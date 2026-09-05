@@ -23,9 +23,3 @@ export class BrowserAutomationHostError extends Error {
 export function browserHostError(input: BrowserAutomationErrorInput): never {
   throw new BrowserAutomationHostError(input);
 }
-
-export const asBrowserAutomationHostError = (
-  error: unknown,
-  fallback: BrowserAutomationErrorInput,
-): BrowserAutomationHostError =>
-  error instanceof BrowserAutomationHostError ? error : new BrowserAutomationHostError(fallback);

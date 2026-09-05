@@ -6,9 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   deriveTerminalCommandIdentity,
-  deriveTerminalOutputIdentity,
   deriveTerminalProcessIdentity,
-  deriveTerminalTitleSignalIdentity,
   resolveTerminalVisualIdentity,
   terminalCliKindFromValue,
 } from "./terminalThreads";
@@ -22,19 +20,12 @@ describe("Antigravity CLI identity", () => {
     });
   });
 
-  it("detects the Antigravity CLI process, banner, and terminal title", () => {
+  it("detects the Antigravity CLI process", () => {
     expect(deriveTerminalProcessIdentity("/Users/dev/.local/bin/agy --model fast")).toMatchObject({
       cliKind: "antigravity",
       iconKey: "antigravity",
     });
-    expect(deriveTerminalOutputIdentity("Welcome to Antigravity CLI")).toMatchObject({
-      cliKind: "antigravity",
-      title: "Antigravity CLI",
-    });
-    expect(deriveTerminalTitleSignalIdentity("AGY CLI")).toMatchObject({
-      cliKind: "antigravity",
-      title: "Antigravity CLI",
-    });
+
   });
 
   it("normalizes persisted Antigravity CLI metadata", () => {
@@ -67,16 +58,19 @@ describe("resolveTerminalVisualIdentity", () => {
     });
   });
 
-  it("still infers provider identity from title when cliKind is omitted", () => {
+  it.each([
+    ["Claude Code", "claude", "claude"],
+    ["AGY CLI", "antigravity", "antigravity"],
+  ])("infers provider identity from %s when cliKind is omitted", (title, cliKind, iconKey) => {
     expect(
       resolveTerminalVisualIdentity({
         fallbackTitle: "Terminal 1",
-        title: "Claude Code",
+        title,
       }),
     ).toMatchObject({
-      cliKind: "claude",
-      iconKey: "claude",
-      title: "Claude Code",
+      cliKind,
+      iconKey,
+      title,
     });
   });
 });

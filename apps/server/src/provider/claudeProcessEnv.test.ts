@@ -7,7 +7,6 @@ import { describe, it, assert } from "@effect/vitest";
 import {
   buildClaudeProcessEnv,
   hasUsableClaudeCliCredentials,
-  hasUsableClaudeCliCredentialsContent,
   readClaudeCliCredentialsContentSummary,
   resolveClaudeCredentialsPaths,
 } from "./claudeProcessEnv.ts";
@@ -102,7 +101,7 @@ describe("claudeProcessEnv", () => {
 
   it("detects usable Claude OAuth credential files", () => {
     assert.equal(
-      hasUsableClaudeCliCredentialsContent(
+      readClaudeCliCredentialsContentSummary(
         JSON.stringify({
           claudeAiOauth: {
             accessToken: "local-access-token",
@@ -110,12 +109,12 @@ describe("claudeProcessEnv", () => {
           },
         }),
         1_000,
-      ),
+      ).usable,
       true,
     );
 
     assert.equal(
-      hasUsableClaudeCliCredentialsContent(
+      readClaudeCliCredentialsContentSummary(
         JSON.stringify({
           claudeAiOauth: {
             accessToken: "expired-access-token",
@@ -124,7 +123,7 @@ describe("claudeProcessEnv", () => {
           },
         }),
         1_000,
-      ),
+      ).usable,
       true,
     );
   });
@@ -148,7 +147,7 @@ describe("claudeProcessEnv", () => {
 
   it("rejects leftover expired or malformed Claude credential files", () => {
     assert.equal(
-      hasUsableClaudeCliCredentialsContent(
+      readClaudeCliCredentialsContentSummary(
         JSON.stringify({
           claudeAiOauth: {
             accessToken: "expired-access-token",
@@ -156,11 +155,11 @@ describe("claudeProcessEnv", () => {
           },
         }),
         1_000,
-      ),
+      ).usable,
       false,
     );
-    assert.equal(hasUsableClaudeCliCredentialsContent("{}", 1_000), false);
-    assert.equal(hasUsableClaudeCliCredentialsContent("not json", 1_000), false);
+    assert.equal(readClaudeCliCredentialsContentSummary("{}", 1_000).usable, false);
+    assert.equal(readClaudeCliCredentialsContentSummary("not json", 1_000).usable, false);
   });
 
   it("reads the first usable credentials path", () => {

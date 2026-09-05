@@ -62,19 +62,6 @@ export const SEO_KEYWORDS = [
   "open source AI coding app",
 ];
 
-export const AI_SEARCH_USER_AGENTS = [
-  "OAI-SearchBot",
-  "ChatGPT-User",
-  "GPTBot",
-  "ClaudeBot",
-  "Claude-SearchBot",
-  "Claude-User",
-  "PerplexityBot",
-  "Google-Extended",
-  "Applebot",
-  "Bingbot",
-] as const;
-
 /** The official 1200×600 share image, served from public/og.png. */
 export const OG_IMAGE = {
   url: "/og.png",

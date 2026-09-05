@@ -60,10 +60,6 @@ export const SYNARA_GATEWAY_HARNESS_POLICY = renderSynaraHarnessPolicy({
   gatewayControlAvailable: true,
 });
 
-export const SYNARA_IDENTITY_ONLY_HARNESS_POLICY = renderSynaraHarnessPolicy({
-  gatewayControlAvailable: false,
-});
-
 export interface SynaraHarnessPolicyDeliveryState {
   harnessPolicyDelivered?: boolean | undefined;
 }

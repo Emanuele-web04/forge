@@ -6,7 +6,6 @@ import {
   deriveReadableToolTitle,
   deriveSynaraMcpToolTitle,
   extractWebFetchUrl,
-  isInspectCommand,
   isSynaraBrowserToolCall,
   normalizeCompactToolLabel,
   resolveCommandVisualKind,
@@ -526,27 +525,25 @@ describe("deriveInlineCommandCall", () => {
   });
 });
 
-describe("isInspectCommand", () => {
+describe("resolveCommandVisualKind", () => {
   it("detects read-only inspection commands (read/search/find/list)", () => {
-    expect(isInspectCommand("cat package.json")).toBe(true);
-    expect(isInspectCommand("sed -n 1,40p src/app.ts")).toBe(true);
-    expect(isInspectCommand("head -n 20 README.md")).toBe(true);
-    expect(isInspectCommand(`rg -n "tool call" apps/web/src`)).toBe(true);
-    expect(isInspectCommand("grep -R foo .")).toBe(true);
-    expect(isInspectCommand("find . -name '*.ts'")).toBe(true);
-    expect(isInspectCommand("ls -la src")).toBe(true);
-    expect(isInspectCommand(`/bin/zsh -lc 'rg -n "x" src'`)).toBe(true);
+    expect(resolveCommandVisualKind("cat package.json")).toBe("inspect");
+    expect(resolveCommandVisualKind("sed -n 1,40p src/app.ts")).toBe("inspect");
+    expect(resolveCommandVisualKind("head -n 20 README.md")).toBe("inspect");
+    expect(resolveCommandVisualKind(`rg -n "tool call" apps/web/src`)).toBe("inspect");
+    expect(resolveCommandVisualKind("grep -R foo .")).toBe("inspect");
+    expect(resolveCommandVisualKind("find . -name '*.ts'")).toBe("inspect");
+    expect(resolveCommandVisualKind("ls -la src")).toBe("inspect");
+    expect(resolveCommandVisualKind(`/bin/zsh -lc 'rg -n "x" src'`)).toBe("inspect");
   });
 
   it("does not treat mutating or executing commands as inspections", () => {
-    expect(isInspectCommand("git status")).toBe(false);
-    expect(isInspectCommand("node build.js")).toBe(false);
-    expect(isInspectCommand("rm -rf dist")).toBe(false);
-    expect(isInspectCommand("mkdir foo")).toBe(false);
+    expect(resolveCommandVisualKind("git status")).toBe("git");
+    expect(resolveCommandVisualKind("node build.js")).toBe("terminal");
+    expect(resolveCommandVisualKind("rm -rf dist")).toBe("terminal");
+    expect(resolveCommandVisualKind("mkdir foo")).toBe("terminal");
   });
-});
 
-describe("resolveCommandVisualKind", () => {
   it("classifies git commands through shell and global-option wrappers", () => {
     expect(resolveCommandVisualKind("git status --short")).toBe("git");
     expect(resolveCommandVisualKind("git -C apps/web status --short")).toBe("git");

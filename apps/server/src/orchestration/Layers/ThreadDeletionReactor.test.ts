@@ -7,7 +7,6 @@ import {
   detachThreadDevice,
   isThreadCurrentlyArchived,
   isThreadLifecycleCleanupEvent,
-  logCleanupCauseUnlessInterrupted,
 } from "./ThreadDeletionReactor";
 import { DeviceService } from "../../device/Services/DeviceService";
 import { DeviceManager } from "../../device/DeviceManager";
@@ -42,37 +41,6 @@ describe("isThreadCurrentlyArchived", () => {
     expect(isThreadCurrentlyArchived({ archivedAt: null })).toBe(false);
     expect(isThreadCurrentlyArchived(undefined)).toBe(false);
     expect(isThreadCurrentlyArchived({ archivedAt: "2026-07-23T20:00:00.000Z" })).toBe(true);
-  });
-});
-
-describe("logCleanupCauseUnlessInterrupted", () => {
-  const threadId = ThreadId.makeUnsafe("thread-deletion-reactor-test");
-
-  it("swallows ordinary cleanup failures", async () => {
-    const exit = await Effect.runPromiseExit(
-      logCleanupCauseUnlessInterrupted({
-        effect: Effect.fail("cleanup failed"),
-        message: "thread deletion cleanup skipped provider session stop",
-        threadId,
-      }),
-    );
-
-    expect(Exit.isSuccess(exit)).toBe(true);
-  });
-
-  it("preserves interrupt causes", async () => {
-    const exit = await Effect.runPromiseExit(
-      logCleanupCauseUnlessInterrupted({
-        effect: Effect.interrupt,
-        message: "thread deletion cleanup skipped provider session stop",
-        threadId,
-      }),
-    );
-
-    expect(Exit.isFailure(exit)).toBe(true);
-    if (Exit.isFailure(exit)) {
-      expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true);
-    }
   });
 });
 

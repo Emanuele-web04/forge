@@ -40,31 +40,15 @@ export const BrowserTimeoutMs = described(
   BROWSER_FIELD_INSTRUCTION_COPY.timeoutMs,
 );
 
-function makeInvocationFields() {
-  return {
-    timeoutMs: Schema.optional(BrowserTimeoutMs),
-    idempotencyKey: Schema.optional(
-      described(BrowserIdempotencyKey, BROWSER_FIELD_INSTRUCTION_COPY.idempotencyKey),
-    ),
-  };
-}
-
-const readOnlyInvocationFields = makeInvocationFields();
-const effectingInvocationFields = makeInvocationFields();
+const invocationFields = {
+  timeoutMs: Schema.optional(BrowserTimeoutMs),
+  idempotencyKey: Schema.optional(
+    described(BrowserIdempotencyKey, BROWSER_FIELD_INSTRUCTION_COPY.idempotencyKey),
+  ),
+};
 const optionalTabField = {
   tabId: Schema.optional(described(BrowserTabId, BROWSER_FIELD_INSTRUCTION_COPY.tabId)),
 };
-
-export const BrowserReadOnlyInvocationCommon = closedStruct(readOnlyInvocationFields);
-export const BrowserEffectingInvocationCommon = closedStruct(effectingInvocationFields);
-export const BrowserReadOnlyTabInvocationCommon = closedStruct({
-  ...readOnlyInvocationFields,
-  ...optionalTabField,
-});
-export const BrowserEffectingTabInvocationCommon = closedStruct({
-  ...effectingInvocationFields,
-  ...optionalTabField,
-});
 
 const BrowserUrl = described(
   BoundedUtf8String(8_192, 1),
@@ -119,10 +103,10 @@ const defaultDomContentLoaded = () => "domcontentloaded" as const;
 const optionalDefault = <S extends Schema.Top>(schema: S, value: () => S["Encoded"]) =>
   Schema.optional(schema).pipe(Schema.withDecodingDefault<Schema.optional<S>>(value));
 
-export const BrowserStatusInput = closedStruct(readOnlyInvocationFields);
-export const BrowserTabsInput = closedStruct(readOnlyInvocationFields);
+export const BrowserStatusInput = closedStruct(invocationFields);
+export const BrowserTabsInput = closedStruct(invocationFields);
 export const BrowserToolOpenInput = closedStruct({
-  ...effectingInvocationFields,
+  ...invocationFields,
   url: Schema.optional(BrowserUrl),
   show: optionalDefault(
     described(Schema.Boolean, BROWSER_FIELD_INSTRUCTION_COPY.show),
@@ -137,7 +121,7 @@ export const BrowserToolOpenInput = closedStruct({
   ),
 });
 export const BrowserToolNavigateInput = closedStruct({
-  ...effectingInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   url: Schema.optional(BrowserUrl),
   annotationId: Schema.optional(BrowserAnnotationId),
@@ -146,7 +130,7 @@ export const BrowserToolNavigateInput = closedStruct({
   Schema.makeFilter((input) => (input.url === undefined) !== (input.annotationId === undefined)),
 );
 const BrowserHistoryNavigationFields = {
-  ...effectingInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   waitUntil: optionalDefault(BrowserWaitUntil, defaultDomContentLoaded),
 };
@@ -160,7 +144,7 @@ export const BrowserReloadInput = closedStruct({
   ),
 });
 export const BrowserResizeInput = closedStruct({
-  ...effectingInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   width: described(
     boundedInt(320, 3_840),
@@ -172,7 +156,7 @@ export const BrowserResizeInput = closedStruct({
   ),
 });
 export const BrowserSnapshotInput = closedStruct({
-  ...readOnlyInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   includeImage: optionalDefault(
     described(
@@ -190,7 +174,7 @@ export const BrowserSnapshotInput = closedStruct({
   ),
 });
 export const BrowserWebMcpToolsInput = closedStruct({
-  ...readOnlyInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   query: Schema.optional(
     described(
@@ -207,7 +191,7 @@ export const BrowserWebMcpToolsInput = closedStruct({
   ),
 });
 export const BrowserWebMcpCallInput = closedStruct({
-  ...effectingInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   discoveryId: described(
     BrowserWebMcpDiscoveryId,
@@ -222,7 +206,7 @@ export const BrowserWebMcpCallInput = closedStruct({
   ),
 });
 export const BrowserScreenshotInput = closedStruct({
-  ...readOnlyInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   fullPage: optionalDefault(
     described(
@@ -233,7 +217,7 @@ export const BrowserScreenshotInput = closedStruct({
   ),
 });
 export const BrowserLogsInput = closedStruct({
-  ...readOnlyInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   includeConsole: optionalDefault(
     described(
@@ -258,7 +242,7 @@ export const BrowserLogsInput = closedStruct({
   ),
 }).check(Schema.makeFilter((value) => value.includeConsole || value.includeNetwork));
 export const BrowserClickInput = closedStruct({
-  ...effectingInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   target: described(BrowserPointerTarget, BROWSER_FIELD_INSTRUCTION_COPY.target),
   button: Schema.optional(
@@ -269,12 +253,12 @@ export const BrowserClickInput = closedStruct({
   ),
 });
 export const BrowserHoverInput = closedStruct({
-  ...effectingInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   target: described(BrowserPointerTarget, BROWSER_FIELD_INSTRUCTION_COPY.target),
 });
 export const BrowserDragInput = closedStruct({
-  ...effectingInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   source: described(
     BrowserPointerTarget,
@@ -290,7 +274,7 @@ export const BrowserDragInput = closedStruct({
   ),
 });
 export const BrowserTypeInput = closedStruct({
-  ...effectingInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   target: described(
     BrowserNodeTarget,
@@ -306,7 +290,7 @@ export const BrowserTypeInput = closedStruct({
   ),
 });
 export const BrowserSelectInput = closedStruct({
-  ...effectingInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   target: described(
     BrowserNodeTarget,
@@ -320,7 +304,7 @@ export const BrowserSelectInput = closedStruct({
   ),
 });
 export const BrowserUploadInput = closedStruct({
-  ...effectingInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   target: described(
     BrowserNodeTarget,
@@ -334,7 +318,7 @@ export const BrowserUploadInput = closedStruct({
   ),
 });
 export const BrowserPressInput = closedStruct({
-  ...effectingInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   keys: described(
     Schema.Array(BrowserKeyChord).check(Schema.isMinLength(1), Schema.isMaxLength(16)),
@@ -355,7 +339,7 @@ const nonZeroPageCount = boundedInt(-100_000, 100_000).check(
   Schema.makeFilter((value: number) => value !== 0),
 );
 export const BrowserScrollInput = closedStruct({
-  ...effectingInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   mode: Schema.Literals(["pixels", "pages", "direction"]),
   deltaX: Schema.optional(nonZeroFinite),
@@ -418,7 +402,7 @@ export const BrowserWaitCondition = Schema.Union([
   closedStruct({ kind: Schema.Literal("load"), state: BrowserLoadState }),
 ]);
 export const BrowserWaitInput = closedStruct({
-  ...readOnlyInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   mode: optionalDefault(
     described(Schema.Literals(["all", "any"]), "Combine conditions using all (default) or any."),
@@ -430,12 +414,12 @@ export const BrowserWaitInput = closedStruct({
   ),
 });
 export const BrowserEvaluateInput = closedStruct({
-  ...effectingInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
   expression: BrowserEvaluateExpression,
 });
 export const BrowserCloseInput = closedStruct({
-  ...effectingInvocationFields,
+  ...invocationFields,
   ...optionalTabField,
 });
 

@@ -29,9 +29,6 @@ export const PI_THINKING_LEVEL_OPTIONS = [
 export type PiThinkingLevel = (typeof PI_THINKING_LEVEL_OPTIONS)[number];
 // Union of every Grok CLI ladder. Per-model capabilities pick a subset:
 // grok-build keeps none/low/medium/high, Grok 4.5 drops none, Grok 4.6 adds xhigh.
-export const GROK_BUILD_REASONING_EFFORTS = ["none", "low", "medium", "high"] as const;
-export const GROK_4_5_REASONING_EFFORTS = ["low", "medium", "high"] as const;
-export const GROK_4_6_REASONING_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
 export const GROK_REASONING_EFFORT_OPTIONS = ["none", "low", "medium", "high", "xhigh"] as const;
 export type GrokReasoningEffort = (typeof GROK_REASONING_EFFORT_OPTIONS)[number];
 export const DROID_REASONING_EFFORT_OPTIONS = [
@@ -1131,7 +1128,6 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
 };
 
 // Backward compatibility for existing Codex-only call sites.
-export const MODEL_OPTIONS = MODEL_OPTIONS_BY_PROVIDER.codex;
 export const DEFAULT_MODEL = DEFAULT_MODEL_BY_PROVIDER.codex;
 export const DEFAULT_GIT_TEXT_GENERATION_MODEL = "gpt-5.6-luna" as const;
 export const DEFAULT_GIT_TEXT_GENERATION_REASONING_EFFORT = "high" as const;

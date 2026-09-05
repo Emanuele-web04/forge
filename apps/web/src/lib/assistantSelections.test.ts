@@ -5,11 +5,9 @@ import {
   appendAssistantSelectionsToPrompt,
   createAssistantSelectionAttachment,
   extractTrailingAssistantSelections,
-  formatAssistantSelectionPreview,
   formatAssistantSelectionQueuePreview,
   formatAssistantSelectionTitleSeed,
   stripEmbeddedAssistantSelections,
-  stripTrailingAssistantSelections,
 } from "./assistantSelections";
 import { appendPastedTextsToPrompt, createPastedTextDraft } from "./composerPastedText";
 
@@ -40,7 +38,7 @@ describe("assistantSelections", () => {
 
   it("strips only trailing assistant selection blocks", () => {
     expect(
-      stripTrailingAssistantSelections(
+      extractTrailingAssistantSelections(
         [
           "Investigate this",
           "",
@@ -54,7 +52,7 @@ describe("assistantSelections", () => {
           "  12 | git status",
           "</terminal_context>",
         ].join("\n"),
-      ),
+      ).promptText,
     ).toBe(
       [
         "Investigate this",
@@ -127,14 +125,6 @@ describe("assistantSelections", () => {
         }),
       ]),
     );
-  });
-
-  it("formats compact chip previews", () => {
-    expect(
-      formatAssistantSelectionPreview(
-        "This is a fairly long first line that should be trimmed for the chip label",
-      ),
-    ).toBe("This is a fairly long first line that shoul…");
   });
 
   it("creates normalized assistant selection attachments", () => {

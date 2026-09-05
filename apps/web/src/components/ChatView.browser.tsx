@@ -71,7 +71,6 @@ import { resetWsNativeApiForTest } from "../wsNativeApi";
 // Pre-transform the compiler-heavy component outside the first case's timeout.
 // The router's auto-split route otherwise requests this module on first mount.
 import "./ChatView";
-import { estimateTimelineMessageHeight } from "./timelineHeight";
 
 const THREAD_ID = "thread-browser-test" as ThreadId;
 const OTHER_THREAD_ID = "thread-browser-test-other" as ThreadId;
@@ -127,27 +126,23 @@ interface ViewportSpec {
   name: string;
   width: number;
   height: number;
-  textTolerancePx: number;
-  attachmentTolerancePx: number;
 }
 
 const DEFAULT_VIEWPORT: ViewportSpec = {
   name: "desktop",
   width: 960,
   height: 1_100,
-  textTolerancePx: 44,
-  attachmentTolerancePx: 56,
 };
 const TEXT_VIEWPORT_MATRIX = [
   DEFAULT_VIEWPORT,
-  { name: "tablet", width: 720, height: 1_024, textTolerancePx: 44, attachmentTolerancePx: 56 },
-  { name: "mobile", width: 430, height: 932, textTolerancePx: 56, attachmentTolerancePx: 56 },
-  { name: "narrow", width: 320, height: 700, textTolerancePx: 84, attachmentTolerancePx: 56 },
+  { name: "tablet", width: 720, height: 1_024 },
+  { name: "mobile", width: 430, height: 932 },
+  { name: "narrow", width: 320, height: 700 },
 ] as const satisfies readonly ViewportSpec[];
 const ATTACHMENT_VIEWPORT_MATRIX = [
   DEFAULT_VIEWPORT,
-  { name: "mobile", width: 430, height: 932, textTolerancePx: 56, attachmentTolerancePx: 56 },
-  { name: "narrow", width: 320, height: 700, textTolerancePx: 84, attachmentTolerancePx: 56 },
+  { name: "mobile", width: 430, height: 932 },
+  { name: "narrow", width: 320, height: 700 },
 ] as const satisfies readonly ViewportSpec[];
 
 interface UserRowMeasurement {
@@ -2079,7 +2074,7 @@ async function measureUserRowAtViewport(options: {
   }
 }
 
-describe("ChatView timeline estimator parity (full app)", () => {
+describe("ChatView transcript geometry (full app)", () => {
   beforeAll(async () => {
     fixture = buildFixture(
       createSnapshotForTargetUser({
@@ -2340,7 +2335,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   it.each(TEXT_VIEWPORT_MATRIX)(
-    "[geometry:linux] keeps long user message estimate close at the $name viewport",
+    "[geometry:linux] clamps long user messages to twelve rendered lines at the $name viewport",
     async (viewport) => {
       const userText = "x".repeat(3_200);
       const targetMessageId = `msg-user-target-long-${viewport.name}` as MessageId;
@@ -2353,17 +2348,18 @@ describe("ChatView timeline estimator parity (full app)", () => {
       });
 
       try {
-        const { measuredRowHeightPx, timelineWidthMeasuredPx } =
-          await mounted.measureUserRow(targetMessageId);
-
-        const estimatedHeightPx = estimateTimelineMessageHeight(
-          { role: "user", text: userText, attachments: [] },
-          { timelineWidthPx: timelineWidthMeasuredPx },
-        );
-
-        expect(Math.abs(measuredRowHeightPx - estimatedHeightPx)).toBeLessThanOrEqual(
-          viewport.textTolerancePx,
-        );
+        await mounted.measureUserRow(targetMessageId);
+        const row = document.querySelector<HTMLElement>(
+          `[data-message-id="${targetMessageId}"][data-message-role="user"]`,
+        )!;
+        const clamp = row.querySelector<HTMLElement>('[data-user-message-clamp="true"]')!;
+        expect(clamp).toBeTruthy();
+        const text = clamp.firstElementChild!;
+        const lineHeightPx = Number.parseFloat(getComputedStyle(text).lineHeight);
+        expect(lineHeightPx).toBeGreaterThan(0);
+        expect(clamp.scrollHeight).toBeGreaterThan(clamp.clientHeight);
+        expect(Math.abs(clamp.getBoundingClientRect().height - 12 * lineHeightPx)).toBeLessThanOrEqual(1);
+        expect(row.querySelector('button[aria-expanded="false"]')?.textContent).toBe("Show more");
       } finally {
         await mounted.cleanup();
       }
@@ -2382,22 +2378,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
 
     try {
-      const measurements: Array<
-        UserRowMeasurement & { viewport: ViewportSpec; estimatedHeightPx: number }
-      > = [];
+      const measurements: UserRowMeasurement[] = [];
 
       for (const viewport of TEXT_VIEWPORT_MATRIX) {
         await mounted.setViewport(viewport);
         const measurement = await mounted.measureUserRow(targetMessageId);
-        const estimatedHeightPx = estimateTimelineMessageHeight(
-          { role: "user", text: userText, attachments: [] },
-          { timelineWidthPx: measurement.timelineWidthMeasuredPx },
-        );
-
-        expect(Math.abs(measurement.measuredRowHeightPx - estimatedHeightPx)).toBeLessThanOrEqual(
-          viewport.textTolerancePx,
-        );
-        measurements.push({ ...measurement, viewport, estimatedHeightPx });
+        measurements.push(measurement);
       }
 
       expect(
@@ -2411,9 +2397,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       const narrowest = byMeasuredWidth[0]!;
       const widest = byMeasuredWidth.at(-1)!;
       expect(narrowest.timelineWidthMeasuredPx).toBeLessThan(widest.timelineWidthMeasuredPx);
-      // Both widths exceed the shared 12-line limit, so resizing must not make
-      // the virtualized estimate grow beyond the visible collapsed row.
-      expect(narrowest.estimatedHeightPx).toBe(widest.estimatedHeightPx);
+      // Both widths exceed the 12-line limit, so the collapsed row stays the same height.
       expect(
         Math.abs(narrowest.measuredRowHeightPx - widest.measuredRowHeightPx),
       ).toBeLessThanOrEqual(8);
@@ -2442,23 +2426,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
       targetMessageId,
     });
 
-    const estimatedDesktopPx = estimateTimelineMessageHeight(
-      { role: "user", text: userText, attachments: [] },
-      { timelineWidthPx: desktopMeasurement.timelineWidthMeasuredPx },
-    );
-    const estimatedMobilePx = estimateTimelineMessageHeight(
-      { role: "user", text: userText, attachments: [] },
-      { timelineWidthPx: mobileMeasurement.timelineWidthMeasuredPx },
-    );
-
     const measuredDeltaPx =
       mobileMeasurement.measuredRowHeightPx - desktopMeasurement.measuredRowHeightPx;
-    const estimatedDeltaPx = estimatedMobilePx - estimatedDesktopPx;
+    expect(mobileMeasurement.timelineWidthMeasuredPx).toBeLessThan(
+      desktopMeasurement.timelineWidthMeasuredPx,
+    );
     expect(measuredDeltaPx).toBeGreaterThan(0);
-    expect(estimatedDeltaPx).toBeGreaterThan(0);
-    const ratio = estimatedDeltaPx / measuredDeltaPx;
-    expect(ratio).toBeGreaterThan(0.65);
-    expect(ratio).toBeLessThan(1.35);
   });
 
   it("[geometry:linux] collapses header actions into overflow before they can overlap the thread title", async () => {
@@ -4374,7 +4347,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   it.each(ATTACHMENT_VIEWPORT_MATRIX)(
-    "[geometry:linux] keeps user attachment estimate close at the $name viewport",
+    "[geometry:linux] keeps user attachments inside their rendered row at the $name viewport",
     async (viewport) => {
       const targetMessageId = `msg-user-target-attachments-${viewport.name}` as MessageId;
       const userText = "message with image attachments";
@@ -4388,21 +4361,27 @@ describe("ChatView timeline estimator parity (full app)", () => {
       });
 
       try {
-        const { measuredRowHeightPx, timelineWidthMeasuredPx } =
-          await mounted.measureUserRow(targetMessageId);
-
-        const estimatedHeightPx = estimateTimelineMessageHeight(
-          {
-            role: "user",
-            text: userText,
-            attachments: [{ id: "attachment-1" }, { id: "attachment-2" }, { id: "attachment-3" }],
-          },
-          { timelineWidthPx: timelineWidthMeasuredPx },
+        await mounted.measureUserRow(targetMessageId);
+        const row = document.querySelector<HTMLElement>(
+          `[data-message-id="${targetMessageId}"][data-message-role="user"]`,
+        )!;
+        const rowRect = row.getBoundingClientRect();
+        const thumbnails = Array.from(
+          row.querySelectorAll<HTMLButtonElement>('button[aria-label^="Preview "]'),
         );
-
-        expect(Math.abs(measuredRowHeightPx - estimatedHeightPx)).toBeLessThanOrEqual(
-          viewport.attachmentTolerancePx,
-        );
+        expect(thumbnails).toHaveLength(3);
+        const rects = thumbnails.map((thumbnail) => thumbnail.getBoundingClientRect());
+        for (const rect of rects) {
+          expect(rect.width).toBeGreaterThan(0);
+          expect(rect.height).toBeGreaterThan(0);
+          expect(rect.left).toBeGreaterThanOrEqual(rowRect.left - 1);
+          expect(rect.right).toBeLessThanOrEqual(rowRect.right + 1);
+          expect(rect.top).toBeGreaterThanOrEqual(rowRect.top - 1);
+          expect(rect.bottom).toBeLessThanOrEqual(rowRect.bottom + 1);
+        }
+        expect(
+          Math.max(...rects.map((rect) => rect.top)) - Math.min(...rects.map((rect) => rect.top)),
+        ).toBeLessThanOrEqual(1);
       } finally {
         await mounted.cleanup();
       }

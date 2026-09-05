@@ -872,22 +872,6 @@ export function resolvePromotedPullPresentation(input: {
   return { label: input.isPullRunning ? "Pulling..." : "Pull" };
 }
 
-/** Environment panel should promote Pull while it is available or already running. */
-export function shouldShowEnvironmentPanelPullRow(input: {
-  quickAction: GitQuickAction;
-  isPullRunning: boolean;
-}): boolean {
-  return shouldPromotePullAction(input);
-}
-
-/** Header Environment mode should surface Pull next to Hand off / Add action. */
-export function shouldShowHeaderPullAction(input: {
-  quickAction: GitQuickAction;
-  isPullRunning: boolean;
-}): boolean {
-  return shouldPromotePullAction(input);
-}
-
 export function shouldOfferCreateBranchPrompt(input: {
   activeWorktreePath: string | null;
   gitStatus: Pick<GitStatusResult, "branch" | "hasUpstream"> | null;

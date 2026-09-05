@@ -1373,6 +1373,3 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsAutomationResolveProposalRpc,
   WsSubscribeAutomationEventsRpc,
 );
-
-/** @deprecated Use WsFeatureRpcGroup. Bootstrap is intentionally a separate endpoint/group. */
-export const WsRpcGroup = WsFeatureRpcGroup;

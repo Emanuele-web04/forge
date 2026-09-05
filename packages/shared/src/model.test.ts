@@ -8,12 +8,8 @@ import {
   DEFAULT_GIT_TEXT_GENERATION_REASONING_EFFORT,
   DEFAULT_MODEL,
   DEFAULT_MODEL_BY_PROVIDER,
-  MODEL_OPTIONS,
   MODEL_OPTIONS_BY_PROVIDER,
   CODEX_REASONING_EFFORT_OPTIONS,
-  GROK_4_5_REASONING_EFFORTS,
-  GROK_4_6_REASONING_EFFORTS,
-  GROK_BUILD_REASONING_EFFORTS,
 } from "@synara/contracts";
 
 import {
@@ -193,7 +189,7 @@ describe("resolveModelSlug", () => {
   });
 
   it("resolves only supported model options", () => {
-    for (const model of MODEL_OPTIONS) {
+    for (const model of MODEL_OPTIONS_BY_PROVIDER.codex) {
       expect(resolveModelSlug(model.slug)).toBe(model.slug);
     }
   });
@@ -219,7 +215,7 @@ describe("resolveModelSlug", () => {
 
   it("keeps codex defaults for backward compatibility", () => {
     expect(getDefaultModel()).toBe(DEFAULT_MODEL);
-    expect(getModelOptions()).toEqual(MODEL_OPTIONS);
+    expect(getModelOptions()).toEqual(MODEL_OPTIONS_BY_PROVIDER.codex);
     expect(getModelOptions("claudeAgent")).toEqual(MODEL_OPTIONS_BY_PROVIDER.claudeAgent);
   });
 });
@@ -434,14 +430,14 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
   });
 
   it("returns Grok Build effort options for grok-build models", () => {
-    expect(values("grok", "grok-build-0.1")).toEqual([...GROK_BUILD_REASONING_EFFORTS]);
-    expect(values("grok", "grok-build")).toEqual([...GROK_BUILD_REASONING_EFFORTS]);
+    expect(values("grok", "grok-build-0.1")).toEqual(["none", "low", "medium", "high"]);
+    expect(values("grok", "grok-build")).toEqual(["none", "low", "medium", "high"]);
   });
 
   it("returns Grok 4.5 and 4.6 CLI effort ladders", () => {
-    expect(values("grok", "grok-4.5")).toEqual([...GROK_4_5_REASONING_EFFORTS]);
-    expect(values("grok", "grok-4.6")).toEqual([...GROK_4_6_REASONING_EFFORTS]);
-    expect(values("grok", "grok-4.7")).toEqual([...GROK_4_6_REASONING_EFFORTS]);
+    expect(values("grok", "grok-4.5")).toEqual(["low", "medium", "high"]);
+    expect(values("grok", "grok-4.6")).toEqual(["low", "medium", "high", "xhigh"]);
+    expect(values("grok", "grok-4.7")).toEqual(["low", "medium", "high", "xhigh"]);
   });
 
   it("co-locates labels with effort values", () => {

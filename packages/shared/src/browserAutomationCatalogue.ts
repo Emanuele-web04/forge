@@ -588,30 +588,3 @@ export function projectBrowserToolDefinitions(
 }
 
 export const BROWSER_TOOL_CATALOGUE = projectBrowserToolDefinitions(BROWSER_TOOL_DEFINITIONS);
-// Host outputs can contain transport-only image sidecars. They are deliberately
-// excluded from the provider-facing catalogue digest.
-export const BROWSER_TOOL_CATALOG_DIGEST_INPUT = BROWSER_TOOL_CATALOGUE.map(
-  ({
-    name,
-    title,
-    description,
-    inputSchema,
-    outputSchema,
-    defaultTimeoutMs,
-    maximumTimeoutMs,
-    annotations,
-  }) => ({
-    name,
-    title,
-    description,
-    inputSchema,
-    outputSchema,
-    defaultTimeoutMs,
-    maximumTimeoutMs,
-    annotations,
-  }),
-);
-
-export const BROWSER_TOOL_CATALOG_CANONICAL_JSON = stableJsonStringify(
-  BROWSER_TOOL_CATALOG_DIGEST_INPUT,
-);

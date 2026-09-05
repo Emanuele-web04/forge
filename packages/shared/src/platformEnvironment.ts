@@ -32,10 +32,6 @@ export function resolveWindowsWslExecutable(env: NodeJS.ProcessEnv = process.env
   return resolveWindowsSystemExecutable(["System32", "wsl.exe"], env);
 }
 
-export function resolveWindowsWhereExecutable(env: NodeJS.ProcessEnv = process.env): string {
-  return resolveWindowsSystemExecutable(["System32", "where.exe"], env);
-}
-
 export function resolveWindowsPowerShellExecutable(env: NodeJS.ProcessEnv = process.env): string {
   return resolveWindowsSystemExecutable(
     ["System32", "WindowsPowerShell", "v1.0", "powershell.exe"],

@@ -13,7 +13,6 @@ import {
   hasBlockingAutomationDraftWarnings,
   maxIterationsForFastIntervalApproval,
   updateAutomationDraftWarningAcknowledgement,
-  warningIdsForAcknowledgedRisks,
   type AutomationDraftWarningId,
 } from "./automationDraft";
 
@@ -100,14 +99,6 @@ describe("automation draft warnings", () => {
         new Set(["fast-recurring-interval", "full-access", "local-checkout"]),
       ),
     ).toEqual(["fast-interval", "full-access", "local-checkout"]);
-  });
-
-  it("maps persisted risk ids back to warning acknowledgements", () => {
-    expect(
-      Array.from(
-        warningIdsForAcknowledgedRisks(["fast-interval", "full-access", "local-checkout"]),
-      ),
-    ).toEqual(["fast-recurring-interval", "full-access", "local-checkout"]);
   });
 
   it("immutably updates warning acknowledgements", () => {

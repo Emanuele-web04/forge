@@ -1151,31 +1151,6 @@ function buildDevinPromptParts(input: {
 // through the shared resolver. Concrete variants, selection slugs, and explicit
 // config remain candidates; reasoning-effort labels are never used as model
 // identifiers.
-export function resolveDevinEffectiveModel(input: {
-  readonly explicitModel: string | undefined;
-  readonly selectionModel: string | undefined;
-  readonly modelVariant?: string | undefined;
-  readonly modelOptions?: DevinModelOptions | undefined;
-  readonly runtimeModel?: ProviderModelDescriptor | undefined;
-}): string | undefined {
-  const modelVariant = resolveDevinModelVariant({
-    model: input.selectionModel,
-    runtimeModel: input.runtimeModel,
-    modelVariant: input.modelOptions?.modelVariant ?? input.modelVariant,
-    reasoningEffort: input.modelOptions?.reasoningEffort,
-    fastMode: input.modelOptions?.fastMode,
-    thinking: input.modelOptions?.thinking,
-    contextWindow: input.modelOptions?.contextWindow,
-  });
-  if (modelVariant) {
-    return modelVariant;
-  }
-  if (input.selectionModel) {
-    return input.selectionModel;
-  }
-  return input.explicitModel;
-}
-
 export function resolveDevinStartModel<E, R>(input: {
   readonly explicitModel: string | undefined;
   readonly modelSelection:

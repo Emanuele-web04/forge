@@ -30,7 +30,6 @@ import {
   parseDevinCliModelList,
   pruneDevinToolCallTurnIds,
   resolveDevinAdapterTimeouts,
-  resolveDevinEffectiveModel,
   resolveDevinOptionalTimeoutMs,
   resolveDevinWedgeRecoveryOptions,
   resolveDevinStartModel,
@@ -1227,63 +1226,49 @@ describe("resolveRequestedModeId", () => {
   });
 });
 
-describe("resolveDevinEffectiveModel", () => {
-  it("prefers the concrete variant over the selection slug and explicit config", () => {
-    expect(
-      resolveDevinEffectiveModel({
-        explicitModel: "default-model",
-        selectionModel: "gpt-5.6-sol",
-        modelVariant: "gpt-5-6-sol-high",
-      }),
-    ).toBe("gpt-5-6-sol-high");
-    expect(
-      resolveDevinEffectiveModel({
-        explicitModel: "default-model",
-        selectionModel: "gpt-5.6-sol",
-        modelVariant: undefined,
-      }),
-    ).toBe("gpt-5.6-sol");
-    expect(
-      resolveDevinEffectiveModel({
-        explicitModel: "default-model",
-        selectionModel: undefined,
-        modelVariant: undefined,
-      }),
-    ).toBe("default-model");
-  });
-
-  it("resolves static traits without a web-populated model variant", () => {
-    expect(
-      resolveDevinEffectiveModel({
-        explicitModel: undefined,
-        selectionModel: "swe-1-7",
-        modelOptions: { fastMode: true },
-      }),
-    ).toBe("swe-1-7-lightning");
-  });
-
-  it("never substitutes a reasoning-effort label as the model", () => {
-    // Regression: a runtime selection with only a reasoning effort (no
-    // resolved variant) must keep the selection slug, never the effort label,
-    // as the Devin `--model` value.
-    expect(
-      resolveDevinEffectiveModel({
-        explicitModel: undefined,
-        selectionModel: "gpt-5.6-sol",
-        modelVariant: undefined,
-      }),
-    ).toBe("gpt-5.6-sol");
-    expect(
-      resolveDevinEffectiveModel({
-        explicitModel: undefined,
-        selectionModel: undefined,
-        modelVariant: undefined,
-      }),
-    ).toBeUndefined();
-  });
-});
-
 describe("resolveDevinStartModel", () => {
+  it.each([
+    {
+      name: "prefers the concrete variant over the selection and explicit model",
+      explicitModel: "default-model",
+      modelSelection: { model: "gpt-5.6-sol", options: { modelVariant: "gpt-5-6-sol-high" } },
+      expected: "gpt-5-6-sol-high",
+    },
+    {
+      name: "prefers the selected model over explicit config",
+      explicitModel: "default-model",
+      modelSelection: { model: "gpt-5.6-sol" },
+      expected: "gpt-5.6-sol",
+    },
+    {
+      name: "falls back to explicit config without a selection",
+      explicitModel: "default-model",
+      modelSelection: undefined,
+      expected: "default-model",
+    },
+    {
+      name: "leaves an omitted model undefined",
+      explicitModel: undefined,
+      modelSelection: undefined,
+      expected: undefined,
+    },
+    {
+      name: "resolves static traits without a web-populated variant",
+      explicitModel: undefined,
+      modelSelection: { model: "swe-1-7", options: { fastMode: true } },
+      expected: "swe-1-7-lightning",
+    },
+  ])("$name", async ({ explicitModel, modelSelection, expected }) => {
+    const model = await Effect.runPromise(
+      resolveDevinStartModel({
+        explicitModel,
+        modelSelection,
+        discoverModels: () => Effect.succeed({ models: [], source: "devin-cli", cached: false }),
+      }),
+    );
+    expect(model).toBe(expected);
+  });
+
   it("discovers once and caches the next non-web trait selection", async () => {
     let discoveryCalls = 0;
     const cachedFlags: Array<boolean | undefined> = [];

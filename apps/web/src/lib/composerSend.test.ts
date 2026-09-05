@@ -11,7 +11,6 @@ import type {
 import * as composerImageBlobStore from "./composerImageBlobStore";
 import {
   buildComposerFileAttachmentsFromFiles,
-  buildUploadComposerAttachments,
   stageUploadComposerAttachments,
   effectiveComposerAttachmentCount,
   findPendingBlobComposerAttachments,
@@ -149,7 +148,7 @@ describe("composerSend attachment builders", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const attachments = await buildUploadComposerAttachments({
+    const { attachments } = await stageUploadComposerAttachments({
       threadId: "thread-1",
       images: [
         {

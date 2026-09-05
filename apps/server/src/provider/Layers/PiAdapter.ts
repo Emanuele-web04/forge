@@ -3010,8 +3010,6 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     } satisfies PiAdapterShape;
   });
 
-export const PiAdapterLive = Layer.effect(PiAdapter, makePiAdapter());
-
 export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
   return Layer.effect(PiAdapter, makePiAdapter(options));
 }

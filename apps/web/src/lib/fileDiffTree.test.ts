@@ -9,7 +9,6 @@ import { describe, expect, it } from "vitest";
 import { filterRenderableFilesForSearch } from "~/components/DiffPanel.logic";
 import {
   buildFileDiffTree,
-  collectFileDiffTreeDirectoryPaths,
   type FileDiffTreeDirectoryNode,
   type FileDiffTreeNode,
 } from "./fileDiffTree";
@@ -104,18 +103,6 @@ describe("buildFileDiffTree", () => {
       createFileDiff("File1.ts"),
     ]);
     expect(names(tree)).toEqual(["File1.ts", "file2.ts", "file10.ts"]);
-  });
-
-  it("collects every directory path", () => {
-    const tree = buildFileDiffTree([
-      createFileDiff("apps/server/a.ts"),
-      createFileDiff("apps/web/b.ts"),
-    ]);
-    expect(collectFileDiffTreeDirectoryPaths(tree).toSorted()).toEqual([
-      "apps",
-      "apps/server",
-      "apps/web",
-    ]);
   });
 });
 

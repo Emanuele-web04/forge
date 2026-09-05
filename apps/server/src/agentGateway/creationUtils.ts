@@ -2,16 +2,6 @@ import { createHash } from "node:crypto";
 
 import { CommandId, MessageId, ThreadId } from "@synara/contracts";
 
-export function slugifyAgentTask(value: string): string {
-  return (
-    value
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 40) || "task"
-  );
-}
-
 export function gatewayIsoNow(): string {
   return new Date().toISOString();
 }

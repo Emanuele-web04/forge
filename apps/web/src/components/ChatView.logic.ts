@@ -254,22 +254,6 @@ export function shouldEnableComposerPastedTextCollapse(input: {
   );
 }
 
-export function buildComposerMenuSelectionKey(input: {
-  menuOpen: boolean;
-  picker: string | null;
-  triggerKind: string | null;
-  triggerQuery: string;
-  items: readonly { id: string }[];
-}): string | null {
-  if (!input.menuOpen) {
-    return null;
-  }
-  const sourceKey = input.picker
-    ? `picker:${input.picker}`
-    : `trigger:${input.triggerKind ?? "none"}:${input.triggerQuery}`;
-  return `${sourceKey}\u001f${input.items.map((item) => item.id).join("\u001e")}`;
-}
-
 export function buildTranscriptAutoFollowSignal(input: {
   readonly messageCount: number;
   readonly tailKey: string;

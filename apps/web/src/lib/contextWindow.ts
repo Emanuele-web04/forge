@@ -209,12 +209,6 @@ export function deriveLatestContextWindowState(
   };
 }
 
-export function deriveLatestContextWindowSnapshot(
-  activities: ReadonlyArray<OrchestrationThreadActivity>,
-): ContextWindowSnapshot | null {
-  return deriveLatestContextWindowState(activities).snapshot;
-}
-
 export function deriveSelectedContextWindowSnapshot(
   selectedValue: string | null | undefined,
 ): ContextWindowSnapshot | null {

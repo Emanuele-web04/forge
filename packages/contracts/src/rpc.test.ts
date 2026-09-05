@@ -11,13 +11,11 @@ import {
   WsProjectsSubscribeFileChangeRpc,
   WsPullRequestsReviewRequestCountRpc,
   WsRpcError,
-  WsRpcGroup,
 } from "./rpc";
 import { ORCHESTRATION_WS_METHODS } from "./orchestration";
 
 describe("WS RPC contracts", () => {
-  it("exports the additive Effect RPC group", () => {
-    expect(WsRpcGroup).toBeDefined();
+  it("keeps bootstrap and feature RPCs in separate groups", () => {
     expect(WsBootstrapRpcGroup.requests.has("bootstrap.negotiate")).toBe(true);
     expect(WsFeatureRpcGroup.requests.has("bootstrap.negotiate")).toBe(false);
     expect(

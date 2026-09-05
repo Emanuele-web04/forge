@@ -119,20 +119,3 @@ export function buildFileDiffTree(files: ReadonlyArray<FileDiffMetadata>): FileD
   }
   return finalizeDirectory(root);
 }
-
-/** Collect every directory path in the tree (useful for expand/collapse-all). */
-export function collectFileDiffTreeDirectoryPaths(
-  nodes: ReadonlyArray<FileDiffTreeNode>,
-): string[] {
-  const paths: string[] = [];
-  const walk = (current: ReadonlyArray<FileDiffTreeNode>) => {
-    for (const node of current) {
-      if (node.kind === "directory") {
-        paths.push(node.path);
-        walk(node.children);
-      }
-    }
-  };
-  walk(nodes);
-  return paths;
-}

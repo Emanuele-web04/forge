@@ -172,25 +172,6 @@ export function findTarget(root: DeviceUiNode, target: DeviceUiTarget): DeviceUi
 }
 
 /**
- * Find a node and insist it is tappable right now.
- *
- * Kept separate from `findTarget` for callers that will not scroll: an
- * off-screen frame is real but outside the display, so tapping it would hit
- * whatever currently occupies that position.
- */
-export function resolveTapTarget(root: DeviceUiNode, target: DeviceUiTarget): DeviceUiTargetMatch {
-  const match = findTarget(root, target);
-  if (!match.onScreen) {
-    throw new DeviceUiTargetError(
-      `Element ${JSON.stringify(target.label)} is in the tree but scrolled off screen. ` +
-        `Scroll it into view first, then tap it.`,
-      [describe(match.node)],
-    );
-  }
-  return match;
-}
-
-/**
  * The band a target must land in to count as usable.
  *
  * Not the whole screen: a row sitting under the status bar or behind a home

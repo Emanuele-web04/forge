@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   BROWSER_TOOL_CATALOGUE,
-  BROWSER_TOOL_CATALOG_DIGEST_INPUT,
   BROWSER_TOOL_DEFINITIONS,
   BROWSER_TOOL_DEFINITIONS_BY_NAME,
   DESTRUCTIVE_LOCAL,
@@ -134,12 +133,9 @@ describe("browser automation catalogue projection", () => {
     );
   });
 
-  it("serializes digest input stably regardless of object key insertion order", () => {
+  it("serializes JSON stably regardless of object key insertion order", () => {
     expect(stableJsonStringify({ z: 1, a: { y: 2, x: 3 } })).toBe(
       stableJsonStringify({ a: { x: 3, y: 2 }, z: 1 }),
-    );
-    expect(JSON.parse(stableJsonStringify(BROWSER_TOOL_CATALOG_DIGEST_INPUT))).toEqual(
-      BROWSER_TOOL_CATALOG_DIGEST_INPUT,
     );
   });
 
