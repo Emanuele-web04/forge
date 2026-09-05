@@ -1,5 +1,5 @@
 // FILE: desktopStorageMigration.ts
-// Purpose: Persists a validated, origin-neutral browser-storage handoff for desktop upgrades.
+// Purpose: Reads and acknowledges a validated browser-storage handoff from older desktop builds.
 // Layer: Desktop main-process utility
 
 import * as FS from "node:fs";
@@ -73,40 +73,6 @@ export function readSynaraStorageSnapshot(snapshotPath: string): SynaraStorageSn
     return validateSynaraStorageSnapshot(JSON.parse(FS.readFileSync(snapshotPath, "utf8")));
   } catch {
     return null;
-  }
-}
-
-export async function saveSynaraStorageSnapshot(
-  snapshotPath: string,
-  input: unknown,
-): Promise<boolean> {
-  const snapshot = validateSynaraStorageSnapshot(input);
-  if (!snapshot) {
-    return false;
-  }
-
-  const current = readSynaraStorageSnapshot(snapshotPath);
-  if (current && Date.parse(current.exportedAt) > Date.parse(snapshot.exportedAt)) {
-    return false;
-  }
-
-  const parentPath = Path.dirname(snapshotPath);
-  const temporaryPath = `${snapshotPath}.${process.pid}.${Date.now()}.tmp`;
-  let handle: FS.promises.FileHandle | null = null;
-  try {
-    await FS.promises.mkdir(parentPath, { recursive: true });
-    handle = await FS.promises.open(temporaryPath, "wx", 0o600);
-    await handle.writeFile(`${JSON.stringify(snapshot)}\n`, "utf8");
-    await handle.sync();
-    await handle.close();
-    handle = null;
-    await FS.promises.rename(temporaryPath, snapshotPath);
-    return true;
-  } catch {
-    return false;
-  } finally {
-    await handle?.close().catch(() => undefined);
-    await FS.promises.rm(temporaryPath, { force: true }).catch(() => undefined);
   }
 }
 

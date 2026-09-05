@@ -7,14 +7,13 @@ import { describe, expect, it } from "vitest";
 import {
   acknowledgeSynaraStorageSnapshot,
   readSynaraStorageSnapshot,
-  saveSynaraStorageSnapshot,
   SYNARA_STORAGE_SNAPSHOT_MAX_BYTES,
   validateSynaraStorageSnapshot,
 } from "./desktopStorageMigration";
 
-const snapshot = (exportedAt = "2026-07-09T00:00:00.000Z") => ({
+const snapshot = () => ({
   version: 1 as const,
-  exportedAt,
+  exportedAt: "2026-07-09T00:00:00.000Z",
   entries: {
     "synara:theme": "dark",
     "synara.openUsage.enabled": "true",
@@ -22,13 +21,12 @@ const snapshot = (exportedAt = "2026-07-09T00:00:00.000Z") => ({
 });
 
 describe("desktopStorageMigration", () => {
-  it("round-trips atomically and acknowledges the snapshot", async () => {
+  it("reads a legacy snapshot and removes it after acknowledgement", async () => {
     const directory = FS.mkdtempSync(Path.join(OS.tmpdir(), "synara-storage-migration-"));
     const target = Path.join(directory, "snapshot.json");
     try {
-      await expect(saveSynaraStorageSnapshot(target, snapshot())).resolves.toBe(true);
+      FS.writeFileSync(target, `${JSON.stringify(snapshot())}\n`);
       expect(readSynaraStorageSnapshot(target)).toEqual(snapshot());
-      expect(FS.readdirSync(directory)).toEqual(["snapshot.json"]);
 
       await acknowledgeSynaraStorageSnapshot(target);
       expect(readSynaraStorageSnapshot(target)).toBeNull();
@@ -62,20 +60,6 @@ describe("desktopStorageMigration", () => {
         entries: { "synara:composer-drafts:v1": largeDraft },
       })?.entries["synara:composer-drafts:v1"],
     ).toBe(largeDraft);
-  });
-
-  it("does not replace a newer snapshot with an older export", async () => {
-    const directory = FS.mkdtempSync(Path.join(OS.tmpdir(), "synara-storage-migration-"));
-    const target = Path.join(directory, "snapshot.json");
-    try {
-      await saveSynaraStorageSnapshot(target, snapshot("2026-07-09T01:00:00.000Z"));
-      await expect(
-        saveSynaraStorageSnapshot(target, snapshot("2026-07-09T00:00:00.000Z")),
-      ).resolves.toBe(false);
-      expect(readSynaraStorageSnapshot(target)?.exportedAt).toBe("2026-07-09T01:00:00.000Z");
-    } finally {
-      FS.rmSync(directory, { recursive: true, force: true });
-    }
   });
 
   it("treats missing and malformed files as absent", () => {

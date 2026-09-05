@@ -30,7 +30,6 @@ import {
   isClaudeUltrathinkPrompt,
   normalizeAntigravityModelOptions,
   normalizeClaudeModelOptions,
-  normalizeCodexModelOptions,
   normalizeCursorModelOptions,
   normalizeGrokModelOptions,
   normalizeModelSlug,
@@ -42,9 +41,7 @@ import {
   resolveModelSlug,
   resolveModelSlugForProvider,
   getDefaultEffort,
-  getProviderOptionCurrentLabel,
   getProviderOptionDescriptors,
-  buildProviderOptionSelectionsFromDescriptors,
   hasEffortLevel,
   resolveGrokEffortFamily,
 } from "./model";
@@ -539,7 +536,6 @@ describe("provider option descriptor helpers", () => {
       type: "select",
       currentValue: "xhigh",
     });
-    expect(getProviderOptionCurrentLabel(reasoning)).toBe("Extra High");
     expect(fastMode).toMatchObject({
       type: "boolean",
       currentValue: true,
@@ -567,11 +563,6 @@ describe("provider option descriptor helpers", () => {
       type: "select",
       currentValue: "xhigh",
     });
-    expect(
-      getProviderOptionCurrentLabel(
-        grok46.find((descriptor) => descriptor.id === "reasoningEffort"),
-      ),
-    ).toBe("Extra High");
   });
 
   it("maps Pi reasoning controls onto the thinkingLevel option", () => {
@@ -632,7 +623,7 @@ describe("provider option descriptor helpers", () => {
       currentValue: true,
     });
   });
-  it("honors explicit descriptors and serializes their current values", () => {
+  it("honors explicit descriptors and applies their selected values", () => {
     const descriptors = getProviderOptionDescriptors({
       provider: "codex",
       caps: {
@@ -654,9 +645,6 @@ describe("provider option descriptor helpers", () => {
 
     expect(descriptors).toHaveLength(1);
     expect(descriptors[0]).toMatchObject({ id: "reasoningDepth", currentValue: "deep" });
-    expect(buildProviderOptionSelectionsFromDescriptors(descriptors)).toEqual([
-      { id: "reasoningDepth", value: "deep" },
-    ]);
   });
 });
 
@@ -713,23 +701,6 @@ describe("formatModelDisplayName", () => {
 
   it("leaves non-GPT custom slugs unchanged", () => {
     expect(formatModelDisplayName("custom/internal-model")).toBe("custom/internal-model");
-  });
-});
-
-describe("normalizeCodexModelOptions", () => {
-  it("drops default-only codex options", () => {
-    expect(
-      normalizeCodexModelOptions("gpt-5.4", { reasoningEffort: "high", fastMode: false }),
-    ).toBeUndefined();
-  });
-
-  it("preserves non-default codex options", () => {
-    expect(
-      normalizeCodexModelOptions("gpt-5.4", { reasoningEffort: "xhigh", fastMode: true }),
-    ).toEqual({
-      reasoningEffort: "xhigh",
-      fastMode: true,
-    });
   });
 });
 

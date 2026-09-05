@@ -285,7 +285,8 @@ describe("ProviderCommandReactor", () => {
       const nativeResumeSucceeded =
         nativeResumeAttempted && (input?.confirmNativeResume?.(effectiveResumeCursor) ?? true);
       if (
-        outcomeOptions?.registerPriorTranscriptBootstrapOnFreshStart === true &&
+        (outcomeOptions?.registerPriorTranscriptBootstrapOnFreshStart === true ||
+          (sessionInput.provider === "devin" && nativeResumeAttempted)) &&
         !nativeResumeSucceeded
       ) {
         pendingPriorTranscriptBootstraps.add(threadId);
@@ -952,7 +953,7 @@ describe("ProviderCommandReactor", () => {
     harness: Awaited<ReturnType<typeof createHarness>>,
     input: {
       readonly eventId: string;
-      readonly provider: "opencode";
+      readonly provider: "opencode" | "devin";
       readonly type: "completed" | "aborted";
       readonly threadId?: ThreadId;
       readonly turnId?: TurnId;
@@ -8763,7 +8764,7 @@ describe("ProviderCommandReactor", () => {
     expect(harness.startSession.mock.calls[1]?.[1]).not.toHaveProperty("resumeCursor");
   });
 
-  it.each(["opencode"] as const)(
+  it.each(["opencode", "devin"] as const)(
     "discards a pending %s transcript recap on explicit session stop",
     async (provider) => {
       const harness = await createHarness({
@@ -8880,7 +8881,7 @@ describe("ProviderCommandReactor", () => {
     },
   );
 
-  it.each(["opencode"] as const)(
+  it.each(["opencode", "devin"] as const)(
     "retains the %s transcript recap when async prompt submission aborts",
     async (provider) => {
       const harness = await createHarness({
@@ -9121,7 +9122,7 @@ describe("ProviderCommandReactor", () => {
     expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
   });
 
-  it.each(["opencode"] as const)(
+  it.each(["opencode", "devin"] as const)(
     "injects transcript context when %s rejects the persisted resume cursor",
     async (provider) => {
       const harness = await createHarness({
@@ -11068,6 +11069,52 @@ describe("ProviderCommandReactor", () => {
         "Stale pending user-input request: user-input-request-unclaimable",
       ),
     });
+  });
+
+  it("pauses a goal on explicit session stop during a Devin recovery gap", async () => {
+    const harness = await createHarness({
+      threadModelSelection: { provider: "devin", model: "swe-1.7" },
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const now = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("goal-before-session-gap-stop"),
+        threadId,
+        goal: "Finish the work",
+        goalStartBehavior: "defer",
+      }),
+    );
+    // Recovery has already settled its old turn. No adapter terminal event remains.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("session-gap-before-stop"),
+        threadId,
+        session: {
+          threadId,
+          status: "interrupted",
+          providerName: "devin",
+          runtimeMode: "full-access",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.stop",
+        commandId: CommandId.makeUnsafe("session-gap-user-stop"),
+        threadId,
+        createdAt: now,
+      }),
+    );
+    await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "stopped");
+    expect((await readHarnessThread(harness))?.goalPausedAt).toBeTruthy();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
   });
 
   it("reacts to thread.session.stop by stopping the runtime without deleting the binding", async () => {
