@@ -117,6 +117,7 @@ describe("bounded Droid secure storage reads", () => {
 it.skipIf(process.platform !== "win32")(
   "compiles the Windows bridge with the production clean environment",
   async () => {
+    let compilationError: childProcess.ExecFileException | null = null;
     vi.mocked(childProcess.execFile).mockImplementation(((
       file: string,
       args: string[],
@@ -136,8 +137,15 @@ it.skipIf(process.platform !== "win32")(
           ),
         ),
         options,
-        callback,
+        (error, stdout, stderr) => {
+          // This invocation cannot read credentials: Get() is replaced above with a literal.
+          compilationError = error;
+          callback(error, stdout, stderr);
+        },
       )) as typeof childProcess.execFile);
-    expect(await readDroidSecureKey({ ...ctx, platform: "win32" }, "keyring")).toBe("compiled");
+    const result = await readDroidSecureKey({ ...ctx, platform: "win32" }, "keyring");
+    expect(compilationError).toBeNull();
+    expect(result).toBe("compiled");
   },
+  15_000,
 );
