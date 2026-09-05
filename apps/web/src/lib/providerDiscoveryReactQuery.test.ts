@@ -4,7 +4,7 @@
 // Layer: Web data fetching tests
 
 import type { NativeApi, ProviderListModelsResult } from "@synara/contracts";
-import { QueryClient } from "@tanstack/react-query";
+import { hashKey, QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -398,7 +398,12 @@ describe("providerModelsQueryOptions", () => {
     );
     const interval = options.refetchInterval;
     if (typeof interval !== "function") throw new Error("Expected recovery polling");
-    const query = queryClient.getQueryCache().build(queryClient, options);
+    const query = queryClient
+      .getQueryCache()
+      .get<ProviderListModelsResult, Error, ProviderListModelsResult, typeof options.queryKey>(
+        hashKey(options.queryKey),
+      );
+    if (!query) throw new Error("Missing Devin query");
     expect(interval(query)).toBe(30_000);
     listModels.mockResolvedValue(catalog);
     await queryClient.refetchQueries({ queryKey: options.queryKey });
