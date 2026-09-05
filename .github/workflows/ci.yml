@@ -186,6 +186,12 @@ jobs:
           src/provider/providerStartupLifecycle.test.ts
           src/processRunner.test.ts
 
+      - name: Verify Windows credential reader compilation without credentials
+        run: >-
+          bun run --cwd apps/server test
+          src/providerUsage/providers/droidSecureStorage.test.ts
+          -t "compiles the Windows bridge"
+
       - name: Test Effect Windows process spawn
         run: bun run --cwd apps/server test src/windowsProcessEffect.test.ts
 

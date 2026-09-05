@@ -1,7 +1,7 @@
 // FILE: providerUsage/providers/droid.ts
 // Purpose: Read Factory CLI credentials and fetch the same standard/core limits shown by Droid's
-// `/limits` command. Credential access is read-only; FACTORY_API_KEY is the fallback when the local
-// token is unavailable, expired, or rejected.
+// `/limits` command. Credential access is read-only. An explicit FACTORY_API_KEY selects its own
+// account; otherwise use the local CLI login without refreshing or modifying its credentials.
 
 import type {
   ServerProviderUsageLimit,
@@ -11,12 +11,7 @@ import type {
 
 import { getDroidApiKeyEnv } from "../../provider/acp/DroidAcpSupport";
 import { credentialFingerprint } from "../credentials";
-import {
-  fetchJson,
-  isAuthFailureStatus,
-  isRateLimitStatus,
-  parseRetryAfterMs,
-} from "../http";
+import { fetchJson, isAuthFailureStatus, isRateLimitStatus, parseRetryAfterMs } from "../http";
 import {
   asFiniteNumber,
   asRecord,
@@ -35,6 +30,7 @@ import {
   droidCredentialCacheKey,
   resolveDroidLocalCredential,
   type DroidCredential,
+  type DroidCredentialResolution,
 } from "./droidCredentials";
 
 const SOURCE = "factory-billing-limits";
@@ -60,9 +56,7 @@ function droidHeaders(auth: DroidAuth): Record<string, string> {
     Authorization: `Bearer ${auth.accessToken}`,
     Accept: "application/json",
     "X-Factory-Client": "cli",
-    ...(auth.activeOrganizationId
-      ? { "X-Factory-Org-Id": auth.activeOrganizationId }
-      : {}),
+    ...(auth.activeOrganizationId ? { "X-Factory-Org-Id": auth.activeOrganizationId } : {}),
   };
 }
 
@@ -159,9 +153,18 @@ const droidResilience = createRateLimitResilience({
     `Factory usage is temporarily unavailable — showing the last values, retrying in ~${retryMins}m.`,
 });
 
+// Identity lookup failures never reuse billing data: the account/region has not been verified.
+const droidIdentityResilience = createRateLimitResilience({
+  provider: "droid",
+  source: SOURCE,
+  detail: (retryMins) =>
+    `Factory account lookup is temporarily unavailable — retrying in ~${retryMins}m.`,
+});
+
 /** Test-only: clear remembered last-good usage and cooldowns. */
 export function __resetDroidUsageRateLimitState(): void {
   droidResilience.reset();
+  droidIdentityResilience.reset();
 }
 
 async function fetchDroidUsage(auth: DroidAuth) {
@@ -170,7 +173,7 @@ async function fetchDroidUsage(auth: DroidAuth) {
   return fetchJson({
     service: "provider-usage-droid",
     url,
-    allowedOrigins: [new URL(url).origin],
+    allowedOrigins: [GLOBAL_API_BASE_URL, EU_API_BASE_URL],
     headers: droidHeaders(auth),
   });
 }
@@ -187,28 +190,102 @@ function localAuth(credential: DroidCredential): DroidAuth {
 }
 
 function authKey(ctx: ProviderUsageContext, auth: DroidAuth): string {
-  return `${ctx.homeDir}:${auth.kind}:${credentialFingerprint(auth.accessToken)}`;
+  return `${ctx.homeDir}:${auth.kind}:${credentialFingerprint(
+    JSON.stringify([auth.accessToken, auth.activeOrganizationId ?? null, auth.region ?? "global"]),
+  )}`;
+}
+
+// The orchestrator passes one context object to cacheKey/fetch. Consume the same credential
+// snapshot, then let its post-fetch cacheKey call re-read storage. No A -> B -> A cache poisoning.
+const preparedCredentials = new WeakMap<
+  ProviderUsageContext,
+  {
+    resolution: DroidCredentialResolution;
+    apiKey: string | undefined;
+  }
+>();
+
+async function resolveSelection(ctx: ProviderUsageContext) {
+  const apiKey = getDroidApiKeyEnv(ctx.env);
+  return {
+    apiKey,
+    resolution: apiKey
+      ? { credential: null, localLoginPresent: false }
+      : await resolveDroidLocalCredential(ctx),
+  };
 }
 
 export const droidUsageFetcher: ProviderUsageFetcher = {
   provider: "droid",
   async cacheKey(ctx) {
-    const resolution = await resolveDroidLocalCredential(ctx);
-    return droidCredentialCacheKey(ctx, resolution, getDroidApiKeyEnv(ctx.env));
+    const selection = await resolveSelection(ctx);
+    preparedCredentials.set(ctx, selection);
+    // API-key residency is resolved by whoami, so do not reuse the outer cache before it.
+    return selection.apiKey ? null : droidCredentialCacheKey(ctx, selection.resolution, undefined);
   },
   async fetch(ctx) {
-    const resolution = await resolveDroidLocalCredential(ctx);
-    const apiKey = getDroidApiKeyEnv(ctx.env);
-    const candidates: DroidAuth[] = [];
+    const selection = preparedCredentials.get(ctx) ?? (await resolveSelection(ctx));
+    preparedCredentials.delete(ctx);
+    const { resolution, apiKey } = selection;
+    let auth: DroidAuth | undefined;
     const local = resolution.credential;
-    if (local && (local.expiresAtMs === null || local.expiresAtMs > ctx.nowMs)) {
-      candidates.push(localAuth(local));
-    }
     if (apiKey) {
-      candidates.push({ accessToken: apiKey, kind: "api-key" });
+      // Factory's CLI validates API keys at the global whoami endpoint and uses that
+      // principal's org/region. Never copy a local WorkOS account's org or region.
+      const identityKey = `${ctx.homeDir}:api:${credentialFingerprint(apiKey)}`;
+      const identityCooldown = droidIdentityResilience.serveDuringCooldown(identityKey, ctx.nowMs);
+      if (identityCooldown) return identityCooldown;
+      try {
+        const identity = await fetchJson({
+          service: "provider-usage-droid",
+          url: `${GLOBAL_API_BASE_URL}/api/cli/whoami`,
+          allowedOrigins: [GLOBAL_API_BASE_URL],
+          headers: { Authorization: `Bearer ${apiKey}`, "X-Factory-Whoami-Extended": "true" },
+        });
+        if (isAuthFailureStatus(identity.status))
+          return needsAuthSnapshot("droid", ctx.nowMs, SOURCE);
+        if (!identity.ok)
+          return droidIdentityResilience.enterCooldown(
+            identityKey,
+            ctx.nowMs,
+            parseRetryAfterMs(identity.headers, ctx.nowMs),
+          );
+        const data = asRecord(identity.json);
+        const org = asString(data?.orgId);
+        const user = asString(data?.userId);
+        const region = data?.region ?? "global";
+        if (
+          !identity.ok ||
+          !org ||
+          !user ||
+          (region !== "global" && region !== "eu") ||
+          data?.isOnPrem === true ||
+          data?.premBaseHost
+        ) {
+          return droidIdentityResilience.enterCooldown(identityKey, ctx.nowMs, undefined);
+        }
+        auth = {
+          accessToken: apiKey,
+          kind: "api-key",
+          activeOrganizationId: org,
+          region,
+        };
+      } catch {
+        return droidIdentityResilience.enterCooldown(identityKey, ctx.nowMs, undefined);
+      }
+    } else if (local && local.expiresAtMs !== null && local.expiresAtMs > ctx.nowMs) {
+      if (local.region && local.region !== "eu" && local.region !== "global") {
+        return errorSnapshot(
+          "droid",
+          ctx.nowMs,
+          SOURCE,
+          "Factory credential region is unsupported.",
+        );
+      }
+      auth = localAuth(local);
     }
 
-    if (candidates.length === 0) {
+    if (!auth) {
       if (local?.expiresAtMs !== null && local?.expiresAtMs !== undefined) {
         const stale = droidResilience.enterCooldown(
           authKey(ctx, localAuth(local)),
@@ -233,37 +310,33 @@ export const droidUsageFetcher: ProviderUsageFetcher = {
         : needsAuthSnapshot("droid", ctx.nowMs, SOURCE);
     }
 
-    for (const auth of candidates) {
-      const key = authKey(ctx, auth);
-      const cooldown = droidResilience.serveDuringCooldown(key, ctx.nowMs);
-      if (cooldown) {
-        return cooldown;
+    const key = authKey(ctx, auth);
+    const cooldown = droidResilience.serveDuringCooldown(key, ctx.nowMs);
+    if (cooldown) {
+      return cooldown;
+    }
+    try {
+      const result = await fetchDroidUsage(auth);
+      if (isAuthFailureStatus(result.status)) {
+        return needsAuthSnapshot("droid", ctx.nowMs, SOURCE);
       }
-      try {
-        const result = await fetchDroidUsage(auth);
-        if (isAuthFailureStatus(result.status)) {
-          continue;
-        }
-        if (isRateLimitStatus(result.status)) {
-          return droidResilience.enterCooldown(
-            key,
-            ctx.nowMs,
-            parseRetryAfterMs(result.headers, ctx.nowMs),
-          );
-        }
-        if (!result.ok) {
-          return droidResilience.enterCooldown(key, ctx.nowMs, undefined);
-        }
-        const snapshot = parseDroidUsage({ json: result.json, nowMs: ctx.nowMs });
-        if (snapshot.status === "ok") {
-          droidResilience.rememberLastGood(key, snapshot, ctx.nowMs);
-        }
-        return snapshot;
-      } catch {
+      if (isRateLimitStatus(result.status)) {
+        return droidResilience.enterCooldown(
+          key,
+          ctx.nowMs,
+          parseRetryAfterMs(result.headers, ctx.nowMs),
+        );
+      }
+      if (!result.ok) {
         return droidResilience.enterCooldown(key, ctx.nowMs, undefined);
       }
+      const snapshot = parseDroidUsage({ json: result.json, nowMs: ctx.nowMs });
+      if (snapshot.status === "ok") {
+        droidResilience.rememberLastGood(key, snapshot, ctx.nowMs);
+      }
+      return snapshot;
+    } catch {
+      return droidResilience.enterCooldown(key, ctx.nowMs, undefined);
     }
-
-    return needsAuthSnapshot("droid", ctx.nowMs, SOURCE);
   },
 };

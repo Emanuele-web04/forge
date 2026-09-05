@@ -99,7 +99,7 @@ export function normalizeRateLimitLabel(
   label: string | undefined,
   windowDurationMins?: number,
 ): string {
-  if (!label) return "Current";
+  if (!label) return windowLabelFromDuration(windowDurationMins) ?? "Current";
 
   const normalized = label
     .trim()
