@@ -15,6 +15,7 @@ import {
   WS_PROTOCOL_EPOCH,
   WS_PROTOCOL_MAX_REVISION,
   WS_PROTOCOL_MIN_REVISION,
+  WS_PROJECT_FILE_WATCH_CAPABILITY,
   WsCompatibilityError,
   type WsBootstrapNegotiateResult,
 } from "@synara/contracts";
@@ -307,6 +308,31 @@ describe("WsTransport", () => {
 
     expect(internals.projectFileSubscriptions.size).toBe(0);
     expect(internals.stopStream).toHaveBeenCalledWith(key);
+  });
+
+  it("does not open a file stream after its subscription is cancelled during connection", async () => {
+    const { transport, internals } = makeBareTransport();
+    let resolveClient!: (client: unknown) => void;
+    internals.getClient = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveClient = resolve;
+        }),
+    );
+    const subscribeFile = vi.fn(() => Stream.never);
+    Object.assign(internals, {
+      compatibility: { capabilities: [WS_PROJECT_FILE_WATCH_CAPABILITY] },
+    });
+    const unsubscribe = transport.subscribeProjectFileChange(
+      { cwd: "/repo", relativePath: "app.ts" },
+      vi.fn(),
+    );
+    unsubscribe();
+    resolveClient({ [WS_METHODS.projectsSubscribeFileChange]: subscribeFile });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(subscribeFile).not.toHaveBeenCalled();
+    expect(internals.projectFileSubscriptions.size).toBe(0);
   });
 
   it("returns the completed GitHub provisioning result and emits each progress event", async () => {
@@ -1340,7 +1366,7 @@ describe("WsTransport", () => {
     await expect(internals.getClient()).resolves.toBe(recoveredClient);
   });
 
-  it("keeps reconnecting and restores shell and thread subscriptions after recovery", async () => {
+  it("keeps reconnecting and restores shell, thread and file subscriptions after recovery", async () => {
     vi.useFakeTimers();
     bindWindowTimersToCurrentGlobals();
     try {
@@ -1361,6 +1387,12 @@ describe("WsTransport", () => {
       const startChannelStream = vi.fn();
       const startShellStream = vi.fn(async () => undefined);
       const startThreadStream = vi.fn(async () => undefined);
+      const startProjectFileChangeStream = vi.fn();
+      const watchedFile = {
+        input: { cwd: "/repo", relativePath: "app.ts" },
+        listeners: new Set([vi.fn()]),
+      };
+      const fileKey = projectFileChangeStreamKey(watchedFile.input);
       Object.assign(internals, {
         disposed: false,
         state: "closed",
@@ -1370,7 +1402,8 @@ describe("WsTransport", () => {
         listeners: new Map([[WS_CHANNELS.serverWelcome, new Set([vi.fn()])]]),
         shellSubscribed: true,
         threadSubscriptions: new Map([[threadId, input]]),
-        projectFileSubscriptions: new Map(),
+        projectFileSubscriptions: new Map([[fileKey, watchedFile]]),
+        startProjectFileChangeStream,
         runtime: null,
         clientScope: null,
         createSession,
@@ -1393,6 +1426,11 @@ describe("WsTransport", () => {
       expect(startShellStream).toHaveBeenCalledOnce();
       expect(startThreadStream).toHaveBeenCalledOnce();
       expect(startThreadStream).toHaveBeenCalledWith(client, threadId, input);
+      expect(startProjectFileChangeStream).toHaveBeenCalledExactlyOnceWith(
+        client,
+        fileKey,
+        watchedFile,
+      );
     } finally {
       vi.useRealTimers();
     }

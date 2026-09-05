@@ -74,6 +74,41 @@ describe("watchWorkspaceFile", () => {
     }
   });
 
+  it.each(["file", "directory"] as const)(
+    "rejects an outside-root symlink through a %s",
+    async (kind) => {
+      const workspaceRoot = await makeWorkspace();
+      const outsideRoot = await makeWorkspace();
+      await NodeFileSystem.writeFile(NodePath.join(outsideRoot, "target.ts"), "outside");
+      await NodeFileSystem.symlink(
+        kind === "file" ? NodePath.join(outsideRoot, "target.ts") : outsideRoot,
+        NodePath.join(workspaceRoot, "link"),
+      );
+      const error = await Effect.runPromise(
+        watchWorkspaceFile({
+          cwd: workspaceRoot,
+          relativePath: kind === "file" ? "link" : "link/target.ts",
+        }).pipe(Stream.runHead, Effect.flip),
+      );
+      expect(error).toBeInstanceOf(WorkspacePathOutsideRootError);
+    },
+  );
+
+  it("allows an in-root symlink and emits the requested relative path", async () => {
+    const workspaceRoot = await makeWorkspace();
+    await NodeFileSystem.writeFile(NodePath.join(workspaceRoot, "target.ts"), "inside");
+    await NodeFileSystem.symlink("target.ts", NodePath.join(workspaceRoot, "link.ts"));
+    const events = await Effect.runPromise(
+      watchWorkspaceFile({ cwd: workspaceRoot, relativePath: "link.ts" }).pipe(
+        Stream.take(1),
+        Stream.runCollect,
+      ),
+    );
+    expect(Array.from(events)).toEqual([
+      { type: "changed", relativePath: "link.ts", mtimeMs: expect.any(Number) },
+    ]);
+  });
+
   it("rejects paths outside the workspace root before opening a watcher", async () => {
     const workspaceRoot = await makeWorkspace();
     const error = await Effect.runPromise(

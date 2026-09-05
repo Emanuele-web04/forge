@@ -909,6 +909,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         cwd={props.workspaceRoot}
         previewGrant={localPreviewGrant}
         cacheKey={binaryPreviewRevision}
+        onReload={handleFileReload}
         openInTarget={openInTarget}
         onPreviewReady={handleBinaryPreviewReady}
         onPreviewError={handleBinaryPreviewError}
