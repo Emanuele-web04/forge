@@ -3618,6 +3618,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
             {
               id: sentId,
               role: "user",
+              source: "native",
+              turnId: null,
               text: "Continue with a long streamed response",
               createdAt: isoAt(1_200),
               updatedAt: isoAt(1_200),
@@ -3646,6 +3648,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           {
             id: messageId,
             role: "assistant",
+            source: "native",
             text: "The response begins.",
             turnId,
             streaming: true,
