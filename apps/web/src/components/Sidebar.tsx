@@ -661,9 +661,8 @@ const THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME = cn(
 /** Status glyph slot; matches the 15px meta-chip column so trailing icons stay compact. */
 function threadRowStatusSlotClassName(isSubagentThread: boolean, toneClassName?: string): string {
   return cn(
-    // The status glyph stays visible on hover (only the meta chips fade), so the
-    // hover-action overlay carries its own solid background to sit above it.
     "flex w-[15px] shrink-0 items-center justify-center leading-none tabular-nums",
+    sidebarHoverRevealHideClassName("thread-row"),
     isSubagentThread
       ? "text-[10px]"
       : // Nudge the timestamp a hair above the meta scale while still tracking the user's
@@ -4981,12 +4980,7 @@ export default function Sidebar() {
     const includePinToggle = input.includePinToggle !== false;
 
     return (
-      <SidebarRowHoverActions
-        testId={`thread-hover-actions-${input.threadId}`}
-        // Solid background so the actions read as an overlay above the status
-        // glyph, which no longer fades out on hover.
-        className="rounded-md bg-[var(--sidebar-background,var(--background))]"
-      >
+      <SidebarRowHoverActions testId={`thread-hover-actions-${input.threadId}`}>
         <div className="pointer-events-auto inline-flex items-center gap-2">
           {includePinToggle ? (
             <ThreadPinToggleButton
