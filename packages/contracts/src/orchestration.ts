@@ -36,6 +36,7 @@ export const ORCHESTRATION_WS_METHODS = {
   getThreadDetailSnapshot: "orchestration.getThreadDetailSnapshot",
   dispatchCommand: "orchestration.dispatchCommand",
   importThread: "orchestration.importThread",
+  regenerateThreadTitle: "orchestration.regenerateThreadTitle",
   repairState: "orchestration.repairState",
   getTurnDiff: "orchestration.getTurnDiff",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
@@ -1258,6 +1259,8 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   title: Schema.optional(TrimmedNonEmptyString),
+  /** Apply the title only while no newer durable title event exists. */
+  expectedTitleSequence: Schema.optional(NonNegativeInt),
   modelSelection: Schema.optional(ModelSelection),
   envMode: Schema.optional(ThreadEnvironmentMode),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -2703,6 +2706,22 @@ export const OrchestrationImportThreadResult = Schema.Struct({
 });
 export type OrchestrationImportThreadResult = typeof OrchestrationImportThreadResult.Type;
 
+export const OrchestrationRegenerateThreadTitleInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type OrchestrationRegenerateThreadTitleInput =
+  typeof OrchestrationRegenerateThreadTitleInput.Type;
+
+export const OrchestrationRegenerateThreadTitleResult = Schema.Union([
+  Schema.Struct({
+    status: Schema.Literals(["renamed", "unchanged"]),
+    title: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({ status: Schema.Literals(["no-context", "stale"]), title: Schema.Null }),
+]);
+export type OrchestrationRegenerateThreadTitleResult =
+  typeof OrchestrationRegenerateThreadTitleResult.Type;
+
 export const OrchestrationUnsubscribeThreadInput = Schema.Struct({
   threadId: ThreadId,
 });
@@ -2732,6 +2751,10 @@ export const OrchestrationRpcSchemas = {
   importThread: {
     input: OrchestrationImportThreadInput,
     output: OrchestrationImportThreadResult,
+  },
+  regenerateThreadTitle: {
+    input: OrchestrationRegenerateThreadTitleInput,
+    output: OrchestrationRegenerateThreadTitleResult,
   },
   getTurnDiff: {
     input: OrchestrationGetTurnDiffInput,

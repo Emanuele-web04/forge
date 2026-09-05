@@ -273,6 +273,15 @@ export const WsOrchestrationImportThreadRpc = Rpc.make(ORCHESTRATION_WS_METHODS.
   error: WsRpcError,
 });
 
+export const WsOrchestrationRegenerateThreadTitleRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.regenerateThreadTitle,
+  {
+    payload: OrchestrationRpcSchemas.regenerateThreadTitle.input,
+    success: OrchestrationRpcSchemas.regenerateThreadTitle.output,
+    error: WsRpcError,
+  },
+);
+
 export const WsOrchestrationGetSnapshotRpc = Rpc.make(ORCHESTRATION_WS_METHODS.getSnapshot, {
   payload: OrchestrationRpcSchemas.getSnapshot.input,
   success: OrchestrationRpcSchemas.getSnapshot.output,
@@ -1241,6 +1250,7 @@ export const WsBootstrapRpcGroup = RpcGroup.make(WsBootstrapNegotiateRpc);
 export const WsFeatureRpcGroup = RpcGroup.make(
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationImportThreadRpc,
+  WsOrchestrationRegenerateThreadTitleRpc,
   WsOrchestrationGetSnapshotRpc,
   WsOrchestrationGetShellSnapshotRpc,
   WsOrchestrationGetThreadDetailSnapshotRpc,

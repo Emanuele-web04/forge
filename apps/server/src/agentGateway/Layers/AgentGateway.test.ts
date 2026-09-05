@@ -481,6 +481,7 @@ function makeHarnessLayer(
             .map((event) => event.sequence),
         ),
       ),
+    getThreadTitleHighWaterSequence: () => Effect.succeed(0),
     readThreadEvents: (input: {
       threadId: string;
       throughSequenceInclusive: number;

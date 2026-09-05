@@ -184,7 +184,7 @@ import {
   type AutomationDraftWarning,
   type AutomationDraftWarningId,
 } from "../lib/automationDraft";
-import { dispatchThreadRename } from "../lib/threadRename";
+import { buildDraftThreadRenameCreateInput, dispatchThreadRename } from "../lib/threadRename";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { splitComposerDropzoneFiles, useComposerDropzone } from "../hooks/useComposerDropzone";
 import { useComposerImageIntake } from "../hooks/useComposerImageIntake";
@@ -10415,6 +10415,7 @@ export default function ChatView({
     activeThread,
     activeRootBranch,
     isServerThread,
+    isLocalDraftThread,
     supportsFastSlashCommand,
     canOfferCompactCommand:
       supportsThreadCompaction(providerComposerCapabilitiesQuery.data) &&
@@ -11155,20 +11156,7 @@ export default function ChatView({
       newTitle,
       unchangedTitles: [activeThread.title],
       createIfMissing: isLocalDraftThread
-        ? {
-            projectId: activeThread.projectId,
-            modelSelection: activeThread.modelSelection,
-            runtimeMode: activeThread.runtimeMode,
-            interactionMode: activeThread.interactionMode,
-            envMode: activeThread.envMode ?? "local",
-            branch: activeThread.branch,
-            worktreePath: activeThread.worktreePath,
-            workingDirectory: activeThread.workingDirectory ?? null,
-            ...(activeThread.lastKnownPr !== undefined
-              ? { lastKnownPr: activeThread.lastKnownPr }
-              : {}),
-            createdAt: activeThread.createdAt,
-          }
+        ? buildDraftThreadRenameCreateInput(activeThread)
         : undefined,
     }).catch((error) => {
       toastManager.add({
