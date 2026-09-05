@@ -1,0 +1,234 @@
+---
+title: External MCP
+description: Pair another local application with a restricted, user-approved Synara task surface.
+---
+
+External MCP lets another local application—such as Codex, Claude Code, or an MCP-capable desktop client—create and inspect restricted Synara tasks through a user-approved integration.
+
+It is separate from the internal [Agent Gateway](/docs/workflows/agent-gateway) injected into supported provider sessions already running inside Synara.
+
+## Internal gateway or external integration
+
+| Surface       | Caller                                  | Authority model                                                                            |
+| ------------- | --------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Agent Gateway | A provider session inside a Synara task | Thread-scoped capabilities and caller-turn authority                                       |
+| External MCP  | Another paired local application        | User-created integration with selected projects, scopes, limits, and revocable credentials |
+
+Use External MCP when work begins outside Synara but should execute through Synara’s durable task and worktree pipeline.
+
+## Create the integration
+
+<Steps>
+<Step>
+
+### Open Integrations
+
+Start Synara and open **Settings → Integrations**.
+
+</Step>
+<Step>
+
+### Define access
+
+Name the integration and choose whether it can use every current and future project or only selected projects.
+
+Safe defaults restrict task creation to managed worktrees and approval-required execution. Keep those defaults unless the workflow genuinely requires broader authority.
+
+</Step>
+<Step>
+
+### Review advanced permissions
+
+Local-checkout execution, broader task reads, and full-access execution are independent high-impact scopes. Grant only what the external client needs.
+
+</Step>
+<Step>
+
+### Create and pair
+
+Choose **Create integration**. For an agentic MCP client, copy the generated setup prompt into that client. For a client that cannot complete the guided prompt, use the copy-ready configuration after completing pairing in Synara.
+
+</Step>
+<Step>
+
+### Verify the connection
+
+The integration moves through waiting, paired, and connected states. The setup flow verifies the connection with `synara_overview`.
+
+</Step>
+</Steps>
+
+The generated setup is preferred because it uses the exact executable and data directory of the running Synara installation. It does not require you to guess a global Synara command, project ID, model slug, request ID, or credential path.
+
+## Pairing lifecycle
+
+If a pairing code expires or the page reloads, use **Resume pairing**. For an already paired integration, **Continue setup** restores the generated setup instructions.
+
+A new pairing code does not replace a previously paired credential automatically.
+
+The MCP client configuration contains the local bridge command and integration identifier. It does not contain the raw integration credential.
+
+## External tool surface
+
+The advertised tool catalog is filtered by the integration’s granted scopes. It can include:
+
+- `synara_overview` — allowed projects, paths, provider availability, scopes, defaults, limits, activity, and suggested next steps
+- `synara_capabilities` — valid provider/model construction and safety limits for an allowed project
+- `synara_list_allowed_projects` — only projects granted to the integration
+- `synara_create_task` — one durable task for one stable `requestId`
+- `synara_wait_for_task` — wait for an authorized task without changing it
+- `synara_read_task` — read tasks owned by the integration, with broader project reads requiring a separate scope
+
+External MCP intentionally exposes a smaller surface than the internal Agent Gateway.
+
+## Create a task safely
+
+Task creation requires an explicit:
+
+- `projectId`
+- Provider
+- Model
+- Prompt
+- Stable `requestId`
+
+Safe defaults are:
+
+- Managed worktree environment
+- Approval-required runtime mode
+
+Use `synara_overview` and `synara_capabilities` first. Do not guess IDs, model slugs, or option shapes.
+
+A stable request ID makes retry behavior durable:
+
+- Reusing it with the same plan replays the existing result
+- Reusing it with a different plan is rejected
+- An ambiguous client response should be retried with the same ID after reading current state
+
+Do not generate a new request ID merely because the first response was lost.
+
+## Project and task ownership
+
+An integration can create tasks only in projects it is allowed to use.
+
+By default, it reads tasks it created. Reading other tasks in an allowed project requires a separate `tasks:read-project` permission.
+
+Keep integrations narrow:
+
+- A CI assistant may need one repository
+- A personal coding client may need several selected projects
+- A general local orchestrator may need all projects, but still should not receive unnecessary full-access or local-checkout authority
+
+## Limits and active task slots
+
+Each integration has project, capability, rate, and active-agent-task limits.
+
+An active slot is reserved while task creation is in progress and remains occupied while the owned task’s current turn is pending or running. Idempotent retries of the same request do not consume another slot.
+
+When a limit is reached, inspect active tasks and finish, interrupt, or wait for them. Do not create additional integrations to evade an intentional safety limit.
+
+## Security model
+
+External MCP is designed for local use:
+
+- The external endpoint is available only while Synara is loopback-only.
+- Configuring published or remote server access disables the external endpoint rather than exposing it remotely.
+- Credentials use a fixed external-MCP audience and cannot authenticate browser, WebSocket, internal provider-session, or general server-token paths.
+- Credentials are expiring and revocable.
+- Synara stores credential hashes in its server database rather than raw server-side credentials.
+- The local credential file is stored under the Synara home directory with restrictive POSIX permissions where supported.
+- The bridge verifies the running local instance with a fresh challenge before forwarding credentials or pairing codes.
+
+On Windows, the credential remains under the current user profile but does not receive the same POSIX mode guarantee. Protect the Windows account and Synara data directory accordingly.
+
+## Audit and privacy
+
+Audit rows can record:
+
+- Integration identity
+- Tool name
+- Request ID
+- Project
+- Environment and runtime mode
+- Outcome
+- Created task IDs
+
+Full prompts are not copied into audit rows or durable recovery plans.
+
+Still treat prompts as sensitive application data. Do not place secrets in them merely because the audit layer omits their full text.
+
+## Revocation
+
+Revoke an integration from **Settings → Integrations**.
+
+Revocation takes effect immediately for new requests and continuing long-running operations. Create and pair a new integration rather than trying to reuse a revoked credential.
+
+Also revoke an integration when:
+
+- The external client or machine is no longer trusted
+- Project access should be reduced
+- A credential file may have been copied
+- The integration was created for a temporary workflow
+- You no longer understand why it needs its current scopes
+
+## Manual configuration
+
+Use generated setup whenever possible. Manual configuration is appropriate for clients that cannot execute the guided prompt.
+
+A generated bridge command includes:
+
+- The exact runtime executable
+- The exact Synara server entry point
+- `mcp serve`
+- The integration identifier
+- The actual Synara home directory
+- `ELECTRON_RUN_AS_NODE=1` where desktop packaging requires it
+
+Do not copy a configuration from another Synara installation without updating its executable and home directory. The bridge intentionally fails rather than silently connecting to an ambiguous or unsafe instance.
+
+## Failure handling
+
+### Waiting for pairing never completes
+
+Use **Resume pairing**, confirm Synara is still running, and restart the guided setup. Do not manually paste raw credentials into the client configuration.
+
+### Paired but not connected
+
+The client has a credential but has not successfully called the bridge. Verify the generated command, executable paths, Synara home directory, and local client logs.
+
+### The wrong projects appear
+
+Review the integration’s selected projects and scopes. `synara_list_allowed_projects` should never return projects outside that grant.
+
+### Task creation is rejected
+
+Read `synara_overview` and `synara_capabilities`. Check project access, provider availability, model selection, active-task limits, and whether the requested environment or runtime mode requires an ungranted scope.
+
+### A retry conflicts with the request ID
+
+The new plan differs from the original durable request. Use the original plan or create a new intentional request ID after confirming you want a distinct task.
+
+### No instance or multiple instances are found
+
+Close stale Synara instances or use the generated configuration for the intended installation. The bridge will not guess between ambiguous local runtimes.
+
+### The credential is revoked or expired
+
+Create and pair a new integration. Do not weaken validation or modify the credential file to bypass lifecycle checks.
+
+## External MCP checklist
+
+- [ ] The integration has a clear purpose and owner
+- [ ] Only required projects are allowed
+- [ ] Managed worktree and approval-required defaults are preserved where possible
+- [ ] Advanced scopes are individually justified
+- [ ] Generated setup uses the intended Synara installation
+- [ ] `synara_overview` verifies the connection
+- [ ] Stable request IDs are reused for retries
+- [ ] Created tasks and active slots are monitored
+- [ ] Audit information and prompts are treated appropriately
+- [ ] Temporary or untrusted integrations are revoked
+
+<Callout type="warn" title="External MCP is local, scoped authority">
+  Pairing another client grants it real ability to create Synara work. Keep project access and
+  execution permissions narrow, and revoke integrations that are no longer needed.
+</Callout>

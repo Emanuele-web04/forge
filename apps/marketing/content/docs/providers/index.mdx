@@ -1,0 +1,132 @@
+---
+title: Provider guides
+description: Install, authenticate, verify, and connect every coding-agent runtime supported by Synara.
+---
+
+Synara works with coding-agent runtimes installed on your machine. These guides explain what each runtime owns, how to verify it independently, and what Synara adds around the provider session.
+
+<Callout type="info" title="Synara is not the provider account">
+  Provider authentication, subscriptions, API keys, model access, and service availability remain
+  with the provider. Synara supplies the shared workspace, task lifecycle, Git environment,
+  terminal, browser, diff, and orchestration surfaces around that runtime.
+</Callout>
+
+## Supported runtimes
+
+| Provider                                       | Default executable | Typical authentication                                 | Steer an active turn |
+| ---------------------------------------------- | ------------------ | ------------------------------------------------------ | -------------------- |
+| [Claude Code](/docs/providers/claude-code)     | `claude`           | Claude account, Console, Bedrock, or Vertex            | Yes                  |
+| [Codex](/docs/providers/codex)                 | `codex`            | ChatGPT account, API key, or configured model provider | Yes                  |
+| [OpenCode](/docs/providers/opencode)           | `opencode`         | Credentials configured inside OpenCode                 | No                   |
+| [Cursor](/docs/providers/cursor)               | `cursor-agent`     | Cursor browser login or API key                        | No                   |
+| [Antigravity](/docs/providers/antigravity)     | `agy`              | Secure keyring and Google sign-in                      | No                   |
+| [Grok Build](/docs/providers/grok)             | `grok`             | Cached account session or xAI API key                  | No                   |
+| [Devin CLI](/docs/providers/devin)             | `devin`            | Devin account login or `WINDSURF_API_KEY`              | No                   |
+| [Pi](/docs/providers/pi)                       | `pi`               | Subscription login or provider API key                 | Yes                  |
+| [Factory Droid](/docs/providers/factory-droid) | `droid`            | Browser device pairing or Factory API key              | No                   |
+
+“Steer an active turn” means Synara can inject a follow-up into supported runtimes while the current provider turn is still running. It does not mean the provider will always accept or act on the message immediately.
+
+## Choose a provider
+
+Choose based on the runtime and account you already trust rather than assuming every provider behaves identically.
+
+- **Account access:** confirm the provider works in its own terminal before debugging Synara.
+- **Models:** Synara shows what the installed runtime and account expose.
+- **Permissions:** approval and autonomy semantics remain provider-specific even when Synara presents them consistently.
+- **Session behavior:** resume, compaction, plan mode, subagents, and live steering vary by provider.
+- **Updates:** an old CLI can be installed and authenticated while still being too old for the integration Synara expects.
+
+## Shared connection workflow
+
+<Steps>
+<Step>
+
+### Install the official runtime
+
+Use the provider’s official installation method. Avoid similarly named third-party packages.
+
+</Step>
+<Step>
+
+### Authenticate outside Synara
+
+Start the runtime in a normal terminal and complete its own login or credential flow.
+
+</Step>
+<Step>
+
+### Verify the executable
+
+Run its version or status command from a fresh shell. This confirms that the executable is available through the environment inherited by desktop applications.
+
+</Step>
+<Step>
+
+### Enable it in Synara
+
+Open provider settings, enable the runtime, and configure a custom binary path only when automatic discovery does not select the intended installation.
+
+</Step>
+<Step>
+
+### Run a bounded test task
+
+Use a disposable repository or harmless read-only request before granting broad permissions in important work.
+
+</Step>
+</Steps>
+
+## Provider guides
+
+<Cards>
+  <Card
+    title="Claude Code"
+    description="Claude authentication, models, effort, approvals, subagents, and live steering."
+    href="/docs/providers/claude-code"
+  />
+  <Card
+    title="Codex"
+    description="ChatGPT or API authentication, models, reasoning effort, approvals, and live steering."
+    href="/docs/providers/codex"
+  />
+  <Card
+    title="OpenCode"
+    description="OpenCode installation, provider credentials, model catalogs, and variants."
+    href="/docs/providers/opencode"
+  />
+  <Card
+    title="Cursor"
+    description="Cursor Agent installation, login, executable discovery, and ACP sessions."
+    href="/docs/providers/cursor"
+  />
+  <Card
+    title="Antigravity"
+    description="Install the agy runtime, authenticate through the keyring, and connect it to Synara."
+    href="/docs/providers/antigravity"
+  />
+  <Card
+    title="Grok Build"
+    description="Install Grok Build, authenticate with an account or API key, and select models safely."
+    href="/docs/providers/grok"
+  />
+  <Card
+    title="Devin CLI"
+    description="Connect Devin through ACP with account authentication, models, commands, plan mode, and compaction."
+    href="/docs/providers/devin"
+  />
+  <Card
+    title="Pi"
+    description="Configure Pi subscription or API-key providers and use supported live steering."
+    href="/docs/providers/pi"
+  />
+  <Card
+    title="Factory Droid"
+    description="Connect Droid through device pairing or an API key and use ACP model and plan controls."
+    href="/docs/providers/factory-droid"
+  />
+</Cards>
+
+## When a provider is missing
+
+Start with the provider-specific guide, then continue to [Troubleshooting](/docs/troubleshooting). Report the executable path, version, authentication state, operating system, and the exact Synara message. Remove tokens, keys, account identifiers, and private paths before sharing diagnostics.

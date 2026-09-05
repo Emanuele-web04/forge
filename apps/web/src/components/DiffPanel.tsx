@@ -33,6 +33,7 @@ import {
   appendComposerPromptText,
   buildDiffSelectionReference,
   buildWhyChangedPrompt,
+  normalizeSelectionSnippet,
 } from "../lib/chatReferences";
 import { resolveDiffEnvironmentState } from "../lib/threadEnvironment";
 import { disclosureWidthClassName } from "../lib/disclosureMotion";
@@ -914,12 +915,10 @@ export default function DiffPanel({
       return null;
     }
     const filePath = anchorRow.getAttribute("data-diff-file-path") ?? "";
-    const text = selection
-      .toString()
-      .replace(/\r\n/g, "\n")
-      .replace(/^\n+|\n+$/g, "")
-      .trim();
-    if (filePath.length === 0 || text.length === 0) {
+    // Read the text from the selection rather than its range: ranges are
+    // retargeted at the shadow host, so `range.toString()` would be empty.
+    const text = normalizeSelectionSnippet(selection.toString());
+    if (filePath.length === 0 || text === null) {
       return null;
     }
     return { filePath, text };

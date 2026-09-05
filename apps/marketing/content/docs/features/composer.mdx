@@ -1,0 +1,51 @@
+---
+title: Composer & attachments
+description: Everything you can feed an agent — files, images, folders, screenshots, inline comments, and pasted context.
+---
+
+The composer is more than a text box. The more precise the context you attach, the less the agent has to guess — these are the tools for that.
+
+## Attach files and images
+
+Drag files or images into the composer, paste them, or use mentions. Attachments render as chips and cards, previews are worktree-aware, and paths with spaces or parentheses survive intact. Browsing your prompt history keeps a draft's attachments instead of stripping them.
+
+## Mention folders
+
+A folder mention opens a real local directory picker, so you can drill into nearby files without typing paths by hand.
+
+## Paste large text as cards
+
+Big pasted blocks collapse into attachment-style cards with line and character counts. They stay expandable, keep the composer readable, and survive message edits.
+
+## Comment on specific lines
+
+From file previews you can leave focused, line-level comments and send them with your next prompt. This is the highest-signal way to say "change _this_, not the whole file."
+
+## Reuse assistant output
+
+Select part of an assistant response and send it back as a structured attachment in your next prompt — useful for "take this plan and implement step 2".
+
+## AppSnap: capture any window
+
+On macOS, press **both Option keys** to capture the active window of any app and attach it to the current task. It is opt-in with a setup panel and permission guidance; captures persist through navigation and restarts until you send them. Perfect for "make it look like this" or attaching an error dialog from another app.
+
+## Thread modes
+
+- **`/plan`** switches the thread into plan mode: the agent proposes an approach before executing, and can pause to ask you multi-select questions you answer with "Submit answers". `/default` returns to normal mode.
+- **`/fast`** toggles fast mode for the thread; **`/compact`** frees context; **`/status`** shows context usage and rate limits.
+- **`/side [provider] [prompt]`** opens a guarded side chat. Put an available provider name first when the child task should use a different runtime.
+- **Checkpoints** let you revert a thread to an earlier state — Synara refuses the revert while a turn is still running, so you can't pull the rug out from under an active agent.
+
+The full command list is in the [slash-commands reference](/docs/reference/slash-commands).
+
+## Quick keys
+
+- `cmd+l` focuses (or blurs) the composer from anywhere outside the terminal.
+- `mod+shift+m` opens the model picker; `alt+]` / `alt+[` cycle models without it.
+- `mod+shift+e` opens the reasoning/effort picker.
+
+<Callout type="info" title="Terminals and previews">
+  What the agent produces flows back through the same panel system — terminals, browser previews,
+  diffs, and generated images render beside the conversation. See [Core
+  concepts](/docs/getting-started/core-concepts).
+</Callout>

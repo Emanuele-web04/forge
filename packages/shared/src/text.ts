@@ -2,7 +2,30 @@
 // Purpose: Small, dependency-free text helpers shared across server and web so
 // repeated string semantics (count pluralization, etc.) live in one place.
 // Layer: Shared runtime utility
-// Exports: pluralize, nonEmptyTrimmed
+// Exports: pluralize, nonEmptyTrimmed, splitsSurrogatePair, unicodeSafeEndOffset
+
+// Reports whether a UTF-16 offset falls between the high and low surrogate of
+// one Unicode code point. JavaScript string lengths and slice offsets count
+// UTF-16 code units, so bounded text must account for this boundary explicitly.
+export function splitsSurrogatePair(text: string, offsetChars: number): boolean {
+  if (offsetChars <= 0 || offsetChars >= text.length) return false;
+  const previousCodeUnit = text.charCodeAt(offsetChars - 1);
+  const nextCodeUnit = text.charCodeAt(offsetChars);
+  return (
+    previousCodeUnit >= 0xd800 &&
+    previousCodeUnit <= 0xdbff &&
+    nextCodeUnit >= 0xdc00 &&
+    nextCodeUnit <= 0xdfff
+  );
+}
+
+// Keeps a prefix within its existing UTF-16 budget without leaving an
+// unpaired high surrogate at the end. At most one code unit is removed.
+export function unicodeSafeEndOffset(text: string, requestedEndOffsetChars: number): number {
+  return splitsSurrogatePair(text, requestedEndOffsetChars)
+    ? requestedEndOffsetChars - 1
+    : requestedEndOffsetChars;
+}
 
 // Normalizes an optional string to "present and meaningful" or absent.
 //

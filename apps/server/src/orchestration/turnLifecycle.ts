@@ -32,3 +32,12 @@ export function settleTurnStateFromSession(
       return null;
   }
 }
+
+/**
+ * Later-arriving events can carry earlier timestamps (retries, imports,
+ * reconciliation), so thread timestamp advancement must be monotonic — a
+ * regressed `updatedAt` re-marks already-read chats as unread after restart.
+ */
+export function maxIso(left: string | null, right: string): string {
+  return left === null || right > left ? right : left;
+}

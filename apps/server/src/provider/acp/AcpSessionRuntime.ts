@@ -168,6 +168,35 @@ type AcpIncomingFrame =
   | { readonly _tag: "error"; readonly error: unknown }
   | { readonly _tag: "end" };
 
+/**
+ * Drains the child agent's stderr for the lifetime of the session scope,
+ * forwarding complete lines to the provider tap. The stream is consumed even
+ * when no tap is installed: an unread stderr pipe eventually fills and blocks
+ * the child's writes. A mid-life stream error or a throwing tap must not stop
+ * the drain, so failures are logged and swallowed.
+ */
+export const runAcpChildStderrTap = <E>(
+  stderr: Stream.Stream<Uint8Array, E>,
+  onLine: ((line: string) => void) | undefined,
+): Effect.Effect<void> =>
+  stderr.pipe(
+    Stream.decodeText,
+    Stream.splitLines,
+    Stream.runForEach((line) =>
+      Effect.sync(() => {
+        if (!onLine) return;
+        try {
+          onLine(line);
+        } catch {
+          // A broken tap must never kill the drain.
+        }
+      }),
+    ),
+    Effect.catchCause((cause) =>
+      Effect.logWarning("acp.stderr_drain_failed", { cause: Cause.pretty(cause) }),
+    ),
+  );
+
 export function normalizeAcpIncomingJsonMessages(
   input: ReadableStream<Uint8Array>,
   normalize: (message: unknown) => unknown,
@@ -369,6 +398,15 @@ export interface AcpSessionRuntimeOptions {
   };
   readonly requestLogger?: (event: AcpSessionRequestLogEvent) => Effect.Effect<void, never>;
   readonly normalizeIncomingMessage?: (message: unknown) => unknown;
+  /**
+   * Per-line tap on the child agent's stderr. The child mirrors its full log
+   * stream there (e.g. Devin's `affogato::stall_watch` warnings and exec
+   * `create_session` lifecycle lines), which is the only out-of-band liveness
+   * signal available when a child wedges while alive. The stderr stream is
+   * always drained so an unread pipe can never fill and block the child,
+   * whether or not a tap is installed.
+   */
+  readonly onChildStderrLine?: (line: string) => void;
   readonly protocolLogging?: {
     readonly logIncoming?: boolean;
     readonly logOutgoing?: boolean;
@@ -1413,6 +1451,12 @@ const makeAcpSessionRuntime = (
     // Registered after child teardown so LIFO scope closure releases any first
     // prompt/fork waiter before waiting for the child process to exit.
     yield* Effect.addFinalizer(() => loadReplayGate?.release ?? Effect.void);
+
+    // Always drain the child's stderr (an unread pipe eventually fills and
+    // blocks the child's writes) and forward lines to the provider tap.
+    yield* runAcpChildStderrTap(child.stderr, options.onChildStderrLine).pipe(
+      Effect.forkIn(runtimeScope),
+    );
 
     const acp = yield* makeOfficialSdkClient(child, runtimeScope, options);
 

@@ -1,0 +1,161 @@
+---
+title: Pi
+description: Install, authenticate, verify, and run the Pi coding agent through Synara.
+---
+
+Synara integrates the Pi coding-agent runtime and its model registry. Pi owns provider credentials, models, extensions, skills, commands, and session behavior; Synara supplies the durable task, working environment, transcript, review surfaces, Agent Gateway connection, and Git lifecycle around it.
+
+## Install
+
+Install Pi from its official npm package:
+
+```bash
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+```
+
+On macOS or Linux, the official installer is also available:
+
+```bash
+curl -fsSL https://pi.dev/install.sh | sh
+```
+
+Verify the executable:
+
+```bash
+pi --version
+```
+
+## Authenticate
+
+Start Pi in a normal terminal:
+
+```bash
+pi
+```
+
+For supported subscription providers, use:
+
+```text
+/login
+```
+
+Pi can also use provider API keys from environment variables or its credential store. For example, an Anthropic key can be supplied before launch:
+
+```bash
+export ANTHROPIC_API_KEY="..."
+```
+
+Do not commit credentials or paste them into Synara tasks. Pi normally stores its user state under `~/.pi/agent/`.
+
+## Verify
+
+From a disposable repository:
+
+```bash
+pi --version
+pi
+```
+
+Confirm that `/login` or the configured API-key provider makes at least one model available. Use `/model` to inspect the catalog, then ask Pi to summarize the repository without making changes.
+
+This verifies the package, provider credentials, model registry, and working directory before Synara is involved.
+
+## Connect to Synara
+
+<Steps>
+<Step>
+
+### Enable Pi
+
+Open provider settings and confirm that Synara detects `pi`.
+
+</Step>
+<Step>
+
+### Confirm provider credentials
+
+Use Pi’s own `/login`, environment variables, or supported auth file. Synara reads the resulting model availability rather than duplicating the secret.
+
+</Step>
+<Step>
+
+### Refresh models and thinking levels
+
+Confirm that the model picker shows the expected provider/model combinations and the thinking levels supported by the selected model.
+
+In Synara 0.8.1 and later, the Anthropic catalog repair keeps Claude Fable 5.1 selectable even when Pi's authenticated upstream catalog predates that model entry. Fable 5.1 uses always-on thinking with Low through Max effort and no fast-mode lane.
+
+</Step>
+<Step>
+
+### Run a bounded task
+
+Start with Pi’s built-in tools and a clean test repository before adding project extensions, skills, or packages that can execute code.
+
+</Step>
+</Steps>
+
+## Capabilities in Synara
+
+Pi sessions can expose:
+
+- Pi’s available provider and model registry
+- Thinking levels supported by the selected model
+- Built-in read, write, edit, and shell tooling
+- Commands, skills, attachments, and project instructions
+- Session history and continuation behavior
+- Tool output, task progress, usage, and context information
+- User-input requests surfaced in the Synara conversation
+- Native steering of a running turn
+- Synara’s terminal, browser, diff, checkpoint, worktree, and Git delivery surfaces
+
+Native steering lets Synara queue a follow-up for a supported active Pi session without cancelling the turn first. The runtime still decides when it can incorporate the message.
+
+Pi extensions and packages execute with the permissions of your user account. Review third-party code before enabling it in a repository Synara will operate.
+
+## Updating
+
+Update Pi and its unpinned packages from Pi itself:
+
+```bash
+pi update
+```
+
+To update only the CLI:
+
+```bash
+pi update --self
+```
+
+You can also update the global npm package through the package manager that installed it. Restart Synara after changing the runtime.
+
+## Troubleshooting
+
+### Pi is not detected
+
+1. Run `pi --version` from a fresh terminal.
+2. Confirm the global package-manager binary directory is on `PATH`.
+3. Check the custom binary path in Synara.
+4. Restart Synara after installation or shell changes.
+
+### No models are available
+
+Run Pi directly and use `/login`, or configure a supported provider API key. Confirm `/model` shows at least one authenticated model before refreshing Synara.
+
+If Anthropic authentication works but Fable 5.1 is missing, refresh Pi in Synara and start a new task. Synara can repair the known Anthropic catalog entry, but it cannot grant model access that the configured account or provider rejects.
+
+### The model catalog differs between projects
+
+Check Pi’s global and project settings, credentials, custom model definitions, and extensions. Project-level resources can change the provider catalog or behavior.
+
+### A third-party Pi package behaves unexpectedly
+
+Disable the package and reproduce with Pi’s built-in runtime. Extensions run arbitrary code and can modify tools, commands, events, and provider behavior.
+
+## Official documentation
+
+- [Pi documentation](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/index.md)
+- [Pi quickstart](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/quickstart.md)
+- [Pi repository](https://github.com/earendil-works/pi)
+
+Continue with [Your first task](/docs/getting-started/first-task) or [Provider handoffs](/docs/workflows/handoffs).

@@ -77,6 +77,7 @@ export class ProviderAdapterProcessError extends Schema.TaggedErrorClass<Provide
     provider: Schema.String,
     threadId: Schema.String,
     detail: Schema.String,
+    reason: Schema.optional(Schema.Literal("resume-state-unavailable")),
     cause: Schema.optional(Schema.Defect),
   },
 ) {

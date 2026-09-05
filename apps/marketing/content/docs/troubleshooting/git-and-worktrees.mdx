@@ -1,0 +1,209 @@
+---
+title: Git and worktrees
+description: Recover from Git locks, conflicts, detached worktrees, missing paths, and overlapping task ownership safely.
+---
+
+Git is the recovery boundary for Synara work. Before fixing a repository problem, identify the task’s actual working directory and preserve every change you may need.
+
+## Start in the task’s working directory
+
+Run:
+
+```bash
+git rev-parse --show-toplevel
+git status --short --branch
+git worktree list --porcelain
+```
+
+Confirm:
+
+- The path matches the task environment
+- The expected branch or detached base is checked out
+- The repository is not in the middle of a merge, rebase, cherry-pick, or revert
+- Untracked files are visible
+- Another task is not using the same checkout
+
+Do not diagnose the primary checkout when the task actually owns a managed worktree.
+
+## Detached HEAD in a managed worktree
+
+A detached HEAD can be intentional. Synara-managed worktrees may begin from a selected base ref without immediately attaching a named branch.
+
+Before changing it:
+
+1. Inspect the commits and diff.
+2. Confirm the intended delivery branch.
+3. Create or attach the branch through the task’s normal Git workflow.
+4. Push the intended branch before cleanup when the work must survive locally.
+
+Do not “fix” a detached HEAD by switching to `main` inside an active task worktree.
+
+## Repository lock error
+
+Git lock files protect concurrent operations. First determine whether another Git process is still running.
+
+1. Stop duplicate Git operations.
+2. Wait for legitimate processes to finish.
+3. Check terminals, editors, hooks, and provider processes using the repository.
+4. Record the exact lock path and command.
+5. Remove a lock file only after confirming no live process owns it.
+6. Run `git status` immediately afterward.
+
+Deleting a live lock can corrupt or interleave repository operations.
+
+## Merge or rebase is in progress
+
+Use `git status` to identify the operation.
+
+Choose deliberately:
+
+- Continue after resolving every conflict
+- Abort the operation and return to the recorded pre-operation state
+- Preserve the current conflict state in a copy before experimenting
+
+Do not mix a merge recovery with unrelated refactors or generated changes. Verify the final diff against both the intended base and objective.
+
+## Worktree path is missing
+
+A task can retain metadata after its directory was removed outside Synara.
+
+1. Stop the affected task.
+2. Record the branch, task ID, and last known worktree path.
+3. Check `git worktree list --porcelain`.
+4. Inspect whether commits or refs still preserve the work.
+5. Check for uncommitted copies elsewhere before pruning metadata.
+6. Recreate or recover the environment only after establishing what survived.
+
+Uncommitted files from a manually deleted directory are not restored by Git metadata.
+
+## Windows project is inside WSL
+
+Synara recognizes workspace roots opened through `\\wsl.localhost\<distribution>\...` and `\\wsl$\<distribution>\...`. Provider commands for those roots run through `wsl.exe` inside the named distribution, and ACP providers receive the equivalent Linux working directory.
+
+When a WSL-backed task fails:
+
+1. Confirm the UNC path names the intended distribution.
+2. Run `wsl.exe --list --verbose` and verify that distribution is installed and available.
+3. Open the equivalent Linux path inside that distribution and confirm the repository exists.
+4. Verify the provider CLI is installed and authenticated inside WSL, not only on the Windows host.
+5. Check that a manually configured provider binary is valid in the environment where it will execute.
+
+Local-folder mentions and project browsing also accept supported UNC and Windows home paths. Do not rewrite a WSL UNC project to a drive-letter path unless it is genuinely the same filesystem and repository.
+
+## Git says a branch is already checked out
+
+A branch can be attached to only one worktree at a time.
+
+Use:
+
+```bash
+git worktree list
+```
+
+Then either:
+
+- Continue in the worktree that already owns the branch
+- Create a different branch for the new task
+- Remove the old worktree safely after preserving its changes
+
+Do not force the same branch into two worktrees.
+
+## Two tasks edited one checkout
+
+Stop both tasks and assign one integration owner.
+
+Capture:
+
+```bash
+git status --short
+git diff --stat
+git diff
+git ls-files --others --exclude-standard
+```
+
+Then classify each change:
+
+- Intended by task A
+- Intended by task B
+- Shared dependency needed by both
+- Unrelated or accidental
+- Unknown ownership
+
+Always preserve the combined state before separating it. Move future edits into independent worktrees.
+
+## Worktree cannot be removed
+
+Before cleanup:
+
+1. Stop provider turns and terminal processes using the path.
+2. Review uncommitted and untracked files.
+3. Commit or copy wanted changes.
+4. Push the branch when it must survive the machine.
+5. Confirm the worktree is not the active environment of a task you still need.
+6. Use guarded cleanup rather than manually deleting the directory first.
+
+Synara protects active managed worktrees and retains a bounded set of recently archived ones, but Git commits and pushed refs are the durable preservation mechanism.
+
+## Wrong base branch
+
+Record the current state before rebasing or moving commits:
+
+```bash
+git branch --show-current
+git rev-parse HEAD
+git merge-base HEAD <intended-base>
+git log --oneline --decorate --graph -20
+```
+
+Choose whether the task should:
+
+- Rebase onto the intended base
+- Merge the intended base
+- Cherry-pick focused commits onto a clean branch
+- Restart from the correct base
+
+Do not rewrite a branch that another task or reviewer is using without coordinating the new head.
+
+## Untracked or generated files appeared
+
+Do not delete all untracked files automatically.
+
+Classify them first:
+
+- Intended source files
+- Test snapshots or fixtures
+- Build artifacts
+- Logs and debug output
+- Downloaded dependencies
+- Credentials or machine-local configuration
+
+Use repository-specific cleanup commands only after reviewing what they remove.
+
+## Safe recovery commands
+
+These commands observe state without mutating it:
+
+```bash
+git status --short --branch
+git diff --check
+git diff --stat
+git diff
+git log --oneline --decorate -20
+git worktree list --porcelain
+git reflog -20
+```
+
+`git reflog` can help locate recent commits or ref movements, but it does not restore uncommitted files from a deleted directory.
+
+## Git recovery checklist
+
+- [ ] The task’s actual working directory was confirmed
+- [ ] Current branch, HEAD, and operation state were recorded
+- [ ] Untracked files were reviewed
+- [ ] No live process owns the repository lock
+- [ ] Work was preserved before cleanup or history rewriting
+- [ ] One integration owner controls the recovery
+- [ ] The final diff will be compared with the intended base
+- [ ] The final head will be tested after conflict resolution
+
+Continue with [Worktrees](/docs/workflows/worktrees) for normal operation or [Report a problem](/docs/troubleshooting/report-a-problem) when Synara’s managed-worktree state disagrees with Git.
