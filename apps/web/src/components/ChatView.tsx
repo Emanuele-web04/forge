@@ -23,6 +23,7 @@ import {
   type ProviderStartOptions,
   type ProviderUserInputAnswers,
   type PinnedMessage,
+  PROVIDER_DISPLAY_NAMES,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   type ResolvedKeybindingsConfig,
   type ServerProviderStatus,
@@ -1484,7 +1485,6 @@ export default function ChatView({
   const worktreeSetupResolutionRef = useRef<WorktreeSetupResolution | null>(null);
   const [worktreeSetupPendingAction, setWorktreeSetupPendingAction] =
     useState<WorktreeSetupResolutionAction | null>(null);
-  const [isLocalConnecting, _setIsLocalConnecting] = useState(false);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
   const [pendingFileUndo, setPendingFileUndo] = useState<PendingFileUndo | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
@@ -2517,7 +2517,9 @@ export default function ChatView({
     ],
   );
   const phase = derivePhase(activeThread?.session ?? null);
-  const isConnecting = isLocalConnecting || phase === "connecting";
+  const isConnecting = phase === "connecting";
+  const providerDisplayName =
+    PROVIDER_DISPLAY_NAMES[activeThread?.session?.provider ?? selectedProvider];
   // User messages intentionally have no turn id; assistant messages are the stable
   // bridge for deciding which historical work can fold into visible replies.
   // Memoized on purpose: an inline Set would change identity every render and cascade
@@ -3622,7 +3624,9 @@ export default function ChatView({
     timelineEntries.length === 0 &&
     !activeThread?.parentThreadId &&
     !isEditorRail &&
-    threadDetailHydration === "ready";
+    threadDetailHydration === "ready" &&
+    localDispatch === null &&
+    optimisticUserMessages.length === 0;
   const isEmptyChatLanding =
     isCenteredEmptyLanding && Boolean(homeDir) && isContainerLandingProject;
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
@@ -5213,6 +5217,10 @@ export default function ChatView({
   // Guards isAtEndRef from flipping during reflow-induced scroll events that
   // fire immediately after an explicit scrollToEnd.
   const programmaticScrollUntilRef = useRef(0);
+  // User scroll gestures take ownership from streaming auto-follow. Ref updates
+  // are immediate; state updates project into the `followLiveOutput` prop.
+  const [isUserScrollDetached, setIsUserScrollDetached] = useState(false);
+  const isUserScrollDetachedRef = useRef(isUserScrollDetached);
   // The arrow's smooth jump is followed by one exact settle after LegendList
   // has measured the tail. A user gesture invalidates that pending settle.
   const settledScrollRequestRef = useRef(0);
@@ -5227,6 +5235,8 @@ export default function ChatView({
     autoFollowThreadIdRef.current = targetThreadId;
     animateNextAutoFollowScrollRef.current = animated;
     isAtEndRef.current = true;
+    isUserScrollDetachedRef.current = false;
+    setIsUserScrollDetached(false);
     showScrollDebouncer.current.cancel();
     setShowScrollToBottom(false);
   }, []);
@@ -5239,6 +5249,8 @@ export default function ChatView({
     programmaticScrollUntilRef.current = 0;
     // A user scroll gesture takes over from any in-flight tail-anchor slide.
     tailAnchorScrollInFlightRef.current = false;
+    isUserScrollDetachedRef.current = true;
+    setIsUserScrollDetached(true);
     if (settledScrollTarget) {
       void stopTranscriptScrollAtCurrentOffset(settledScrollTarget);
     }
@@ -5273,7 +5285,19 @@ export default function ChatView({
     if (isAtEnd) {
       showScrollDebouncer.current.cancel();
       setShowScrollToBottom(false);
+      isUserScrollDetachedRef.current = false;
+      setIsUserScrollDetached(false);
     } else {
+      // Keyboard (Page-Up, arrows), scrollbar drags, and trackpad scrolling fire
+      // onScroll without any wheel/touch/pointer gesture, so scroll ownership
+      // has to move here too: leaving the end detaches follow mode until the
+      // user scrolls back (the isAtEnd branch above reattaches). The
+      // tail-anchor slide keeps ownership — these events can be the slide's own
+      // scroll output, and the hook clears that flag itself when it finishes.
+      autoFollowThreadIdRef.current = null;
+      animateNextAutoFollowScrollRef.current = false;
+      isUserScrollDetachedRef.current = true;
+      setIsUserScrollDetached(true);
       showScrollDebouncer.current.maybeExecute();
     }
   }, []);
@@ -5602,6 +5626,8 @@ export default function ChatView({
     settledScrollRequestRef.current += 1;
     settledScrollInFlightRef.current = false;
     programmaticScrollUntilRef.current = 0;
+    isUserScrollDetachedRef.current = false;
+    setIsUserScrollDetached(false);
     showScrollDebouncer.current.cancel();
     // Capture the carried sidebar-open intent synchronously (ref reads/writes stay
     // in render->commit order); defer only the setState so this thread-change reset
@@ -12363,7 +12389,12 @@ export default function ChatView({
                     agentActivityDetail={openAgentActivityDetail}
                     hasMessages={timelineEntries.length > 0}
                     isWorking={isWorking}
-                    workingLabel={resolveWorkingLabel({ isSendBusy, turnTakenOver })}
+                    workingLabel={resolveWorkingLabel({
+                      isSendBusy,
+                      turnTakenOver,
+                      isConnecting,
+                      providerName: providerDisplayName,
+                    })}
                     worktreeSetup={activeWorktreeSetup}
                     worktreeSetupPendingAction={worktreeSetupPendingAction}
                     onResolveWorktreeSetup={onResolveWorktreeSetup}
@@ -12400,7 +12431,7 @@ export default function ChatView({
                     editableUserMessageId={editableUserMessageId}
                     isRevertingCheckpoint={isRevertingCheckpoint}
                     onExpandTimelineImage={onExpandTimelineImage}
-                    followLiveOutput={hasStreamingAssistantText}
+                    followLiveOutput={hasStreamingAssistantText && !isUserScrollDetached}
                     onIsAtEndChange={onIsAtEndChange}
                     markdownCwd={threadWorkspaceCwd ?? undefined}
                     resolvedTheme={resolvedTheme}

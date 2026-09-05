@@ -2048,4 +2048,88 @@ describe("orchestration projector", () => {
     expect(finalized.threads[0]?.messages[1]?.text).toBe("Hello, world!");
     expect(finalized.threads[0]?.messages[1]?.streaming).toBe(false);
   });
+
+  it("compacts oversized message text while leaving ordinary text intact", async () => {
+    const createdAt = "2026-08-30T12:00:00.000Z";
+    const afterCreate = await Effect.runPromise(
+      projectEvent(
+        createEmptyReadModel(createdAt),
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-huge",
+          occurredAt: createdAt,
+          commandId: "cmd-create-huge",
+          payload: {
+            threadId: "thread-huge",
+            projectId: "project-1",
+            title: "Huge message test",
+            modelSelection: { provider: "codex", model: "gpt-5-codex" },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+      ),
+    );
+
+    const smallText = "Hello";
+    const afterSmall = await Effect.runPromise(
+      projectEvent(
+        afterCreate,
+        makeEvent({
+          sequence: 2,
+          type: "thread.message-sent",
+          aggregateKind: "thread",
+          aggregateId: "thread-huge",
+          occurredAt: createdAt,
+          commandId: "cmd-small",
+          payload: {
+            threadId: "thread-huge",
+            messageId: "msg-small",
+            role: "user",
+            text: smallText,
+            turnId: null,
+            streaming: false,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+      ),
+    );
+    expect(afterSmall.threads[0]?.messages[0]?.text).toBe(smallText);
+
+    const hugeText = "x".repeat(700_000);
+    const afterHuge = await Effect.runPromise(
+      projectEvent(
+        afterSmall,
+        makeEvent({
+          sequence: 3,
+          type: "thread.message-sent",
+          aggregateKind: "thread",
+          aggregateId: "thread-huge",
+          occurredAt: createdAt,
+          commandId: "cmd-huge",
+          payload: {
+            threadId: "thread-huge",
+            messageId: "msg-huge",
+            role: "user",
+            text: hugeText,
+            turnId: null,
+            streaming: false,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+      ),
+    );
+    const compacted = afterHuge.threads[0]?.messages[1]?.text;
+    expect(compacted?.length).toBeLessThan(hugeText.length);
+    expect(compacted?.length).toBeLessThanOrEqual(512 * 1024);
+    expect(compacted).toContain("[synara: message text truncated;");
+    expect(compacted).toContain("700000 bytes");
+  });
 });
