@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import * as AcpErrors from "./AcpErrors.ts";
 
 import {
-  acpPermissionOutcome,
   canonicalItemTypeFromAcpToolKind,
   classifyAcpPromptTurnCompletion,
   mapAcpToAdapterError,
@@ -30,12 +29,6 @@ describe("AcpAdapterSupport", () => {
       ["read", "dynamic_tool_call"],
       [undefined, "dynamic_tool_call"],
     ]);
-  });
-
-  it("maps ACP approval decisions to permission outcomes", () => {
-    expect(acpPermissionOutcome("accept")).toBe("allow-once");
-    expect(acpPermissionOutcome("acceptForSession")).toBe("allow-always");
-    expect(acpPermissionOutcome("decline")).toBe("reject-once");
   });
 
   it("selects the provider's real permission option id for approval decisions", () => {

@@ -286,7 +286,8 @@ describe("ProviderCommandReactor", () => {
       const nativeResumeSucceeded =
         nativeResumeAttempted && (input?.confirmNativeResume?.(effectiveResumeCursor) ?? true);
       if (
-        outcomeOptions?.registerPriorTranscriptBootstrapOnFreshStart === true &&
+        (outcomeOptions?.registerPriorTranscriptBootstrapOnFreshStart === true ||
+          (sessionInput.provider === "devin" && nativeResumeAttempted)) &&
         !nativeResumeSucceeded
       ) {
         pendingPriorTranscriptBootstraps.add(threadId);
@@ -953,7 +954,7 @@ describe("ProviderCommandReactor", () => {
     harness: Awaited<ReturnType<typeof createHarness>>,
     input: {
       readonly eventId: string;
-      readonly provider: "opencode";
+      readonly provider: "opencode" | "devin";
       readonly type: "completed" | "aborted";
       readonly threadId?: ThreadId;
       readonly turnId?: TurnId;
@@ -3674,6 +3675,80 @@ describe("ProviderCommandReactor", () => {
     const followUpInput = harness.sendTurn.mock.calls[2]?.[0] as { input?: string } | undefined;
     expect(followUpInput?.input).not.toContain("<thread_context>");
     expect(followUpInput?.input).toBe("Continue after successful retry");
+  });
+
+  it("preserves the provider resume cursor when interrupt escalation stops the runtime", async () => {
+    const harness = await createHarness({
+      interruptTurn: () =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: "codex",
+            method: "turn/interrupt",
+            detail: "connection closed after request write",
+          }),
+        ),
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-interrupt-escalation-turn"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-interrupt-escalation"),
+          role: "user",
+          text: "Start a turn that cannot be interrupted",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    harness.setRuntimeSessionTurnState({
+      threadId,
+      status: "running",
+      activeTurnId: asTurnId("turn-interrupt-escalation"),
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.makeUnsafe("cmd-interrupt-escalation"),
+        threadId,
+        turnId: asTurnId("turn-interrupt-escalation"),
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "stopped");
+    expect(harness.interruptTurn).toHaveBeenCalledWith({
+      threadId,
+      turnId: asTurnId("turn-interrupt-escalation"),
+    });
+    expect(harness.stopSession).not.toHaveBeenCalled();
+    expect(harness.stopRuntimeSession).toHaveBeenCalledWith({ threadId });
+
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "interrupt-escalation-follow-up",
+      text: "Continue after interrupt escalation",
+      createdAt: new Date().toISOString(),
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+
+    expect(harness.startSessionWithOutcome).toHaveBeenCalledTimes(2);
+    const sessions = await Effect.runPromise(harness.listSessions());
+    expect(sessions).toEqual([
+      expect.objectContaining({ threadId, resumeCursor: { opaque: "resume-1" } }),
+    ]);
+    expect(harness.stopSession).not.toHaveBeenCalled();
+    expect(harness.clearSessionResumeCursor).not.toHaveBeenCalled();
+    expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
+    const followUpInput = harness.sendTurn.mock.calls[1]?.[0];
+    expect(followUpInput?.input).toBe("Continue after interrupt escalation");
   });
 
   it("rolls back provider conversation state for message edits", async () => {
@@ -8764,7 +8839,7 @@ describe("ProviderCommandReactor", () => {
     expect(harness.startSession.mock.calls[1]?.[1]).not.toHaveProperty("resumeCursor");
   });
 
-  it.each(["opencode"] as const)(
+  it.each(["opencode", "devin"] as const)(
     "discards a pending %s transcript recap on explicit session stop",
     async (provider) => {
       const harness = await createHarness({
@@ -8881,7 +8956,7 @@ describe("ProviderCommandReactor", () => {
     },
   );
 
-  it.each(["opencode"] as const)(
+  it.each(["opencode", "devin"] as const)(
     "retains the %s transcript recap when async prompt submission aborts",
     async (provider) => {
       const harness = await createHarness({
@@ -9122,7 +9197,7 @@ describe("ProviderCommandReactor", () => {
     expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
   });
 
-  it.each(["opencode"] as const)(
+  it.each(["opencode", "devin"] as const)(
     "injects transcript context when %s rejects the persisted resume cursor",
     async (provider) => {
       const harness = await createHarness({
@@ -11069,6 +11144,52 @@ describe("ProviderCommandReactor", () => {
         "Stale pending user-input request: user-input-request-unclaimable",
       ),
     });
+  });
+
+  it("pauses a goal on explicit session stop during a Devin recovery gap", async () => {
+    const harness = await createHarness({
+      threadModelSelection: { provider: "devin", model: "swe-1.7" },
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const now = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("goal-before-session-gap-stop"),
+        threadId,
+        goal: "Finish the work",
+        goalStartBehavior: "defer",
+      }),
+    );
+    // Recovery has already settled its old turn. No adapter terminal event remains.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("session-gap-before-stop"),
+        threadId,
+        session: {
+          threadId,
+          status: "interrupted",
+          providerName: "devin",
+          runtimeMode: "full-access",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.stop",
+        commandId: CommandId.makeUnsafe("session-gap-user-stop"),
+        threadId,
+        createdAt: now,
+      }),
+    );
+    await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "stopped");
+    expect((await readHarnessThread(harness))?.goalPausedAt).toBeTruthy();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
   });
 
   it("reacts to thread.session.stop by stopping the runtime without deleting the binding", async () => {

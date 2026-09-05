@@ -19,6 +19,7 @@ export default mergeConfig(appConfig, {
       input: {
         index: path.resolve(import.meta.dirname, "index.html"),
         pipeline: path.resolve(import.meta.dirname, "pipeline.html"),
+        concurrent: path.resolve(import.meta.dirname, "concurrent.html"),
       },
     },
   },

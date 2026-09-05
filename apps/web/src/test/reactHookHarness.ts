@@ -54,6 +54,14 @@ export const reactHookHarness = {
 };
 
 export const reactHookHarnessMock = {
+  useMemo<T>(factory: () => T, deps: readonly unknown[]): T {
+    const slot = nextSlot();
+    if (!depsEqual(slot.deps, deps)) {
+      slot.deps = deps;
+      slot.value = factory();
+    }
+    return slot.value as T;
+  },
   useCallback<T extends (...args: never[]) => unknown>(callback: T, deps: readonly unknown[]): T {
     const slot = nextSlot();
     if (!depsEqual(slot.deps, deps)) {
