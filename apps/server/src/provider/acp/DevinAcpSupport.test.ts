@@ -48,9 +48,7 @@ describe("resolveDevinBinaryPath", () => {
         path === "C:\\Users\\me\\AppData\\Local\\devin\\cli\\bin\\devin.exe",
     };
     expect(resolveDevinBinaryPath(undefined, options)).toBe("devin");
-    expect(resolveDevinBinaryPath("C:\\Custom\\devin.exe", options)).toBe(
-      "C:\\Custom\\devin.exe",
-    );
+    expect(resolveDevinBinaryPath("C:\\Custom\\devin.exe", options)).toBe("C:\\Custom\\devin.exe");
   });
 });
 
