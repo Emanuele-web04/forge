@@ -1762,7 +1762,7 @@ export function makeDevinAdapter(
     const startDevinSession = (
       input: Parameters<DevinAdapterShape["startSession"]>[0],
       recoverySession?: DevinSessionContext,
-    ) =>
+    ): ReturnType<DevinAdapterShape["startSession"]> =>
       withThreadLock(
         input.threadId,
         Effect.gen(function* () {
