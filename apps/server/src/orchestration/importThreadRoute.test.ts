@@ -130,6 +130,9 @@ it.effect("imports Codex history through a provider-owned fork", () =>
         modelSelection: { provider: "codex", model: "gpt-5.5" },
         forkSourceResumeCursor: { threadId: externalId },
         runtimeMode: "full-access",
+        // Imported provider-native threads were created outside Synara under
+        // the native account 0 binding.
+        accountOrdinal: 0,
       },
     ]);
     assert.deepEqual(readThread.mock.calls, [[threadId]]);

@@ -7007,6 +7007,8 @@ describe("ChatView transcript geometry (full app)", () => {
 
       await vi.waitFor(
         () => {
+          // The home-chat prewarm can dispatch its own project.create for the
+          // home directory, so match the dialog's command by workspace root.
           const projectCreateCommand = findDispatchedCommand(
             "project.create",
             (command) => command.workspaceRoot === "/repo/spaced-project",

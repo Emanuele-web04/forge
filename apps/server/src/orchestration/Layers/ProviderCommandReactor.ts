@@ -1,7 +1,3 @@
-// FILE: ProviderCommandReactor.ts
-// Purpose: Routes orchestration intents into provider sessions and maintains replay-safe context.
-// Layer: Orchestration provider reactor
-
 import {
   type ChatAttachment,
   type CheckpointRef,
@@ -1658,6 +1654,10 @@ const make = Effect.gen(function* () {
       modelSelection: desiredModelSelection,
       providerOptions: resolvedProviderOptions,
       runtimeMode: desiredRuntimeMode,
+      // No explicit account ordinal: ProviderService.resolveAccountForLaunch
+      // owns the precedence (persisted thread binding first, native
+      // account 0 for legacy threads). Pinning 0 here would fail closed
+      // with binding-conflict on managed threads that restart.
     };
 
     const providerSessionStartInput = (resumeCursor?: unknown) => ({

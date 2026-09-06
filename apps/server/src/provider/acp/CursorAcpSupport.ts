@@ -6,7 +6,11 @@
  *
  * @module CursorAcpSupport
  */
-import { type CursorModelOptions, type ProviderModelDescriptor } from "@synara/contracts";
+import {
+  type CursorModelOptions,
+  type ProviderAccountLaunchContext,
+  type ProviderModelDescriptor,
+} from "@synara/contracts";
 import { formatModelDisplayName, parseCursorCliReasoningEffort } from "@synara/shared/model";
 import { Effect, Layer, Schema, Scope, ServiceMap } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -15,6 +19,7 @@ import type * as Acp from "@agentclientprotocol/sdk";
 import { SessionConfigOption as SessionConfigOptionCodec } from "./AcpExtensions.ts";
 
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
+import { applyAccountEnvironmentOverrides } from "@synara/shared/providerAccounts/accountEnvironment";
 import {
   AcpSessionRuntime,
   type AcpSessionRuntimeOptions,
@@ -45,6 +50,7 @@ export interface CursorAcpRuntimeInput extends Omit<
 > {
   readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   readonly cursorSettings: CursorAcpRuntimeCursorSettings | null | undefined;
+  readonly accountLaunch?: ProviderAccountLaunchContext;
 }
 
 export interface CursorAcpModelSelectionErrorContext {
@@ -89,21 +95,27 @@ export function buildCursorAcpSpawnInput(
   cursorSettings: CursorAcpRuntimeCursorSettings | null | undefined,
   cwd: string,
   commandOptions?: CursorAgentCommandOptions,
+  accountLaunch?: ProviderAccountLaunchContext,
 ): AcpSpawnInput {
   const command = buildCursorAgentCommand(
     cursorSettings?.binaryPath,
     [...(cursorSettings?.apiEndpoint ? (["-e", cursorSettings.apiEndpoint] as const) : []), "acp"],
     commandOptions,
   );
+  const env = buildProviderChildEnvironment({
+    provider: "cursor",
+    overrides: CURSOR_AGENT_BROWSERLESS_ENV,
+  });
+  if (accountLaunch !== undefined) {
+    // Applied last so managed-account auth always beats inherited env.
+    applyAccountEnvironmentOverrides(env, accountLaunch.environment);
+  }
   return {
     command: command.command,
     args: command.args,
     cwd,
     // Keep ACP startup browserless without forcing CI/noninteractive flags onto user turns.
-    env: buildProviderChildEnvironment({
-      provider: "cursor",
-      overrides: CURSOR_AGENT_BROWSERLESS_ENV,
-    }),
+    env,
   };
 }
 
@@ -128,7 +140,12 @@ export const makeCursorAcpRuntime = (
     const acpContext = yield* Layer.build(
       AcpSessionRuntime.layer({
         ...input,
-        spawn: buildCursorAcpSpawnInput(input.cursorSettings, input.cwd),
+        spawn: buildCursorAcpSpawnInput(
+          input.cursorSettings,
+          input.cwd,
+          undefined,
+          input.accountLaunch,
+        ),
         authMethodId: "cursor_login",
         authenticateMeta: { headless: true },
         clientCapabilities: CURSOR_PARAMETERIZED_MODEL_PICKER_CAPABILITIES,

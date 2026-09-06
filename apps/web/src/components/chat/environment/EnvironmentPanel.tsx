@@ -1,13 +1,3 @@
-// FILE: EnvironmentPanel.tsx
-// Purpose: Codex-style "Environment" panel. Consolidates the chat-header diff toggle,
-//          the composer-footer env/branch pickers, the header git actions, and the
-//          "Open in editor" controls into one vertical list of full-width rows. Always
-//          rendered as the same rounded floating card; the only difference is whether it
-//          overlays pinned top-right of the chat column (p-3 gutters). Full-width single
-//          chat also reserves transcript/composer inset; split panes and an open right dock
-//          use floating overlay only. The card surface and content are identical either way.
-// Layer: Environment panel container
-
 import type {
   AutomationDefinition,
   EditorId,
@@ -49,6 +39,7 @@ import {
   EnvironmentAutomationsSection,
   type EnvironmentAutomationPanelItem,
 } from "./EnvironmentAutomationsSection";
+import { EnvironmentAccountSection } from "./EnvironmentAccountSection";
 import { EnvironmentUsageSection } from "./EnvironmentUsageSection";
 import { EnvironmentLocalServersSection } from "./EnvironmentLocalServersSection";
 import { EnvironmentPullRequestSection } from "./EnvironmentPullRequestSection";
@@ -423,6 +414,10 @@ export function EnvironmentPanel({
         dangling rule. Visibility is gated on the per-section AppSettings flags.
       */}
       {settings.showEnvironmentUsage ? <EnvironmentUsageSection provider={activeProvider} /> : null}
+
+      {activeThreadId ? (
+        <EnvironmentAccountSection threadId={activeThreadId} enabled={open} onClose={onClose} />
+      ) : null}
 
       {settings.showEnvironmentRepository && githubRepository && onOpenGithubRepository ? (
         <EnvironmentLabeledSection label="Repository">

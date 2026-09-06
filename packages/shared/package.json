@@ -268,6 +268,46 @@
       "types": "./src/cli.ts",
       "import": "./src/cli.ts"
     },
+    "./providerAccounts/accountIds": {
+      "types": "./src/providerAccounts/accountIds.ts",
+      "import": "./src/providerAccounts/accountIds.ts"
+    },
+    "./providerAccounts/accountPaths": {
+      "types": "./src/providerAccounts/accountPaths.ts",
+      "import": "./src/providerAccounts/accountPaths.ts"
+    },
+    "./providerAccounts/capabilities": {
+      "types": "./src/providerAccounts/capabilities.ts",
+      "import": "./src/providerAccounts/capabilities.ts"
+    },
+    "./providerAccounts/launcherProtocol": {
+      "types": "./src/providerAccounts/launcherProtocol.ts",
+      "import": "./src/providerAccounts/launcherProtocol.ts"
+    },
+    "./providerAccounts/accountEnvironment": {
+      "types": "./src/providerAccounts/accountEnvironment.ts",
+      "import": "./src/providerAccounts/accountEnvironment.ts"
+    },
+    "./providerAccounts/accountEnvironmentBuilders": {
+      "types": "./src/providerAccounts/accountEnvironmentBuilders.ts",
+      "import": "./src/providerAccounts/accountEnvironmentBuilders.ts"
+    },
+    "./providerAccounts/codexAccountEnvironment": {
+      "types": "./src/providerAccounts/codexAccountEnvironment.ts",
+      "import": "./src/providerAccounts/codexAccountEnvironment.ts"
+    },
+    "./providerAccounts/claudeAccountEnvironment": {
+      "types": "./src/providerAccounts/claudeAccountEnvironment.ts",
+      "import": "./src/providerAccounts/claudeAccountEnvironment.ts"
+    },
+    "./providerAccounts/cursorAccountEnvironment": {
+      "types": "./src/providerAccounts/cursorAccountEnvironment.ts",
+      "import": "./src/providerAccounts/cursorAccountEnvironment.ts"
+    },
+    "./providerAccounts/grokAccountEnvironment": {
+      "types": "./src/providerAccounts/grokAccountEnvironment.ts",
+      "import": "./src/providerAccounts/grokAccountEnvironment.ts"
+    },
     "./migrationRecovery": {
       "types": "./src/migrationRecovery.ts",
       "import": "./src/migrationRecovery.ts"
