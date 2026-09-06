@@ -14,7 +14,7 @@
       "@effect/sql-sqlite-bun": "https://pkg.pr.new/Effect-TS/effect-smol/@effect/sql-sqlite-bun@8881a9b",
       "@effect/vitest": "https://pkg.pr.new/Effect-TS/effect-smol/@effect/vitest@8881a9b",
       "@effect/language-service": "0.75.1",
-      "@types/bun": "^1.3.9",
+      "@types/bun": "^1.4.1",
       "@types/node": "^24.10.13",
       "tsdown": "^0.20.3",
       "typescript": "^5.7.3",
@@ -93,10 +93,10 @@
     "yaml": "^2.8.3"
   },
   "engines": {
-    "bun": "^1.3.9",
+    "bun": "^1.4.2",
     "node": "^24.13.1"
   },
-  "packageManager": "bun@1.3.12",
+  "packageManager": "bun@1.4.2",
   "msw": {
     "workerDirectory": [
       "apps/web/public"
