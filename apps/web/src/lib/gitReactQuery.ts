@@ -663,30 +663,6 @@ export function gitPullMutationOptions(input: { cwd: string | null; queryClient:
   });
 }
 
-export function gitCreateWorktreeMutationOptions(input: { queryClient: QueryClient }) {
-  return mutationOptions({
-    mutationFn: async ({
-      cwd,
-      branch,
-      newBranch,
-      path,
-    }: {
-      cwd: string;
-      branch: string;
-      newBranch: string;
-      path?: string | null;
-    }) => {
-      const api = ensureNativeApi();
-      if (!cwd) throw new Error("Git worktree creation is unavailable.");
-      return api.git.createWorktree({ cwd, branch, newBranch, path: path ?? null });
-    },
-    mutationKey: ["git", "mutation", "create-worktree"] as const,
-    onSettled: async () => {
-      await invalidateGitQueries(input.queryClient);
-    },
-  });
-}
-
 export function gitCreateDetachedWorktreeMutationOptions(input: { queryClient: QueryClient }) {
   return mutationOptions({
     mutationFn: async ({

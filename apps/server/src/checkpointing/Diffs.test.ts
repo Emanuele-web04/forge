@@ -1,11 +1,11 @@
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { parseCheckpointFilesFromUnifiedDiff, parseTurnDiffFilesFromUnifiedDiff } from "./Diffs.ts";
+import { parseCheckpointFilesFromUnifiedDiff } from "./Diffs.ts";
 
-describe("parseTurnDiffFilesFromUnifiedDiff", () => {
+describe("parseCheckpointFilesFromUnifiedDiff", () => {
   it("returns empty list for empty diff", async () => {
-    expect(await Effect.runPromise(parseTurnDiffFilesFromUnifiedDiff(""))).toEqual([]);
+    expect(await Effect.runPromise(parseCheckpointFilesFromUnifiedDiff(""))).toEqual([]);
   });
 
   it("parses per-file additions and deletions", async () => {
@@ -29,7 +29,7 @@ describe("parseTurnDiffFilesFromUnifiedDiff", () => {
       "",
     ].join("\n");
 
-    expect(await Effect.runPromise(parseTurnDiffFilesFromUnifiedDiff(diff))).toEqual([
+    expect(await Effect.runPromise(parseCheckpointFilesFromUnifiedDiff(diff))).toEqual([
       { path: "a.txt", kind: "modified", additions: 2, deletions: 1 },
       { path: "src/b.ts", kind: "modified", additions: 0, deletions: 2 },
     ]);
@@ -44,7 +44,7 @@ describe("parseTurnDiffFilesFromUnifiedDiff", () => {
       "",
     ].join("\n");
 
-    expect(await Effect.runPromise(parseTurnDiffFilesFromUnifiedDiff(diff))).toEqual([
+    expect(await Effect.runPromise(parseCheckpointFilesFromUnifiedDiff(diff))).toEqual([
       { path: "src/new.ts", kind: "renamed", additions: 0, deletions: 0 },
     ]);
   });
@@ -62,7 +62,7 @@ describe("parseTurnDiffFilesFromUnifiedDiff", () => {
       "",
     ].join("\r\n");
 
-    expect(await Effect.runPromise(parseTurnDiffFilesFromUnifiedDiff(diff))).toEqual([
+    expect(await Effect.runPromise(parseCheckpointFilesFromUnifiedDiff(diff))).toEqual([
       { path: "a.txt", kind: "modified", additions: 2, deletions: 1 },
     ]);
   });
@@ -87,26 +87,8 @@ describe("parseTurnDiffFilesFromUnifiedDiff", () => {
       "",
     ].join("\n");
 
-    expect(await Effect.runPromise(parseTurnDiffFilesFromUnifiedDiff(diff))).toEqual([
-      { path: "CLAUDE.md", kind: "modified", additions: 2, deletions: 3 },
-    ]);
-  });
-
-  it("maps parsed file summaries into checkpoint files", async () => {
-    const diff = [
-      "diff --git a/src/app.ts b/src/app.ts",
-      "index 1111111..2222222 100644",
-      "--- a/src/app.ts",
-      "+++ b/src/app.ts",
-      "@@ -1 +1,2 @@",
-      "-old",
-      "+new",
-      "+extra",
-      "",
-    ].join("\n");
-
     expect(await Effect.runPromise(parseCheckpointFilesFromUnifiedDiff(diff))).toEqual([
-      { path: "src/app.ts", kind: "modified", additions: 2, deletions: 1 },
+      { path: "CLAUDE.md", kind: "modified", additions: 2, deletions: 3 },
     ]);
   });
 

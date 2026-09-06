@@ -842,13 +842,6 @@ export function deriveFriendlyCommandTarget(rawCommand: string): string {
   return target.length <= 72 ? target : `${target.slice(0, 69).trimEnd()}…`;
 }
 
-// Whether a shell command is a read-only inspection (read/search/find/list).
-// Reuses the same command unwrapping as deriveReadableCommandDisplay so the
-// timeline search icon stays in sync with the derived command label.
-export function isInspectCommand(rawCommand: string): boolean {
-  return resolveCommandVisualKind(rawCommand) === "inspect";
-}
-
 // Classifies command rows for transcript glyphs after peeling away shell/env wrappers.
 // This keeps `git -C`, `env ... gh`, and `/bin/zsh -lc "cd ... && git ..."` visually branded.
 export function resolveCommandVisualKind(rawCommand: string): CommandVisualKind {

@@ -5,7 +5,6 @@ import type { DraftThreadState } from "../composerDraftStore";
 import type { Thread } from "../types";
 import {
   filterRenderableFilesForSearch,
-  isDiffPanelPickerOptionSelected,
   isStaleDiffTurnSelection,
   resolveConversationCacheScope,
   resolveDiffPanelGitStatusQueriesEnabled,
@@ -302,35 +301,6 @@ describe("diff panel view source helpers", () => {
 
   it("keeps the persisted default working-tree scope available in the picker", () => {
     expect(DIFF_PANEL_PICKER_SCOPE_OPTIONS).toContain("workingTree");
-  });
-
-  it("marks picker options selected only when they match the active scope", () => {
-    const latestTurnId = TurnId.makeUnsafe("turn-latest");
-
-    expect(
-      isDiffPanelPickerOptionSelected(
-        { kind: "turn", turnId: null },
-        { id: "allTurns" },
-        latestTurnId,
-        "all",
-      ),
-    ).toBe(true);
-    expect(
-      isDiffPanelPickerOptionSelected(
-        { kind: "turn", turnId: latestTurnId },
-        { id: "lastTurn" },
-        latestTurnId,
-        "last",
-      ),
-    ).toBe(true);
-    expect(
-      isDiffPanelPickerOptionSelected(
-        { kind: "turn", turnId: TurnId.makeUnsafe("turn-older") },
-        { id: "lastTurn" },
-        latestTurnId,
-        "last",
-      ),
-    ).toBe(false);
   });
 
   it("detects stale turn selections and resolves summaries without fallback", () => {

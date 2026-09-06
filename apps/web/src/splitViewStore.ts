@@ -353,36 +353,6 @@ export function selectSplitView(splitViewId: SplitViewId | null) {
     splitViewId ? (store.splitViewsById[splitViewId] ?? null) : null;
 }
 
-// Deterministic membership lookup: restore only if a thread has one clear split,
-// or if it is the source thread of one split. Ambiguous non-source membership
-// falls back to single-chat instead of guessing by recency.
-export function resolvePreferredSplitViewIdForThread(input: {
-  splitViewsById: Record<SplitViewId, SplitView | undefined>;
-  splitViewIdBySourceThreadId: Record<string, SplitViewId | undefined>;
-  threadId: ThreadId | null;
-}): SplitViewId | null {
-  if (!input.threadId) {
-    return null;
-  }
-
-  const matchingSplitViews = Object.values(input.splitViewsById)
-    .filter((splitView): splitView is SplitView => splitView !== undefined)
-    .filter((splitView) =>
-      collectLeaves(splitView.root).some((leaf) => leaf.threadId === input.threadId),
-    );
-
-  const sourceSplitViewId = input.splitViewIdBySourceThreadId[input.threadId] ?? null;
-  if (
-    sourceSplitViewId &&
-    matchingSplitViews.some((splitView) => splitView.id === sourceSplitViewId)
-  ) {
-    return sourceSplitViewId;
-  }
-
-  const onlyMatchingSplitView = matchingSplitViews.length === 1 ? matchingSplitViews[0] : null;
-  return onlyMatchingSplitView?.id ?? null;
-}
-
 // --- store ---
 
 export const useSplitViewStore = create<SplitViewStore>()(

@@ -34,9 +34,6 @@ export function userMessageBubbleBorderClassName(isTemporaryThread: boolean): st
     ? USER_MESSAGE_BUBBLE_TEMPORARY_BORDER_CLASS_NAME
     : USER_MESSAGE_BUBBLE_PLAIN_BORDER_CLASS_NAME;
 }
-
-const CHAT_TRANSCRIPT_USER_CHAR_WIDTH_RATIO = 0.48;
-const CHAT_TRANSCRIPT_ASSISTANT_CHAR_WIDTH_RATIO = 0.52;
 // Matches Tailwind `leading-relaxed` (1.625). Shared by the assistant transcript text,
 // user message bubbles, and the composer input so every chat surface reads at one leading.
 const CHAT_TRANSCRIPT_LINE_HEIGHT_RATIO = 1.625;
@@ -49,18 +46,6 @@ export function getChatTranscriptUserMessageLineHeightPx(
   chatFontSizePx = DEFAULT_CHAT_FONT_SIZE_PX,
 ): number {
   return getChatTranscriptLineHeightPx(chatFontSizePx);
-}
-
-export function getChatTranscriptUserCharWidthPx(
-  chatFontSizePx = DEFAULT_CHAT_FONT_SIZE_PX,
-): number {
-  return normalizeChatFontSizePx(chatFontSizePx) * CHAT_TRANSCRIPT_USER_CHAR_WIDTH_RATIO;
-}
-
-export function getChatTranscriptAssistantCharWidthPx(
-  chatFontSizePx = DEFAULT_CHAT_FONT_SIZE_PX,
-): number {
-  return normalizeChatFontSizePx(chatFontSizePx) * CHAT_TRANSCRIPT_ASSISTANT_CHAR_WIDTH_RATIO;
 }
 
 function buildChatTextStyle(fontSizePx: number, lineHeightPx: number): CSSProperties {

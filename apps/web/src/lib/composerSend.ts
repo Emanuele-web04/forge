@@ -361,17 +361,6 @@ export async function stageUploadComposerAttachments(input: {
   return { attachments, commit, cleanup, runWithDispatch };
 }
 
-// Compatibility wrapper for callers that have not yet adopted the explicit
-// commit/cleanup lifecycle. Sequential upload failure compensation still applies.
-export async function buildUploadComposerAttachments(input: {
-  threadId: string;
-  images: ReadonlyArray<ComposerImageAttachment>;
-  files?: ReadonlyArray<ComposerFileAttachment>;
-  assistantSelections: ReadonlyArray<ComposerAssistantSelectionAttachment>;
-}): Promise<UploadChatAttachment[]> {
-  return (await stageUploadComposerAttachments(input)).attachments;
-}
-
 /**
  * Persisted image attachments that still back a blob (AppSnap captures) but
  * have not yet hydrated into the live `images` array. Right after a reload,

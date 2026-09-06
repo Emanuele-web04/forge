@@ -1,6 +1,5 @@
-// Keep the renderer and virtualization estimator on the same collapsed-message
-// policy. The character threshold is only a first-paint overflow hint; rendered
-// and estimated heights are both governed by the line limit.
+// The character threshold is a first-paint overflow hint; rendered message
+// height is governed by the line limit.
 export const COLLAPSED_USER_MESSAGE_MAX_CHARS = 600;
 export const USER_MESSAGE_COLLAPSED_MAX_LINES = 12;
 export const USER_MESSAGE_COLLAPSED_FADE_LINES = 2;
@@ -18,15 +17,4 @@ export function userMessageLikelyOverflows(text: string): boolean {
     }
   }
   return false;
-}
-
-export function resolveCollapsedUserMessageLineEstimate(estimatedLines: number): {
-  renderedLines: number;
-  collapsible: boolean;
-} {
-  const safeLines = Math.max(0, estimatedLines);
-  return {
-    renderedLines: Math.min(safeLines, USER_MESSAGE_COLLAPSED_MAX_LINES),
-    collapsible: safeLines > USER_MESSAGE_COLLAPSED_MAX_LINES,
-  };
 }

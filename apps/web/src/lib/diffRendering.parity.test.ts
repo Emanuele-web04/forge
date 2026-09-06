@@ -1,15 +1,4 @@
-// FILE: diffRendering.parity.test.ts
-// Purpose: Regression guard — the server-side patch counter must report exactly what the
-//          browser reports after fully parsing the same patch.
-// Layer: Web/shared contract test
-//
-// The `+N/-M` badge used to fetch the whole patch and count it here with
-// `summarizePatchTotals`. It now asks the server for three integers instead, and the server
-// counts with `summarizeUnifiedPatchTotals`. Those are two independent implementations
-// feeding one badge, so any disagreement between them is a visible number changing for the
-// user. Every patch shape git can emit for a working tree belongs in this table.
-
-import { summarizeUnifiedPatchTotals } from "@synara/shared/unifiedPatchStats";
+// Verify parsed totals against explicit counts for the patch shapes Git emits.
 import { describe, expect, it } from "vitest";
 
 import { summarizePatchTotals } from "./diffRendering";
@@ -125,33 +114,50 @@ index eeeeeee..fffffff 100644
 +e
 `;
 
-const CASES: ReadonlyArray<readonly [name: string, patch: string]> = [
-  ["a modified file", MODIFIED_FILE],
-  ["an added file", ADDED_FILE],
-  ["a deleted file", DELETED_FILE],
-  ["an untracked file folded in via --no-index", UNTRACKED_VIA_NO_INDEX],
-  ["a pure rename with no content change", PURE_RENAME],
-  ["a rename with edits", RENAME_WITH_EDITS],
-  ["a binary file", BINARY_FILE],
-  ["a file with no trailing newline", NO_TRAILING_NEWLINE],
-  ["content lines that look like diff headers", DIFF_SHAPED_CONTENT],
-  ["multiple hunks in one file", MULTI_HUNK],
+const CASES = [
+  ["a modified file", MODIFIED_FILE, { additions: 2, deletions: 1, fileCount: 1 }],
+  ["an added file", ADDED_FILE, { additions: 3, deletions: 0, fileCount: 1 }],
+  ["a deleted file", DELETED_FILE, { additions: 0, deletions: 2, fileCount: 1 }],
+  [
+    "an untracked file folded in via --no-index",
+    UNTRACKED_VIA_NO_INDEX,
+    { additions: 2, deletions: 0, fileCount: 1 },
+  ],
+  [
+    "a pure rename with no content change",
+    PURE_RENAME,
+    { additions: 0, deletions: 0, fileCount: 1 },
+  ],
+  ["a rename with edits", RENAME_WITH_EDITS, { additions: 1, deletions: 1, fileCount: 1 }],
+  ["a binary file", BINARY_FILE, { additions: 0, deletions: 0, fileCount: 1 }],
+  [
+    "a file with no trailing newline",
+    NO_TRAILING_NEWLINE,
+    { additions: 1, deletions: 1, fileCount: 1 },
+  ],
+  [
+    "content lines that look like diff headers",
+    DIFF_SHAPED_CONTENT,
+    { additions: 3, deletions: 3, fileCount: 1 },
+  ],
+  ["multiple hunks in one file", MULTI_HUNK, { additions: 3, deletions: 2, fileCount: 1 }],
   [
     "every shape concatenated",
     [MODIFIED_FILE, ADDED_FILE, DELETED_FILE, PURE_RENAME, BINARY_FILE, MULTI_HUNK].join(""),
+    { additions: 8, deletions: 5, fileCount: 6 },
   ],
-];
+] as const;
 
-describe("server patch totals match the browser's parsed totals", () => {
-  for (const [name, patch] of CASES) {
-    it(`agrees on ${name}`, () => {
-      expect(summarizeUnifiedPatchTotals(patch)).toEqual(summarizePatchTotals(patch));
+describe("parsed patch totals", () => {
+  for (const [name, patch, expected] of CASES) {
+    it(`counts ${name}`, () => {
+      expect(summarizePatchTotals(patch)).toEqual(expected);
     });
   }
 
-  it("agrees that an empty patch has no totals", () => {
+  it("returns no totals for an empty patch", () => {
     for (const empty of ["", "   \n  ", undefined]) {
-      expect(summarizeUnifiedPatchTotals(empty)).toEqual(summarizePatchTotals(empty));
+      expect(summarizePatchTotals(empty)).toBeNull();
     }
   });
 });

@@ -73,10 +73,6 @@ export function resolveClaudeCredentialsPaths(input?: {
   return [...new Set(paths)];
 }
 
-export function hasUsableClaudeCliCredentialsContent(content: string, nowMs = Date.now()): boolean {
-  return readClaudeCliCredentialsContentSummary(content, nowMs).usable;
-}
-
 export function readClaudeCliCredentialsContentSummary(
   content: string,
   nowMs = Date.now(),

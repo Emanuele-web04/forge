@@ -26,7 +26,6 @@ import {
   checkGrokProviderStatus,
   checkOpenCodeProviderStatus,
   checkPiProviderStatus,
-  hasCustomModelProvider,
   makeDisabledProviderStatus,
   makeCheckClaudeProviderStatus,
   makeCheckCodexProviderStatus,
@@ -41,7 +40,7 @@ import {
   providerStatusesEqual,
   ProviderHealthLive,
   projectProviderStatusesForSettings,
-  readCodexConfigModelProvider,
+  readCodexConfigModelProviderForEnv,
   stabilizeProviderStatusesAgainstTransientTimeouts,
 } from "./ProviderHealth";
 import { resolvePackageManagedProviderMaintenance } from "../providerMaintenance";
@@ -1044,7 +1043,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   // ── checkCodexProviderStatus tests ────────────────────────────────
   //
   // These tests control CODEX_HOME to ensure the custom-provider detection
-  // in hasCustomModelProvider() does not interfere with the auth-probe
+  // in checkCodexProviderStatus does not interfere with the auth-probe
   // path being tested.
 
   describe("checkCodexProviderStatus", () => {
@@ -1395,34 +1394,34 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
     });
   });
 
-  // ── readCodexConfigModelProvider tests ─────────────────────────────
+  // ── readCodexConfigModelProviderForEnv tests ─────────────────────────────
 
-  describe("readCodexConfigModelProvider", () => {
+  describe("readCodexConfigModelProviderForEnv", () => {
     it.effect("returns undefined when config file does not exist", () =>
       Effect.gen(function* () {
         yield* withTempCodexHome();
-        assert.strictEqual(yield* readCodexConfigModelProvider, undefined);
+        assert.strictEqual(yield* readCodexConfigModelProviderForEnv(process.env), undefined);
       }),
     );
 
     it.effect("returns undefined when config has no model_provider key", () =>
       Effect.gen(function* () {
         yield* withTempCodexHome('model = "gpt-5-codex"\n');
-        assert.strictEqual(yield* readCodexConfigModelProvider, undefined);
+        assert.strictEqual(yield* readCodexConfigModelProviderForEnv(process.env), undefined);
       }),
     );
 
     it.effect("returns the provider when model_provider is set at top level", () =>
       Effect.gen(function* () {
         yield* withTempCodexHome('model = "gpt-5-codex"\nmodel_provider = "portkey"\n');
-        assert.strictEqual(yield* readCodexConfigModelProvider, "portkey");
+        assert.strictEqual(yield* readCodexConfigModelProviderForEnv(process.env), "portkey");
       }),
     );
 
     it.effect("returns openai when model_provider is openai", () =>
       Effect.gen(function* () {
         yield* withTempCodexHome('model_provider = "openai"\n');
-        assert.strictEqual(yield* readCodexConfigModelProvider, "openai");
+        assert.strictEqual(yield* readCodexConfigModelProviderForEnv(process.env), "openai");
       }),
     );
 
@@ -1438,7 +1437,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             "",
           ].join("\n"),
         );
-        assert.strictEqual(yield* readCodexConfigModelProvider, undefined);
+        assert.strictEqual(yield* readCodexConfigModelProviderForEnv(process.env), undefined);
       }),
     );
 
@@ -1454,67 +1453,14 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             'model = "gpt-5-pro"',
           ].join("\n"),
         );
-        assert.strictEqual(yield* readCodexConfigModelProvider, "azure");
+        assert.strictEqual(yield* readCodexConfigModelProviderForEnv(process.env), "azure");
       }),
     );
 
     it.effect("handles single-quoted values in TOML", () =>
       Effect.gen(function* () {
         yield* withTempCodexHome("model_provider = 'mistral'\n");
-        assert.strictEqual(yield* readCodexConfigModelProvider, "mistral");
-      }),
-    );
-  });
-
-  // ── hasCustomModelProvider tests ───────────────────────────────────
-
-  describe("hasCustomModelProvider", () => {
-    it.effect("returns false when no config file exists", () =>
-      Effect.gen(function* () {
-        yield* withTempCodexHome();
-        assert.strictEqual(yield* hasCustomModelProvider, false);
-      }),
-    );
-
-    it.effect("returns false when model_provider is not set", () =>
-      Effect.gen(function* () {
-        yield* withTempCodexHome('model = "gpt-5-codex"\n');
-        assert.strictEqual(yield* hasCustomModelProvider, false);
-      }),
-    );
-
-    it.effect("returns false when model_provider is openai", () =>
-      Effect.gen(function* () {
-        yield* withTempCodexHome('model_provider = "openai"\n');
-        assert.strictEqual(yield* hasCustomModelProvider, false);
-      }),
-    );
-
-    it.effect("returns true when model_provider is portkey", () =>
-      Effect.gen(function* () {
-        yield* withTempCodexHome('model_provider = "portkey"\n');
-        assert.strictEqual(yield* hasCustomModelProvider, true);
-      }),
-    );
-
-    it.effect("returns true when model_provider is azure", () =>
-      Effect.gen(function* () {
-        yield* withTempCodexHome('model_provider = "azure"\n');
-        assert.strictEqual(yield* hasCustomModelProvider, true);
-      }),
-    );
-
-    it.effect("returns true when model_provider is ollama", () =>
-      Effect.gen(function* () {
-        yield* withTempCodexHome('model_provider = "ollama"\n');
-        assert.strictEqual(yield* hasCustomModelProvider, true);
-      }),
-    );
-
-    it.effect("returns true when model_provider is a custom proxy", () =>
-      Effect.gen(function* () {
-        yield* withTempCodexHome('model_provider = "my-company-proxy"\n');
-        assert.strictEqual(yield* hasCustomModelProvider, true);
+        assert.strictEqual(yield* readCodexConfigModelProviderForEnv(process.env), "mistral");
       }),
     );
   });

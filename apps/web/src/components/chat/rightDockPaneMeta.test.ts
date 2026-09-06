@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import type { ThreadId } from "@synara/contracts";
-import { RIGHT_DOCK_PANE_KINDS, type RightDockPane } from "~/rightDockStore.logic";
+import { type RightDockPane } from "~/rightDockStore.logic";
 import {
-  RIGHT_DOCK_ADD_MENU_KINDS,
   buildRightDockPaneLabelOverrides,
   getRightDockPaneMeta,
   resolveRightDockPaneLabel,
@@ -26,20 +25,7 @@ function makePane(
   };
 }
 
-describe("RIGHT_DOCK_ADD_MENU_KINDS", () => {
-  it("offers the explorer pane but not the chat-driven file pane", () => {
-    // The "+" menu surfaces the file-tree explorer; single-file preview tabs are
-    // opened by clicking a file reference in chat, not from the add menu.
-    expect(RIGHT_DOCK_ADD_MENU_KINDS).toContain("explorer");
-    expect(RIGHT_DOCK_ADD_MENU_KINDS).not.toContain("file");
-  });
-
-  it("keeps the canonical kind order minus context-only panes", () => {
-    expect([...RIGHT_DOCK_ADD_MENU_KINDS]).toEqual(
-      RIGHT_DOCK_PANE_KINDS.filter((kind) => kind !== "file" && kind !== "pullRequest"),
-    );
-  });
-
+describe("getRightDockPaneMeta", () => {
   it("labels the explorer pane", () => {
     expect(getRightDockPaneMeta("explorer").label).toBe("Explorer");
   });

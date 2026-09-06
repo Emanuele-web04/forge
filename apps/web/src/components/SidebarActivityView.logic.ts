@@ -3,11 +3,7 @@
 // Exports: eligibility, status-group resolution, settle helpers, and the view-model builder.
 
 import type { ProjectId, ThreadId } from "@synara/contracts";
-
-import { formatRelativeTime } from "~/lib/relativeTime";
-import type { TimestampFormat } from "../appSettings";
 import { canSessionAnswerPendingRequests, isLatestTurnSettled } from "../session-logic";
-import { formatShortTimestamp } from "../timestampFormat";
 import type { SidebarThreadSummary } from "../types";
 import { hasUnseenCompletion, isThreadActivelyWorking } from "./Sidebar.logic";
 
@@ -510,23 +506,6 @@ export function collectVisibleActivityThreadIds(input: {
   }
   if (input.settledOpen) visible.push(...input.settled);
   return [...new Set(visible.map((thread) => thread.id))];
-}
-
-/**
- * Row timestamp: today's threads show the exact clock time (task-feed precision,
- * and it disambiguates same-title chats that would both read "2h"); older rows
- * keep the coarser relative label.
- */
-export function formatActivityRowTime(input: {
-  thread: ActivityRecencyInput;
-  nowMs: number;
-  timestampFormat: TimestampFormat;
-}): string {
-  const isoDate = resolveActivityRecencyIso(input.thread);
-  if (resolveActivityDateBucket(input.thread, input.nowMs) === "today") {
-    return formatShortTimestamp(isoDate, input.timestampFormat);
-  }
-  return formatRelativeTime(isoDate);
 }
 
 /** Threads "Mark all as read" should visit: eligible feed rows with an unseen completion. */

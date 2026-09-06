@@ -1,13 +1,6 @@
 import type { Metadata } from "next";
 
-import {
-  absoluteUrl,
-  OG_IMAGE,
-  SITE_DESCRIPTION,
-  SITE_NAME,
-  SITE_URL,
-  X_PROFILE_URL,
-} from "@/lib/seo";
+import { absoluteUrl, OG_IMAGE, SITE_NAME, SITE_URL, X_PROFILE_URL } from "@/lib/seo";
 
 /** Search and user-directed retrieval agents that affect answer visibility. */
 export const AI_DISCOVERY_USER_AGENTS = [
@@ -102,5 +95,3 @@ export function documentationPageJsonLd({
 
 export const AI_DISCOVERY_NOTICE =
   "These plain-text files are convenience indexes for agents and answer engines. robots.txt and page-level indexing directives remain authoritative.";
-
-export const CANONICAL_PRODUCT_FACT = SITE_DESCRIPTION;

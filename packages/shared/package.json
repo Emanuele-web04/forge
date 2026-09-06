@@ -292,10 +292,6 @@
       "types": "./src/browserAutomationMcpError.ts",
       "import": "./src/browserAutomationMcpError.ts"
     },
-    "./unifiedPatchStats": {
-      "types": "./src/unifiedPatchStats.ts",
-      "import": "./src/unifiedPatchStats.ts"
-    },
     "./providerDeliveryBlock": {
       "types": "./src/providerDeliveryBlock.ts",
       "import": "./src/providerDeliveryBlock.ts"

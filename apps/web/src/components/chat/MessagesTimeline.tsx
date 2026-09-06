@@ -244,8 +244,7 @@ export interface MessagesTimelineController {
 }
 
 // Keeps the origin/steer marker visually attached to the whole sent-message stack.
-// Which marker (if any) applies comes from the shared resolveUserTurnMarker predicate,
-// which the timelineHeight estimator also uses — keep presentation-only concerns here.
+// Which marker (if any) applies comes from the shared resolveUserTurnMarker predicate.
 const USER_TURN_MARKER_PRESENTATION: Record<
   UserTurnMarkerKind,
   { readonly Icon: LucideIcon; readonly label: string }

@@ -339,15 +339,6 @@ export interface ThreadStatusPill {
 }
 
 /**
- * A status that still asks something of the user or is producing output right
- * now. Surfaces that dim finished work (the Activity Done section) keep showing
- * these pills, so a thread that restarts or asks for approval stays visible.
- */
-export function isUrgentThreadStatusPill(pill: ThreadStatusPill): boolean {
-  return pill.label !== "Completed";
-}
-
-/**
  * Which status — if any — a sidebar row shows in its trailing glyph slot.
  * Single owner of the visibility rule so the classic thread rows, the collapsed
  * project rows and the Activity rows can never disagree about when a spinner or

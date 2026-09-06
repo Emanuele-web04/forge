@@ -5,7 +5,6 @@ import {
   resolveWindowsPowerShellExecutable,
   resolveWindowsSystemExecutable,
   resolveWindowsSystemRoot,
-  resolveWindowsWhereExecutable,
   resolveWindowsWslExecutable,
 } from "./platformEnvironment";
 
@@ -19,7 +18,6 @@ describe("platformEnvironment", () => {
     expect(resolveWindowsSystemRoot(env)).toBe("D:\\Windows");
     expect(resolveWindowsComSpec(env)).toBe("D:\\Windows\\System32\\custom-cmd.exe");
     expect(resolveWindowsWslExecutable(env)).toBe("D:\\Windows\\System32\\wsl.exe");
-    expect(resolveWindowsWhereExecutable(env)).toBe("D:\\Windows\\System32\\where.exe");
     expect(resolveWindowsPowerShellExecutable(env)).toBe(
       "D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
     );
