@@ -823,8 +823,21 @@ describe("Antigravity CLI integration helpers", () => {
             },
           ]);
 
+          const turnTerminalFiber = yield* adapter.streamEvents.pipe(
+            Stream.filter((event) => event.type === "turn.completed"),
+            Stream.take(1),
+            Stream.runCollect,
+            Effect.forkChild,
+          );
           child?.emit("close", 0, null);
-          yield* Effect.sleep("25 millis");
+          // The close handler settles the turn asynchronously (gateway cancel,
+          // hook-file drain, run-dir cleanup) and clears activeProcess before
+          // emitting turn.completed. Wait for that event instead of a fixed
+          // sleep so stopSession cannot race the pid-less fake into teardown.
+          const terminalEvents = Array.from(
+            yield* Fiber.join(turnTerminalFiber).pipe(Effect.timeout("2 seconds")),
+          );
+          expect(terminalEvents).toHaveLength(1);
           yield* adapter.stopSession(threadId);
         }).pipe(
           Effect.provide(
