@@ -380,6 +380,10 @@ async function mountApp(
   };
 }
 
+// beforeAll worst case (30s activation + 80s warmup + worker start) exceeds the
+// 90s hookTimeout in vitest.browser.config.ts, so raise it for this file.
+vi.setConfig({ hookTimeout: 150_000 });
+
 describe("Keybindings update toast", () => {
   beforeAll(async () => {
     fixture = buildFixture();
