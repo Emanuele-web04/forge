@@ -21,6 +21,7 @@
     "build": "tsdown src/index.ts --format esm,cjs --dts --clean",
     "prepare": "effect-language-service patch",
     "typecheck": "tsc --noEmit",
+    "typecheck:native": "node ../../node_modules/@typescript/native/bin/tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {

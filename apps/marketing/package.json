@@ -17,6 +17,7 @@
     "test:a11y": "playwright test tests/a11y",
     "test:performance": "node scripts/performance-smoke.mjs",
     "typecheck": "tsc --noEmit",
+    "typecheck:native": "node ../../node_modules/@typescript/native/bin/tsc --noEmit --tsBuildInfoFile node_modules/.cache/typescript-native.tsbuildinfo",
     "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
     "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
     "postinstall": "fumadocs-mdx"

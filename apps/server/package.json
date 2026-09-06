@@ -21,6 +21,7 @@
     "start": "node dist/index.mjs",
     "prepare": "effect-language-service patch",
     "typecheck": "tsc --noEmit",
+    "typecheck:native": "node ../../node_modules/@typescript/native/bin/tsc --noEmit --tsBuildInfoFile node_modules/.cache/typescript-native.tsbuildinfo",
     "test": "vitest run --maxWorkers=1 --no-file-parallelism"
   },
   "dependencies": {

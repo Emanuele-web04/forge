@@ -1,6 +1,6 @@
 export interface GuestCrypto {
   randomUUID?: () => string;
-  getRandomValues: <T extends ArrayBufferView>(array: T) => T;
+  getRandomValues: Crypto["getRandomValues"];
 }
 
 export function createGuestIdentifier(crypto: GuestCrypto): string {
