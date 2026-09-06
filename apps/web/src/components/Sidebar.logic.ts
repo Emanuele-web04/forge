@@ -29,6 +29,14 @@ import {
 } from "../sidebarRowStyles";
 import { isDuplicateProjectCreateError } from "../lib/projectCreateRecovery";
 import {
+  buildThreadHierarchyIndex,
+  collectRevealThreadIds,
+  getDirectChildThreadCount,
+  getThreadEdgeKind,
+  resolveVisibleChildThreadIds,
+  type ThreadHierarchyEdgeKind,
+} from "./sidebarThreadHierarchy";
+import {
   canSessionAnswerPendingRequests,
   formatClockDuration,
   hasLiveLatestTurn,
@@ -300,6 +308,9 @@ export type SidebarProjectEntry = {
   rootRowId: ThreadId;
   thread: SidebarThreadSummary;
   depth: number;
+  /** Direct children available for this row (counter source; views paginate the branch). */
+  directChildCount?: number;
+  edgeKind?: ThreadHierarchyEdgeKind | undefined;
 };
 
 export type SidebarThreadHoverAnchorScope = "pinned" | "chat" | "project" | "activity";
@@ -1042,85 +1053,92 @@ export interface SidebarThreadTreeRow<
   thread: T;
   depth: number;
   rootThreadId: T["id"];
-}
-
-function collectActiveThreadAncestorIds<
-  T extends Pick<SidebarThreadSummary, "id" | "parentThreadId">,
->(threadById: Map<T["id"], T>, forceVisibleThreadId: T["id"] | undefined): Set<T["id"]> {
-  const ancestorIds = new Set<T["id"]>();
-  let currentThreadId = forceVisibleThreadId;
-
-  while (currentThreadId) {
-    const parentThreadId = threadById.get(currentThreadId)?.parentThreadId ?? undefined;
-    if (!parentThreadId) {
-      break;
-    }
-    ancestorIds.add(parentThreadId);
-    currentThreadId = parentThreadId;
-  }
-
-  return ancestorIds;
+  /** Direct children available for this row, including collapsed or paged ones. */
+  directChildCount: number;
+  /** Frontend-only edge kind: subagent (parentThreadId) vs batch (sourceThreadId). */
+  edgeKind: ThreadHierarchyEdgeKind | undefined;
 }
 
 // Build the project-local parent/child thread tree while preserving sort order from the input list.
+//
+// The forest comes from the shared sidebarThreadHierarchy index: kinship is
+// `parentThreadId` (subagent) or `sourceThreadId` (nested batch) within the
+// same project only, orphans stay hidden, and cycles/duplicates cannot loop
+// the walk. Roots always render; children render only under an expanded
+// parent. Branches start closed: expansion is explicit (`expandedThreadIds`,
+// persisted in Sidebar.uiState.ts) plus a transient reveal of the
+// `forceVisibleThreadId` ancestor path, which an explicit close
+// (`collapsedThreadIds`) can override until the active thread changes. Each
+// open branch pages its direct children 20 by 20 via
+// `childExtraPagesByParentId`; a revealed active descendant is always
+// included even outside the current page.
 export function buildProjectThreadTree<
-  T extends Pick<SidebarThreadSummary, "id" | "parentThreadId">,
+  T extends Pick<SidebarThreadSummary, "id" | "parentThreadId"> &
+    Partial<Pick<SidebarThreadSummary, "projectId" | "sourceThreadId" | "gatewayOperationId">>,
 >(input: {
   threads: readonly T[];
   forceVisibleThreadId?: T["id"] | undefined;
+  expandedThreadIds?: ReadonlySet<T["id"]> | undefined;
+  collapsedThreadIds?: ReadonlySet<T["id"]> | undefined;
+  childExtraPagesByParentId?: ReadonlyMap<T["id"], number> | undefined;
 }): SidebarThreadTreeRow<T>[] {
   const { forceVisibleThreadId, threads } = input;
-  const threadById = new Map(threads.map((thread) => [thread.id, thread] as const));
-  const childrenByParentId = new Map<T["id"], T[]>();
-  const roots: T[] = [];
-
-  for (const thread of threads) {
-    const parentThreadId = thread.parentThreadId ?? null;
-    if (!parentThreadId) {
-      roots.push(thread);
-      continue;
+  const index = buildThreadHierarchyIndex(threads);
+  const collapsedThreadIds = input.collapsedThreadIds ?? new Set<T["id"]>();
+  const revealedThreadIds = collectRevealThreadIds(index, forceVisibleThreadId);
+  const expandedThreadIds = new Set<T["id"]>(input.expandedThreadIds ?? []);
+  for (const revealedThreadId of revealedThreadIds) {
+    if (!collapsedThreadIds.has(revealedThreadId)) {
+      expandedThreadIds.add(revealedThreadId);
     }
-    // Subagent threads are only reachable through their parent. When the parent
-    // is not in the list (archived or deleted), its subtree stays hidden instead
-    // of being promoted to top-level rows.
-    if (!threadById.has(parentThreadId)) {
-      continue;
-    }
-    const siblings = childrenByParentId.get(parentThreadId) ?? [];
-    siblings.push(thread);
-    childrenByParentId.set(parentThreadId, siblings);
   }
 
-  const activeThreadAncestorIds = collectActiveThreadAncestorIds(threadById, forceVisibleThreadId);
   const orderedRows: SidebarThreadTreeRow<T>[] = [];
+  // Explicit iterative preorder walk so abnormal depth cannot overflow the stack.
+  const stack: { threadId: T["id"]; depth: number; rootThreadId: T["id"] }[] = [];
+  for (let rootPosition = index.rootIds.length - 1; rootPosition >= 0; rootPosition -= 1) {
+    const rootId = index.rootIds[rootPosition] as T["id"];
+    stack.push({ threadId: rootId, depth: 0, rootThreadId: rootId });
+  }
 
-  const visit = (thread: T, depth: number, rootThreadId: T["id"]) => {
-    const childThreads = childrenByParentId.get(thread.id) ?? [];
-    const revealsActiveDescendant =
-      childThreads.length > 0 && activeThreadAncestorIds.has(thread.id);
-
+  while (stack.length > 0) {
+    const { depth, rootThreadId, threadId } = stack.pop() as {
+      threadId: T["id"];
+      depth: number;
+      rootThreadId: T["id"];
+    };
+    const thread = index.nodesById.get(threadId);
+    if (!thread) {
+      continue;
+    }
     orderedRows.push({
       thread,
       depth,
       rootThreadId,
+      directChildCount: getDirectChildThreadCount(index, threadId),
+      edgeKind: getThreadEdgeKind(index, threadId),
     });
 
-    if (!revealsActiveDescendant) {
-      return;
+    if (expandedThreadIds.has(threadId) && !collapsedThreadIds.has(threadId)) {
+      const { visibleChildIds } = resolveVisibleChildThreadIds({
+        index,
+        parentId: threadId,
+        requestedExtraPages: input.childExtraPagesByParentId?.get(threadId) ?? 0,
+        revealedThreadIds,
+      });
+      for (let childPosition = visibleChildIds.length - 1; childPosition >= 0; childPosition -= 1) {
+        const childId = visibleChildIds[childPosition] as T["id"];
+        stack.push({ threadId: childId, depth: depth + 1, rootThreadId });
+      }
     }
-
-    for (const child of childThreads) {
-      visit(child, depth + 1, rootThreadId);
-    }
-  };
-
-  for (const root of roots) {
-    visit(root, 0, root.id);
   }
 
   return orderedRows;
 }
 
+// Roots are paged before they expand: `previewLimit` counts families, and every
+// visible row of an included root renders. Children never consume root slots
+// and no subtree is ever cut mid-family by the preview.
 export function getVisibleSidebarEntriesForPreview<
   T extends {
     rowId: Thread["id"];
@@ -1135,52 +1153,39 @@ export function getVisibleSidebarEntriesForPreview<
   visibleEntries: T[];
 } {
   const { activeEntryId, entries, previewLimit } = input;
-  const hasHiddenEntries = entries.length > previewLimit;
-
-  if (!hasHiddenEntries) {
-    return {
-      hasHiddenEntries,
-      visibleEntries: [...entries],
-    };
+  const rootOrder: Thread["id"][] = [];
+  const seenRootIds = new Set<Thread["id"]>();
+  for (const entry of entries) {
+    if (!seenRootIds.has(entry.rootRowId)) {
+      seenRootIds.add(entry.rootRowId);
+      rootOrder.push(entry.rootRowId);
+    }
   }
 
-  const previewEntries = entries.slice(0, previewLimit);
-  const visibleEntryIds = new Set(previewEntries.map((entry) => entry.rowId));
+  const previewRootIds = new Set(rootOrder.slice(0, Math.max(0, previewLimit)));
+  const forcedVisibleRowIds = new Set<Thread["id"]>();
 
-  if (!activeEntryId || visibleEntryIds.has(activeEntryId)) {
-    return {
-      hasHiddenEntries: true,
-      visibleEntries: previewEntries,
-    };
+  if (activeEntryId !== undefined && !previewRootIds.has(activeEntryId)) {
+    const activeEntry = entries.find((entry) => entry.rowId === activeEntryId);
+    if (activeEntry && !previewRootIds.has(activeEntry.rootRowId)) {
+      // Reveal the active entry with its ancestor chain inside the current scope.
+      const rootEntryIndex = entries.findIndex((entry) => entry.rowId === activeEntry.rootRowId);
+      const activeEntryIndex = entries.findIndex((entry) => entry.rowId === activeEntryId);
+      if (rootEntryIndex !== -1 && activeEntryIndex !== -1) {
+        for (const entry of entries.slice(rootEntryIndex, activeEntryIndex + 1)) {
+          forcedVisibleRowIds.add(entry.rowId);
+        }
+      }
+    }
   }
 
-  const activeEntryIndex = entries.findIndex((entry) => entry.rowId === activeEntryId);
-  if (activeEntryIndex === -1) {
-    return {
-      hasHiddenEntries: true,
-      visibleEntries: previewEntries,
-    };
-  }
-
-  const activeEntry = entries[activeEntryIndex];
-  if (!activeEntry) {
-    return {
-      hasHiddenEntries: true,
-      visibleEntries: previewEntries,
-    };
-  }
-
-  const rootEntryIndex = entries.findIndex((entry) => entry.rowId === activeEntry.rootRowId);
-  const forcedVisibleEntries =
-    rootEntryIndex === -1 ? [activeEntry] : entries.slice(rootEntryIndex, activeEntryIndex + 1);
-
-  for (const entry of forcedVisibleEntries) {
-    visibleEntryIds.add(entry.rowId);
-  }
+  const visibleEntries = entries.filter(
+    (entry) => previewRootIds.has(entry.rootRowId) || forcedVisibleRowIds.has(entry.rowId),
+  );
 
   return {
-    hasHiddenEntries: true,
-    visibleEntries: entries.filter((entry) => visibleEntryIds.has(entry.rowId)),
+    hasHiddenEntries: visibleEntries.length < entries.length,
+    visibleEntries,
   };
 }
 
@@ -1252,29 +1257,75 @@ export function orderPinnedProjectsForSidebar<T extends Pick<Project, "id">>(
 }
 
 // Hide globally pinned rows from the per-project lists so the sidebar doesn't duplicate chats.
-// Exception: a pinned parent whose children are in the list stays in the tree.
-// The pinned section renders flat rows only, and buildProjectThreadTree hides
-// children with a missing parent — hiding such a parent would make its
-// descendants unreachable anywhere in the sidebar.
+// A family appears exactly once per view: pinning any member moves the whole
+// family to the Pinned section, so every thread whose family root contains a
+// pinned member is excluded here. Families resolve through the shared
+// hierarchy index (parentThreadId → subagent, sourceThreadId → batch) within
+// the same project; orphans and cross-project links stay hidden as usual.
 export function getUnpinnedThreadsForSidebar<
-  T extends Pick<Thread, "id"> & Partial<Pick<SidebarThreadSummary, "parentThreadId">>,
+  T extends Pick<Thread, "id"> &
+    Partial<Pick<SidebarThreadSummary, "parentThreadId" | "projectId" | "sourceThreadId" | "gatewayOperationId">>,
 >(threads: readonly T[], pinnedThreadIds: readonly T["id"][]): T[] {
   if (pinnedThreadIds.length === 0) {
     return [...threads];
   }
 
-  const parentThreadIds = new Set<T["id"]>();
-  for (const thread of threads) {
-    const parentThreadId = thread.parentThreadId ?? null;
-    if (parentThreadId !== null) {
-      parentThreadIds.add(parentThreadId as T["id"]);
+  const pinnedThreadIdSet = new Set<T["id"]>(pinnedThreadIds);
+  const index = buildThreadHierarchyIndex(threads);
+  const pinnedRootIds = new Set<T["id"]>();
+  for (const pinnedThreadId of pinnedThreadIdSet) {
+    const rootId = index.rootIdByThreadId.get(pinnedThreadId);
+    if (rootId !== undefined) {
+      pinnedRootIds.add(rootId);
+      continue;
+    }
+    // Hidden or unknown pinned ids (orphans, other projects, not yet
+    // hydrated) still hide their own row to avoid duplicates in Pinned.
+    if (index.nodesById.has(pinnedThreadId)) {
+      pinnedRootIds.add(pinnedThreadId);
     }
   }
+  if (pinnedRootIds.size === 0) {
+    return threads.filter((thread) => !pinnedThreadIdSet.has(thread.id));
+  }
 
-  const hiddenThreadIds = new Set(
-    pinnedThreadIds.filter((threadId) => !parentThreadIds.has(threadId)),
-  );
-  return threads.filter((thread) => !hiddenThreadIds.has(thread.id));
+  return threads.filter((thread) => {
+    const rootId = index.rootIdByThreadId.get(thread.id);
+    if (rootId !== undefined) {
+      return !pinnedRootIds.has(rootId);
+    }
+    // Hidden threads never render in ordinary lists; keep the direct pinned
+    // check so they don't leak back as roots.
+    return !pinnedThreadIdSet.has(thread.id);
+  });
+}
+
+/**
+ * Family roots for the Pinned section, in first-pinned-position order: if any
+ * member of a family is pinned, the whole family renders once under its root.
+ * Returns the root thread for each pinned family plus ungroupable pinned ids.
+ */
+export function getPinnedFamilyRootIdsForSidebar<
+  T extends Pick<Thread, "id"> &
+    Partial<Pick<SidebarThreadSummary, "parentThreadId" | "projectId" | "sourceThreadId" | "gatewayOperationId">>,
+>(threads: readonly T[], pinnedThreadIds: readonly T["id"][]): T["id"][] {
+  if (pinnedThreadIds.length === 0) {
+    return [];
+  }
+  const index = buildThreadHierarchyIndex(threads);
+  const seenRoots = new Set<T["id"]>();
+  const rootIds: T["id"][] = [];
+  for (const pinnedThreadId of pinnedThreadIds) {
+    const rootId = index.rootIdByThreadId.get(pinnedThreadId) ?? (
+      index.nodesById.has(pinnedThreadId) ? pinnedThreadId : undefined
+    );
+    if (rootId === undefined || seenRoots.has(rootId)) {
+      continue;
+    }
+    seenRoots.add(rootId);
+    rootIds.push(rootId);
+  }
+  return rootIds;
 }
 
 // Only prune persisted pins after the thread snapshot has hydrated.
@@ -1586,6 +1637,9 @@ export function deriveSidebarProjectData(input: {
   activeSidebarThreadId: ThreadId | undefined;
   previewLimit: number;
   previewPageSize: number;
+  expandedThreadIds?: ReadonlySet<ThreadId> | undefined;
+  collapsedThreadIds?: ReadonlySet<ThreadId> | undefined;
+  childExtraPagesByParentId?: ReadonlyMap<ThreadId, number> | undefined;
   resolveThreadStatus?: (
     thread: SidebarThreadSummary,
   ) => ReturnType<typeof resolveThreadStatusPill>;
@@ -1648,14 +1702,19 @@ export function deriveSidebarProjectData(input: {
     const projectThreadTree = buildProjectThreadTree({
       threads: projectThreads,
       forceVisibleThreadId: input.activeSidebarThreadId,
+      expandedThreadIds: input.expandedThreadIds,
+      collapsedThreadIds: input.collapsedThreadIds,
+      childExtraPagesByParentId: input.childExtraPagesByParentId,
     });
     const orderedEntries: SidebarProjectEntry[] = projectThreadTree.map(
-      ({ thread, depth, rootThreadId }) => ({
+      ({ thread, depth, rootThreadId, directChildCount, edgeKind }) => ({
         kind: "thread",
         rowId: thread.id,
         rootRowId: rootThreadId,
         thread,
         depth,
+        directChildCount,
+        edgeKind,
       }),
     );
 
@@ -1663,8 +1722,11 @@ export function deriveSidebarProjectData(input: {
       input.activeSidebarThreadId === undefined
         ? null
         : (orderedEntries.find((entry) => entry.rowId === input.activeSidebarThreadId) ?? null);
+    // Preview pages roots (families), not expanded rows: children never consume
+    // root slots and no subtree is cut mid-family by the preview.
+    const rootCount = new Set(orderedEntries.map((entry) => entry.rootRowId)).size;
     const paging = resolveSidebarThreadListPaging({
-      totalCount: orderedEntries.length,
+      totalCount: rootCount,
       baseLimit: input.previewLimit,
       pageSize: input.previewPageSize,
       requestedExtraPages,

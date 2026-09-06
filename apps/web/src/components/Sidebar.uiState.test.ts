@@ -5,6 +5,9 @@ import {
   persistSidebarUiState,
   readSidebarUiState,
   resolveProjectThreadListExtraPages,
+  sanitizeExpandedThreadIds,
+  subscribeSidebarUiState,
+  toggleExpandedThreadId,
 } from "./Sidebar.uiState";
 
 describe("Sidebar.uiState", () => {
@@ -44,6 +47,7 @@ describe("Sidebar.uiState", () => {
       dismissedThreadStatusKeyByThreadId: {},
       lastThreadRoute: null,
       activityViewEnabled: false,
+      expandedThreadIds: [],
     });
   });
 
@@ -67,6 +71,7 @@ describe("Sidebar.uiState", () => {
         splitViewId: "split-456",
       },
       activityViewEnabled: true,
+      expandedThreadIds: ["thread-1", "thread-2"],
     });
 
     expect(readSidebarUiState()).toEqual({
@@ -88,6 +93,7 @@ describe("Sidebar.uiState", () => {
         splitViewId: "split-456",
       },
       activityViewEnabled: true,
+      expandedThreadIds: ["thread-1", "thread-2"],
     });
   });
 
@@ -130,6 +136,7 @@ describe("Sidebar.uiState", () => {
         threadId: "thread-123",
       },
       activityViewEnabled: false,
+      expandedThreadIds: [],
     });
   });
 
@@ -171,6 +178,7 @@ describe("Sidebar.uiState", () => {
       dismissedThreadStatusKeyByThreadId: {},
       lastThreadRoute: null,
       activityViewEnabled: false,
+      expandedThreadIds: [],
     });
   });
 
@@ -207,5 +215,98 @@ describe("Sidebar.uiState", () => {
         projectCwd: "/Users/tester/Code/demo",
       }),
     ).toBe(0);
+  });
+
+  it("persists explicit branch expansion and keeps v1 defaults compatible", () => {
+    // Old v1 payloads without the new field still read as all branches closed.
+    window.localStorage.setItem(
+      "synara:sidebar-ui:v1",
+      JSON.stringify({ chatSectionExpanded: true }),
+    );
+    expect(readSidebarUiState().expandedThreadIds).toEqual([]);
+
+    persistSidebarUiState({
+      ...readSidebarUiState(),
+      expandedThreadIds: ["thread-a", "thread-b"],
+    });
+    expect(readSidebarUiState().expandedThreadIds).toEqual(["thread-a", "thread-b"]);
+  });
+
+  it("sanitizes corrupt expansion values: ignores types, empties and duplicates", () => {
+    expect(sanitizeExpandedThreadIds(undefined)).toEqual([]);
+    expect(sanitizeExpandedThreadIds("thread-a")).toEqual([]);
+    expect(
+      sanitizeExpandedThreadIds(["thread-a", "", 42, null, "thread-a", "thread-b"]),
+    ).toEqual(["thread-a", "thread-b"]);
+
+    window.localStorage.setItem(
+      "synara:sidebar-ui:v1",
+      JSON.stringify({ expandedThreadIds: ["ok", "", 7, "ok", null] }),
+    );
+    expect(readSidebarUiState().expandedThreadIds).toEqual(["ok"]);
+  });
+
+  it("toggles expansion in memory even when storage fails", () => {
+    expect(toggleExpandedThreadId([], "thread-a")).toEqual(["thread-a"]);
+    expect(toggleExpandedThreadId(["thread-a", "thread-b"], "thread-a")).toEqual(["thread-b"]);
+    expect(toggleExpandedThreadId(["thread-a"], "")).toEqual(["thread-a"]);
+
+    const throwingStorage = {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error("denied");
+      },
+      removeItem: () => {},
+      clear: () => {},
+    };
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { localStorage: throwingStorage },
+    });
+    // Persistence failure must not throw; in-memory toggle still works.
+    expect(() =>
+      persistSidebarUiState({ ...readSidebarUiState(), expandedThreadIds: ["x"] }),
+    ).not.toThrow();
+    expect(toggleExpandedThreadId(["x"], "y")).toEqual(["x", "y"]);
+  });
+
+  it("syncs expansion across tabs via storage events", () => {
+    const listeners = new Map<string, Set<(event: StorageEvent) => void>>();
+    const addEventListener = (type: string, listener: (event: StorageEvent) => void) => {
+      const set = listeners.get(type) ?? new Set();
+      set.add(listener);
+      listeners.set(type, set);
+    };
+    const removeEventListener = (type: string, listener: (event: StorageEvent) => void) => {
+      listeners.get(type)?.delete(listener);
+    };
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        localStorage: {
+          clear: () => storage.clear(),
+          getItem: (key: string) => storage.get(key) ?? null,
+          removeItem: (key: string) => {
+            storage.delete(key);
+          },
+          setItem: (key: string, value: string) => {
+            storage.set(key, value);
+          },
+        },
+        addEventListener,
+        removeEventListener,
+      },
+    });
+
+    const seen: string[][] = [];
+    const unsubscribe = subscribeSidebarUiState((state) => {
+      seen.push(state.expandedThreadIds);
+    });
+    storage.set("synara:sidebar-ui:v1", JSON.stringify({ expandedThreadIds: ["tab-2"] }));
+    for (const listener of listeners.get("storage") ?? []) {
+      listener({ key: "synara:sidebar-ui:v1" } as StorageEvent);
+    }
+    expect(seen).toEqual([["tab-2"]]);
+    unsubscribe();
   });
 });

@@ -11,6 +11,7 @@ import {
   findDeepestWorkspaceRootMatch,
   findWorkspaceRootMatch,
   getFallbackThreadIdAfterDelete,
+  getPinnedFamilyRootIdsForSidebar,
   getVisibleSidebarEntriesForPreview,
   orderPinnedProjectsForSidebar,
   pullRequestRepositoryConfigFingerprint,
@@ -1156,7 +1157,7 @@ describe("pin helpers", () => {
     ).toEqual([threads[0]]);
   });
 
-  it("keeps a pinned parent in project lists so its children stay reachable and nested", () => {
+  it("moves whole families to Pinned once: pinning any member excludes the family", () => {
     const threads = [
       makeThread("thread-1"),
       {
@@ -1166,15 +1167,40 @@ describe("pin helpers", () => {
       makeThread("thread-2"),
     ];
 
-    // Pinning the parent must not hide child-1 entirely (buildProjectThreadTree
-    // hides children with missing parents); the parent stays in the tree,
-    // children render under it.
-    expect(getUnpinnedThreadsForSidebar(threads, ["thread-1" as ThreadId])).toEqual(threads);
+    // Pinning the parent moves the whole family to Pinned; the ordinary list
+    // keeps only unrelated roots, without duplicates.
+    expect(getUnpinnedThreadsForSidebar(threads, ["thread-1" as ThreadId])).toEqual([
+      threads[2],
+    ]);
+    // Pinning the child moves the same family: parent + child disappear together.
+    expect(getUnpinnedThreadsForSidebar(threads, ["child-1" as ThreadId])).toEqual([
+      threads[2],
+    ]);
     // Childless pinned threads are still hidden from project lists.
     expect(getUnpinnedThreadsForSidebar(threads, ["thread-2" as ThreadId])).toEqual([
       threads[0],
       threads[1],
     ]);
+  });
+
+  it("orders pinned families by first pinned position without duplicates", () => {
+    const threads = [
+      makeThread("root-a"),
+      { ...makeThread("child-a"), parentThreadId: "root-a" as ThreadId },
+      makeThread("root-b"),
+      {
+        ...makeThread("batch-b"),
+        sourceThreadId: "root-b" as ThreadId,
+        gatewayOperationId: "op-1",
+      },
+    ];
+    expect(
+      getPinnedFamilyRootIdsForSidebar(threads, [
+        "child-a" as ThreadId,
+        "batch-b" as ThreadId,
+        "root-a" as ThreadId,
+      ]),
+    ).toEqual(["root-a" as ThreadId, "root-b" as ThreadId]);
   });
 
   it("lets an optimistic unpin override server and persisted pinned state", () => {
@@ -1705,7 +1731,7 @@ describe("buildProjectThreadTree", () => {
       threads: [
         makeThread({
           id: ThreadId.makeUnsafe("thread-parent"),
-          createdAt: "2026-03-09T10:03:00.000Z",
+          createdAt: "2026-03-09T10:02:00.000Z",
         }),
         makeThread({
           id: ThreadId.makeUnsafe("thread-child"),
@@ -1727,10 +1753,116 @@ describe("buildProjectThreadTree", () => {
       [ThreadId.makeUnsafe("thread-grandchild"), 2],
     ]);
   });
+
+  it("nests batch children via sourceThreadId with batch edges", () => {
+    const rows = buildProjectThreadTree({
+      threads: [
+        makeThread({ id: ThreadId.makeUnsafe("html-gastos") }),
+        makeThread({
+          id: ThreadId.makeUnsafe("implement"),
+          sourceThreadId: ThreadId.makeUnsafe("html-gastos"),
+          gatewayOperationId: "op-impl",
+        }),
+      ],
+      expandedThreadIds: new Set([ThreadId.makeUnsafe("html-gastos")]),
+    });
+
+    expect(rows.map((row) => [row.thread.id, row.depth, row.edgeKind])).toEqual([
+      [ThreadId.makeUnsafe("html-gastos"), 0, undefined],
+      [ThreadId.makeUnsafe("implement"), 1, "batch"],
+    ]);
+  });
+
+  it("pages 20 siblings per branch without consuming root slots", () => {
+    const threads = [makeThread({ id: ThreadId.makeUnsafe("root") })];
+    for (let i = 1; i <= 25; i += 1) {
+      threads.push(
+        makeThread({
+          id: ThreadId.makeUnsafe(`child-${i}`),
+          parentThreadId: ThreadId.makeUnsafe("root"),
+        }),
+      );
+    }
+    const firstPage = buildProjectThreadTree({
+      threads,
+      expandedThreadIds: new Set([ThreadId.makeUnsafe("root")]),
+    });
+    expect(firstPage.filter((row) => row.depth === 1)).toHaveLength(20);
+    expect(firstPage[0]?.directChildCount).toBe(25);
+
+    const secondPage = buildProjectThreadTree({
+      threads,
+      expandedThreadIds: new Set([ThreadId.makeUnsafe("root")]),
+      childExtraPagesByParentId: new Map([[ThreadId.makeUnsafe("root"), 1]]),
+    });
+    expect(secondPage.filter((row) => row.depth === 1)).toHaveLength(25);
+  });
+
+  it("reveals an active child outside both root and child pages", () => {
+    const threads = [makeThread({ id: ThreadId.makeUnsafe("root") })];
+    for (let i = 1; i <= 25; i += 1) {
+      threads.push(
+        makeThread({
+          id: ThreadId.makeUnsafe(`child-${i}`),
+          parentThreadId: ThreadId.makeUnsafe("root"),
+        }),
+      );
+    }
+    const rows = buildProjectThreadTree({
+      threads,
+      forceVisibleThreadId: ThreadId.makeUnsafe("child-25"),
+    });
+    expect(rows.map((row) => row.thread.id)).toContain(ThreadId.makeUnsafe("child-25"));
+    expect(rows[0]?.thread.id).toBe(ThreadId.makeUnsafe("root"));
+  });
+
+  it("keeps explicit close of the active ancestor until the active thread changes", () => {
+    const threads = [
+      makeThread({ id: ThreadId.makeUnsafe("root") }),
+      makeThread({
+        id: ThreadId.makeUnsafe("child"),
+        parentThreadId: ThreadId.makeUnsafe("root"),
+      }),
+    ];
+    const rows = buildProjectThreadTree({
+      threads,
+      forceVisibleThreadId: ThreadId.makeUnsafe("child"),
+      expandedThreadIds: new Set([
+        ThreadId.makeUnsafe("root"),
+        ThreadId.makeUnsafe("child"),
+      ]),
+      collapsedThreadIds: new Set([ThreadId.makeUnsafe("root")]),
+    });
+    expect(rows.map((row) => row.thread.id)).toEqual([ThreadId.makeUnsafe("root")]);
+  });
+
+  it("keeps stable visible order following input order", () => {
+    const rows = buildProjectThreadTree({
+      threads: [
+        makeThread({ id: ThreadId.makeUnsafe("root-b") }),
+        makeThread({ id: ThreadId.makeUnsafe("root-a") }),
+        makeThread({
+          id: ThreadId.makeUnsafe("child-a2"),
+          parentThreadId: ThreadId.makeUnsafe("root-a"),
+        }),
+        makeThread({
+          id: ThreadId.makeUnsafe("child-a1"),
+          parentThreadId: ThreadId.makeUnsafe("root-a"),
+        }),
+      ],
+      expandedThreadIds: new Set([ThreadId.makeUnsafe("root-a")]),
+    });
+    expect(rows.map((row) => row.thread.id)).toEqual([
+      ThreadId.makeUnsafe("root-b"),
+      ThreadId.makeUnsafe("root-a"),
+      ThreadId.makeUnsafe("child-a2"),
+      ThreadId.makeUnsafe("child-a1"),
+    ]);
+  });
 });
 
 describe("getVisibleSidebarEntriesForPreview", () => {
-  it("caps preview by rendered rows, not root-thread count", () => {
+  it("caps preview by root families, not rendered rows", () => {
     const result = getVisibleSidebarEntriesForPreview({
       entries: [
         {
@@ -1755,9 +1887,11 @@ describe("getVisibleSidebarEntriesForPreview", () => {
     });
 
     expect(result.hasHiddenEntries).toBe(true);
+    // Both rows of the first family render: children never consume root slots.
     expect(result.visibleEntries.map((entry) => entry.rowId)).toEqual([
       ThreadId.makeUnsafe("thread-parent"),
       ThreadId.makeUnsafe("thread-child"),
+      ThreadId.makeUnsafe("thread-second-root"),
     ]);
   });
 
@@ -1787,11 +1921,47 @@ describe("getVisibleSidebarEntriesForPreview", () => {
       previewLimit: 2,
     });
 
-    expect(result.hasHiddenEntries).toBe(true);
+    // The third family is forced visible with its ancestors; nothing stays hidden.
+    expect(result.hasHiddenEntries).toBe(false);
     expect(result.visibleEntries.map((entry) => entry.rowId)).toEqual([
       ThreadId.makeUnsafe("thread-parent"),
       ThreadId.makeUnsafe("thread-child"),
+      ThreadId.makeUnsafe("thread-second-root"),
       ThreadId.makeUnsafe("thread-third-root"),
+    ]);
+  });
+
+  it("reports hidden families when the active reveal still leaves roots out", () => {
+    const entries = [
+      {
+        rowId: ThreadId.makeUnsafe("root-1"),
+        rootRowId: ThreadId.makeUnsafe("root-1"),
+      },
+      {
+        rowId: ThreadId.makeUnsafe("root-2"),
+        rootRowId: ThreadId.makeUnsafe("root-2"),
+      },
+      {
+        rowId: ThreadId.makeUnsafe("root-3"),
+        rootRowId: ThreadId.makeUnsafe("root-3"),
+      },
+      {
+        rowId: ThreadId.makeUnsafe("root-4"),
+        rootRowId: ThreadId.makeUnsafe("root-4"),
+      },
+    ];
+
+    const result = getVisibleSidebarEntriesForPreview({
+      entries,
+      activeEntryId: ThreadId.makeUnsafe("root-3"),
+      previewLimit: 2,
+    });
+
+    expect(result.hasHiddenEntries).toBe(true);
+    expect(result.visibleEntries.map((entry) => entry.rowId)).toEqual([
+      ThreadId.makeUnsafe("root-1"),
+      ThreadId.makeUnsafe("root-2"),
+      ThreadId.makeUnsafe("root-3"),
     ]);
   });
 });
@@ -2250,6 +2420,40 @@ describe("deriveSidebarProjectData", () => {
       canShowLessThreads: true,
     });
     expect(derive(7)?.visibleEntries).toHaveLength(12);
+  });
+
+  it("pages five roots even when roots have children: children never consume root slots", () => {
+    const project = makeProject();
+    const threads: SidebarThreadSummary[] = [];
+    for (let i = 1; i <= 6; i += 1) {
+      threads.push(
+        makeSidebarThreadSummary({ id: ThreadId.makeUnsafe(`root-${i}`), title: `Root ${i}` }),
+      );
+      threads.push(
+        makeSidebarThreadSummary({
+          id: ThreadId.makeUnsafe(`root-${i}-child`),
+          parentThreadId: ThreadId.makeUnsafe(`root-${i}`),
+          title: `Child ${i}`,
+        }),
+      );
+    }
+    const data = deriveSidebarProjectData({
+      projects: [project],
+      sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId(threads),
+      pinnedThreadIds: [],
+      threadListExtraPagesByProjectCwd: new Map(),
+      normalizeProjectCwd: (cwd) => cwd,
+      activeSidebarThreadId: undefined,
+      previewLimit: 5,
+      previewPageSize: 5,
+      expandedThreadIds: new Set(threads.map((t) => t.id)),
+    });
+    const visible = data.get(project.id)?.visibleEntries ?? [];
+    const rootIds = [...new Set(visible.map((e) => e.rootRowId))];
+    expect(rootIds).toHaveLength(5);
+    // Open families render their children inline without cutting the subtree.
+    expect(visible.length).toBeGreaterThan(5);
+    expect(visible.filter((e) => e.depth === 0)).toHaveLength(5);
   });
 });
 

@@ -170,6 +170,7 @@ export function threadShellsEqual(left: ThreadShell | undefined, right: ThreadSh
     (left.parentThreadId ?? null) === (right.parentThreadId ?? null) &&
     (left.creationSource ?? null) === (right.creationSource ?? null) &&
     (left.sourceThreadId ?? null) === (right.sourceThreadId ?? null) &&
+    (left.gatewayOperationId ?? null) === (right.gatewayOperationId ?? null) &&
     (left.subagentAgentId ?? null) === (right.subagentAgentId ?? null) &&
     (left.subagentNickname ?? null) === (right.subagentNickname ?? null) &&
     (left.subagentRole ?? null) === (right.subagentRole ?? null) &&
@@ -1683,6 +1684,7 @@ export function normalizeThreadFromReadModel(
     (previous.parentThreadId ?? null) === (incoming.parentThreadId ?? null) &&
     (previous.creationSource ?? null) === (incoming.creationSource ?? null) &&
     (previous.sourceThreadId ?? null) === (incoming.sourceThreadId ?? null) &&
+    (previous.gatewayOperationId ?? null) === (incoming.gatewayOperationId ?? null) &&
     (previous.subagentAgentId ?? null) === (incoming.subagentAgentId ?? null) &&
     (previous.subagentNickname ?? null) === (incoming.subagentNickname ?? null) &&
     (previous.subagentRole ?? null) === (incoming.subagentRole ?? null) &&
@@ -1741,6 +1743,7 @@ export function normalizeThreadFromReadModel(
     parentThreadId: incoming.parentThreadId ?? null,
     creationSource: incoming.creationSource ?? null,
     sourceThreadId: incoming.sourceThreadId ?? null,
+    gatewayOperationId: incoming.gatewayOperationId ?? null,
     subagentAgentId: incoming.subagentAgentId ?? null,
     subagentNickname: incoming.subagentNickname ?? null,
     subagentRole: incoming.subagentRole ?? null,
@@ -1859,6 +1862,7 @@ export function normalizeThreadShellSnapshot(
     parentThreadId: incoming.parentThreadId ?? null,
     creationSource: incoming.creationSource ?? null,
     sourceThreadId: incoming.sourceThreadId ?? null,
+    gatewayOperationId: incoming.gatewayOperationId ?? null,
     subagentAgentId: incoming.subagentAgentId ?? null,
     subagentNickname: incoming.subagentNickname ?? null,
     subagentRole: incoming.subagentRole ?? null,

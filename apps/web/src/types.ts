@@ -264,6 +264,7 @@ export interface Thread extends ThreadWorkspaceState {
   parentThreadId?: ThreadId | null;
   creationSource?: ThreadCreationSource | null;
   sourceThreadId?: ThreadId | null;
+  gatewayOperationId?: string | null;
   subagentAgentId?: string | null;
   subagentNickname?: string | null;
   subagentRole?: string | null;
@@ -310,6 +311,7 @@ export interface ThreadShell extends ThreadWorkspaceState {
   parentThreadId?: ThreadId | null;
   creationSource?: ThreadCreationSource | null;
   sourceThreadId?: ThreadId | null;
+  gatewayOperationId?: string | null;
   subagentAgentId?: string | null;
   subagentNickname?: string | null;
   subagentRole?: string | null;
@@ -355,6 +357,8 @@ export interface SidebarThreadSummary {
   lastVisitedAt?: string | undefined;
   parentThreadId?: ThreadId | null;
   creationSource?: ThreadCreationSource | null;
+  sourceThreadId?: ThreadId | null;
+  gatewayOperationId?: string | null;
   subagentAgentId?: string | null;
   subagentNickname?: string | null;
   subagentRole?: string | null;
