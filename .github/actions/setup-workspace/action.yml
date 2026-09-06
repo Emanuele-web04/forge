@@ -48,14 +48,17 @@ runs:
     # survive across jobs. Turbo verifies its own fingerprints on hit, so a
     # broad key is safe: stale entries simply miss inside turbo. test and
     # typecheck stay cache:false in turbo.json (inputs not proven airtight).
+    # GitHub caches are immutable: each job/shard saves new results per commit
+    # and restores its previous snapshot before falling back to other lanes.
     - name: Cache Turbo outputs
       uses: actions/cache@v5
       with:
         path: |
           .turbo
           node_modules/.cache/turbo
-        key: ${{ runner.os }}-turbo-${{ hashFiles('bun.lock') }}-${{ hashFiles('.github/workflows/ci.yml') }}
+        key: ${{ runner.os }}-turbo-${{ hashFiles('bun.lock') }}-${{ hashFiles('.github/workflows/ci.yml') }}-${{ github.job }}-${{ strategy.job-index || 0 }}-${{ github.sha }}
         restore-keys: |
+          ${{ runner.os }}-turbo-${{ hashFiles('bun.lock') }}-${{ hashFiles('.github/workflows/ci.yml') }}-${{ github.job }}-${{ strategy.job-index || 0 }}-
           ${{ runner.os }}-turbo-${{ hashFiles('bun.lock') }}-
           ${{ runner.os }}-turbo-
 

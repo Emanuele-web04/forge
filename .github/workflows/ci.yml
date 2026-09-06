@@ -228,7 +228,16 @@ jobs:
     name: Format, Lint, Typecheck, Test, Browser Test, Build
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    needs: [changes, static-fast, static-typecheck, unit, browser, build]
+    needs:
+      - changes
+      - static-fast
+      - static-typecheck
+      - unit
+      - browser
+      - build
+      - windows_process
+      - migration_lineage
+      - release_smoke
     if: always()
     steps:
       - name: Aggregate lane results
@@ -240,6 +249,9 @@ jobs:
           UNIT: ${{ needs.unit.result }}
           BROWSER: ${{ needs.browser.result }}
           BUILD: ${{ needs.build.result }}
+          WINDOWS_PROCESS: ${{ needs.windows_process.result }}
+          MIGRATION_LINEAGE: ${{ needs.migration_lineage.result }}
+          RELEASE_SMOKE: ${{ needs.release_smoke.result }}
         run: |
           fail=0
           # The docs-only filter itself must have run: without it a skip proves nothing.
@@ -247,12 +259,16 @@ jobs:
             echo "changes=$CHANGES (filter must succeed)"
             fail=1
           fi
+          if [ "$CODE" != "true" ] && [ "$CODE" != "false" ]; then
+            echo "code=$CODE (filter must return true or false)"
+            fail=1
+          fi
           # Fast static always runs, docs-only or not.
           if [ "$STATIC_FAST" != "success" ]; then
             echo "static-fast=$STATIC_FAST"
             fail=1
           fi
-          for lane in "typecheck=$TYPECHECK" "unit=$UNIT" "browser=$BROWSER" "build=$BUILD"; do
+          for lane in "typecheck=$TYPECHECK" "unit=$UNIT" "browser=$BROWSER" "build=$BUILD" "windows-process=$WINDOWS_PROCESS" "migration-lineage=$MIGRATION_LINEAGE" "release-smoke=$RELEASE_SMOKE"; do
             name="${lane%%=*}"
             result="${lane#*=}"
             if [ "$CODE" != "true" ]; then
