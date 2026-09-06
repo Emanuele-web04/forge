@@ -440,6 +440,32 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
     expect(values("grok", "grok-4.7")).toEqual(["low", "medium", "high", "xhigh"]);
   });
 
+  it("returns Muse custom-model effort ladders including xhigh and max", () => {
+    expect(values("grok", "muse-spark-1.3")).toEqual([
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+    expect(values("grok", "muse-spark-1.3-contributor")).toEqual([
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+    expect(values("grok", "muse-spark-1.4")).toEqual([
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+  });
+
   it("co-locates labels with effort values", () => {
     const levels = getModelCapabilities("claudeAgent", "claude-opus-4-6").reasoningEffortLevels;
     const high = levels.find((l) => l.value === "high");
@@ -518,6 +544,8 @@ describe("resolveGrokEffortFamily", () => {
     expect(resolveGrokEffortFamily("grok-4.6")).toBe("4.6");
     expect(resolveGrokEffortFamily("grok-4.7")).toBe("4.6");
     expect(resolveGrokEffortFamily("custom/grok-fast")).toBe("build");
+    expect(resolveGrokEffortFamily("muse-spark-1.3")).toBe("muse");
+    expect(resolveGrokEffortFamily("muse-spark-1.3-contributor")).toBe("muse-contributor");
   });
 });
 
@@ -1119,6 +1147,15 @@ describe("normalizeGrokModelOptions", () => {
       reasoningEffort: "xhigh",
     });
     expect(normalizeGrokModelOptions("grok-4.6", { reasoningEffort: "none" })).toBeUndefined();
+    expect(normalizeGrokModelOptions("muse-spark-1.3", { reasoningEffort: "xhigh" })).toEqual({
+      reasoningEffort: "xhigh",
+    });
+    expect(normalizeGrokModelOptions("muse-spark-1.3", { reasoningEffort: "max" })).toEqual({
+      reasoningEffort: "max",
+    });
+    expect(
+      normalizeGrokModelOptions("muse-spark-1.3-contributor", { reasoningEffort: "max" }),
+    ).toBeUndefined();
   });
 });
 

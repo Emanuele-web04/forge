@@ -28,8 +28,17 @@ export const PI_THINKING_LEVEL_OPTIONS = [
 ] as const;
 export type PiThinkingLevel = (typeof PI_THINKING_LEVEL_OPTIONS)[number];
 // Union of every Grok CLI ladder. Per-model capabilities pick a subset:
-// grok-build keeps none/low/medium/high, Grok 4.5 drops none, Grok 4.6 adds xhigh.
-export const GROK_REASONING_EFFORT_OPTIONS = ["none", "low", "medium", "high", "xhigh"] as const;
+// grok-build keeps none/low/medium/high, Grok 4.5 drops none, Grok 4.6 adds xhigh,
+// and Muse custom models add minimal/max.
+export const GROK_REASONING_EFFORT_OPTIONS = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
 export type GrokReasoningEffort = (typeof GROK_REASONING_EFFORT_OPTIONS)[number];
 export const DROID_REASONING_EFFORT_OPTIONS = [
   "off",
@@ -238,11 +247,22 @@ const CODEX_GPT_5_5_CAPABILITIES: ModelCapabilities = {
 };
 
 const GROK_CLI_EFFORT_DESCRIPTIONS = {
+  minimal: "Shortest reasoning pass",
   low: "Quick, fast implementations",
   medium: "Balanced effort with standard implementation and testing",
   high: "Higher implementation quality with extensive reasoning",
   xhigh: "Highest effort and reasoning level",
+  max: "Extended reasoning",
 } as const;
+
+const GROK_CLI_EFFORT_LABELS: Record<Exclude<GrokReasoningEffort, "none">, string> = {
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra High",
+  max: "Max",
+};
 
 function grokCliEffortOption(
   value: Exclude<GrokReasoningEffort, "none">,
@@ -250,7 +270,7 @@ function grokCliEffortOption(
 ): EffortOption {
   return {
     value,
-    label: value === "xhigh" ? "Extra High" : `${value.charAt(0).toUpperCase()}${value.slice(1)}`,
+    label: GROK_CLI_EFFORT_LABELS[value],
     description: GROK_CLI_EFFORT_DESCRIPTIONS[value],
     ...options,
   };
@@ -280,6 +300,23 @@ const GROK_4_5_CAPABILITIES = grokCapabilities([
 ]);
 
 const GROK_4_6_CAPABILITIES = grokCapabilities([
+  grokCliEffortOption("low"),
+  grokCliEffortOption("medium"),
+  grokCliEffortOption("high", { isDefault: true }),
+  grokCliEffortOption("xhigh"),
+]);
+
+const GROK_MUSE_CAPABILITIES = grokCapabilities([
+  grokCliEffortOption("minimal"),
+  grokCliEffortOption("low"),
+  grokCliEffortOption("medium"),
+  grokCliEffortOption("high", { isDefault: true }),
+  grokCliEffortOption("xhigh"),
+  grokCliEffortOption("max"),
+]);
+
+const GROK_MUSE_CONTRIBUTOR_CAPABILITIES = grokCapabilities([
+  grokCliEffortOption("minimal"),
   grokCliEffortOption("low"),
   grokCliEffortOption("medium"),
   grokCliEffortOption("high", { isDefault: true }),
@@ -1325,6 +1362,10 @@ Object.assign(MODEL_CAPABILITIES_INDEX.grok, {
   "grok-build-0.1": GROK_BUILD_CAPABILITIES,
   "grok-build": GROK_BUILD_CAPABILITIES,
   "grok-4.5": GROK_4_5_CAPABILITIES,
+  muse: GROK_MUSE_CAPABILITIES,
+  "muse-contributor": GROK_MUSE_CONTRIBUTOR_CAPABILITIES,
+  "muse-spark-1.3": GROK_MUSE_CAPABILITIES,
+  "muse-spark-1.3-contributor": GROK_MUSE_CONTRIBUTOR_CAPABILITIES,
 });
 
 // ── Provider display names ────────────────────────────────────────────

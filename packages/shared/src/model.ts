@@ -497,8 +497,13 @@ export function getModelCapabilities(
   return EMPTY_MODEL_CAPABILITIES;
 }
 
-export function resolveGrokEffortFamily(model: string): "build" | "4.5" | "4.6" {
+export function resolveGrokEffortFamily(
+  model: string,
+): "build" | "4.5" | "4.6" | "muse" | "muse-contributor" {
   const slug = model.trim().toLowerCase();
+  if (slug.includes("muse")) {
+    return slug.includes("contributor") ? "muse-contributor" : "muse";
+  }
   if (
     slug.includes("build") ||
     slug.includes("code-fast") ||
@@ -527,13 +532,25 @@ export function resolveGrokEffortFamily(model: string): "build" | "4.5" | "4.6" 
   return "4.6";
 }
 
-function grokCapabilitiesForFamily(family: "build" | "4.5" | "4.6"): ModelCapabilities {
+function grokCapabilitiesForFamily(
+  family: "build" | "4.5" | "4.6" | "muse" | "muse-contributor",
+): ModelCapabilities {
   const grokCaps = MODEL_CAPABILITIES_INDEX.grok;
   if (family === "build") {
     return grokCaps["grok-build"] ?? EMPTY_MODEL_CAPABILITIES;
   }
   if (family === "4.5") {
     return grokCaps["grok-4.5"] ?? grokCaps["grok-4.6"] ?? EMPTY_MODEL_CAPABILITIES;
+  }
+  if (family === "muse") {
+    return grokCaps.muse ?? grokCaps["muse-spark-1.3"] ?? EMPTY_MODEL_CAPABILITIES;
+  }
+  if (family === "muse-contributor") {
+    return (
+      grokCaps["muse-contributor"] ??
+      grokCaps["muse-spark-1.3-contributor"] ??
+      EMPTY_MODEL_CAPABILITIES
+    );
   }
   return grokCaps["grok-4.6"] ?? EMPTY_MODEL_CAPABILITIES;
 }
