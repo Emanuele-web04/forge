@@ -2453,6 +2453,104 @@ describe("Antigravity background task helpers (#752)", () => {
 });
 
 describe("Antigravity print result telemetry", () => {
+  it.each([true, false])(
+    "persists the usage baseline across restarts (legacy=%s)",
+    async (legacy) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-agy-baseline-"));
+      const totals = [10_000, 10_300, 10_500];
+      const spawnProcess: NonNullable<AntigravityAdapterDependencies["spawnProcess"]> = () => {
+        const child = new EventEmitter() as ReturnType<
+          NonNullable<AntigravityAdapterDependencies["spawnProcess"]>
+        >;
+        const stdout = new PassThrough();
+        Object.assign(child, {
+          stdout,
+          stderr: new PassThrough(),
+          killed: false,
+          kill: () => true,
+        });
+        setTimeout(() => {
+          stdout.end(
+            JSON.stringify({
+              conversation_id: "existing-conversation",
+              status: "SUCCESS",
+              response: "answer",
+              usage: { total_tokens: totals.shift() },
+            }),
+          );
+          child.emit("close", 0, null);
+        }, 20);
+        return child;
+      };
+      try {
+        await Effect.runPromise(
+          Effect.gen(function* () {
+            const adapter = yield* AntigravityAdapter;
+            const threadId = ThreadId.makeUnsafe("thread-usage-baseline");
+            let resumeCursor: unknown = legacy ? "existing-conversation" : undefined;
+            for (let index = 0; index < 3; index++) {
+              yield* adapter.startSession({
+                provider: "antigravity",
+                threadId,
+                runtimeMode: "full-access",
+                cwd: root,
+                ...(resumeCursor !== undefined ? { resumeCursor } : {}),
+                providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+              });
+              const eventsFiber = yield* adapter.streamEvents.pipe(
+                Stream.takeUntil((event) => event.type === "turn.completed"),
+                Stream.runCollect,
+                Effect.forkChild,
+              );
+              yield* adapter.sendTurn({ threadId, input: "reply", attachments: [] });
+              const events = Array.from(
+                yield* Fiber.join(eventsFiber).pipe(Effect.timeout("3 seconds")),
+              );
+              const tokens = events.filter((event) => event.type === "thread.token-usage.updated");
+              if (legacy && index === 0) {
+                expect(tokens).toHaveLength(0);
+              } else {
+                expect(tokens).toHaveLength(1);
+                expect(tokens[0]).toMatchObject({
+                  payload: {
+                    usage: {
+                      totalProcessedTokens: legacy
+                        ? [0, 300, 500][index]
+                        : [10_000, 10_300, 10_500][index],
+                    },
+                  },
+                });
+              }
+              resumeCursor = JSON.parse(
+                JSON.stringify((yield* adapter.listSessions())[0]?.resumeCursor),
+              );
+              expect(resumeCursor).toEqual({
+                conversationId: "existing-conversation",
+                usageBaseline: legacy ? 10_000 : 0,
+              });
+              yield* adapter.stopSession(threadId);
+            }
+          }).pipe(
+            Effect.provide(
+              makeAntigravityAdapterLive({
+                ensurePlugin: async () => undefined,
+                spawnProcess,
+                teardownProcessTree: async () => completeProcessTeardown(),
+              }).pipe(
+                Layer.provideMerge(
+                  ServerConfig.layerTest(root, { prefix: "antigravity-baseline-test-" }),
+                ),
+                Layer.provideMerge(NodeServices.layer),
+              ),
+            ),
+          ),
+        );
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it.each([false, true])(
     "drains JSON after stop and unwraps responses (error=%s)",
     async (failed) => {
@@ -2530,7 +2628,10 @@ describe("Antigravity print result telemetry", () => {
                 .map((event) => event.payload.delta),
             ).toEqual(["visible answer"]);
             expect(teardownCalls).toBe(0);
-            expect((yield* adapter.listSessions())[0]?.resumeCursor).toBe("json-conversation");
+            expect((yield* adapter.listSessions())[0]?.resumeCursor).toEqual({
+              conversationId: "json-conversation",
+              usageBaseline: 0,
+            });
             yield* adapter.stopSession(threadId);
           }).pipe(
             Effect.provide(

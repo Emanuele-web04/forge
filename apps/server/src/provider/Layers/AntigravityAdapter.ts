@@ -70,6 +70,7 @@ import {
 import { signalOwnedChildProcess } from "../../platform/processTreeController.ts";
 import { teardownChildProcessTree } from "../supervisedProcessTeardown.ts";
 
+import { nonNegativeInteger } from "../tokenUsage.ts";
 import { parseAntigravityPrintOutput } from "../antigravityPrintOutput.ts";
 
 const PROVIDER = "antigravity" as const;
@@ -140,6 +141,7 @@ type AntigravitySessionContext = ToolSurfaceCounters & {
   eventFile?: string | undefined;
   transcriptPath?: string | undefined;
   conversationId?: string | undefined;
+  usageBaseline: number | undefined;
   modelName?: string | undefined;
   modelOptions?: AntigravityModelOptions | undefined;
   processedHookBytes: number;
@@ -211,6 +213,15 @@ function resumeConversationId(value: unknown): string | undefined {
     if (typeof record[key] === "string" && record[key].trim()) return record[key].trim();
   }
   return undefined;
+}
+
+// Keep the baseline in the opaque resume cursor so a server restart cannot
+// turn pre-upgrade history into newly attributed usage.
+function antigravityResumeCursor(context: AntigravitySessionContext) {
+  return {
+    conversationId: context.conversationId,
+    ...(context.usageBaseline !== undefined ? { usageBaseline: context.usageBaseline } : {}),
+  };
 }
 
 function transcriptPathForConversation(conversationId: string): string {
@@ -1289,7 +1300,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       context.session = {
         ...inactiveSession,
         status: failed ? "error" : "ready",
-        ...(context.conversationId ? { resumeCursor: context.conversationId } : {}),
+        ...(context.conversationId ? { resumeCursor: antigravityResumeCursor(context) } : {}),
         updatedAt: new Date().toISOString(),
         ...(failed && input.errorMessage ? { lastError: input.errorMessage } : {}),
       };
@@ -1756,7 +1767,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         if (learnedConversation) {
           context.session = {
             ...context.session,
-            resumeCursor: conversationId,
+            resumeCursor: antigravityResumeCursor(context),
             updatedAt: new Date().toISOString(),
           };
           offer({
@@ -1980,6 +1991,13 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         }
         const now = new Date().toISOString();
         const conversationId = resumeConversationId(input.resumeCursor);
+        const usageBaseline = conversationId
+          ? nonNegativeInteger(
+              typeof input.resumeCursor === "object" && input.resumeCursor !== null
+                ? (input.resumeCursor as Record<string, unknown>).usageBaseline
+                : undefined,
+            )
+          : 0;
         const modelSelection =
           input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
         const model = modelSelection?.model ?? DEFAULT_MODEL;
@@ -1990,7 +2008,14 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           cwd: trim(input.cwd) ?? serverConfig.cwd,
           model,
           threadId: input.threadId,
-          ...(conversationId ? { resumeCursor: conversationId } : {}),
+          ...(conversationId
+            ? {
+                resumeCursor: {
+                  conversationId,
+                  ...(usageBaseline !== undefined ? { usageBaseline } : {}),
+                },
+              }
+            : {}),
           createdAt: now,
           updatedAt: now,
         };
@@ -2000,6 +2025,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
             ? { lifecycleGeneration: input.lifecycleGeneration }
             : {}),
           binaryPath,
+          usageBaseline,
           turns: [],
           ...(conversationId ? { conversationId } : {}),
           ...(modelSelection?.options ? { modelOptions: modelSelection.options } : {}),
@@ -2293,11 +2319,24 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               return;
             }
             if (printOutput.usage) {
-              offer({
-                ...base(context),
-                type: "thread.token-usage.updated",
-                payload: { usage: printOutput.usage },
-              } satisfies ProviderRuntimeEvent);
+              const total = printOutput.usage.totalProcessedTokens!;
+              // A legacy resume has no trustworthy pre-turn counter. Its first
+              // result establishes the baseline, including that first turn;
+              // only later increments can be attributed without guessing.
+              context.usageBaseline ??= total;
+              const trackedTotal = total - context.usageBaseline;
+              if (trackedTotal > 0) {
+                offer({
+                  ...base(context),
+                  type: "thread.token-usage.updated",
+                  payload: {
+                    usage:
+                      context.usageBaseline === 0
+                        ? printOutput.usage
+                        : { usedTokens: 0, totalProcessedTokens: trackedTotal },
+                  },
+                } satisfies ProviderRuntimeEvent);
+              }
             }
             const interrupted = context.interrupted || signal !== null;
             const failed = !interrupted && ((code ?? 1) !== 0 || printOutput.error !== undefined);
@@ -2328,7 +2367,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         return {
           threadId: input.threadId,
           turnId,
-          ...(context.conversationId ? { resumeCursor: context.conversationId } : {}),
+          ...(context.conversationId ? { resumeCursor: antigravityResumeCursor(context) } : {}),
         };
       });
 
@@ -2432,6 +2471,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           context.turns.splice(Math.max(0, context.turns.length - Math.max(0, numTurns)));
           // Antigravity has no rollback cursor; ProviderService will rebuild local context.
           delete context.conversationId;
+          context.usageBaseline = 0;
           delete context.transcriptPath;
           delete context.processedTranscriptPath;
           context.processedTranscriptBytes = 0;
