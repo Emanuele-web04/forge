@@ -2451,3 +2451,108 @@ describe("Antigravity background task helpers (#752)", () => {
     }
   });
 });
+
+describe("Antigravity print result telemetry", () => {
+  it.each([false, true])(
+    "drains JSON after stop and unwraps responses (error=%s)",
+    async (failed) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-agy-json-"));
+      let teardownCalls = 0;
+      const spawnProcess: NonNullable<AntigravityAdapterDependencies["spawnProcess"]> = (
+        _command,
+        args,
+        options,
+      ) => {
+        expect(args).toEqual(expect.arrayContaining(["--output-format", "json"]));
+        const child = new EventEmitter() as ReturnType<
+          NonNullable<AntigravityAdapterDependencies["spawnProcess"]>
+        >;
+        const stdout = new PassThrough();
+        Object.assign(child, {
+          stdout,
+          stderr: new PassThrough(),
+          killed: false,
+          kill: () => true,
+        });
+        fsSync.appendFileSync(options.env!.SYNARA_ANTIGRAVITY_EVENTS!, "stop\t{}\n");
+        // The hook is observed first. A normal CLI then flushes its envelope.
+        setTimeout(() => {
+          stdout.end(
+            JSON.stringify({
+              conversation_id: "json-conversation",
+              status: failed ? "ERROR" : "SUCCESS",
+              response: "visible answer",
+              ...(failed ? { error: "provider failed" } : {}),
+              usage: { input_tokens: 80, output_tokens: 20, total_tokens: 100 },
+            }),
+          );
+          child.emit("close", 0, null);
+        }, 600);
+        return child;
+      };
+      try {
+        await Effect.runPromise(
+          Effect.gen(function* () {
+            const adapter = yield* AntigravityAdapter;
+            const eventsFiber = yield* adapter.streamEvents.pipe(
+              Stream.takeUntil((event) => event.type === "turn.completed"),
+              Stream.runCollect,
+              Effect.forkChild,
+            );
+            const threadId = ThreadId.makeUnsafe("thread-json-output");
+            yield* adapter.startSession({
+              provider: "antigravity",
+              threadId,
+              runtimeMode: "full-access",
+              cwd: root,
+              providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+            });
+            yield* adapter.sendTurn({ threadId, input: "reply", attachments: [] });
+            const events = Array.from(
+              yield* Fiber.join(eventsFiber).pipe(Effect.timeout("3 seconds")),
+            );
+            const tokens = events.filter((event) => event.type === "thread.token-usage.updated");
+            expect(tokens).toHaveLength(1);
+            expect(tokens[0]).toMatchObject({
+              threadId,
+              payload: { usage: { usedTokens: 0, totalProcessedTokens: 100 } },
+            });
+            expect(events.at(-1)).toMatchObject({
+              type: "turn.completed",
+              payload: {
+                state: failed ? "failed" : "completed",
+                ...(failed ? { errorMessage: "provider failed" } : {}),
+              },
+            });
+            expect(
+              events
+                .filter((event) => event.type === "content.delta")
+                .map((event) => event.payload.delta),
+            ).toEqual(["visible answer"]);
+            expect(teardownCalls).toBe(0);
+            expect((yield* adapter.listSessions())[0]?.resumeCursor).toBe("json-conversation");
+            yield* adapter.stopSession(threadId);
+          }).pipe(
+            Effect.provide(
+              makeAntigravityAdapterLive({
+                ensurePlugin: async () => undefined,
+                spawnProcess,
+                teardownProcessTree: async () => {
+                  teardownCalls++;
+                  return completeProcessTeardown();
+                },
+              }).pipe(
+                Layer.provideMerge(
+                  ServerConfig.layerTest(root, { prefix: "antigravity-json-test-" }),
+                ),
+                Layer.provideMerge(NodeServices.layer),
+              ),
+            ),
+          ),
+        );
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+});

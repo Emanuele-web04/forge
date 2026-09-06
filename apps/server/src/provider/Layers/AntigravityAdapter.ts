@@ -70,6 +70,8 @@ import {
 import { signalOwnedChildProcess } from "../../platform/processTreeController.ts";
 import { teardownChildProcessTree } from "../supervisedProcessTeardown.ts";
 
+import { parseAntigravityPrintOutput } from "../antigravityPrintOutput.ts";
+
 const PROVIDER = "antigravity" as const;
 const DEFAULT_MODEL = "Gemini 3.5 Flash";
 const PRINT_TIMEOUT = "30m";
@@ -1217,13 +1219,27 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         return;
       }
       const child = context.activeProcess;
-      void teardownProcessTree(child).catch(() => {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // Process may already be gone.
-        }
-      });
+      // The stop hook runs before print mode writes its final JSON envelope.
+      // Allow a normal exit to flush response/usage; still bound lingering CLI
+      // processes, and never tear down a later turn or new background work.
+      const timer = setTimeout(() => {
+        if (
+          context.activeProcess !== child ||
+          context.turnTerminalEmitted ||
+          context.pendingBackgroundTasks.size > 0 ||
+          context.pendingAnonymousBackgroundTasks > 0
+        )
+          return;
+        void teardownProcessTree(child).catch(() => {
+          try {
+            child.kill("SIGKILL");
+          } catch {
+            /* Process may already be gone. */
+          }
+        });
+      }, 1_000);
+      timer.unref();
+      child.once("close", () => clearTimeout(timer));
     };
 
     /**
@@ -2156,6 +2172,8 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           logFile,
           "--print-timeout",
           PRINT_TIMEOUT,
+          "--output-format",
+          "json",
           "-p",
           providerPrompt,
         ];
@@ -2253,13 +2271,17 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
               return;
             }
-            if (!context.sawAssistant && stdout.trim()) {
+            const printOutput = parseAntigravityPrintOutput(stdout);
+            if (!context.conversationId && printOutput.conversationId) {
+              context.conversationId = printOutput.conversationId;
+            }
+            if (!context.sawAssistant && printOutput.response) {
               emitTextItem(
                 context,
                 {
                   step_index: Number.MAX_SAFE_INTEGER,
                   type: "PRINT_OUTPUT",
-                  content: stdout.trim(),
+                  content: printOutput.response,
                 },
                 "assistant_message",
                 "assistant_text",
@@ -2270,8 +2292,15 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
               return;
             }
+            if (printOutput.usage) {
+              offer({
+                ...base(context),
+                type: "thread.token-usage.updated",
+                payload: { usage: printOutput.usage },
+              } satisfies ProviderRuntimeEvent);
+            }
             const interrupted = context.interrupted || signal !== null;
-            const failed = !interrupted && (code ?? 1) !== 0;
+            const failed = !interrupted && ((code ?? 1) !== 0 || printOutput.error !== undefined);
             if (failed && stderr.trim()) {
               offer({
                 ...base(context, { includeTurn: false }),
@@ -2285,7 +2314,10 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               stopReason: interrupted ? "interrupted" : failed ? "error" : "model_stop",
               ...(failed
                 ? {
-                    errorMessage: stderr.trim() || `Antigravity CLI exited with code ${code ?? 1}.`,
+                    errorMessage:
+                      printOutput.error ||
+                      stderr.trim() ||
+                      `Antigravity CLI exited with code ${code ?? 1}.`,
                   }
                 : {}),
               raw: raw("process-exit", { code, signal, stdout, stderr }),
