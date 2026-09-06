@@ -1764,11 +1764,11 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
 
       emit("remoteControl/status/changed");
       emit("skills/changed");
-      emit("session/threadOpenRequested", "lifecycle");
+      emit("session/threadOpenRequested", "session");
       // Real errors and useful unknown events must survive the filter.
       emit("session/threadOpenRequested", "error");
       emit("item/future/completed");
-      emit("session/started", "lifecycle");
+      emit("session/started", "session");
 
       const events = Array.from(yield* Fiber.join(eventsFiber));
       assert.deepEqual(
