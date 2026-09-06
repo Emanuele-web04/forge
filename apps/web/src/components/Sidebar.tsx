@@ -5840,12 +5840,7 @@ export default function Sidebar() {
             >
               <PinStatusIcon pinned={isProjectPinned} className="size-3.5" />
             </button>
-            <SidebarSectionToolbar
-              placement="overlay"
-              revealOnHover
-              // Solid background so the toolbar reads as an overlay above the row content.
-              className="rounded-md bg-[var(--sidebar-background,var(--background))]"
-            >
+            <SidebarSectionToolbar placement="overlay" revealOnHover>
               <SidebarIconButton
                 icon={IoIosGitCompare}
                 label={`View pull requests for ${project.name}`}
