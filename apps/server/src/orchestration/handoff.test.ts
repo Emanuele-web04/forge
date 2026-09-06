@@ -6,7 +6,11 @@
 import { MessageId, type OrchestrationMessage, ThreadId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import { buildHandoffBootstrapText, buildPriorTranscriptBootstrapText } from "./handoff.ts";
+import {
+  buildHandoffBootstrapText,
+  buildPriorTranscriptBootstrapText,
+  listPriorTranscriptMessages,
+} from "./handoff.ts";
 
 const message = (
   index: number,
@@ -43,6 +47,27 @@ function hasUnpairedSurrogate(text: string): boolean {
   }
   return false;
 }
+
+describe("listPriorTranscriptMessages", () => {
+  it("preserves prior message identity and order while excluding incomplete and empty text", () => {
+    const first = message(0, "user", "  keep this text  ");
+    const second = message(1, "assistant", "\u200b");
+    const current = message(5, "user", "current");
+    const messages = [
+      first,
+      second,
+      message(2, "user", "\n\r\t\u00a0\ufeff\u2028"),
+      { ...message(3, "assistant", "streaming"), streaming: true },
+      current,
+      message(6, "assistant", "later"),
+    ];
+    const result = listPriorTranscriptMessages(thread(messages), current.id);
+    expect(result).toHaveLength(2);
+    expect(result[0]).toBe(first);
+    expect(result[1]).toBe(second);
+    expect(listPriorTranscriptMessages(thread(messages), first.id)).toEqual([]);
+  });
+});
 
 describe("buildHandoffBootstrapText", () => {
   it("does not split a surrogate pair at the earlier-message summary boundary", () => {

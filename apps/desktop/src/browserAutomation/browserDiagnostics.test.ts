@@ -252,28 +252,104 @@ describe("browser diagnostics store", () => {
     expect(all.truncated).toBe(false);
   });
 
-  it("keeps the serialized response below the contract budget", async () => {
-    const { runtime, emit } = createRuntime();
-    const diagnostics = new BrowserDiagnosticsStore();
-    await diagnostics.observe(runtime);
-    for (let index = 0; index < 200; index += 1) {
-      emit("Network.requestWillBeSent", {
-        requestId: `large-request-${index}`,
-        request: {
-          method: "GET",
-          url: `https://example.test/${"x".repeat(8_000)}?token=secret-${index}`,
-        },
-      });
-    }
-
-    const output = await diagnostics.read(runtime, {
-      includeConsole: false,
-      includeNetwork: true,
-      limit: 200,
-    });
-
-    expect(Buffer.byteLength(JSON.stringify(output), "utf8")).toBeLessThanOrEqual(320 * 1_024);
-    expect(output.entries.length).toBeLessThan(200);
+  it("drops the oldest entry when the untruncated response is one byte over budget", async () => {
+    const readFixture = async (padding: number) => {
+      const { runtime, emit } = createRuntime();
+      const diagnostics = new BrowserDiagnosticsStore();
+      await diagnostics.observe(runtime);
+      try {
+        for (let index = 0; index < 41; index += 1) {
+          emit("Network.requestWillBeSent", {
+            requestId: `request-${index}`,
+            request: {
+              method: "GET",
+              url: `https://example.test/${"x".repeat(index < 40 ? 8_000 : padding)}`,
+            },
+          });
+        }
+        return await diagnostics.read(runtime, {
+          includeConsole: false,
+          includeNetwork: true,
+          limit: 200,
+        });
+      } finally {
+        diagnostics.dispose(runtime);
+      }
+    };
+    const short = await readFixture(0);
+    expect(short.entries).toHaveLength(41);
+    expect(short.truncated).toBe(false);
+    const padding = 320 * 1_024 + 1 - Buffer.byteLength(JSON.stringify(short), "utf8");
+    expect(padding).toBeGreaterThan(0);
+    expect(padding).toBeLessThan(8_000);
+    const last = short.entries[40];
+    if (last?.kind !== "network") throw new Error("Expected a network entry in the fixture");
+    const full = {
+      ...short,
+      entries: short.entries.with(40, { ...last, url: last.url + "x".repeat(padding) }),
+    };
+    expect(Buffer.byteLength(JSON.stringify(full), "utf8")).toBe(320 * 1_024 + 1);
+    const output = await readFixture(padding);
+    expect(output.entries).toHaveLength(40);
+    expect(output.entries[0]).toMatchObject({ requestId: "request-1" });
     expect(output.truncated).toBe(true);
   });
+
+  it.each([
+    { kind: "network", text: "x" },
+    { kind: "console", text: "多" },
+    { kind: "console", text: '"\\' },
+  ])(
+    "keeps the largest newest suffix under the JSON byte budget ($kind/$text)",
+    async ({ kind, text }) => {
+      const { runtime, emit } = createRuntime();
+      const diagnostics = new BrowserDiagnosticsStore();
+      await diagnostics.observe(runtime);
+      const captured = [];
+      for (let index = 0; index < 200; index += 1) {
+        if (kind === "network") {
+          emit("Network.requestWillBeSent", {
+            requestId: `large-request-${index}`,
+            request: {
+              method: "GET",
+              url: `https://example.test/${text.repeat(8_000)}?token=secret-${index}`,
+            },
+          });
+        } else {
+          emit("Log.entryAdded", {
+            entry: { level: "info", text: `${index}:${text.repeat(4_096)}` },
+          });
+        }
+        const latest = await diagnostics.read(runtime, {
+          includeConsole: true,
+          includeNetwork: true,
+          limit: 1,
+        });
+        captured.push(latest.entries[0]!);
+      }
+      if (kind === "console") {
+        expect(captured[0]).toMatchObject({ kind, text: expect.stringContaining(text) });
+      }
+
+      const output = await diagnostics.read(runtime, {
+        includeConsole: true,
+        includeNetwork: true,
+        limit: 200,
+      });
+
+      expect(Buffer.byteLength(JSON.stringify(output), "utf8")).toBeLessThanOrEqual(320 * 1_024);
+      expect(output.entries.length).toBeLessThan(200);
+      expect(output.truncated).toBe(true);
+      const expected = { ...output, entries: captured, truncated: false };
+      while (
+        expected.entries.length > 0 &&
+        Buffer.byteLength(JSON.stringify(expected), "utf8") > 320 * 1_024
+      ) {
+        expected.entries = expected.entries.slice(1);
+        expected.truncated = true;
+      }
+      expect(output).toEqual(expected);
+      diagnostics.dispose(runtime);
+    },
+  );
 });

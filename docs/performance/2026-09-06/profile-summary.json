@@ -1,0 +1,65 @@
+{
+  "totalSamples": 28028,
+  "topSelfSamples": [
+    {
+      "function": "RegExp: ^(?<output>[\\s\\S]*?)(?:\\s*<exited with exit code (?<code>\\d+)>)\\s*$",
+      "samples": 12982,
+      "percent": 46.317967746539175
+    },
+    {
+      "function": "RegExp: \\s+(?:complete|completed|done|finished|success|succeeded|started|running)\\s*$",
+      "samples": 10663,
+      "percent": 38.04409875838447
+    },
+    {
+      "function": "RegExp: \\s*\\|\\s*",
+      "samples": 2875,
+      "percent": 10.257599543313829
+    },
+    {
+      "function": "countTextLines",
+      "samples": 288,
+      "percent": 1.0275438846867417
+    },
+    {
+      "function": "(idle)",
+      "samples": 171,
+      "percent": 0.6101041815327529
+    },
+    {
+      "function": "RegExp: \\s+",
+      "samples": 157,
+      "percent": 0.560154131582703
+    },
+    {
+      "function": "splitToolAndArgs",
+      "samples": 108,
+      "percent": 0.3853289567575282
+    },
+    {
+      "function": "findShellChain",
+      "samples": 96,
+      "percent": 0.34251462822891393
+    },
+    {
+      "function": "RegExp: \\r?\\n",
+      "samples": 95,
+      "percent": 0.3389467675181961
+    },
+    {
+      "function": "normalizeToolTextForComparison",
+      "samples": 49,
+      "percent": 0.17482517482517482
+    },
+    {
+      "function": "stripCommandDisplayWrappers",
+      "samples": 46,
+      "percent": 0.16412159269302126
+    },
+    {
+      "function": "",
+      "samples": 42,
+      "percent": 0.14985014985014986
+    }
+  ]
+}

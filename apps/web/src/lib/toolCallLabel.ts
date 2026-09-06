@@ -15,7 +15,8 @@ import { extractToolArgumentField } from "./toolArgumentSummary";
 
 export function normalizeCompactToolLabel(value: string): string {
   return value
-    .replace(/\s+(?:complete|completed|done|finished|success|succeeded|started|running)\s*$/i, "")
+    .trimEnd()
+    .replace(/\s(?:complete|completed|done|finished|success|succeeded|started|running)$/i, "")
     .trim();
 }
 
@@ -1238,7 +1239,7 @@ function unwrapShellCommandIfPresent(rawCommand: string): string {
     break;
   }
 
-  const pipeIndex = value.search(/\s*\|\s*/);
+  const pipeIndex = value.indexOf("|");
   if (pipeIndex > 0) {
     value = value.slice(0, pipeIndex).trim();
   }

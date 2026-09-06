@@ -9,7 +9,7 @@
 
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 
-import { resolveFileDiffPath } from "./diffRendering";
+import { compareDiffPaths, resolveFileDiffPath } from "./diffRendering";
 
 export interface FileDiffTreeFileNode {
   kind: "file";
@@ -40,12 +40,6 @@ interface MutableDirectory {
 
 function createDirectory(name: string, path: string): MutableDirectory {
   return { name, path, directories: new Map(), files: [] };
-}
-
-// Natural-order, case-insensitive comparison so the tree stays human-friendly
-// and stable (mirrors compareFileDiffByPath in diffRendering).
-function compareNodeName(left: string, right: string): number {
-  return left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" });
 }
 
 // Collapse single-child directory chains (e.g. `server` → `src` becomes
@@ -83,10 +77,10 @@ function finalizeDirectory(directory: MutableDirectory): FileDiffTreeNode[] {
   }
   // Directories first, then files, matching the editor explorer ordering.
   const sortedDirectories = directories.toSorted((left, right) =>
-    compareNodeName(left.name, right.name),
+    compareDiffPaths(left.name, right.name),
   );
   const sortedFiles = directory.files.toSorted((left, right) =>
-    compareNodeName(left.name, right.name),
+    compareDiffPaths(left.name, right.name),
   );
   return [...sortedDirectories, ...sortedFiles];
 }

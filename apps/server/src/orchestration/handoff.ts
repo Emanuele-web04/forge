@@ -101,7 +101,7 @@ export function listPriorTranscriptMessages(
     return (
       (message.role === "user" || message.role === "assistant") &&
       message.streaming === false &&
-      normalizeMessageText(message.text).length > 0
+      message.text.trim().length > 0
     );
   });
 }
