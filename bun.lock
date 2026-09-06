@@ -93,6 +93,7 @@
         "open": "^10.1.0",
         "tree-kill": "^1.2.2",
         "ws": "^8.21.0",
+        "zod": "4.3.6",
       },
       "devDependencies": {
         "@effect/language-service": "catalog:",
@@ -106,7 +107,6 @@
         "tsdown": "catalog:",
         "typescript": "catalog:",
         "vitest": "catalog:",
-        "zod": "4.3.6",
       },
     },
     "apps/web": {
