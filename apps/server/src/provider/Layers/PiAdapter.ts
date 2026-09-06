@@ -1270,8 +1270,10 @@ export async function refreshPiOpenRouterModels(runtime: ModelRuntime): Promise<
     ...base,
     getModels: () => [...models.values()],
     // Reuse the SDK store so a later session keeps discovered capacities offline.
-    refreshModels: async ({ store }) => {
-      await store.write({ models: live, lastModified: Date.now(), checkedAt: Date.now() });
+    refreshModels: async ({ publish }) => {
+      await publish({
+        persist: { models: live, lastModified: Date.now(), checkedAt: Date.now() },
+      });
     },
   });
   await runtime.refresh({ allowNetwork: false });

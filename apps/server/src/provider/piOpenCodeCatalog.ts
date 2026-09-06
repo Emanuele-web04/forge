@@ -129,11 +129,13 @@ export async function refreshPiOpenCodeCatalog(
     runtime.registerNativeProvider({
       ...opencodeProvider(),
       getModels: () => resolvedModels,
-      refreshModels: async ({ store }) => {
-        await store.write({
-          models: resolvedModels,
-          checkedAt: Date.now(),
-          lastModified: Date.now(),
+      refreshModels: async ({ publish }) => {
+        await publish({
+          persist: {
+            models: resolvedModels,
+            checkedAt: Date.now(),
+            lastModified: Date.now(),
+          },
         });
       },
     });
