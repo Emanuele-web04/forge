@@ -22,7 +22,7 @@ env:
   NODE_OPTIONS: --max-old-space-size=4096
 
 jobs:
-  # Docs-only filter: PRs touching only prose, images, or marketing content
+  # Docs-only filter: PRs touching only prose, doc images, or marketing content
   # run static-fast + gate only. outputs.code is 'true' when any code file changed.
   changes:
     name: Detect code changes
@@ -53,19 +53,14 @@ jobs:
               # Directory exclusions stay scoped to code-free trees: marketing
               # src ships .tsx under docs/ dirs and web ships a .ts module
               # under assets/, so '**/docs/**' / '**/assets/**' would let real
-              # code skip the gate. Binaries are excluded by extension below.
+              # code skip the gate. Runtime images stay on the code path:
+              # browser tests validate app icon transparency and layout.
               - '**'
               - '!**/*.md'
               - '!docs/**'
               - '!**/*.mdx'
               - '!apps/marketing/content/**'
-              - '!**/*.png'
-              - '!**/*.jpg'
-              - '!**/*.jpeg'
-              - '!**/*.gif'
-              - '!**/*.svg'
-              - '!**/*.webp'
-              - '!**/*.ico'
+              - '!.github/assets/**/*.{png,jpg,jpeg,gif,svg,webp,ico}'
 
   # Phase 1b: the old static lane split. Fast checks (no special runtime) stay
   # unblocked so docs-only PRs get a signal in ~1min.
