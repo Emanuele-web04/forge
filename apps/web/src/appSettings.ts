@@ -325,6 +325,7 @@ export const AppSettingsSchema = Schema.Struct({
   showEnvironmentNotepad: Schema.Boolean.pipe(withDefaults(() => false)),
   followUpBehavior: FollowUpBehavior.pipe(withDefaults(() => DEFAULT_FOLLOW_UP_BEHAVIOR)),
   enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => true)),
+  autoOpenDevicePane: Schema.Boolean.pipe(withDefaults(() => true)),
   enableProviderUpdateChecks: Schema.Boolean.pipe(withDefaults(() => true)),
   keepAwakeMode: KeepAwakeMode.pipe(withDefaults(() => "off" as const satisfies KeepAwakeMode)),
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),

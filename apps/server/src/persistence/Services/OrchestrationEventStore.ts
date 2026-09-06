@@ -45,6 +45,11 @@ export interface OrchestrationEventStoreShape {
     threadId: string,
   ) => Effect.Effect<number, OrchestrationEventStoreError>;
 
+  /** Capture the latest durable event sequence that assigned this thread's title. */
+  readonly getThreadTitleHighWaterSequence: (
+    threadId: string,
+  ) => Effect.Effect<number, OrchestrationEventStoreError>;
+
   /** Read one stable, newest-first page from a thread's durable event stream. */
   readonly readThreadEvents: (input: {
     readonly threadId: string;

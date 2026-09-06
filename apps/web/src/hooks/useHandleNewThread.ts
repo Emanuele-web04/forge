@@ -17,6 +17,11 @@ import {
 } from "../composerDraftStore";
 import { resolveNewChatModelSelection } from "../composerDraftModels";
 import {
+  findProviderStatus,
+  isProviderUsable,
+  resolveAvailableProviderPreference,
+} from "../lib/providerAvailability";
+import {
   buildDraftThreadContextPatch,
   createActiveDraftThreadSnapshot,
   createActiveThreadSnapshot,
@@ -205,7 +210,7 @@ export function useHandleNewThread() {
       useStore.getState().projects.find((project) => project.id === projectId)
         ?.defaultModelSelection ?? null;
     const composerState = useComposerDraftStore.getState();
-    const initialModelSelection = resolveNewChatModelSelection({
+    const newChatModelInput = {
       focusedDraft: focusedThreadId
         ? (composerState.draftsByThreadId[focusedThreadId] ?? null)
         : null,
@@ -217,8 +222,32 @@ export function useHandleNewThread() {
       stickyModelSelectionByProvider: composerState.stickyModelSelectionByProvider,
       projectModelSelection: projectDefaultModelSelection,
       defaultProvider: settings.defaultProvider,
+    } as const;
+    const preferredInitialModelSelection = resolveNewChatModelSelection({
+      ...newChatModelInput,
       ...(options?.provider ? { providerOverride: options.provider } : {}),
     });
+    const fallbackProvider =
+      !options?.provider &&
+      providerStatusesReconciled &&
+      !isProviderUsable(
+        findProviderStatus(providerStatuses, preferredInitialModelSelection.provider),
+      )
+        ? resolveAvailableProviderPreference({
+            preferredProvider:
+              projectDefaultModelSelection?.provider ?? settings.defaultProvider,
+            statuses: providerStatuses,
+            providerOrder: settings.providerOrder,
+            hiddenProviders: settings.hiddenProviders,
+          })
+        : null;
+    const initialModelSelection =
+      fallbackProvider && isProviderUsable(findProviderStatus(providerStatuses, fallbackProvider))
+        ? resolveNewChatModelSelection({
+            ...newChatModelInput,
+            providerOverride: fallbackProvider,
+          })
+        : preferredInitialModelSelection;
     const activeThreadSnapshot = createActiveThreadSnapshot(activeThread, projectId);
     const activeDraftThreadSnapshot = createActiveDraftThreadSnapshot(activeDraftThread, projectId);
     const resolveCreationState = (

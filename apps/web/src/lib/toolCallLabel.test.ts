@@ -6,7 +6,6 @@ import {
   deriveReadableToolTitle,
   deriveSynaraMcpToolTitle,
   extractWebFetchUrl,
-  isInspectCommand,
   isSynaraBrowserToolCall,
   normalizeCompactToolLabel,
   resolveCommandVisualKind,
@@ -58,6 +57,17 @@ describe("normalizeCompactToolLabel", () => {
     expect(normalizeCompactToolLabel("Tool call completed")).toBe("Tool call");
     expect(normalizeCompactToolLabel("Ran command done")).toBe("Ran command");
     expect(normalizeCompactToolLabel("Ran command started")).toBe("Ran command");
+  });
+
+  it.each([
+    ["  Tool\r\n\tCOMPLETED\n", "Tool"],
+    ["completed", "completed"],
+    [" completed ", ""],
+    ["Toolcompleted", "Toolcompleted"],
+    ["Tool completed later", "Tool completed later"],
+    ["Tool\u00a0done\u2028", "Tool"],
+  ])("preserves status-word boundaries in %j", (value, expected) => {
+    expect(normalizeCompactToolLabel(value)).toBe(expected);
   });
 });
 
@@ -394,6 +404,15 @@ describe("deriveReadableToolTitle", () => {
 });
 
 describe("deriveReadableCommandDisplay", () => {
+  it.each(["|", " | ", "\t\r\n|\t"])("keeps the first command before a pipe: %j", (pipe) => {
+    const command = `cat src/result.ts${pipe}head -n 1`;
+    expect(deriveReadableCommandDisplay(command)).toEqual({
+      verb: "Read",
+      target: "src/result.ts",
+      fullCommand: command,
+    });
+  });
+
   it("extracts search targets without leaking the full shell wrapper inline", () => {
     expect(deriveReadableCommandDisplay(`/bin/zsh -lc 'rg -n "tool call" apps/web/src'`)).toEqual({
       verb: "Searched",
@@ -526,27 +545,25 @@ describe("deriveInlineCommandCall", () => {
   });
 });
 
-describe("isInspectCommand", () => {
+describe("resolveCommandVisualKind", () => {
   it("detects read-only inspection commands (read/search/find/list)", () => {
-    expect(isInspectCommand("cat package.json")).toBe(true);
-    expect(isInspectCommand("sed -n 1,40p src/app.ts")).toBe(true);
-    expect(isInspectCommand("head -n 20 README.md")).toBe(true);
-    expect(isInspectCommand(`rg -n "tool call" apps/web/src`)).toBe(true);
-    expect(isInspectCommand("grep -R foo .")).toBe(true);
-    expect(isInspectCommand("find . -name '*.ts'")).toBe(true);
-    expect(isInspectCommand("ls -la src")).toBe(true);
-    expect(isInspectCommand(`/bin/zsh -lc 'rg -n "x" src'`)).toBe(true);
+    expect(resolveCommandVisualKind("cat package.json")).toBe("inspect");
+    expect(resolveCommandVisualKind("sed -n 1,40p src/app.ts")).toBe("inspect");
+    expect(resolveCommandVisualKind("head -n 20 README.md")).toBe("inspect");
+    expect(resolveCommandVisualKind(`rg -n "tool call" apps/web/src`)).toBe("inspect");
+    expect(resolveCommandVisualKind("grep -R foo .")).toBe("inspect");
+    expect(resolveCommandVisualKind("find . -name '*.ts'")).toBe("inspect");
+    expect(resolveCommandVisualKind("ls -la src")).toBe("inspect");
+    expect(resolveCommandVisualKind(`/bin/zsh -lc 'rg -n "x" src'`)).toBe("inspect");
   });
 
   it("does not treat mutating or executing commands as inspections", () => {
-    expect(isInspectCommand("git status")).toBe(false);
-    expect(isInspectCommand("node build.js")).toBe(false);
-    expect(isInspectCommand("rm -rf dist")).toBe(false);
-    expect(isInspectCommand("mkdir foo")).toBe(false);
+    expect(resolveCommandVisualKind("git status")).toBe("git");
+    expect(resolveCommandVisualKind("node build.js")).toBe("terminal");
+    expect(resolveCommandVisualKind("rm -rf dist")).toBe("terminal");
+    expect(resolveCommandVisualKind("mkdir foo")).toBe("terminal");
   });
-});
 
-describe("resolveCommandVisualKind", () => {
   it("classifies git commands through shell and global-option wrappers", () => {
     expect(resolveCommandVisualKind("git status --short")).toBe("git");
     expect(resolveCommandVisualKind("git -C apps/web status --short")).toBe("git");

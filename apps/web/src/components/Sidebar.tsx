@@ -511,10 +511,6 @@ const ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS = 6;
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS = 50;
 const GITHUB_CANCEL_RECOVERY_MAX_ATTEMPTS = 40;
 const GITHUB_CANCEL_RECOVERY_DELAY_MS = 250;
-const SIDEBAR_VIEW_LABELS: Record<SidebarView, string> = {
-  threads: "Projects",
-  studio: "Studio",
-};
 /** Snap the optimistic segment selection back if the navigation never lands. */
 const EMPTY_PROJECT_SIDEBAR_DATA: ReadonlyMap<ProjectId, SidebarDerivedProjectData> = new Map();
 const DebugFeatureFlagsMenu = import.meta.env.DEV
@@ -1671,7 +1667,6 @@ export default function Sidebar() {
       }
     };
   }, []);
-  const createSplitViewFromDrop = useSplitViewStore((store) => store.createFromDrop);
   const setSplitFocusedPane = useSplitViewStore((store) => store.setFocusedPane);
   const openRightDockPane = useRightDockStore((store) => store.openPane);
   // Query defaults are applied after destructuring: a default inside the destructuring

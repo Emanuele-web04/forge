@@ -1743,6 +1743,45 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       }),
   );
 
+  it.effect("keeps routine Codex startup notifications out of the activity stream", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const eventsFiber = yield* Stream.take(adapter.streamEvents, 3).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const emit = (method: string, kind: ProviderEvent["kind"] = "notification") =>
+        lifecycleManager.emit("event", {
+          id: asEventId(`startup-${method}-${kind}`),
+          kind,
+          provider: "codex",
+          createdAt: new Date().toISOString(),
+          method,
+          threadId: asThreadId("startup-thread"),
+          ...(kind === "error" ? { message: "Failed to open thread" } : {}),
+          payload: { status: "disabled" },
+        } satisfies ProviderEvent);
+
+      emit("remoteControl/status/changed");
+      emit("skills/changed");
+      emit("session/threadOpenRequested", "session");
+      // Real errors and useful unknown events must survive the filter.
+      emit("session/threadOpenRequested", "error");
+      emit("item/future/completed");
+      emit("session/started", "session");
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.deepEqual(
+        events.map((event) => event.type),
+        ["runtime.error", "event.unmapped", "session.started"],
+      );
+      assert.equal(
+        events[1]?.type === "event.unmapped" ? events[1].payload.nativeType : undefined,
+        "item/future/completed",
+      );
+    }),
+  );
+
   it.effect("coalesces repeated unmapped burst events", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;

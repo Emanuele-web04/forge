@@ -44,8 +44,198 @@ const EMPTY_PLUGINS_RESULT: ProviderListPluginsResult = {
   cached: false,
 };
 
+// The server admits at most two expensive reads at once, and agent discovery
+// uses the same budget. Keep model discovery to one request at a time so opening
+// the provider picker cannot reject most catalogs before their CLIs even run.
+// Foreground requests may move ahead of queued warming, but never interrupt the
+// discovery that already owns the single model slot.
+type ProviderModelDiscoveryPriority = "background" | "prefetch" | "foreground";
+
+interface ProviderModelDiscoveryTask {
+  readonly queryKey: readonly unknown[];
+  priority: ProviderModelDiscoveryPriority;
+  priorityOrder: number;
+  readonly signal: AbortSignal;
+  readonly discover: () => Promise<unknown>;
+  readonly resolve: (value: unknown) => void;
+  readonly reject: (reason: unknown) => void;
+  readonly abort: () => void;
+}
+
+const providerModelDiscoveryQueue: ProviderModelDiscoveryTask[] = [];
+// Each selected pane owns a separate lease, released on selection change or unmount.
+const foregroundModelDiscoveryOwners = new Set<readonly unknown[]>();
+let providerModelDiscoveryRunning = false;
+let providerModelDiscoveryPriorityOrder = 0;
+
+const PROVIDER_MODEL_DISCOVERY_PRIORITY_RANK: Record<ProviderModelDiscoveryPriority, number> = {
+  background: 0,
+  prefetch: 1,
+  foreground: 2,
+};
+
+function queryKeysMatch(left: readonly unknown[], right: readonly unknown[]): boolean {
+  return (
+    left.length === right.length && left.every((value, index) => Object.is(value, right[index]))
+  );
+}
+
+function abortReason(signal: AbortSignal): unknown {
+  try {
+    signal.throwIfAborted();
+  } catch (error) {
+    return error;
+  }
+  return new Error("Provider model discovery was cancelled.");
+}
+
+function drainProviderModelDiscoveryQueue(): void {
+  if (providerModelDiscoveryRunning) return;
+
+  let nextIndex = 0;
+  for (let index = 1; index < providerModelDiscoveryQueue.length; index += 1) {
+    const candidate = providerModelDiscoveryQueue[index];
+    const current = providerModelDiscoveryQueue[nextIndex];
+    if (!candidate || !current) continue;
+    const candidateRank = PROVIDER_MODEL_DISCOVERY_PRIORITY_RANK[candidate.priority];
+    const currentRank = PROVIDER_MODEL_DISCOVERY_PRIORITY_RANK[current.priority];
+    if (
+      candidateRank > currentRank ||
+      (candidateRank === currentRank &&
+        candidate.priority !== "background" &&
+        candidate.priorityOrder > current.priorityOrder)
+    ) {
+      nextIndex = index;
+    }
+  }
+  const task = providerModelDiscoveryQueue.splice(nextIndex, 1)[0];
+  if (!task) return;
+
+  task.signal.removeEventListener("abort", task.abort);
+  if (task.signal.aborted) {
+    task.reject(abortReason(task.signal));
+    drainProviderModelDiscoveryQueue();
+    return;
+  }
+
+  providerModelDiscoveryRunning = true;
+  void Promise.resolve()
+    .then(task.discover)
+    .then(task.resolve, task.reject)
+    .finally(() => {
+      providerModelDiscoveryRunning = false;
+      drainProviderModelDiscoveryQueue();
+    });
+}
+
+export function prioritizeProviderModelDiscovery(
+  queryKey: readonly unknown[],
+  priority: Exclude<ProviderModelDiscoveryPriority, "background"> = "foreground",
+): (() => void) | undefined {
+  const owner = priority === "foreground" ? [...queryKey] : undefined;
+  if (owner) foregroundModelDiscoveryOwners.add(owner);
+  for (const task of providerModelDiscoveryQueue) {
+    const matches = queryKeysMatch(task.queryKey, queryKey);
+    if (!matches && priority === "prefetch" && task.priority === "prefetch") {
+      // Only the newest hover target remains prefetch-priority. Foreground
+      // catalogs are not exclusive: split-view panes can observe distinct
+      // selected providers at the same time.
+      task.priority = "background";
+    } else if (matches) {
+      if (
+        task.priority === "background" ||
+        (task.priority === "prefetch" && priority === "foreground")
+      ) {
+        task.priority = priority;
+      }
+      // A newly selected pane goes first without demoting catalogs selected
+      // in other active panes below speculative prefetch work.
+      task.priorityOrder = ++providerModelDiscoveryPriorityOrder;
+    }
+  }
+  if (!owner) return;
+  return () => {
+    foregroundModelDiscoveryOwners.delete(owner);
+    if ([...foregroundModelDiscoveryOwners].some((key) => queryKeysMatch(key, queryKey))) return;
+    for (const task of providerModelDiscoveryQueue) {
+      if (queryKeysMatch(task.queryKey, queryKey) && task.priority === "foreground") {
+        task.priority = "background";
+        task.priorityOrder = 0;
+      }
+    }
+  };
+}
+
+function serializeProviderModelDiscovery<T>(
+  queryKey: readonly unknown[],
+  signal: AbortSignal,
+  priority: ProviderModelDiscoveryPriority,
+  discover: () => Promise<T>,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => {
+      const taskIndex = providerModelDiscoveryQueue.findIndex((task) => task.abort === abort);
+      if (taskIndex < 0) return;
+      providerModelDiscoveryQueue.splice(taskIndex, 1);
+      reject(abortReason(signal));
+    };
+    const effectivePriority = [...foregroundModelDiscoveryOwners].some((key) =>
+      queryKeysMatch(key, queryKey),
+    )
+      ? "foreground"
+      : priority;
+    providerModelDiscoveryQueue.push({
+      queryKey,
+      priority: effectivePriority,
+      priorityOrder: effectivePriority === "background" ? 0 : ++providerModelDiscoveryPriorityOrder,
+      signal,
+      discover,
+      resolve: (value) => resolve(value as T),
+      reject,
+      abort,
+    });
+    signal.addEventListener("abort", abort, { once: true });
+    drainProviderModelDiscoveryQueue();
+  });
+}
+
+function requireDiscoveredModels(
+  provider: ProviderKind,
+  result: ProviderListModelsResult,
+  previous: ProviderListModelsResult | undefined,
+): ProviderListModelsResult {
+  // Initial degraded discovery can still expose an adapter's usable static
+  // fallback. During a background refresh, however, keep a previously good
+  // dynamic catalog and let React Query retry the transient failure.
+  if (
+    provider === "devin" &&
+    result.error &&
+    previous &&
+    !previous.error &&
+    previous.models.length > 0
+  ) {
+    throw new Error(result.error);
+  }
+  const isAuthoritativeEmptyCatalog =
+    result.source === "disabled" ||
+    result.source === "unsupported" ||
+    (provider === "opencode" &&
+      (result.source === "opencode" || result.source === "opencode-cli")) ||
+    (provider === "pi" && result.source?.startsWith("pi.sdk") === true);
+  if (
+    provider !== "codex" &&
+    provider !== "claudeAgent" &&
+    result.models.length === 0 &&
+    !isAuthoritativeEmptyCatalog
+  ) {
+    throw new Error(`${provider} model discovery returned no models.`);
+  }
+  return result;
+}
+
 export const providerDiscoveryQueryKeys = {
   all: ["provider-discovery"] as const,
+  modelsAll: ["provider-discovery", "models"] as const,
   composerCapabilities: (provider: ProviderKind) =>
     ["provider-discovery", "composer-capabilities", provider] as const,
   commands: (
@@ -81,6 +271,10 @@ export const providerDiscoveryQueryKeys = {
   agents: (provider: ProviderKind, binaryPath: string | null, cwd: string | null) =>
     [...providerDiscoveryQueryKeys.agentsForProvider(provider), binaryPath, cwd] as const,
 };
+
+export function providerModelDiscoveryRetry(provider: ProviderKind): number {
+  return provider === "cursor" ? 0 : provider === "droid" ? 2 : 3;
+}
 
 export function providerComposerCapabilitiesQueryOptions(provider: ProviderKind) {
   return queryOptions({
@@ -204,31 +398,56 @@ export function providerModelsQueryOptions(input: {
   agentDir?: string | null;
   cwd?: string | null;
   enabled?: boolean;
+  priority?: ProviderModelDiscoveryPriority | undefined;
 }) {
-  return queryOptions({
-    queryKey: providerDiscoveryQueryKeys.models(
-      input.provider,
-      input.binaryPath ?? null,
-      input.apiEndpoint ?? null,
-      input.agentDir ?? null,
-      input.cwd ?? null,
-    ),
-    queryFn: async (): Promise<ProviderListModelsResult> => {
-      const api = ensureNativeApi();
-      return api.provider.listModels({
-        provider: input.provider,
-        ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
-        ...(input.apiEndpoint ? { apiEndpoint: input.apiEndpoint } : {}),
-        ...(input.agentDir ? { agentDir: input.agentDir } : {}),
-        ...(input.cwd ? { cwd: input.cwd } : {}),
-      });
-    },
+  const queryKey = providerDiscoveryQueryKeys.models(
+    input.provider,
+    input.binaryPath ?? null,
+    input.apiEndpoint ?? null,
+    input.agentDir ?? null,
+    input.cwd ?? null,
+  );
+  return queryOptions<ProviderListModelsResult, Error, ProviderListModelsResult, typeof queryKey>({
+    queryKey,
+    queryFn: ({ client, signal }): Promise<ProviderListModelsResult> =>
+      serializeProviderModelDiscovery(
+        queryKey,
+        signal,
+        input.priority ?? "background",
+        async () => {
+          const api = ensureNativeApi();
+          const result = await api.provider.listModels({
+            provider: input.provider,
+            ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+            ...(input.apiEndpoint ? { apiEndpoint: input.apiEndpoint } : {}),
+            ...(input.agentDir ? { agentDir: input.agentDir } : {}),
+            ...(input.cwd ? { cwd: input.cwd } : {}),
+          });
+          const previous = client.getQueryData<ProviderListModelsResult>(queryKey);
+          return requireDiscoveredModels(input.provider, result, previous);
+        },
+      ),
     enabled: input.enabled ?? true,
     // Cached catalogs paint immediately while stale entries revalidate in the
     // background. Droid discovery starts a disposable ACP session, so retain its
     // longer cache and never repeat that work merely because the window regained focus.
-    retry: input.provider === "droid" || input.provider === "cursor" ? 0 : 3,
-    staleTime: input.provider === "droid" ? 5 * 60_000 : 30_000,
+    retry: providerModelDiscoveryRetry(input.provider),
+    staleTime:
+      input.provider === "devin"
+        ? (query) => (query.state.data?.error ? 0 : 30_000)
+        : input.provider === "droid"
+          ? 5 * 60_000
+          : 30_000,
+    // Devin deliberately returns a usable static catalog when CLI discovery
+    // fails. Keep it visible, but retry while observed instead of treating the
+    // degraded result as a successful 30-minute cache entry. A failed refresh
+    // retains healthy data, so the query error must also keep recovery polling alive.
+    ...(input.provider === "devin"
+      ? {
+          refetchInterval: (query) =>
+            query.state.data?.error || query.state.error ? 30_000 : false,
+        }
+      : {}),
     ...(input.provider === "droid" ? { refetchOnWindowFocus: false } : {}),
     // 30min — matches NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS in
     // providerModelPrefetch.ts (not imported: that module imports from here).

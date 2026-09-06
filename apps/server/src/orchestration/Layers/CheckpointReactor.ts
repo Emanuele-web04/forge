@@ -142,6 +142,11 @@ const make = Effect.gen(function* () {
   // thread. The flag is cleared when the worker starts processing the job so an
   // edit arriving during the git work re-schedules and captures the newest tree.
   const liveDiffScheduledThreads = new Set<ThreadId>();
+  // Turns that started in a workspace that was not yet a git repository. A
+  // scaffolding turn (`git init`, create-next-app, ...) turns the folder into a
+  // repo mid-turn, so the completion capture finds no turn-start baseline. That
+  // is expected for such turns and must not surface as a capture failure.
+  const turnsStartedWithoutGitWorkspace = new Map<ThreadId, TurnId>();
 
   // Providers that stream their own unified diff (e.g. Codex) update the live
   // turn diff through ProviderRuntimeIngestion. For providers without that
@@ -357,7 +362,7 @@ const make = Effect.gen(function* () {
   // policy: a worktree thread whose baseline resolved through the workspace
   // while its completion snapshot resolved through the session cwd would diff
   // two different checkouts.
-  const resolveCheckpointCwd = Effect.fnUntraced(function* (input: {
+  const resolveCheckpointWorkspace = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly thread: Pick<OrchestrationThread, "projectId" | "envMode" | "worktreePath">;
     readonly project: OrchestrationProjectShell;
@@ -376,10 +381,16 @@ const make = Effect.gen(function* () {
     if (!cwd) {
       return undefined;
     }
-    if (!isGitWorkspace(cwd)) {
-      return undefined;
-    }
-    return cwd;
+    return { cwd, isGitRepository: isGitWorkspace(cwd) } as const;
+  });
+
+  const resolveCheckpointCwd = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly thread: Pick<OrchestrationThread, "projectId" | "envMode" | "worktreePath">;
+    readonly project: OrchestrationProjectShell;
+  }) {
+    const workspace = yield* resolveCheckpointWorkspace(input);
+    return workspace?.isGitRepository ? workspace.cwd : undefined;
   });
 
   // Shared tail for both capture paths: creates the git checkpoint ref, diffs
@@ -400,6 +411,9 @@ const make = Effect.gen(function* () {
     readonly status: "ready" | "missing" | "error";
     readonly assistantMessageId: MessageId | undefined;
     readonly createdAt: string;
+    // The workspace only became a git repository while this turn ran, so no
+    // turn-start baseline could have been captured.
+    readonly workspaceInitializedDuringTurn: boolean;
   }) {
     const fromCheckpointRef = checkpointRefForThreadTurnStart(input.threadId, input.turnId);
     const targetCheckpointRef = checkpointRefForThreadTurn(input.threadId, input.turnCount);
@@ -409,11 +423,22 @@ const make = Effect.gen(function* () {
       checkpointRef: fromCheckpointRef,
     });
     if (!fromCheckpointExists) {
-      yield* Effect.logWarning("checkpoint capture missing pre-turn baseline", {
-        threadId: input.threadId,
-        turnId: input.turnId,
-        checkpointRef: fromCheckpointRef,
-      });
+      if (input.workspaceInitializedDuringTurn) {
+        yield* Effect.logDebug(
+          "checkpoint capture has no pre-turn baseline: workspace became a git repository during the turn",
+          {
+            threadId: input.threadId,
+            turnId: input.turnId,
+            checkpointRef: fromCheckpointRef,
+          },
+        );
+      } else {
+        yield* Effect.logWarning("checkpoint capture missing pre-turn baseline", {
+          threadId: input.threadId,
+          turnId: input.turnId,
+          checkpointRef: fromCheckpointRef,
+        });
+      }
     }
 
     yield* checkpointStore.captureCheckpoint({
@@ -455,12 +480,14 @@ const make = Effect.gen(function* () {
               }).pipe(Effect.as([])),
             ),
           )
-      : yield* appendCaptureFailureActivity({
-          threadId: input.threadId,
-          turnId: input.turnId,
-          detail: "Checkpoint captured, but the turn start baseline is unavailable.",
-          createdAt: input.createdAt,
-        }).pipe(Effect.as([]));
+      : input.workspaceInitializedDuringTurn
+        ? []
+        : yield* appendCaptureFailureActivity({
+            threadId: input.threadId,
+            turnId: input.turnId,
+            detail: "Checkpoint captured, but the turn start baseline is unavailable.",
+            createdAt: input.createdAt,
+          }).pipe(Effect.as([]));
 
     const assistantMessageId = yield* resolveAssistantMessageIdForTurn({
       threadId: input.threadId,
@@ -628,6 +655,10 @@ const make = Effect.gen(function* () {
       ? existingPlaceholder.checkpointTurnCount
       : currentTurnCount + 1;
 
+    const workspaceInitializedDuringTurn =
+      turnsStartedWithoutGitWorkspace.get(thread.id) === turnId;
+    turnsStartedWithoutGitWorkspace.delete(thread.id);
+
     yield* captureAndDispatchCheckpoint({
       threadId: thread.id,
       turnId,
@@ -637,6 +668,7 @@ const make = Effect.gen(function* () {
       status: checkpointStatusFromRuntime(event.payload.state),
       assistantMessageId: undefined,
       createdAt: event.createdAt,
+      workspaceInitializedDuringTurn,
     });
   });
 
@@ -784,14 +816,32 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const checkpointCwd = yield* resolveCheckpointCwd({
+    const workspace = yield* resolveCheckpointWorkspace({
       threadId: thread.id,
       thread,
       project,
     });
-    if (!checkpointCwd) {
+    if (!workspace) {
+      turnsStartedWithoutGitWorkspace.delete(thread.id);
       return;
     }
+    if (!workspace.isGitRepository) {
+      // Nothing to snapshot yet. Remember the turn so its completion capture
+      // does not report the (necessarily) missing baseline as a failure when
+      // the turn itself initializes the repository.
+      turnsStartedWithoutGitWorkspace.set(thread.id, turnId);
+      yield* Effect.logDebug(
+        "checkpoint turn start baseline skipped: workspace is not a git repository",
+        {
+          threadId: thread.id,
+          turnId,
+          cwd: workspace.cwd,
+        },
+      );
+      return;
+    }
+    turnsStartedWithoutGitWorkspace.delete(thread.id);
+    const checkpointCwd = workspace.cwd;
 
     const pendingTurnStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
       threadId: thread.id,

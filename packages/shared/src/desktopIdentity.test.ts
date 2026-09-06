@@ -10,7 +10,6 @@ import {
   SYNARA_DESKTOP_UPDATE_CHANNEL,
   SYNARA_DEVELOPMENT_BUNDLE_ID,
   SYNARA_PRODUCTION_BUNDLE_ID,
-  synaraBundleId,
   synaraDesktopIdentity,
 } from "./desktopIdentity";
 
@@ -18,8 +17,8 @@ describe("desktopIdentity", () => {
   it("uses the exact canonical production and development bundle IDs", () => {
     expect(SYNARA_PRODUCTION_BUNDLE_ID).toBe("com.emanueledipietro.synara");
     expect(SYNARA_DEVELOPMENT_BUNDLE_ID).toBe("com.emanueledipietro.synara.dev");
-    expect(synaraBundleId(false)).toBe(SYNARA_PRODUCTION_BUNDLE_ID);
-    expect(synaraBundleId(true)).toBe(SYNARA_DEVELOPMENT_BUNDLE_ID);
+    expect(synaraDesktopIdentity("production").bundleId).toBe(SYNARA_PRODUCTION_BUNDLE_ID);
+    expect(synaraDesktopIdentity("development").bundleId).toBe(SYNARA_DEVELOPMENT_BUNDLE_ID);
   });
 
   it("uses the exact packaged renderer origin and entry URL", () => {

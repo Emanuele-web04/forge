@@ -44,10 +44,7 @@ import { makeEffectProcessCommand } from "../platform/effectProcessRuntime.ts";
 
 import { NetService, type NetServiceShape } from "@synara/shared/Net";
 import { buildProviderChildEnvironment } from "../providerChildEnvironment.ts";
-import {
-  readOpenCodeAuthFileUtf8,
-  resolveOpenCodeCompatibleAuthPaths,
-} from "./openCodeAuthPaths.ts";
+import { readOpenCodeAuthFileUtf8 } from "./openCodeAuthPaths.ts";
 import {
   teardownEffectProcessTree,
   teardownProviderProcessTree,
@@ -463,22 +460,6 @@ function readOpenCodeVariantEffort(
     return trimToNull(variantKey);
   }
   return null;
-}
-
-export function resolveOpenCodeAuthFilePath(
-  pathInfo: Pick<OpenCodePathInfo, "home">,
-  cliSpec: OpenCodeCompatibleCliSpec = OPENCODE_CLI_SPEC,
-): string {
-  const [preferredPath] = resolveOpenCodeCompatibleAuthPaths({
-    homeDir: pathInfo.home,
-    env: process.env,
-    platform: process.platform,
-    dataDirectoryName: cliSpec.dataDirectoryName,
-  });
-  if (!preferredPath) {
-    throw new Error("OpenCode auth path resolution produced no candidates");
-  }
-  return preferredPath;
 }
 
 export function parseOpenCodeCredentialProviderIDs(content: string): ReadonlyArray<string> {

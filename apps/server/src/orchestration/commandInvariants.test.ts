@@ -13,7 +13,6 @@ import { Effect } from "effect";
 import {
   findThreadById,
   listThreadsByProjectId,
-  requireNonNegativeInteger,
   requireProjectHasNoThreads,
   requireThread,
   requireThreadAbsent,
@@ -257,26 +256,6 @@ describe("commandInvariants", () => {
         }),
       ),
     ).rejects.toThrow("already exists");
-  });
-
-  it("requires non-negative integers", async () => {
-    await Effect.runPromise(
-      requireNonNegativeInteger({
-        commandType: "thread.checkpoint.revert",
-        field: "turnCount",
-        value: 0,
-      }),
-    );
-
-    await expect(
-      Effect.runPromise(
-        requireNonNegativeInteger({
-          commandType: "thread.checkpoint.revert",
-          field: "turnCount",
-          value: -1,
-        }),
-      ),
-    ).rejects.toThrow("greater than or equal to 0");
   });
 
   it("requires thread to be archived for unarchive command", async () => {

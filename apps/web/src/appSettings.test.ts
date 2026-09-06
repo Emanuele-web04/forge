@@ -1061,6 +1061,16 @@ describe("AppSettingsSchema", () => {
     ).toBe(true);
   });
 
+  it("preserves a disabled simulator auto-open preference across settings persistence", () => {
+    const codec = Schema.fromJsonString(AppSettingsSchema);
+    const decode = Schema.decodeSync(codec);
+    const defaults = decode("{}");
+    expect(defaults.autoOpenDevicePane).toBe(true);
+
+    const settings = applyLocalAppSettingsPatch(defaults, { autoOpenDevicePane: false });
+    expect(decode(Schema.encodeSync(codec)(settings)).autoOpenDevicePane).toBe(false);
+  });
+
   it("fills decoding defaults for persisted settings that predate newer keys", () => {
     const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
 

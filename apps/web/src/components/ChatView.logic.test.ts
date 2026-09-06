@@ -14,7 +14,6 @@ import type { WorkLogEntry } from "../session-logic";
 
 import {
   appendVoiceTranscriptToPrompt,
-  buildComposerMenuSelectionKey,
   buildTranscriptAutoFollowSignal,
   buildTranscriptTailKey,
   commitAfterRuntimeModePersistence,
@@ -388,60 +387,6 @@ describe("file undo completion", () => {
         },
       }),
     ).toBe(false);
-  });
-});
-
-describe("composer menu selection", () => {
-  const items = [{ id: "skill:check-code" }, { id: "skill:sanity-check" }] as const;
-
-  it("builds a stable key from query and displayed item order", () => {
-    const baseKey = buildComposerMenuSelectionKey({
-      menuOpen: true,
-      picker: null,
-      triggerKind: "slash-command",
-      triggerQuery: "check",
-      items,
-    });
-
-    expect(
-      buildComposerMenuSelectionKey({
-        menuOpen: true,
-        picker: null,
-        triggerKind: "slash-command",
-        triggerQuery: "check",
-        items: [...items],
-      }),
-    ).toBe(baseKey);
-    expect(
-      buildComposerMenuSelectionKey({
-        menuOpen: true,
-        picker: null,
-        triggerKind: "slash-command",
-        triggerQuery: "chec",
-        items,
-      }),
-    ).not.toBe(baseKey);
-    expect(
-      buildComposerMenuSelectionKey({
-        menuOpen: true,
-        picker: null,
-        triggerKind: "slash-command",
-        triggerQuery: "check",
-        items: [...items].reverse(),
-      }),
-    ).not.toBe(baseKey);
-  });
-
-  it("returns null while the menu is closed", () => {
-    expect(
-      buildComposerMenuSelectionKey({
-        menuOpen: false,
-        picker: null,
-        triggerKind: "slash-command",
-        triggerQuery: "check",
-        items,
-      }),
-    ).toBeNull();
   });
 });
 
@@ -2484,6 +2429,39 @@ describe("resolveWorkingLabel", () => {
     expect(resolveWorkingLabel({ isSendBusy: true, turnTakenOver: false })).toBe("Loading");
     expect(resolveWorkingLabel({ isSendBusy: true, turnTakenOver: true })).toBe("Thinking");
     expect(resolveWorkingLabel({ isSendBusy: false, turnTakenOver: false })).toBe("Thinking");
+  });
+
+  it("shows Starting provider… during the connecting phase", () => {
+    expect(
+      resolveWorkingLabel({
+        isSendBusy: false,
+        turnTakenOver: false,
+        isConnecting: true,
+        providerName: "Pi",
+      }),
+    ).toBe("Starting Pi…");
+
+    expect(
+      resolveWorkingLabel({
+        isSendBusy: true,
+        turnTakenOver: false,
+        isConnecting: true,
+        providerName: "Pi",
+      }),
+    ).toBe("Loading");
+
+    expect(
+      resolveWorkingLabel({
+        isSendBusy: true,
+        turnTakenOver: true,
+        isConnecting: true,
+        providerName: "Pi",
+      }),
+    ).toBe("Starting Pi…");
+
+    expect(
+      resolveWorkingLabel({ isSendBusy: false, turnTakenOver: false, isConnecting: true }),
+    ).toBe("Thinking");
   });
 });
 

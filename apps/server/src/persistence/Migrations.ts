@@ -114,9 +114,10 @@ import Migration0095 from "./Migrations/095_ProjectionThreadsGoalTiming.ts";
 import Migration0096 from "./Migrations/096_ProjectionThreadsGoalAchievements.ts";
 import Migration0097 from "./Migrations/097_ProjectionThreadsSidechatLifecycle.ts";
 import Migration0098 from "./Migrations/098_MigrateKiloToOpenCode.ts";
-import Migration0099 from "./Migrations/099_ProjectSources.ts";
-import Migration0100 from "./Migrations/100_OutboundMcpConnections.ts";
-import Migration0101 from "./Migrations/101_ProjectPullRequestPinProviders.ts";
+import Migration0099 from "./Migrations/099_InvalidateProjectionThreadsCursor.ts";
+import Migration0100 from "./Migrations/100_ProjectSources.ts";
+import Migration0101 from "./Migrations/101_OutboundMcpConnections.ts";
+import Migration0102 from "./Migrations/102_ProjectPullRequestPinProviders.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -230,9 +231,10 @@ export const migrationEntries = [
   [96, "ProjectionThreadsGoalAchievements", Migration0096],
   [97, "ProjectionThreadsSidechatLifecycle", Migration0097],
   [98, "MigrateKiloToOpenCode", Migration0098],
-  [99, "ProjectSources", Migration0099],
-  [100, "OutboundMcpConnections", Migration0100],
-  [101, "ProjectPullRequestPinProviders", Migration0101],
+  [99, "InvalidateProjectionThreadsCursor", Migration0099],
+  [100, "ProjectSources", Migration0100],
+  [101, "OutboundMcpConnections", Migration0101],
+  [102, "ProjectPullRequestPinProviders", Migration0102],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
@@ -334,19 +336,19 @@ export const MIGRATION_LINEAGE_ALIASES: readonly MigrationLineageAlias[] = [
   {
     historicalId: 97,
     historicalName: "ProjectSources",
-    currentId: 99,
+    currentId: 100,
     historicalSlotRequiresRerun: true,
   },
   {
     historicalId: 98,
     historicalName: "OutboundMcpConnections",
-    currentId: 100,
+    currentId: 101,
     historicalSlotRequiresRerun: true,
   },
   {
     historicalId: 99,
     historicalName: "ProjectPullRequestPinProviders",
-    currentId: 101,
+    currentId: 102,
     historicalSlotRequiresRerun: true,
   },
   {

@@ -8,7 +8,6 @@ import {
   advanceThreadDetailResumeCursor,
   buildThreadSubscribeInput,
   clearThreadDetailResumeCursor,
-  clearThreadDetailResumeCursors,
   getThreadDetailResumeCursor,
   hasThreadDetailResumeCursor,
   resetThreadDetailResumeCursorsForTests,
@@ -56,7 +55,7 @@ describe("threadDetailResumeCursors", () => {
     expect(hasThreadDetailResumeCursor(threadOne)).toBe(false);
     expect(hasThreadDetailResumeCursor(threadTwo)).toBe(true);
 
-    clearThreadDetailResumeCursors([threadTwo]);
+    clearThreadDetailResumeCursor(threadTwo);
     expect(buildThreadSubscribeInput(threadTwo)).toEqual({ threadId: threadTwo });
   });
 });

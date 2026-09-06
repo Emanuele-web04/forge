@@ -7,6 +7,7 @@
 import {
   type ModelSelection,
   type OrchestrationThreadPullRequest,
+  type OrchestrationRegenerateThreadTitleResult,
   type ProjectId,
   type ProviderInteractionMode,
   type RuntimeMode,
@@ -14,10 +15,64 @@ import {
 } from "@synara/contracts";
 import { type DraftThreadEnvMode } from "../composerDraftStore";
 import { readNativeApi } from "../nativeApi";
+import type { Thread } from "../types";
 import { promoteThreadCreate } from "./threadCreatePromotion";
 import { newCommandId } from "./utils";
 
 type ThreadRenameOutcome = "empty" | "unchanged" | "unavailable" | "renamed";
+export type ThreadTitleRegenerationOutcome =
+  | OrchestrationRegenerateThreadTitleResult
+  | { readonly status: "unavailable"; readonly title: null };
+
+type DraftThreadRenameSource = Pick<
+  Thread,
+  | "projectId"
+  | "modelSelection"
+  | "runtimeMode"
+  | "interactionMode"
+  | "envMode"
+  | "branch"
+  | "worktreePath"
+  | "workingDirectory"
+  | "lastKnownPr"
+  | "createdAt"
+>;
+
+export function buildDraftThreadRenameCreateInput(thread: DraftThreadRenameSource) {
+  return {
+    projectId: thread.projectId,
+    modelSelection: thread.modelSelection,
+    runtimeMode: thread.runtimeMode,
+    interactionMode: thread.interactionMode,
+    envMode: thread.envMode ?? "local",
+    branch: thread.branch,
+    worktreePath: thread.worktreePath,
+    workingDirectory: thread.workingDirectory ?? null,
+    ...(thread.lastKnownPr !== undefined ? { lastKnownPr: thread.lastKnownPr } : {}),
+    createdAt: thread.createdAt,
+  } satisfies {
+    projectId: ProjectId;
+    modelSelection: ModelSelection;
+    runtimeMode: RuntimeMode;
+    interactionMode: ProviderInteractionMode;
+    envMode: DraftThreadEnvMode;
+    branch: string | null;
+    worktreePath: string | null;
+    workingDirectory: string | null;
+    lastKnownPr?: OrchestrationThreadPullRequest | null;
+    createdAt: string;
+  };
+}
+
+export async function dispatchThreadTitleRegeneration(
+  threadId: ThreadId,
+): Promise<ThreadTitleRegenerationOutcome> {
+  const api = readNativeApi();
+  if (!api) {
+    return { status: "unavailable", title: null };
+  }
+  return api.orchestration.regenerateThreadTitle({ threadId });
+}
 
 export async function dispatchThreadRename(input: {
   threadId: ThreadId;

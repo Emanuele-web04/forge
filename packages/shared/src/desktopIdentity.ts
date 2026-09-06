@@ -85,7 +85,3 @@ export function synaraDesktopIdentity(flavor: SynaraDesktopFlavor): SynaraDeskto
     usesScriptedUpdates: false,
   };
 }
-
-export function synaraBundleId(isDevelopment: boolean): string {
-  return synaraDesktopIdentity(isDevelopment ? "development" : "production").bundleId;
-}

@@ -4,7 +4,6 @@
 
 import {
   MAX_PINNED_PROJECTS,
-  type KeybindingCommand,
   type ProjectId,
   type PullRequestReviewRequestCountResult,
   type ThreadId,
@@ -325,18 +324,6 @@ export type SidebarDerivedProjectData = {
   projectStatus: ReturnType<typeof resolveProjectStatusIndicator>;
 };
 
-const THREAD_JUMP_COMMANDS = [
-  "thread.jump.1",
-  "thread.jump.2",
-  "thread.jump.3",
-  "thread.jump.4",
-  "thread.jump.5",
-  "thread.jump.6",
-  "thread.jump.7",
-  "thread.jump.8",
-  "thread.jump.9",
-] as const satisfies readonly KeybindingCommand[];
-
 export interface ThreadStatusPill {
   label:
     | "Working"
@@ -352,11 +339,7 @@ export interface ThreadStatusPill {
   dismissalKey?: string;
 }
 
-/**
- * A status that still asks something of the user or is producing output right
- * now. Surfaces that dim finished work (the Activity Done section) keep showing
- * these pills, so a thread that restarts or asks for approval stays visible.
- */
+/** A status that still requires attention or represents active output. */
 export function isUrgentThreadStatusPill(pill: ThreadStatusPill): boolean {
   return pill.label !== "Completed";
 }
@@ -1053,7 +1036,6 @@ export function getVisibleThreadsForProject<T extends Pick<SidebarThreadSummary,
     visibleThreads: threads.filter((thread) => visibleThreadIds.has(thread.id)),
   };
 }
-
 export interface SidebarThreadTreeRow<
   T extends Pick<SidebarThreadSummary, "id" | "parentThreadId">,
 > {
@@ -1315,109 +1297,6 @@ export function resolveProjectEmptyState(input: {
   return input.threadsHydrated ? "empty" : "loading";
 }
 
-// Match the exact rows the sidebar renders for one project, including folded previews.
-export function getRenderedThreadsForSidebarProject<
-  T extends Pick<SidebarThreadSummary, "id"> & SidebarThreadSortInput,
->(input: {
-  project: Pick<Project, "expanded">;
-  threads: readonly T[];
-  activeThreadId: Thread["id"] | undefined;
-  previewLimit: number;
-}): {
-  hasHiddenThreads: boolean;
-  renderedThreads: T[];
-} {
-  const { activeThreadId, previewLimit, project, threads } = input;
-  const pinnedCollapsedThread =
-    !project.expanded && activeThreadId
-      ? (threads.find((thread) => thread.id === activeThreadId) ?? null)
-      : null;
-  const { hasHiddenThreads, visibleThreads } = getVisibleThreadsForProject({
-    threads,
-    activeThreadId,
-    previewLimit,
-  });
-
-  return {
-    hasHiddenThreads,
-    renderedThreads: pinnedCollapsedThread ? [pinnedCollapsedThread] : visibleThreads,
-  };
-}
-
-// Flatten the sidebar's current project/thread visibility into the same order the user sees.
-export function getVisibleSidebarThreadIds(input: {
-  projects: readonly Pick<Project, "id" | "expanded">[];
-  threads: readonly (Pick<SidebarThreadSummary, "id" | "projectId" | "parentThreadId"> &
-    SidebarThreadSortInput)[];
-  activeThreadId: Thread["id"] | undefined;
-  threadListExtraPagesByProjectId: ReadonlyMap<Project["id"], number>;
-  previewLimit: number;
-  previewPageSize: number;
-  threadSortOrder: SidebarThreadSortOrder;
-}): Thread["id"][] {
-  const {
-    activeThreadId,
-    previewLimit,
-    previewPageSize,
-    projects,
-    threadListExtraPagesByProjectId,
-    threadSortOrder,
-    threads,
-  } = input;
-  const visibleThreadIds: Thread["id"][] = [];
-  const threadsByProjectId = new Map<ProjectId, (typeof threads)[number][]>();
-
-  for (const thread of threads) {
-    const projectThreads = threadsByProjectId.get(thread.projectId);
-    if (projectThreads) {
-      projectThreads.push(thread);
-    } else {
-      threadsByProjectId.set(thread.projectId, [thread]);
-    }
-  }
-
-  for (const project of projects) {
-    const projectThreads = sortThreadsForSidebar(
-      threadsByProjectId.get(project.id) ?? [],
-      threadSortOrder,
-    );
-    const projectThreadTree = buildProjectThreadTree({
-      threads: projectThreads,
-      forceVisibleThreadId: activeThreadId,
-    });
-    const paging = resolveSidebarThreadListPaging({
-      totalCount: projectThreadTree.length,
-      baseLimit: previewLimit,
-      pageSize: previewPageSize,
-      requestedExtraPages: threadListExtraPagesByProjectId.get(project.id) ?? 0,
-    });
-    const { visibleEntries } = getVisibleSidebarEntriesForPreview({
-      entries: projectThreadTree.map((row) => ({
-        rowId: row.thread.id,
-        rootRowId: row.rootThreadId,
-        threadId: row.thread.id,
-      })),
-      activeEntryId: activeThreadId,
-      previewLimit: paging.previewLimit,
-    });
-    const pinnedCollapsedThread =
-      !project.expanded && activeThreadId
-        ? (projectThreads.find((thread) => thread.id === activeThreadId) ?? null)
-        : null;
-
-    if (pinnedCollapsedThread) {
-      visibleThreadIds.push(pinnedCollapsedThread.id);
-      continue;
-    }
-
-    for (const entry of visibleEntries) {
-      visibleThreadIds.push(entry.threadId);
-    }
-  }
-
-  return visibleThreadIds;
-}
-
 // Resolve the next sidebar-visible thread for keyboard cycling with wraparound.
 export function getNextVisibleSidebarThreadId(input: {
   visibleThreadIds: readonly Thread["id"][];
@@ -1448,24 +1327,6 @@ export function getNextVisibleSidebarThreadId(input: {
       : (activeIndex - 1 + visibleThreadIds.length) % visibleThreadIds.length;
 
   return visibleThreadIds[nextIndex] ?? null;
-}
-
-export function getSidebarThreadIdForJumpCommand(input: {
-  visibleThreadIds: readonly Thread["id"][];
-  command: string | null;
-}): Thread["id"] | null {
-  if (!input.command) {
-    return null;
-  }
-
-  const jumpIndex = THREAD_JUMP_COMMANDS.indexOf(
-    input.command as (typeof THREAD_JUMP_COMMANDS)[number],
-  );
-  if (jumpIndex === -1) {
-    return null;
-  }
-
-  return input.visibleThreadIds[jumpIndex] ?? null;
 }
 
 export function getSidebarThreadIdsToPrewarm(input: {

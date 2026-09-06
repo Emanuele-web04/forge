@@ -300,13 +300,14 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [96, "ProjectionThreadsGoalAchievements"],
         [97, "ProjectionThreadsSidechatLifecycle"],
         [98, "MigrateKiloToOpenCode"],
-        [99, "ProjectSources"],
-        [100, "OutboundMcpConnections"],
-        [101, "ProjectPullRequestPinProviders"],
+        [99, "InvalidateProjectionThreadsCursor"],
+        [100, "ProjectSources"],
+        [101, "OutboundMcpConnections"],
+        [102, "ProjectPullRequestPinProviders"],
       ]);
 
       const tracker = yield* trackerRows(sql);
-      assert.deepStrictEqual(tracker.slice(-47), [
+      assert.deepStrictEqual(tracker.slice(-48), [
         { migration_id: 55, name: "ManagedAttachments" },
         { migration_id: 56, name: "CommandReceiptFingerprints" },
         { migration_id: 57, name: "ThreadScopedProjectionMessageIdentity" },
@@ -351,9 +352,10 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         { migration_id: 96, name: "ProjectionThreadsGoalAchievements" },
         { migration_id: 97, name: "ProjectionThreadsSidechatLifecycle" },
         { migration_id: 98, name: "MigrateKiloToOpenCode" },
-        { migration_id: 99, name: "ProjectSources" },
-        { migration_id: 100, name: "OutboundMcpConnections" },
-        { migration_id: 101, name: "ProjectPullRequestPinProviders" },
+        { migration_id: 99, name: "InvalidateProjectionThreadsCursor" },
+        { migration_id: 100, name: "ProjectSources" },
+        { migration_id: 101, name: "OutboundMcpConnections" },
+        { migration_id: 102, name: "ProjectPullRequestPinProviders" },
       ]);
       const preserved = yield* sql<{ readonly count: number }>`
         SELECT COUNT(*) AS count FROM orchestration_consumer_state
@@ -444,9 +446,10 @@ agentGatewayRetentionLegacyLayer(
           [96, "ProjectionThreadsGoalAchievements"],
           [97, "ProjectionThreadsSidechatLifecycle"],
           [98, "MigrateKiloToOpenCode"],
-          [99, "ProjectSources"],
-          [100, "OutboundMcpConnections"],
-          [101, "ProjectPullRequestPinProviders"],
+          [99, "InvalidateProjectionThreadsCursor"],
+          [100, "ProjectSources"],
+          [101, "OutboundMcpConnections"],
+          [102, "ProjectPullRequestPinProviders"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -540,14 +543,15 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [96, "ProjectionThreadsGoalAchievements"],
         [97, "ProjectionThreadsSidechatLifecycle"],
         [98, "MigrateKiloToOpenCode"],
-        [99, "ProjectSources"],
-        [100, "OutboundMcpConnections"],
-        [101, "ProjectPullRequestPinProviders"],
+        [99, "InvalidateProjectionThreadsCursor"],
+        [100, "ProjectSources"],
+        [101, "OutboundMcpConnections"],
+        [102, "ProjectPullRequestPinProviders"],
       ]);
 
       const tracker = yield* trackerRows(sql);
       assert.deepStrictEqual(
-        tracker.slice(-31).map((row) => [row.migration_id, row.name]),
+        tracker.slice(-32).map((row) => [row.migration_id, row.name]),
         [
           [71, "ProjectionThreadsGatewayProvenance"],
           [72, "AgentGatewayOperationRetention"],
@@ -577,9 +581,10 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [96, "ProjectionThreadsGoalAchievements"],
           [97, "ProjectionThreadsSidechatLifecycle"],
           [98, "MigrateKiloToOpenCode"],
-          [99, "ProjectSources"],
-          [100, "OutboundMcpConnections"],
-          [101, "ProjectPullRequestPinProviders"],
+          [99, "InvalidateProjectionThreadsCursor"],
+          [100, "ProjectSources"],
+          [101, "OutboundMcpConnections"],
+          [102, "ProjectPullRequestPinProviders"],
         ],
       );
 
@@ -668,14 +673,15 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [96, "ProjectionThreadsGoalAchievements"],
         [97, "ProjectionThreadsSidechatLifecycle"],
         [98, "MigrateKiloToOpenCode"],
-        [99, "ProjectSources"],
-        [100, "OutboundMcpConnections"],
-        [101, "ProjectPullRequestPinProviders"],
+        [99, "InvalidateProjectionThreadsCursor"],
+        [100, "ProjectSources"],
+        [101, "OutboundMcpConnections"],
+        [102, "ProjectPullRequestPinProviders"],
       ]);
 
       const tracker = yield* trackerRows(sql);
       assert.deepStrictEqual(
-        tracker.slice(-27).map((row) => [row.migration_id, row.name]),
+        tracker.slice(-28).map((row) => [row.migration_id, row.name]),
         [
           [75, "ExternalMcpActiveCapacity"],
           [76, "ExternalMcpHardening"],
@@ -701,9 +707,10 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [96, "ProjectionThreadsGoalAchievements"],
           [97, "ProjectionThreadsSidechatLifecycle"],
           [98, "MigrateKiloToOpenCode"],
-          [99, "ProjectSources"],
-          [100, "OutboundMcpConnections"],
-          [101, "ProjectPullRequestPinProviders"],
+          [99, "InvalidateProjectionThreadsCursor"],
+          [100, "ProjectSources"],
+          [101, "OutboundMcpConnections"],
+          [102, "ProjectPullRequestPinProviders"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`
@@ -861,13 +868,13 @@ projectPullRequestPinProvidersLayer("project pull request pin provider migration
   it.effect("rebuilds the exact provider-aware schema without losing legacy pins", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 100 });
+      yield* runMigrations({ toMigrationInclusive: 101 });
       yield* sql`
         INSERT INTO project_pull_request_pins (project_id, repository_key, pull_request_number)
         VALUES ('project-legacy-pin', 'owner/repo', 7)
       `;
 
-      assert.deepStrictEqual(yield* runMigrations(), [[101, "ProjectPullRequestPinProviders"]]);
+      assert.deepStrictEqual(yield* runMigrations(), [[102, "ProjectPullRequestPinProviders"]]);
       const rows = yield* sql<{
         readonly projectId: string;
         readonly provider: string;
@@ -1179,12 +1186,12 @@ bitbucketCanaryLayer("Bitbucket MCP Canary migration lineage", (it) => {
       const sql = yield* SqlClient.SqlClient;
       yield* runMigrations({ toMigrationInclusive: 96 });
       // Apply exactly the three migrations shipped by the feature build.
-      for (const id of [99, 100, 101]) {
+      for (const id of [100, 101, 102]) {
         const entry = migrationEntries.find(([migrationId]) => migrationId === id)!;
         yield* entry[2];
         yield* sql`
           INSERT INTO effect_sql_migrations (migration_id, name)
-          VALUES (${id - 2}, ${entry[1]})
+          VALUES (${id - 3}, ${entry[1]})
         `;
       }
       yield* sql`
@@ -1216,7 +1223,7 @@ bitbucketCanaryLayer("Bitbucket MCP Canary migration lineage", (it) => {
         [97, 98, 99].map((migrationId) => ({ kind: "remove", migrationId })),
       );
       const executed = yield* runMigrations();
-      assert.deepStrictEqual(executed.map(([id]) => id), [97, 98, 99, 100, 101]);
+      assert.deepStrictEqual(executed.map(([id]) => id), [97, 98, 99, 100, 101, 102]);
       assert.deepStrictEqual(yield* sql`SELECT * FROM projection_projects`, sourcesBefore);
       assert.deepStrictEqual(yield* sql`SELECT * FROM outbound_mcp_connections`, connectionsBefore);
       assert.deepStrictEqual(yield* sql`SELECT * FROM project_pull_request_pins`, pinsBefore);

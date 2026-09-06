@@ -115,7 +115,6 @@ export function countUniqueViewerReviewRequests(entries: readonly PullRequestLis
       .map(pullRequestListRepositoryIdentity),
   ).size;
 }
-
 /** Stable partition used by ungrouped tabs after an optimistic pin toggle. */
 export function orderPullRequestEntriesPinnedFirst(
   entries: readonly PullRequestListEntry[],

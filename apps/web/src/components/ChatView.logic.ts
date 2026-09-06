@@ -254,22 +254,6 @@ export function shouldEnableComposerPastedTextCollapse(input: {
   );
 }
 
-export function buildComposerMenuSelectionKey(input: {
-  menuOpen: boolean;
-  picker: string | null;
-  triggerKind: string | null;
-  triggerQuery: string;
-  items: readonly { id: string }[];
-}): string | null {
-  if (!input.menuOpen) {
-    return null;
-  }
-  const sourceKey = input.picker
-    ? `picker:${input.picker}`
-    : `trigger:${input.triggerKind ?? "none"}:${input.triggerQuery}`;
-  return `${sourceKey}\u001f${input.items.map((item) => item.id).join("\u001e")}`;
-}
-
 export function buildTranscriptAutoFollowSignal(input: {
   readonly messageCount: number;
   readonly tailKey: string;
@@ -1340,11 +1324,22 @@ export function hasServerAcknowledgedLocalDispatch(input: {
 /** Fail-open bound for the post-ack "awaiting turn start" Thinking bridge. */
 export const LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS = 60_000;
 
+/** The exact label set the transcript's working indicator can render. */
+export type WorkingLabel = "Loading" | "Thinking" | `Starting ${string}…`;
+
 export function resolveWorkingLabel(input: {
   isSendBusy: boolean;
   turnTakenOver: boolean;
-}): "Loading" | "Thinking" {
-  return input.isSendBusy && !input.turnTakenOver ? "Loading" : "Thinking";
+  isConnecting?: boolean;
+  providerName?: string;
+}): WorkingLabel {
+  if (input.isSendBusy && !input.turnTakenOver) {
+    return "Loading";
+  }
+  if (input.isConnecting && input.providerName) {
+    return `Starting ${input.providerName}…`;
+  }
+  return "Thinking";
 }
 
 /**

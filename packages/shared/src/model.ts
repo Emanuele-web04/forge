@@ -7,7 +7,6 @@ import {
   type ClaudeApiEffort,
   type ClaudeModelOptions,
   type ClaudeCodeEffort,
-  type CodexModelOptions,
   type CursorModelOptions,
   type GrokModelOptions,
   type GrokReasoningEffort,
@@ -23,7 +22,6 @@ import {
   type PiThinkingLevel,
   type ProviderKind,
   type ProviderWithDefaultModel,
-  CodexReasoningEffort,
 } from "@synara/contracts";
 
 const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> = {
@@ -245,6 +243,18 @@ export function hasAutoCompactWindowOption(caps: ModelCapabilities, value: strin
   return caps.autoCompactWindowOptions?.some((option) => option.value === value) ?? false;
 }
 
+// Claude model ids may carry a context-window qualifier, e.g. `claude-fable-5-1[1m]`.
+const CLAUDE_CONTEXT_WINDOW_SUFFIX_PATTERN = /\[([^\]]+)\]$/u;
+
+export function getClaudeContextWindowSuffix(model: string | null | undefined): string | null {
+  if (typeof model !== "string") return null;
+  return CLAUDE_CONTEXT_WINDOW_SUFFIX_PATTERN.exec(model)?.[1]?.toLowerCase() ?? null;
+}
+
+export function stripClaudeContextWindowSuffix(model: string): string {
+  return model.replace(CLAUDE_CONTEXT_WINDOW_SUFFIX_PATTERN, "");
+}
+
 export function getDefaultAutoCompactWindow(caps: ModelCapabilities): string | null {
   return caps.autoCompactWindowOptions?.find((option) => option.isDefault)?.value ?? null;
 }
@@ -308,13 +318,6 @@ export function getProviderOptionBooleanSelectionValue(
 ): boolean | undefined {
   const value = providerOptionSelectionValue(selections, id);
   return typeof value === "boolean" ? value : undefined;
-}
-
-export function getModelSelectionOptionValue(
-  modelSelection: ModelSelection | null | undefined,
-  id: string,
-): string | boolean | undefined {
-  return providerOptionSelectionValue(modelSelection?.options as ProviderOptionSelectionsInput, id);
 }
 
 export function getModelSelectionStringOptionValue(
@@ -470,43 +473,17 @@ export function getProviderOptionCurrentValue(
   return descriptor.currentValue ?? descriptor.options.find((option) => option.isDefault)?.id;
 }
 
-export function getProviderOptionCurrentLabel(
-  descriptor: ProviderOptionDescriptor | null | undefined,
-): string | undefined {
-  const value = getProviderOptionCurrentValue(descriptor);
-  if (!descriptor) {
-    return undefined;
-  }
-  if (descriptor.type === "boolean") {
-    return typeof value === "boolean" ? (value ? "On" : "Off") : undefined;
-  }
-  return typeof value === "string"
-    ? descriptor.options.find((option) => option.id === value)?.label
-    : undefined;
-}
-
-export function buildProviderOptionSelectionsFromDescriptors(
-  descriptors: ReadonlyArray<ProviderOptionDescriptor> | null | undefined,
-): ProviderOptionSelection[] | undefined {
-  if (!descriptors || descriptors.length === 0) {
-    return undefined;
-  }
-  const selections = descriptors.flatMap((descriptor) => {
-    const value = getProviderOptionCurrentValue(descriptor);
-    return typeof value === "string" || typeof value === "boolean"
-      ? [{ id: descriptor.id, value }]
-      : [];
-  });
-  return selections.length > 0 ? selections : undefined;
-}
-
 // ── Data-driven capability resolver ───────────────────────────────────
 
 export function getModelCapabilities(
   provider: ProviderKind,
   model: string | null | undefined,
 ): ModelCapabilities {
-  const slug = normalizeModelSlug(model, provider);
+  const normalizedSlug = normalizeModelSlug(model, provider);
+  const slug =
+    provider === "claudeAgent" && normalizedSlug
+      ? stripClaudeContextWindowSuffix(normalizedSlug)
+      : normalizedSlug;
   if (slug && MODEL_CAPABILITIES_INDEX[provider]?.[slug]) {
     return MODEL_CAPABILITIES_INDEX[provider][slug];
   }
@@ -580,7 +557,7 @@ export function normalizeModelSlug(
 
   const providerScopedModel =
     provider === "claudeAgent"
-      ? trimmed.replace(/\[[^\]]+\]$/u, "")
+      ? stripClaudeContextWindowSuffix(trimmed)
       : provider === "devin" && trimmed === trimmed.toLowerCase() && trimmed.endsWith("-medium")
         ? trimmed.slice(0, -"-medium".length)
         : trimmed;
@@ -589,7 +566,12 @@ export function normalizeModelSlug(
   const aliased = Object.prototype.hasOwnProperty.call(aliases, aliasKey)
     ? aliases[aliasKey]
     : undefined;
-  return typeof aliased === "string" ? aliased : (providerScopedModel as ModelSlug);
+  const normalized = typeof aliased === "string" ? aliased : providerScopedModel;
+  return (
+    provider === "claudeAgent" && getClaudeContextWindowSuffix(trimmed) === "1m"
+      ? `${normalized}[1m]`
+      : normalized
+  ) as ModelSlug;
 }
 
 export function resolveSelectableModel(
@@ -629,7 +611,11 @@ export function resolveModelSlug(
   model: string | null | undefined,
   provider: ProviderKind = "codex",
 ): ModelSlug | null {
-  const normalized = normalizeModelSlug(model, provider);
+  const normalizedModel = normalizeModelSlug(model, provider);
+  const normalized =
+    provider === "claudeAgent" && normalizedModel
+      ? (stripClaudeContextWindowSuffix(normalizedModel) as ModelSlug)
+      : normalizedModel;
   if (provider === "devin" || provider === "pi") {
     return normalized;
   }
@@ -655,21 +641,11 @@ export function trimOrNull<T extends string>(value: T | null | undefined): T | n
   return trimmed || null;
 }
 
-export function normalizeCodexModelOptions(
-  model: string | null | undefined,
-  modelOptions: CodexModelOptions | null | undefined,
-): CodexModelOptions | undefined {
-  const caps = getModelCapabilities("codex", model);
-  const defaultReasoningEffort = getDefaultEffort(caps) as CodexReasoningEffort;
-  const reasoningEffort = trimOrNull(modelOptions?.reasoningEffort) ?? defaultReasoningEffort;
-  const fastModeEnabled = modelOptions?.fastMode === true;
-  const nextOptions: CodexModelOptions = {
-    ...(reasoningEffort !== defaultReasoningEffort ? { reasoningEffort } : {}),
-    ...(fastModeEnabled ? { fastMode: true } : {}),
-  };
-  return Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
-}
-
+/**
+ * Keeps only explicit Claude option overrides. The model-native auto-compact
+ * window stays unset so Claude Code can apply server tuning, settings.json,
+ * and CLAUDE_CODE_AUTO_COMPACT_WINDOW.
+ */
 export function normalizeClaudeModelOptions(
   model: string | null | undefined,
   modelOptions: ClaudeModelOptions | null | undefined,
@@ -707,6 +683,14 @@ export function normalizeClaudeModelOptions(
 }
 
 export function resolveApiModelId(modelSelection: ModelSelection): string {
+  if (
+    modelSelection.provider === "claudeAgent" &&
+    (modelSelection.options?.autoCompactWindow ?? modelSelection.options?.contextWindow) === "1m" &&
+    hasAutoCompactWindowOption(getModelCapabilities("claudeAgent", modelSelection.model), "1m") &&
+    getClaudeContextWindowSuffix(modelSelection.model) === null
+  ) {
+    return `${modelSelection.model}[1m]`;
+  }
   return modelSelection.model;
 }
 

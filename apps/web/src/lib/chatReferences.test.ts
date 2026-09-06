@@ -11,6 +11,7 @@ import {
   computeSelectionColumns,
   computeSelectionLineRange,
   formatChatFileReference,
+  normalizeSelectionSnippet,
 } from "./chatReferences";
 
 describe("formatChatFileReference", () => {
@@ -134,6 +135,25 @@ describe("buildWhyLinesPrompt", () => {
     expect(prompt).toContain("lines 3-9");
     expect(prompt).toContain("@src/a.ts");
     expect(prompt).toContain("git blame");
+  });
+});
+
+describe("normalizeSelectionSnippet", () => {
+  it("returns the text unchanged when it is already clean", () => {
+    expect(normalizeSelectionSnippet("const a = 1;")).toBe("const a = 1;");
+  });
+
+  it("normalizes CRLF and strips blank edge lines and surrounding whitespace", () => {
+    expect(normalizeSelectionSnippet("\r\n  first\r\nsecond  \r\n\r\n")).toBe("first\nsecond");
+  });
+
+  it("keeps interior blank lines", () => {
+    expect(normalizeSelectionSnippet("first\n\nsecond")).toBe("first\n\nsecond");
+  });
+
+  it("returns null for empty or whitespace-only selections", () => {
+    expect(normalizeSelectionSnippet("")).toBeNull();
+    expect(normalizeSelectionSnippet(" \n\t\r\n ")).toBeNull();
   });
 });
 

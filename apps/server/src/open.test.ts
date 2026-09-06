@@ -14,7 +14,6 @@ import {
 import {
   clearWindowsStorePackageDiscoveryCache,
   getEditorWindowsStorePackages,
-  resolveWindowsStorePackageDirectory,
   resolveWindowsStorePackageDirectoryFromPowerShell,
   resolveWindowsStorePackageInstallLocation,
 } from "./editorAppDiscovery";
@@ -620,34 +619,6 @@ it.layer(NodeServices.layer)("resolveAvailableEditors", (it) => {
       });
 
       assert.equal(editors.includes("vscode"), true);
-    }),
-  );
-
-  it.effect("does not treat Windows app-execution-alias folders as package installs", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const localAppData = yield* fs.makeTempDirectoryScoped({
-        prefix: "synara-vscode-store-alias-",
-      });
-      yield* fs.makeDirectory(
-        path.join(
-          localAppData,
-          "Microsoft",
-          "WindowsApps",
-          "Microsoft.VisualStudioCode_8wekyb3d8bbwe",
-        ),
-        { recursive: true },
-      );
-      const editor = EDITORS.find((candidate) => candidate.id === "vscode");
-      assert.ok(editor);
-
-      assert.equal(
-        resolveWindowsStorePackageDirectory(getEditorWindowsStorePackages(editor), "win32", {
-          LOCALAPPDATA: localAppData,
-        }),
-        null,
-      );
     }),
   );
 

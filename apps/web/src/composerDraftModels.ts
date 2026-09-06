@@ -447,8 +447,6 @@ export function normalizeModelSelection(
     : hasLegacyAntigravityEffort
       ? antigravityLegacyMatch[1]!.trim()
       : rawModel;
-  const inferredClaudeAutoCompactWindow =
-    provider === "claudeAgent" && /\[1m\]$/iu.test(rawModel) ? "1m" : undefined;
   const model = normalizeModelSlug(normalizedRawModel, provider);
   if (!model) {
     return null;
@@ -464,13 +462,7 @@ export function normalizeModelSelection(
     provider === "codex"
       ? modelOptions?.codex
       : provider === "claudeAgent"
-        ? inferredClaudeAutoCompactWindow !== undefined
-          ? {
-              ...modelOptions?.claudeAgent,
-              autoCompactWindow:
-                modelOptions?.claudeAgent?.autoCompactWindow ?? inferredClaudeAutoCompactWindow,
-            }
-          : modelOptions?.claudeAgent
+        ? modelOptions?.claudeAgent
         : provider === "antigravity"
           ? modelOptions?.antigravity
           : provider === "grok"
@@ -792,28 +784,22 @@ export function resolvePreferredComposerModelSelection(input: {
   threadModelSelection: ModelSelection | null | undefined;
   projectModelSelection: ModelSelection | null | undefined;
   defaultProvider?: ProviderKind | null | undefined;
-  // Fresh bootstrap: the draft has no thread history yet, so its model state is
-  // only sticky-seeded carry-over. An explicit persisted default (or an explicit
-  // thread/project selection) must beat that stale sticky provider.
-  fresh?: boolean;
 }): ModelSelection {
+  // The draft's selection is the user's most recently used target: a fresh draft
+  // is seeded from the sticky (last-used) state, so this precedence is what
+  // makes a new chat reopen with the model and options used last time. Project
+  // and global defaults only apply when nothing has been used yet.
   const draftProviderWithSelection =
     COMPOSER_PROVIDER_KINDS.find(
       (provider) => input.draft?.modelSelectionByProvider?.[provider] !== undefined,
     ) ?? null;
-  const preferredProvider = input.fresh
-    ? (input.threadModelSelection?.provider ??
-      input.projectModelSelection?.provider ??
-      input.defaultProvider ??
-      input.draft?.activeProvider ??
-      draftProviderWithSelection ??
-      "codex")
-    : (input.draft?.activeProvider ??
-      draftProviderWithSelection ??
-      input.threadModelSelection?.provider ??
-      input.projectModelSelection?.provider ??
-      input.defaultProvider ??
-      "codex");
+  const preferredProvider =
+    input.draft?.activeProvider ??
+    draftProviderWithSelection ??
+    input.threadModelSelection?.provider ??
+    input.projectModelSelection?.provider ??
+    input.defaultProvider ??
+    "codex";
 
   const persistedSelection =
     (input.threadModelSelection?.provider === preferredProvider
@@ -825,9 +811,8 @@ export function resolvePreferredComposerModelSelection(input: {
   const draftSelection = input.draft?.modelSelectionByProvider?.[preferredProvider] ?? null;
 
   return (
-    (input.fresh
-      ? (persistedSelection ?? draftSelection)
-      : (draftSelection ?? persistedSelection)) ?? {
+    draftSelection ??
+    persistedSelection ?? {
       provider: preferredProvider === "pi" ? "codex" : preferredProvider,
       model: getDefaultModel(preferredProvider === "pi" ? "codex" : preferredProvider),
     }

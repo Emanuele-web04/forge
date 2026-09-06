@@ -14,8 +14,11 @@ import type { DraftThreadEnvMode } from "../composerDraftDomain";
 import { findProviderStatus, resolveAvailableProviderPreference } from "./providerAvailability";
 import { resolveProviderDiscoveryCwd } from "./providerDiscovery";
 import {
+  prioritizeProviderModelDiscovery,
   providerAgentsQueryOptions,
   providerComposerCapabilitiesQueryOptions,
+  providerDiscoveryQueryKeys,
+  providerModelDiscoveryRetry,
   providerModelsQueryOptions,
 } from "./providerDiscoveryReactQuery";
 
@@ -114,8 +117,9 @@ export function providerModelsPrefetchQueryOptions(input: {
   provider: ProviderKind;
   settings: ProviderModelPrefetchSettings;
   cwd?: string | null;
+  priority?: "background" | "prefetch" | undefined;
 }) {
-  const { provider, settings } = input;
+  const { priority, provider, settings } = input;
   const cwd = input.cwd ?? null;
 
   switch (provider) {
@@ -123,43 +127,50 @@ export function providerModelsPrefetchQueryOptions(input: {
       return providerModelsQueryOptions({
         provider: "claudeAgent",
         binaryPath: settings.claudeBinaryPath || null,
+        priority,
       });
     case "codex":
-      return providerModelsQueryOptions({ provider: "codex" });
+      return providerModelsQueryOptions({ provider: "codex", priority });
     case "cursor":
       return providerModelsQueryOptions({
         provider: "cursor",
         binaryPath: settings.cursorBinaryPath || null,
         apiEndpoint: settings.cursorApiEndpoint || null,
+        priority,
       });
     case "devin":
       return providerModelsQueryOptions({
         provider: "devin",
         binaryPath: settings.devinBinaryPath || null,
         cwd,
+        priority,
       });
     case "antigravity":
       return providerModelsQueryOptions({
         provider: "antigravity",
         binaryPath: settings.antigravityBinaryPath || null,
         cwd,
+        priority,
       });
     case "grok":
       return providerModelsQueryOptions({
         provider: "grok",
         binaryPath: settings.grokBinaryPath || null,
+        priority,
       });
     case "droid":
       return providerModelsQueryOptions({
         provider: "droid",
         binaryPath: settings.droidBinaryPath || null,
         cwd,
+        priority,
       });
     case "opencode":
       return providerModelsQueryOptions({
         provider: "opencode",
         binaryPath: settings.openCodeBinaryPath || null,
         cwd,
+        priority,
       });
     case "pi":
       return providerModelsQueryOptions({
@@ -167,6 +178,7 @@ export function providerModelsPrefetchQueryOptions(input: {
         binaryPath: settings.piBinaryPath || null,
         agentDir: settings.piAgentDir || null,
         cwd,
+        priority,
       });
   }
 }
@@ -201,6 +213,7 @@ export function prefetchProviderModelsForNewThread(
     settings: ProviderModelPrefetchSettings;
     cwd?: string | null;
     providers?: ReadonlyArray<ProviderKind>;
+    foregroundProvider?: ProviderKind;
   },
 ): void {
   const cwd = input.cwd ?? null;
@@ -213,11 +226,18 @@ export function prefetchProviderModelsForNewThread(
       provider,
       settings: input.settings,
       cwd,
+      priority: provider === (input.foregroundProvider ?? providers[0]) ? "prefetch" : "background",
     });
     void queryClient.prefetchQuery({
       ...modelsOptions,
-      retry: 0,
-      staleTime: NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS,
+      retry:
+        provider === "codex" || provider === "claudeAgent"
+          ? 0
+          : providerModelDiscoveryRetry(provider),
+      staleTime:
+        provider === "devin"
+          ? (query) => (query.state.data?.error ? 0 : NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS)
+          : NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS,
       gcTime: NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS,
     });
 
@@ -266,8 +286,8 @@ export function prefetchDroidModelsForNewThread(
       provider: "droid",
       settings: input.settings,
       cwd,
+      priority: "prefetch",
     }),
-    retry: 0,
     staleTime: NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS,
     gcTime: NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS,
   });
@@ -374,14 +394,54 @@ export function prefetchModelsForNewThread(
     selectedProvider === "droid" || !isProviderWarmable(selectedProvider)
       ? providers
       : [selectedProvider, ...providers.filter((provider) => provider !== selectedProvider)];
+  const shouldWarmSelectedDroid =
+    input.includeDroid === true && selectedProvider === "droid" && isProviderWarmable("droid");
+  const desiredModelQueryKeys = orderedProviders.map(
+    (provider) =>
+      providerModelsPrefetchQueryOptions({
+        provider,
+        settings: input.settings,
+        cwd,
+      }).queryKey,
+  );
+  if (shouldWarmSelectedDroid) {
+    desiredModelQueryKeys.push(
+      providerModelsPrefetchQueryOptions({
+        provider: "droid",
+        settings: input.settings,
+        cwd,
+      }).queryKey,
+    );
+  }
+  const selectedModelQueryKey = desiredModelQueryKeys.find(
+    (queryKey) => queryKey[2] === selectedProvider,
+  );
+  if (selectedModelQueryKey) {
+    prioritizeProviderModelDiscovery(selectedModelQueryKey, "prefetch");
+  }
 
+  // Hovering another project supersedes only inactive model prefetches. Active
+  // composer queries and exact-key prefetches keep running. Include both
+  // fetching and offline-paused queries so stale hover work cannot revive on
+  // reconnect and consume native admission.
+  void queryClient.cancelQueries({
+    queryKey: providerDiscoveryQueryKeys.modelsAll,
+    type: "inactive",
+    predicate: (query) =>
+      !desiredModelQueryKeys.some(
+        (queryKey) =>
+          query.queryKey.length === queryKey.length &&
+          query.queryKey.every((value, index) => Object.is(value, queryKey[index])),
+      ),
+  });
+
+  if (shouldWarmSelectedDroid) {
+    prefetchDroidModelsForNewThread(queryClient, { settings: input.settings, cwd });
+  }
   prefetchProviderModelsForNewThread(queryClient, {
     settings: input.settings,
     cwd,
     providers: orderedProviders,
+    foregroundProvider: selectedProvider,
   });
-
-  if (input.includeDroid === true && selectedProvider === "droid" && isProviderWarmable("droid")) {
-    prefetchDroidModelsForNewThread(queryClient, { settings: input.settings, cwd });
-  }
 }

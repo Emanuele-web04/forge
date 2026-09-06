@@ -1,4 +1,5 @@
 import type { OrchestrationMessage, OrchestrationThread } from "@synara/contracts";
+import { unicodeSafeEndOffset } from "@synara/shared/text";
 
 const RECENT_MESSAGE_COUNT = 6;
 const EARLIER_MESSAGE_CHAR_LIMIT = 320;
@@ -18,7 +19,9 @@ function truncateText(value: string, maxChars: number): string {
   if (value.length <= maxChars) {
     return value;
   }
-  return `${value.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
+  const requestedEndOffset = Math.max(0, maxChars - 3);
+  const endOffset = unicodeSafeEndOffset(value, requestedEndOffset);
+  return `${value.slice(0, endOffset).trimEnd()}...`;
 }
 
 function roleLabel(message: Pick<OrchestrationMessage, "role">): "User" | "Assistant" {
@@ -98,7 +101,7 @@ export function listPriorTranscriptMessages(
     return (
       (message.role === "user" || message.role === "assistant") &&
       message.streaming === false &&
-      normalizeMessageText(message.text).length > 0
+      message.text.trim().length > 0
     );
   });
 }

@@ -1091,6 +1091,83 @@ describe("CheckpointReactor", () => {
     ).toBe(true);
   });
 
+  it("does not report a missing baseline when the turn itself initializes the git repository", async () => {
+    // A scaffolding turn starts in a plain folder and runs `git init` mid-turn.
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "synara-checkpoint-plain-"));
+    tempDirs.push(workspace);
+    const harness = await createHarness({
+      seedFilesystemCheckpoints: false,
+      providerName: "claudeAgent",
+      projectWorkspaceRoot: workspace,
+      threadWorktreePath: workspace,
+      providerSessionCwd: workspace,
+    });
+    const createdAt = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-set-repo-init-mid-turn"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "ready",
+          providerName: "claudeAgent",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+
+    harness.provider.emit({
+      type: "turn.started",
+      eventId: EventId.makeUnsafe("evt-turn-started-repo-init"),
+      provider: "claudeAgent",
+      createdAt: new Date().toISOString(),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      turnId: asTurnId("turn-repo-init"),
+    });
+    await harness.drain();
+    expect(fs.existsSync(path.join(workspace, ".git"))).toBe(false);
+
+    runGit(workspace, ["init", "--initial-branch=main"]);
+    runGit(workspace, ["config", "user.email", "test@example.com"]);
+    runGit(workspace, ["config", "user.name", "Test User"]);
+    fs.writeFileSync(path.join(workspace, "package.json"), "{}\n", "utf8");
+    runGit(workspace, ["add", "."]);
+    runGit(workspace, ["commit", "-m", "Initial"]);
+
+    harness.provider.emit({
+      type: "turn.completed",
+      eventId: EventId.makeUnsafe("evt-turn-completed-repo-init"),
+      provider: "claudeAgent",
+      createdAt: new Date().toISOString(),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      turnId: asTurnId("turn-repo-init"),
+      payload: { state: "completed" },
+    });
+
+    await waitForEvent(harness.engine, (event) => event.type === "thread.turn-diff-completed");
+    const thread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.checkpoints.length === 1 &&
+        entry.activities.some((activity) => activity.kind === "checkpoint.captured"),
+    );
+
+    expect(thread.checkpoints[0]?.checkpointTurnCount).toBe(1);
+    expect(thread.checkpoints[0]?.status).toBe("missing");
+    expect(
+      gitRefExists(workspace, checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 1)),
+    ).toBe(true);
+    expect(
+      thread.activities.some((activity) => activity.kind === "checkpoint.capture.failed"),
+    ).toBe(false);
+  });
+
   it("derives a live turn-diff placeholder from git for claude file edits mid-turn", async () => {
     const harness = await createHarness({
       seedFilesystemCheckpoints: false,

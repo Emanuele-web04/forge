@@ -551,6 +551,7 @@ export function createWsNativeApi(): NativeApi {
         options?.signal
           ? transport.request(WS_METHODS.projectsReadFile, input, { signal: options.signal })
           : transport.request(WS_METHODS.projectsReadFile, input),
+      onFileChange: (input, callback) => transport.subscribeProjectFileChange(input, callback),
       resolveWorkspaceFileReferences: (input) =>
         transport.request(WS_METHODS.projectsResolveWorkspaceFileReferences, input),
       resolveOutOfRootFileReference: (input) =>
@@ -796,6 +797,10 @@ export function createWsNativeApi(): NativeApi {
         });
       },
       importThread: (input) => transport.request(ORCHESTRATION_WS_METHODS.importThread, input),
+      regenerateThreadTitle: (input) =>
+        transport.request(ORCHESTRATION_WS_METHODS.regenerateThreadTitle, input, {
+          timeoutMs: null,
+        }),
       repairState: () => transport.request(ORCHESTRATION_WS_METHODS.repairState),
       getTurnDiff: (input) => transport.request(ORCHESTRATION_WS_METHODS.getTurnDiff, input),
       getFullThreadDiff: (input) =>

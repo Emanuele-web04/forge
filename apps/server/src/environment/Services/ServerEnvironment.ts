@@ -1,8 +1,7 @@
-import type { EnvironmentId, ExecutionEnvironmentDescriptor } from "@synara/contracts";
+import type { ExecutionEnvironmentDescriptor } from "@synara/contracts";
 import { Effect, ServiceMap } from "effect";
 
 export interface ServerEnvironmentShape {
-  readonly getEnvironmentId: Effect.Effect<EnvironmentId>;
   readonly getDescriptor: Effect.Effect<ExecutionEnvironmentDescriptor>;
 }
 

@@ -1,7 +1,7 @@
 // FILE: focusedChatContext.ts
 // Purpose: Resolves the currently focused chat context across single and split chat surfaces.
 // Layer: Route-aware UI helpers
-// Exports: pure resolver and hook used by shortcut, discovery, and thread creation flows
+// Exports: hook used by shortcut, discovery, and thread creation flows
 
 import { ThreadId, type ThreadId as ThreadIdType } from "@synara/contracts";
 import { useMemo } from "react";
@@ -26,43 +26,6 @@ export interface FocusedChatContext {
   activeDraftThread: DraftThreadState | null;
   activeProject: Project | null;
   activeProjectId: Project["id"] | null;
-}
-
-export function resolveFocusedChatContext(input: {
-  routeThreadId: ThreadIdType | null;
-  splitView: SplitView | null;
-  threads: readonly Thread[];
-  projects: readonly Project[];
-  draftThreadsByThreadId: Record<string, DraftThreadState | undefined>;
-}): FocusedChatContext {
-  const focusedThreadId = input.splitView
-    ? resolveSplitViewFocusedPaneThreadId(input.splitView)
-    : input.routeThreadId;
-  const activeThread =
-    focusedThreadId !== null
-      ? (input.threads.find((thread) => thread.id === focusedThreadId) ?? null)
-      : null;
-  const activeDraftThread =
-    focusedThreadId !== null ? (input.draftThreadsByThreadId[focusedThreadId] ?? null) : null;
-  const activeProjectId =
-    activeDraftThread?.projectId ??
-    activeThread?.projectId ??
-    input.splitView?.ownerProjectId ??
-    null;
-  const activeProject =
-    activeProjectId !== null
-      ? (input.projects.find((project) => project.id === activeProjectId) ?? null)
-      : null;
-
-  return {
-    routeThreadId: input.routeThreadId,
-    splitView: input.splitView,
-    focusedThreadId,
-    activeThread,
-    activeDraftThread,
-    activeProject,
-    activeProjectId,
-  };
 }
 
 export function useFocusedChatContext(): FocusedChatContext {

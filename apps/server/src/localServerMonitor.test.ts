@@ -12,7 +12,7 @@ import {
   extractLocalServerPageTitle,
   isExcludedFromFullScan,
   isIgnoredLocalServerProcess,
-  isLikelyDevServerProcess,
+  detectDevServerKindFromText,
   parseProcessInfo,
   parseLsofCwdOutput,
   parseLsofTcpListenOutput,
@@ -91,12 +91,12 @@ describe("localServerMonitor", () => {
 
   it("keeps dev servers and ignores Electron/Synara-style application listeners", () => {
     expect(
-      isLikelyDevServerProcess({
+      detectDevServerKindFromText({
         command: "node",
         args: "node ./node_modules/.bin/vite --host 127.0.0.1",
         ports: [5173],
       }),
-    ).toBe(true);
+    ).toBe("Vite");
     expect(
       isIgnoredLocalServerProcess({
         command: "Electron",
@@ -112,19 +112,19 @@ describe("localServerMonitor", () => {
       }),
     ).toBe(true);
     expect(
-      isLikelyDevServerProcess({
+      detectDevServerKindFromText({
         command: "node",
         args: "node /Users/emanueledipietro/Developer/synara/apps/web/node_modules/.bin/vite",
         ports: [5733],
       }),
-    ).toBe(true);
+    ).toBe("Vite");
     expect(
-      isLikelyDevServerProcess({
+      detectDevServerKindFromText({
         command: "bun",
         args: "bun run electron:dev",
         ports: [5733],
       }),
-    ).toBe(true);
+    ).toBe("Dev Server");
   });
 
   it("ignores Chromium/Electron app helpers that hold a dev-range port (e.g. Discord on :6463)", () => {
@@ -134,7 +134,6 @@ describe("localServerMonitor", () => {
       ports: [6463],
     };
     expect(isIgnoredLocalServerProcess(discordRenderer)).toBe(true);
-    expect(isLikelyDevServerProcess(discordRenderer)).toBe(false);
 
     // Filtered by the helper name alone, even without the full Chromium arg list.
     expect(
@@ -147,29 +146,29 @@ describe("localServerMonitor", () => {
 
     // A real dev server on the same port range stays visible.
     expect(
-      isLikelyDevServerProcess({
+      detectDevServerKindFromText({
         command: "node",
         args: "node ./node_modules/.bin/vite --port 6006",
         ports: [6006],
       }),
-    ).toBe(true);
+    ).toBe("Vite");
   });
 
   it("does not promote databases or port-only listeners to local dev servers", () => {
     expect(
-      isLikelyDevServerProcess({
+      detectDevServerKindFromText({
         command: "mongod",
         args: "mongod --config /opt/homebrew/etc/mongod.conf",
         ports: [27017],
       }),
-    ).toBe(false);
+    ).toBe(null);
     expect(
-      isLikelyDevServerProcess({
+      detectDevServerKindFromText({
         command: "go",
         args: "go run ./cmd/web",
         ports: [8080],
       }),
-    ).toBe(true);
+    ).toBe("Go");
 
     const processInfo = new Map<number, LocalServerProcessInfo>([
       [123, { ppid: 1, commandLine: "node server.js" }],

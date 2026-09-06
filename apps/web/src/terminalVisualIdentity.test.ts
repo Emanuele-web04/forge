@@ -6,7 +6,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   resolveTerminalVisualIdentityMap,
-  resolveTerminalVisualState,
   selectRepresentativeTerminalVisualIdentity,
 } from "./terminalVisualIdentity";
 
@@ -94,13 +93,16 @@ describe("terminal visual identity", () => {
     });
   });
 
-  it("keeps attention ahead of running when resolving a single terminal state", () => {
+  it("keeps attention ahead of running in the terminal identity map", () => {
     expect(
-      resolveTerminalVisualState({
+      resolveTerminalVisualIdentityMap({
+        terminalIds: ["terminal-1"],
         runningTerminalIds: ["terminal-1"],
         terminalAttentionStatesById: { "terminal-1": "attention" },
-        terminalId: "terminal-1",
-      }),
+        terminalCliKindsById: {},
+        terminalLabelsById: {},
+        terminalTitleOverridesById: {},
+      }).get("terminal-1")?.state,
     ).toBe("attention");
   });
 });
