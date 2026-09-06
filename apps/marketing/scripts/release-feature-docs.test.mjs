@@ -107,3 +107,13 @@ test("v0.8.2 documents rename, simulator opt-out, and Claude automatic compactio
   assert.ok(claude.includes("Auto (Claude Code)"));
   assert.ok(claude.includes("returning to Auto clears that override"));
 });
+
+test("v0.8.3 documents packaged dependency recovery and persistent diff layout", () => {
+  const providers = read("content/docs/troubleshooting/providers.mdx");
+  const organize = read("content/docs/features/organize.mdx");
+  assert.ok(providers.includes("Cannot find package 'zod'"));
+  assert.ok(providers.includes("0.8.3 or later"));
+  assert.ok(providers.includes("does not repair the app bundle"));
+  assert.ok(organize.includes("**Split diff** or **Stacked diff**"));
+  assert.ok(organize.includes("after an app restart"));
+});

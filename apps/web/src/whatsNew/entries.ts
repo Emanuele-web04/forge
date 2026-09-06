@@ -22,6 +22,28 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.8.3",
+    date: "Sep 6",
+    features: [
+      {
+        id: "packaged-provider-fix",
+        title: "Fix provider startup after the 0.8.2 update",
+        description:
+          "The desktop app now includes the missing dependency that could prevent ACP providers from starting.",
+        details:
+          "Fixes the Cannot find package 'zod' error in the packaged app. Release verification now loads provider SDKs and other lazy runtime dependencies from the packaged application before publication.",
+      },
+      {
+        id: "remember-diff-layout",
+        title: "Remember your preferred diff layout",
+        description:
+          "Your Split or Stacked diff choice stays selected when you close and reopen the panel.",
+        details:
+          "The diff layout is saved locally and restored across panel remounts and app restarts. Split remains the default when no preference has been saved.",
+      },
+    ],
+  },
+  {
     version: "0.8.2",
     date: "Sep 6",
     features: [

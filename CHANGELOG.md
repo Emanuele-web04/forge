@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.8.3 - 2026-09-06
+
+Hotfix for the missing packaged dependency reported immediately after 0.8.2.
+
+### Added
+
+- Added a packaged runtime dependency smoke check before release startup verification and artifact upload.
+
+### Changed
+
+- Remember the selected Split or Stacked diff layout across panel remounts and app restarts.
+- Build the server as ESM only; remove the unused CommonJS output that could not load import-only dependencies.
+
+### Fixed
+
+- Ship zod as a production dependency, fixing the packaged app's Cannot find package 'zod' error when loading the ACP SDK.
+
+### Verification
+
+- Validated with Node 24.13.1 and Bun 1.4.2; frozen-lockfile installation passed.
+- `bun run fmt:check`, `bun run lint`, `bun run typecheck`, and `bun run release:smoke` passed. Lint reported 520 warnings and no errors; all seven workspaces passed typechecking.
+- `bun run build` passed all five tasks. Existing large-chunk and marketing build-output cache warnings remain.
+- `bun run test` passed all eight tasks: 903 test files and 10,530 tests passed, with 11 files and 30 tests skipped. No failing tests or targeted reruns were needed.
+- Focused packaged-runtime regression checks verified missing zod fails and the repaired archive passes using the installed macOS Electron runtime; the diff-layout browser regression also passed.
+- Both documentation copies passed 53 documentation tests and lint; the public website build passed. Documented packaged dependency recovery and persistent diff layout.
+
 ## 0.8.2 - 2026-09-06
 
 This release includes 43 commits since v0.8.1, covering measured performance improvements, model discovery, provider recovery, file previews, and everyday task controls.
