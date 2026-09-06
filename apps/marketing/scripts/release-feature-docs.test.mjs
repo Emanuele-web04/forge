@@ -95,3 +95,15 @@ test("v0.7.3 durable workflows are documented and connected", () => {
   assert.ok(worktrees.includes("wsl.exe"));
   assert.ok(worktrees.includes("\\\\wsl.localhost"));
 });
+
+test("v0.8.2 documents rename, simulator opt-out, and Claude automatic compaction", () => {
+  const commands = read("content/docs/reference/slash-commands.mdx");
+  const simulator = read("content/docs/features/ios-simulator.mdx");
+  const claude = read("content/docs/providers/claude-code.mdx");
+  assert.ok(commands.includes("/rename <title>"));
+  assert.ok(commands.includes("keeps the newer title"));
+  assert.ok(simulator.includes("Automatically open simulator"));
+  assert.ok(simulator.includes("open the pane manually"));
+  assert.ok(claude.includes("Auto (Claude Code)"));
+  assert.ok(claude.includes("returning to Auto clears that override"));
+});

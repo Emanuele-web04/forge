@@ -131,6 +131,10 @@ brew upgrade --cask devin-cli
 
 Restart Synara after updating, especially when the ACP command set, authentication, models, or session configuration changed.
 
+## Stale sessions and recovery
+
+Synara attempts recovery before dispatching a prompt to a stale Devin session. It can also restart a child runtime detected as wedged rather than leaving the turn waiting for the ordinary idle timeout. Recovery is distinct from intentionally pausing a goal or interrupting a task; inspect the resulting task state before repeating work with external side effects.
+
 ## Troubleshooting
 
 ### Devin is not detected

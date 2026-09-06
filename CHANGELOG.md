@@ -1,5 +1,104 @@
 # Changelog
 
+## 0.8.2 - 2026-09-06
+
+This release includes 43 commits since v0.8.1, covering measured performance improvements, model discovery, provider recovery, file previews, and everyday task controls.
+
+### Added
+
+- Added app-owned `/rename <title>` for a direct title change and bare `/rename` for conversation-based title generation. Empty drafts need a message before generation; newer title changes win over stale generated results.
+- Added **Add to chat** for selections in rendered Markdown previews.
+- Added **Automatically open simulator** so users can keep working in Simulator.app without automatically reopening Synara's mirrored pane. Manual opening remains available.
+- Added startup phase-duration diagnostics and benchmark fixtures with raw measurements for streaming, file sorting, tool output, browser diagnostics, and native typechecking.
+
+### Changed
+
+- Stabilized Markdown render components so unchanged code blocks keep their DOM, soft-wrap state, and highlighting lifecycle during streaming. The automation dialog subscribes to other transcripts only while open, and the branch toolbar uses the focused usage selector.
+- Coalesced streaming deltas while preserving message, completion, structural-event, and project boundaries. Running-thread synchronization and animation timing avoid redundant work without changing animation appearance.
+- Replaced repeated locale-option setup with a lazy shared natural-order collator for diff lists and trees.
+- Consolidated tool-output suffix parsing to avoid pathological whitespace backtracking, and count read-summary lines without allocating split arrays.
+- Bounded browser diagnostics with one-pass exact JSON byte accounting instead of repeatedly serializing and discarding old entries.
+- Selected prior transcript messages without normalizing each body, preserving original text and object identity.
+- Wake queued turn work when a blocking claim settles instead of waiting only for the polling interval.
+- Cache provider model discovery per project/runtime, deduplicate concurrent requests, bound discovery time and retry cooldowns, prioritize the selected provider, and surface degraded or failed discovery.
+- Updated Pi model discovery for native OpenRouter authentication and OpenCode Zen protocols/capabilities, and upgraded its SDK for GLM 5.3 Flash and GPT-6 Astra.
+- Made Claude compaction **Auto (Claude Code)** by default, separate from explicit 200k and 1M overrides. Auto leaves window resolution to Claude Code; explicit overrides remain pinned. SDK summary context usage avoids per-turn token-count requests, and gateway metadata exposes Claude context windows.
+- Reduced shared harness and browser-tool schema overhead while retaining tool-specific guidance and accepted inputs.
+- Restore the last-used model and options in new chats, and persist sidebar project expansion state, including legacy project aliases.
+- Filter routine Codex startup noise while preserving actual errors, use a dedicated compaction icon, and soften chat card seams.
+- Import the public website into `apps/marketing` with Cloudflare Workers preparation, and stop its redundant theme-class MutationObserver feedback loop.
+- Upgrade the pinned Bun toolchain to 1.4.2 and make TypeScript 7 the default seven-workspace checker. Keep `typecheck:legacy` for the documented Effect diagnostic gap and compiler comparisons.
+- Split CI into static, unit, browser, and build lanes; shard unit/browser tests, cache installs, and add a documentation-only fast path. Correct PR-size label synchronization ordering.
+- Remove confirmed unused code and consolidate shared logic while retaining independent regression coverage.
+- Bump server, desktop, web, contracts, and lockfile workspace versions to 0.8.2.
+
+### Measured performance
+
+These are recorded before/after experiments for the merged changes, not a new v0.8.1-versus-v0.8.2 end-to-end benchmark. The reports include workloads, controls, raw samples, and limits.
+
+**Concurrent streaming component benchmark** — Apple M5, 32 GiB RAM, production Vite/Chromium build, one visible fenced-code message, 200 settled messages per task, 36 alternating samples across variants/workloads. Each sample used six seconds of synthetic input plus settling; providers, transport, sidebar, and Electron integration were excluded.
+
+| Metric                     | Five streams: before → after        | Ten streams: before → after         |
+| -------------------------- | ----------------------------------- | ----------------------------------- |
+| Total Chromium CPU time    | 3.597 → 2.858 s (20.5% lower)       | 3.440 → 3.136 s (8.8% lower)        |
+| Renderer CPU time          | 3.196 → 2.187 s (31.6% lower)       | 3.048 → 2.417 s (20.7% lower)       |
+| Frame-interval p95         | 25.0 → 9.6 ms                       | 25.0 → 9.7 ms                       |
+| Renderer RSS at sample end | 428.516 → 352.828 MiB (17.7% lower) | 435.562 → 350.891 MiB (19.4% lower) |
+
+- Unchanged code-block remounts fell from 60 to zero; the closed automation hook fell from 120 renders to zero during 60 hidden-thread flushes.
+- End-of-sample RSS is not peak RAM or evidence of a fixed leak. Hidden-stream RSS changed by under 0.5%, and browser-process CPU increased in the visible case even while total Chromium CPU decreased. These results do not establish whole-app, real-provider, hardware GPU, or energy savings.
+- Evidence: [concurrent-thread report](docs/performance/2026-09-05-concurrent-threads/report.md).
+
+**Isolated production-function benchmarks** — three fresh processes per variant, warmups, alternating order, matching output hashes, Apple M5, Node 24.13.0 and Bun 1.3.12:
+
+| Operation                                         |       Before |     After | Reduction |
+| ------------------------------------------------- | -----------: | --------: | --------: |
+| Sort 2,048 diff paths                             |    36.452 ms |  2.593 ms |     92.9% |
+| Build a 2,048-path tree                           |    18.889 ms |  1.912 ms |     89.9% |
+| Derive a normal 24 KB multiline work log          |     0.742 ms |  0.460 ms |     38.0% |
+| Derive an adversarial whitespace-heavy work log   | 2,287.290 ms | 0.0527 ms |   >99.99% |
+| Count a 2,000-line read summary                   |    0.0355 ms | 0.0149 ms |     57.9% |
+| Read 200 browser logs with large URLs             |    80.060 ms |  0.964 ms |     98.8% |
+| Select prior messages from 2,000 × 2 KiB messages |     1.833 ms | 0.0195 ms |     98.9% |
+
+- Large diagnostic reads returned the same 40 entries and 326,893-byte payload. Ordinary small diagnostic reads and the unchanged transcript control were within noise and are not counted as wins.
+- The isolated website theme probe reduced 427–430 observer callbacks per 1.1 seconds to zero across light/dark/system behavior; this is not a full-site CPU or first-paint measurement.
+- Evidence: [operation report](docs/performance/2026-09-06/report.md).
+
+**Developer checks** — seven workspaces, Bun 1.4.2, three alternating samples per command/cache state, Turbo result caching disabled:
+
+- Cold compiler-cache median: 56.339 → 12.528 seconds, 77.8% lower (4.50×).
+- Unchanged incremental median: 12.451 → 3.170 seconds, 74.5% lower (3.93×).
+- These compare legacy and native typechecking, not app runtime. The native checker has a verified Effect `importFromBarrel` diagnostic gap, so the timings do not imply equivalent diagnostic coverage.
+- Evidence: [native-typecheck qualification](docs/performance/2026-09-06/native-typecheck.md).
+
+### Fixed
+
+- Preserve user scroll ownership during streaming; tool-only activity, buffering, and reconnects do not count as live assistant text.
+- Avoid the empty-home flash while the first message is being dispatched; keep provider status and turn durations truthful and stable.
+- Keep read tasks from reappearing as unread after restart, and restore orchestrator approval cards.
+- Revalidate open text, image, PDF, and diff views after file changes without overwriting dirty text edits.
+- Prevent background simulator events from stealing focus, preserve task ownership and deferred requests, and respect manual pane closure.
+- Recover stale Devin sessions before prompt dispatch and restart wedged child runtimes instead of waiting for the full idle budget.
+- Correct Pi/OpenCode agent-gateway tool schemas and provider-event whitespace sanitization.
+- Preserve Unicode character boundaries in handoff bootstrap text, and deduplicate stale-recovery refinements.
+- Read Factory Droid usage from available Factory credentials, including supported secure storage.
+- Fix native Windows Cursor/Devin detection, hide Effect child-process windows, and accept PID zero in process snapshots.
+- Back off repeated failing Git remote refreshes and reset the failure count after success.
+- Avoid false checkpoint-baseline failure when a task starts in a plain directory and initializes Git during the turn; an absent historical baseline remains absent.
+- Fix the KeybindingsToast cold-shard test race and Antigravity adapter teardown race.
+
+### Verification
+
+- Verified with Node 24.13.1 and Bun 1.4.2; frozen-lockfile installation passed. The release lockfile changes only the four workspace versions.
+- `bun run fmt:check` passed; `bun run lint` passed with 520 warnings and no errors.
+- `bun run typecheck` and the additional `bun run typecheck:legacy` both passed all seven workspaces.
+- `bun run release:smoke` passed.
+- The first `bun run build` failed during Next prerendering with `Expected workStore to be initialized`; after dependency installation settled, the full rerun passed all five tasks in 1m54.184s. No application code change was needed. Existing large-chunk and Browserslist advisories remain.
+- Full `bun run test` passed all eight Turbo tasks in 6m7.704s: 903 test files and 10,528 tests passed; 11 files and 30 tests were skipped. No targeted test rerun was needed.
+- Public documentation was audited against all 43 source commits and updated in both website copies. Both copies passed documentation checks (52 tests plus integrity validation), lint, and build. The first external-site build exposed a release-copy syntax error, which was corrected before the successful rerun. Stale local Astro/OpenNext generated artifacts were moved out of the monorepo website before its lint pass.
+- The compiled website changelog was checked in the browser, and release versions plus the in-app/monorepo website highlights were verified to match.
+
 ## 0.8.1 - 2026-09-02
 
 ### Added

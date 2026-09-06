@@ -121,6 +121,12 @@ claude update
 
 Restart Synara after replacing the executable.
 
+## Automatic compaction and explicit windows
+
+The compaction picker defaults to **Auto (Claude Code)**. In this mode Synara leaves the window unpinned so Claude Code can resolve its own model, account, settings, and environment behavior. Choose **200k** or **1M** when you want an explicit override; returning to Auto clears that override. A displayed model context capacity and an automatic compaction threshold are different values.
+
+Context usage comes from the SDK summary when available, and a live model change refreshes the effective context metadata. An explicit window selection does not grant an account additional model access.
+
 ## Troubleshooting
 
 ### Claude is not detected
