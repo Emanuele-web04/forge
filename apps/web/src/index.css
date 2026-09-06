@@ -148,11 +148,11 @@
     /* The outer seam reads stronger than --color-border (and NOT the more-transparent
        --app-surface-divider used by the internal hairlines/splits): the route's outer
        edge against the sidebar should read as solid. Do not re-unify these. */
-    --seam-line: --alpha(var(--color-black) / 7%);
+    --seam-line: --alpha(var(--color-black) / 4%);
   }
 
   .dark .chat-content-card {
-    --seam-line: --alpha(var(--color-white) / 5%);
+    --seam-line: --alpha(var(--color-white) / 3%);
   }
 
   [data-sidebar-side="left"] .chat-content-card {
