@@ -1,11 +1,17 @@
-# Opt-in native typechecking
+# Native typechecking qualification
 
 ## Decision
 
-Keep `bun run typecheck` as the required legacy gate. Add
-`bun run typecheck:native` for faster development feedback, not as a CI
-replacement. The native checker visits the same source files and catches the
-tested TypeScript errors, but does not preserve every Effect diagnostic.
+The initial qualification introduced `bun run typecheck:native` as an opt-in
+command. Following the maintainer's decision to adopt it, `bun run typecheck`
+now uses TypeScript 7 in all seven workspaces and CI. `typecheck:native` is an
+alias; `typecheck:legacy` retains the previous checker for explicit comparisons.
+Build tools that use the JavaScript compiler API remain on TypeScript 5.
+
+The measurements below describe the original qualification, before promotion.
+The native checker visits the same source files and catches the tested
+TypeScript errors, but does not preserve every Effect diagnostic. Promotion
+accepts that known difference; it does not establish diagnostic equivalence.
 
 In a controlled mutation, `import { NodeRuntime } from
 "@effect/platform-node"` fails the legacy checker with `effect(importFromBarrel)`
@@ -87,6 +93,30 @@ CI, lint suite, or broad application test suite was run for this experiment.
 
 ## Reproduce
 
+### Default-command recheck on Bun 1.4.2
+
+After promotion, the same machine and Node 24.13.0 compared
+`bun run typecheck:legacy` against the new default `bun run typecheck`, now with
+Bun 1.4.2 and its matching frozen dependencies. Three alternating samples per
+command/cache state used identical source and no Turbo result caching. This
+separate run does not replace the original Bun 1.3.12 measurements above.
+
+| Command/state        |      Min |   Median |      Max |
+| -------------------- | -------: | -------: | -------: |
+| Legacy, cold         | 55.189 s | 56.339 s | 60.710 s |
+| Default, cold        | 12.484 s | 12.528 s | 14.678 s |
+| Legacy, incremental  | 11.319 s | 12.451 s | 13.284 s |
+| Default, incremental |  3.059 s |  3.170 s |  3.472 s |
+
+The new default reduced median latency by 77.8% cold (4.50x) and 74.5%
+incrementally (3.93x). All twelve runs passed all seven workspaces. A temporary
+web source mutation also confirmed that both the workspace and root default
+commands fail on invalid optional properties (TS2375), unchecked indexed access
+(TS2322), and an unused Effect (TS377001). The mutation was removed before
+measurement. Formatting and lint passed; lint retained existing warnings.
+
+### Commands
+
 Use the pinned dependencies and a supported Node version. Generate marketing
 types once before either command, rather than comparing a prepared project with
 an unprepared checkout:
@@ -94,8 +124,8 @@ an unprepared checkout:
 ```sh
 bun install --frozen-lockfile
 (cd apps/marketing && bun run postinstall && node node_modules/next/dist/bin/next typegen)
+bun run typecheck:legacy
 bun run typecheck
-bun run typecheck:native
 ```
 
 For the repeated measurements, run this from the repository root. It removes
@@ -118,10 +148,10 @@ const projects = [
   "scripts",
 ];
 for (let sample = 1; sample <= 3; sample++) {
-  const tasks = sample % 2 ? ["typecheck", "typecheck:native"] : ["typecheck:native", "typecheck"];
+  const tasks = sample % 2 ? ["typecheck:legacy", "typecheck"] : ["typecheck", "typecheck:legacy"];
   for (const task of tasks) {
     const cache =
-      task === "typecheck"
+      task === "typecheck:legacy"
         ? "tsconfig.tsbuildinfo"
         : "node_modules/.cache/typescript-native.tsbuildinfo";
     for (const project of projects) {
@@ -142,8 +172,9 @@ for (let sample = 1; sample <= 3; sample++) {
 ```
 
 The native package also exposes a root `tsc` executable. Use the named scripts
-above; the existing workspace scripts continue resolving their local legacy
-compiler. Existing build/editor tooling is not migrated by this change.
+above; workspace `typecheck` scripts explicitly select the native compiler, while
+`typecheck:legacy` selects the local legacy compiler. Existing build/editor
+tooling is not migrated by this change.
 
 References: [TypeScript 7 side-by-side installation](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/),
 [Effect native checker](https://github.com/Effect-TS/tsgo). This is a first step

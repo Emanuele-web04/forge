@@ -132,20 +132,19 @@ bun install
 bun run dev
 ```
 
-For faster development feedback, `bun run typecheck:native` checks all seven
-workspaces with TypeScript 7 and the native Effect checker. It uses separate
-incremental caches and leaves the existing TypeScript 5 compiler available for
-build and declaration tooling.
+`bun run typecheck` checks all seven workspaces with TypeScript 7 and the native
+Effect checker. CI and each workspace's `typecheck` script use the same compiler.
+`bun run typecheck:native` remains an alias for the default check.
 
-This is an **additional development check, not a replacement for
-`bun run typecheck`**. The native Effect checker does not yet enforce every rule
-we use: in particular, `importFromBarrel` errors are currently missed. Keep the
-existing typecheck as the required pre-merge/CI check. Do not use a native-only
-pass to certify a change.
+The native Effect checker does not enforce every legacy rule: in particular,
+`importFromBarrel` errors are currently missed. `bun run typecheck:legacy` keeps
+the TypeScript 5 check available for explicit comparisons; it is not run by CI.
+The existing compiler also remains installed for build and declaration tools
+that require its JavaScript API. Native and legacy checks use separate caches.
 
-Use those named scripts rather than a bare `tsc` from the repository root: the
-native package exposes that executable too. Each workspace's existing
-`typecheck` script still resolves its local TypeScript 5 compiler.
+Use these named scripts rather than a bare `tsc`, whose version depends on the
+current directory. Normal installation patches the native compiler for Effect;
+the root `typecheck` command also ensures that patch is applied before checking.
 
 ## Contributing
 

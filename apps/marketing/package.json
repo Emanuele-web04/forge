@@ -16,8 +16,9 @@
     "test:visual:update": "playwright test tests/visual --grep @visual --update-snapshots",
     "test:a11y": "playwright test tests/a11y",
     "test:performance": "node scripts/performance-smoke.mjs",
-    "typecheck": "tsc --noEmit",
-    "typecheck:native": "node ../../node_modules/@typescript/native/bin/tsc --noEmit --tsBuildInfoFile node_modules/.cache/typescript-native.tsbuildinfo",
+    "typecheck": "node ../../node_modules/@typescript/native/bin/tsc --noEmit --tsBuildInfoFile node_modules/.cache/typescript-native.tsbuildinfo",
+    "typecheck:native": "bun run typecheck",
+    "typecheck:legacy": "tsc --noEmit",
     "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
     "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
     "postinstall": "fumadocs-mdx"

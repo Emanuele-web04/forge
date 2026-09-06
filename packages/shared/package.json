@@ -315,8 +315,9 @@
   },
   "scripts": {
     "prepare": "effect-language-service patch",
-    "typecheck": "tsc --noEmit",
-    "typecheck:native": "node ../../node_modules/@typescript/native/bin/tsc --noEmit",
+    "typecheck": "node ../../node_modules/@typescript/native/bin/tsc --noEmit",
+    "typecheck:native": "bun run typecheck",
+    "typecheck:legacy": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {

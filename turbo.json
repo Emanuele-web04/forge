@@ -44,6 +44,11 @@
       "outputs": [],
       "cache": false
     },
+    "typecheck:legacy": {
+      "dependsOn": ["^typecheck:legacy"],
+      "outputs": [],
+      "cache": false
+    },
     "test": {
       "dependsOn": ["^build"],
       "cache": false,
