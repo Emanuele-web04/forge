@@ -116,7 +116,7 @@ it("does not fetch for absent auth, custom endpoints, or extension-owned catalog
   });
   await refreshPiOpenRouterModels(runtime);
   expect(request).not.toHaveBeenCalled();
-  await runtime.setRuntimeApiKey("openrouter", "test-only", { allowNetwork: false });
+  await runtime.setRuntimeApiKey("openrouter", "test-only");
   runtime.registerProvider("openrouter", { baseUrl: "https://custom.example/v1", models: [] });
   await runtime.refresh({ allowNetwork: false });
   await refreshPiOpenRouterModels(runtime);
