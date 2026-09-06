@@ -233,6 +233,16 @@ import {
   SidebarThreadRowContent,
   type SidebarThreadTerminalStatus,
 } from "./SidebarThreadRowContent";
+import {
+  nestSidebarEntriesByDepth,
+  SidebarThreadHierarchyBranch,
+  type NestedSidebarEntry,
+} from "./SidebarThreadBranch";
+import {
+  buildThreadHierarchyIndex,
+  SIDEBAR_THREAD_HIERARCHY_CHILD_PAGE_SIZE,
+  type ThreadHierarchyEdgeKind,
+} from "./sidebarThreadHierarchy";
 import { RenameDialog } from "./RenameDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import {
@@ -263,6 +273,7 @@ import {
   readSidebarUiState,
   resolveProjectThreadListExtraPages,
   subscribeSidebarUiState,
+  toggleExpandedThreadId,
 } from "./Sidebar.uiState";
 import {
   getArm64IntelBuildWarningDescription,
@@ -333,6 +344,7 @@ import {
   deriveSidebarProjectData,
   createSidebarThreadHoverAnchorId,
   findWorkspaceRootMatch,
+  getPinnedFamilyRootIdsForSidebar,
   getPinnedThreadsForSidebar,
   getUnpinnedThreadsForSidebar,
   orderPinnedProjectsForSidebar,
@@ -1751,6 +1763,19 @@ export default function Sidebar() {
   const [activityViewEnabled, setActivityViewEnabled] = useState(
     () => readSidebarUiState().activityViewEnabled,
   );
+  // Hierarchy branches start closed; explicit opens persist and are shared by
+  // both sidebars, Chats, Studio and Pinned. Collapsed ids are transient
+  // exceptions that keep an actively revealed branch closed until the active
+  // thread changes. Child paging is per-mount only (never persisted).
+  const [expandedThreadIds, setExpandedThreadIds] = useState<readonly string[]>(
+    () => readSidebarUiState().expandedThreadIds,
+  );
+  const [collapsedThreadIds, setCollapsedThreadIds] = useState<ReadonlySet<ThreadId>>(
+    () => new Set(),
+  );
+  const [childExtraPagesByParentId, setChildExtraPagesByParentId] = useState<
+    ReadonlyMap<ThreadId, number>
+  >(() => new Map());
   const [activityVisibleThreadIds, setActivityVisibleThreadIds] = useState<readonly ThreadId[]>([]);
   const handleActivityVisibleThreadIdsChange = useCallback((threadIds: readonly ThreadId[]) => {
     setActivityVisibleThreadIds((current) => {
@@ -1782,6 +1807,7 @@ export default function Sidebar() {
         setDismissedThreadStatusKeyByThreadId(state.dismissedThreadStatusKeyByThreadId);
         setLastThreadRoute(state.lastThreadRoute);
         setActivityViewEnabled(state.activityViewEnabled);
+        setExpandedThreadIds(state.expandedThreadIds);
       }),
     [],
   );
@@ -1840,6 +1866,102 @@ export default function Sidebar() {
     routeThreadId,
   });
   const visualActiveSidebarThreadId = activeSidebarThreadId;
+  // Explicit branch closes win over the transient active-descendant reveal
+  // only until the active thread changes.
+  useEffect(() => {
+    setCollapsedThreadIds(new Set());
+  }, [activeSidebarThreadId]);
+  const expandedThreadIdSet = useMemo(
+    () => new Set(expandedThreadIds as readonly ThreadId[]),
+    [expandedThreadIds],
+  );
+  const persistUiStateWithExpansion = useCallback(
+    (nextExpandedThreadIds: readonly string[]) => {
+      persistSidebarUiState({
+        chatSectionExpanded,
+        chatThreadListExtraPages,
+        projectThreadListExtraPagesByCwd: Object.fromEntries(legacyThreadListExtraPagesByCwd),
+        projectThreadListExtraPagesById: Object.fromEntries(threadListExtraPagesByProjectId),
+        dismissedThreadStatusKeyByThreadId,
+        lastThreadRoute,
+        activityViewEnabled,
+        expandedThreadIds: [...nextExpandedThreadIds],
+      });
+    },
+    [
+      activityViewEnabled,
+      chatSectionExpanded,
+      chatThreadListExtraPages,
+      dismissedThreadStatusKeyByThreadId,
+      lastThreadRoute,
+      legacyThreadListExtraPagesByCwd,
+      threadListExtraPagesByProjectId,
+    ],
+  );
+  const toggleHierarchyBranch = useCallback(
+    (threadId: ThreadId, isCurrentlyOpen: boolean) => {
+      if (isCurrentlyOpen) {
+        // Closing: drop the explicit open and keep the transient
+        // active-descendant reveal from reopening it until navigation.
+        setExpandedThreadIds((current) => {
+          if (!(current as readonly string[]).includes(threadId as string)) {
+            return current;
+          }
+          const next = toggleExpandedThreadId(current, threadId as string);
+          persistUiStateWithExpansion(next);
+          return next;
+        });
+        setCollapsedThreadIds((current) => {
+          if (current.has(threadId)) {
+            return current;
+          }
+          const next = new Set(current);
+          next.add(threadId);
+          return next;
+        });
+        return;
+      }
+      setExpandedThreadIds((current) => {
+        if ((current as readonly string[]).includes(threadId as string)) {
+          return current;
+        }
+        const next = toggleExpandedThreadId(current, threadId as string);
+        persistUiStateWithExpansion(next);
+        return next;
+      });
+      setCollapsedThreadIds((current) => {
+        if (!current.has(threadId)) {
+          return current;
+        }
+        const next = new Set(current);
+        next.delete(threadId);
+        return next;
+      });
+    },
+    [persistUiStateWithExpansion],
+  );
+  const showMoreHierarchyChildren = useCallback((parentId: ThreadId) => {
+    setChildExtraPagesByParentId((current) => {
+      const next = new Map(current);
+      next.set(parentId, (next.get(parentId) ?? 0) + 1);
+      return next;
+    });
+  }, []);
+  const showLessHierarchyChildren = useCallback((parentId: ThreadId) => {
+    setChildExtraPagesByParentId((current) => {
+      const pages = current.get(parentId) ?? 0;
+      if (pages <= 0) {
+        return current;
+      }
+      const next = new Map(current);
+      if (pages <= 1) {
+        next.delete(parentId);
+      } else {
+        next.set(parentId, pages - 1);
+      }
+      return next;
+    });
+  }, []);
   const selectSidebarThreads = useMemo(() => createSidebarThreadSummariesSelector(), []);
   const hideAutomationRunThreads = !appSettings.showAutomationRunThreads;
   const selectSidebarTreeThreads = useMemo(
@@ -2114,6 +2236,54 @@ export default function Sidebar() {
       ),
     [activeSpaceNonStudioSidebarTreeThreads, isOnStudio, pinnedThreadIds, studioSidebarTreeThreads],
   );
+  // Pinned families render once as hierarchy: if any member is pinned, the
+  // whole family (root + descendants) renders in Pinned. Family order follows
+  // the first pinned position; members keep store order for stable nesting.
+  const pinnedFamilyRootIds = useMemo(
+    () =>
+      getPinnedFamilyRootIdsForSidebar(
+        isOnStudio ? studioSidebarTreeThreads : activeSpaceNonStudioSidebarTreeThreads,
+        pinnedThreadIds,
+      ),
+    [activeSpaceNonStudioSidebarTreeThreads, isOnStudio, pinnedThreadIds, studioSidebarTreeThreads],
+  );
+  const pinnedHierarchyRows = useMemo(() => {
+    if (pinnedFamilyRootIds.length === 0) {
+      return [];
+    }
+    const surfaceTreeThreads = isOnStudio
+      ? studioSidebarTreeThreads
+      : activeSpaceNonStudioSidebarTreeThreads;
+    const index = buildThreadHierarchyIndex(surfaceTreeThreads);
+    const orderByRootId = new Map<ThreadId, number>(
+      pinnedFamilyRootIds.map((rootId, position) => [rootId, position]),
+    );
+    const familyThreads = surfaceTreeThreads.filter((thread) => {
+      const rootId = index.rootIdByThreadId.get(thread.id);
+      return rootId !== undefined && orderByRootId.has(rootId);
+    });
+    familyThreads.sort((left, right) => {
+      const leftRoot = index.rootIdByThreadId.get(left.id) ?? left.id;
+      const rightRoot = index.rootIdByThreadId.get(right.id) ?? right.id;
+      return (orderByRootId.get(leftRoot) ?? 0) - (orderByRootId.get(rightRoot) ?? 0);
+    });
+    return buildProjectThreadTree({
+      threads: familyThreads,
+      forceVisibleThreadId: activeSidebarThreadId ?? undefined,
+      expandedThreadIds: expandedThreadIdSet,
+      collapsedThreadIds,
+      childExtraPagesByParentId,
+    });
+  }, [
+    activeSidebarThreadId,
+    activeSpaceNonStudioSidebarTreeThreads,
+    childExtraPagesByParentId,
+    collapsedThreadIds,
+    expandedThreadIdSet,
+    isOnStudio,
+    pinnedFamilyRootIds,
+    studioSidebarTreeThreads,
+  ]);
   const openPrLink = useCallback((event: MouseEvent<HTMLElement>, prUrl: string) => {
     event.preventDefault();
     event.stopPropagation();
@@ -3879,6 +4049,7 @@ export default function Sidebar() {
         dismissedThreadStatusKeyByThreadId,
         lastThreadRoute: nextLastThreadRoute,
         activityViewEnabled,
+        expandedThreadIds: [...expandedThreadIds],
       });
     },
     [
@@ -3886,6 +4057,7 @@ export default function Sidebar() {
       chatSectionExpanded,
       chatThreadListExtraPages,
       dismissedThreadStatusKeyByThreadId,
+      expandedThreadIds,
       legacyThreadListExtraPagesByCwd,
       threadListExtraPagesByProjectId,
     ],
@@ -4460,12 +4632,18 @@ export default function Sidebar() {
         appSettings.sidebarThreadSortOrder,
       ),
       forceVisibleThreadId: activeSidebarThreadId ?? undefined,
+      expandedThreadIds: expandedThreadIdSet,
+      collapsedThreadIds,
+      childExtraPagesByParentId,
     });
   }, [
     activeSidebarThreadId,
     appSettings.sidebarThreadSortOrder,
     chatSectionExpanded,
     chatProjects,
+    childExtraPagesByParentId,
+    collapsedThreadIds,
+    expandedThreadIdSet,
     sortedSidebarThreadsByProjectId,
   ]);
   const visibleChatThreadIds = useMemo(
@@ -4491,10 +4669,16 @@ export default function Sidebar() {
         appSettings.sidebarThreadSortOrder,
       ),
       forceVisibleThreadId: activeSidebarThreadId ?? undefined,
+      expandedThreadIds: expandedThreadIdSet,
+      collapsedThreadIds,
+      childExtraPagesByParentId,
     });
   }, [
     activeSidebarThreadId,
     appSettings.sidebarThreadSortOrder,
+    childExtraPagesByParentId,
+    collapsedThreadIds,
+    expandedThreadIdSet,
     isOnStudio,
     pinnedThreadIds,
     sortedSidebarThreadsByProjectId,
@@ -4643,10 +4827,16 @@ export default function Sidebar() {
         activeSidebarThreadId: activeSidebarThreadId ?? undefined,
         previewLimit: THREAD_PREVIEW_LIMIT,
         previewPageSize: THREAD_PREVIEW_PAGE_SIZE,
+        expandedThreadIds: expandedThreadIdSet,
+        collapsedThreadIds,
+        childExtraPagesByParentId,
         resolveThreadStatus: resolveThreadStatusForSidebar,
       }),
     [
       activeSidebarThreadId,
+      childExtraPagesByParentId,
+      collapsedThreadIds,
+      expandedThreadIdSet,
       threadListExtraPagesByProjectCwd,
       pinnedThreadIds,
       sortedSidebarThreadsByProjectId,
@@ -4673,10 +4863,16 @@ export default function Sidebar() {
       activeSidebarThreadId: activeSidebarThreadId ?? undefined,
       previewLimit: THREAD_PREVIEW_LIMIT,
       previewPageSize: THREAD_PREVIEW_PAGE_SIZE,
+      expandedThreadIds: expandedThreadIdSet,
+      collapsedThreadIds,
+      childExtraPagesByParentId,
       resolveThreadStatus: resolveThreadStatusForSidebar,
     });
   }, [
     activeSidebarThreadId,
+    childExtraPagesByParentId,
+    collapsedThreadIds,
+    expandedThreadIdSet,
     isOnStudio,
     threadListExtraPagesByProjectCwd,
     pinnedThreadIds,
@@ -4738,12 +4934,14 @@ export default function Sidebar() {
       dismissedThreadStatusKeyByThreadId,
       lastThreadRoute,
       activityViewEnabled,
+      expandedThreadIds: [...expandedThreadIds],
     });
   }, [
     activityViewEnabled,
     chatSectionExpanded,
     chatThreadListExtraPages,
     dismissedThreadStatusKeyByThreadId,
+    expandedThreadIds,
     legacyThreadListExtraPagesByCwd,
     threadListExtraPagesByProjectId,
     lastThreadRoute,
@@ -4804,6 +5002,11 @@ export default function Sidebar() {
     for (const thread of pinnedThreads) {
       addVisibleThreadId(thread.id);
     }
+    // Pinned family descendants render inside Pinned (not as standalone
+    // pinned rows), so they join the visible ids through the hierarchy rows.
+    for (const row of pinnedHierarchyRows) {
+      addVisibleThreadId(row.thread.id);
+    }
 
     for (const project of surfaceProjects) {
       const projectSidebarData = surfaceProjectSidebarDataById.get(project.id);
@@ -4843,6 +5046,7 @@ export default function Sidebar() {
   }, [
     collapsedThreadFolderIds,
     folderIdByThreadId,
+    pinnedHierarchyRows,
     pinnedThreads,
     studioChatThreadIds,
     surfaceProjectSidebarDataById,
@@ -5067,9 +5271,105 @@ export default function Sidebar() {
     );
   }
   // Identical "Pinned" header + rows block shared by the Threads and Studio surfaces.
-  // `pinnedThreads` is already the surface-appropriate list, so a single helper keeps both in sync.
+  // Pinned families render once as hierarchy: the toggle, counter and nested
+  // children are shared with projects/Chats/Studio through the same branch
+  // wrapper, while each row keeps its own pin state and actions.
+  type HierarchyListEntry = {
+    thread: SidebarThreadSummary;
+    depth: number;
+    directChildCount?: number | undefined;
+    edgeKind?: ThreadHierarchyEdgeKind | undefined;
+  };
+
+  function renderHierarchyChildPaging(parentId: ThreadId, totalChildCount: number, renderedDirectCount: number) {
+    const extraPages = childExtraPagesByParentId.get(parentId) ?? 0;
+    const hiddenCount = Math.max(0, totalChildCount - renderedDirectCount);
+    if (hiddenCount <= 0 && extraPages <= 0) {
+      return null;
+    }
+    const showCount = Math.min(SIDEBAR_THREAD_HIERARCHY_CHILD_PAGE_SIZE, hiddenCount);
+    return (
+      <div className="flex w-full min-w-0 items-center gap-1 py-0.5 pr-2">
+        {hiddenCount > 0 ? (
+          <button
+            type="button"
+            data-thread-selection-safe
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              showMoreHierarchyChildren(parentId);
+            }}
+            className="h-6 flex-1 truncate rounded-md pl-8 text-left text-[length:var(--app-font-size-ui,11px)] text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"
+          >
+            Show {showCount} more
+          </button>
+        ) : null}
+        {extraPages > 0 ? (
+          <button
+            type="button"
+            data-thread-selection-safe
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              showLessHierarchyChildren(parentId);
+            }}
+            className={hiddenCount > 0 ? "h-6 flex-none rounded-md px-2 text-left text-[length:var(--app-font-size-ui,11px)] text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground" : "h-6 flex-1 truncate rounded-md pl-8 text-left text-[length:var(--app-font-size-ui,11px)] text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"}
+          >
+            Show less
+          </button>
+        ) : null}
+      </div>
+    );
+  }
+
+  function renderNestedHierarchyNode(
+    node: NestedSidebarEntry<HierarchyListEntry>,
+    renderRow: (thread: SidebarThreadSummary, depth: number) => ReactNode,
+    surface: string,
+  ): ReactNode {
+    const { entry } = node;
+    const totalChildCount = entry.directChildCount ?? 0;
+    const isOpen = node.children.length > 0;
+    const threadId = entry.thread.id;
+    return (
+      <SidebarThreadHierarchyBranch
+        key={threadId}
+        threadId={threadId}
+        title={entry.thread.title}
+        depth={entry.depth}
+        directChildCount={totalChildCount}
+        edgeKind={entry.edgeKind}
+        expanded={isOpen}
+        onToggle={(id) => toggleHierarchyBranch(id, isOpen)}
+        row={renderRow(entry.thread, entry.depth)}
+        childPaging={
+          isOpen
+            ? renderHierarchyChildPaging(threadId, totalChildCount, node.children.length)
+            : undefined
+        }
+        surface={surface}
+      >
+        {node.children.map((child) => renderNestedHierarchyNode(child, renderRow, surface))}
+      </SidebarThreadHierarchyBranch>
+    );
+  }
+
+  function renderNestedHierarchyList(
+    entries: readonly HierarchyListEntry[],
+    renderRow: (thread: SidebarThreadSummary, depth: number) => ReactNode,
+    surface: string,
+  ): ReactNode {
+    return (
+      <>
+        {nestSidebarEntriesByDepth(entries).map((node) => renderNestedHierarchyNode(node, renderRow, surface))}
+      </>
+    );
+  }
+
   function renderPinnedThreadsSection() {
-    if (pinnedThreads.length === 0) {
+    if (pinnedHierarchyRows.length === 0) {
       return null;
     }
     return (
@@ -5078,7 +5378,7 @@ export default function Sidebar() {
           <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>Pinned</span>
         </div>
         <div className="flex flex-col gap-0.5">
-          {pinnedThreads.map((thread) => renderPinnedThreadRow(thread))}
+          {renderNestedHierarchyList(pinnedHierarchyRows, (thread) => renderPinnedThreadRow(thread), "pinned")}
         </div>
       </div>
     );
@@ -5338,7 +5638,9 @@ export default function Sidebar() {
     });
     const isSubagentThread = Boolean(thread.parentThreadId);
     const leadingPr = isSubagentThread || thread.forkSourceThreadId ? null : pr;
-    const subagentIndentPx = Math.max(0, Math.min(depth - 1, 3) * 10);
+    // Hierarchy indent lives in SidebarThreadHierarchyBranch (12px/level, max
+    // 48px); the row keeps only its connector glyph without extra margin.
+    const subagentIndentPx = 0;
     const showCompactMeta = !isSubagentThread;
     const showTemporaryThreadIcon = showCompactMeta && isTemporaryThread;
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
@@ -5409,7 +5711,8 @@ export default function Sidebar() {
                     return (
                       candidate !== undefined &&
                       candidate.projectId === thread.projectId &&
-                      (candidate.parentThreadId ?? null) === null
+                      (candidate.parentThreadId ?? null) === null &&
+                      (candidate.sourceThreadId ?? null) === null
                     );
                   });
                   sidebarThreadDragIdsRef.current = draggableFolderThreadIds;
@@ -5631,8 +5934,9 @@ export default function Sidebar() {
         <div className={disclosureShellClassName(open)}>
           <div className={DISCLOSURE_INNER_CLASS}>
             <div className={cn("pl-5", disclosureContentClassName(open))}>
-              {entries.map((entry) =>
-                renderThreadRow(entry.thread, orderedProjectThreadIds, entry.depth, false),
+              {renderNestedHierarchyList(entries, (thread, depth) =>
+                renderThreadRow(thread, orderedProjectThreadIds, depth, false),
+                "project",
               )}
             </div>
           </div>
@@ -5680,6 +5984,7 @@ export default function Sidebar() {
     const threadCountByFolderId = new Map<string, number>();
     for (const thread of projectThreads) {
       if ((thread.parentThreadId ?? null) !== null) continue;
+      if ((thread.sourceThreadId ?? null) !== null) continue;
       const folderId = folderIdByThreadId[thread.id];
       if (!folderId || !activeFolderIds.has(folderId)) continue;
       threadCountByFolderId.set(folderId, (threadCountByFolderId.get(folderId) ?? 0) + 1);
@@ -5953,9 +6258,12 @@ export default function Sidebar() {
                   threadCountByFolderId.get(folder.id) ?? 0,
                 ),
               )}
-              {rootVisibleEntries.map((entry) =>
-                renderThreadRow(entry.thread, orderedProjectThreadIds, entry.depth, false),
-              )}
+              {rootVisibleEntries.length > 0
+                ? renderNestedHierarchyList(rootVisibleEntries, (thread, depth) =>
+                    renderThreadRow(thread, orderedProjectThreadIds, depth, false),
+                    "project",
+                  )
+                : null}
 
               {(canShowMoreThreads || canShowLessThreads) && (
                 <SidebarMenuSubItem className="w-full">
@@ -6986,8 +7294,9 @@ export default function Sidebar() {
                   )}
                   <SidebarMenu ref={attachProjectListAutoAnimateRef} className="gap-1">
                     {studioChatThreadRows.length > 0 ? (
-                      studioChatThreadRows.map((row) =>
-                        renderThreadRow(row.thread, studioChatThreadIds, row.depth, true),
+                      renderNestedHierarchyList(studioChatThreadRows, (thread, depth) =>
+                        renderThreadRow(thread, studioChatThreadIds, depth, true),
+                        "studio",
                       )
                     ) : (
                       <div className="px-2 pt-4 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
@@ -7223,13 +7532,16 @@ export default function Sidebar() {
                     className={cn("gap-1", disclosureContentClassName(chatSectionExpanded))}
                   >
                     {visibleChatThreadRows.length > 0 ? (
-                      renderedChatEntries.map((entry) =>
-                        renderThreadRow(
-                          entry.row.thread,
-                          visibleChatThreadIds,
-                          entry.row.depth,
-                          true,
-                        ),
+                      renderNestedHierarchyList(
+                        renderedChatEntries.map((entry) => ({
+                          thread: entry.row.thread,
+                          depth: entry.row.depth,
+                          directChildCount: entry.row.directChildCount,
+                          edgeKind: entry.row.edgeKind,
+                        })),
+                        (thread, depth) =>
+                          renderThreadRow(thread, visibleChatThreadIds, depth, true),
+                        "chat",
                       )
                     ) : (
                       <div className="px-2 py-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/48">

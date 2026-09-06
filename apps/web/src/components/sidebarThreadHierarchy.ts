@@ -131,7 +131,7 @@ export function buildThreadHierarchyIndex<T extends ThreadHierarchyNode>(
       }
       pathSet.add(currentKey);
       path.push(currentKey);
-      const parentKey = declaredParentKey.get(currentKey) ?? null;
+      const parentKey: string | null = declaredParentKey.get(currentKey) ?? null;
       if (parentKey === null || parentKey === currentKey) {
         // No parent (root candidate) or self-reference (hidden).
         result = parentKey === null;

@@ -31,7 +31,7 @@ function makeThread(id: string, overrides: Partial<TestThread> = {}): TestThread
 
 describe("buildThreadHierarchyIndex", () => {
   it("returns an empty forest for empty input", () => {
-    const index = buildThreadHierarchyIndex([]);
+    const index = buildThreadHierarchyIndex<TestThread>([]);
     expect(index.rootIds).toEqual([]);
     expect(index.nodesById.size).toBe(0);
     expect(index.hiddenThreadIds.size).toBe(0);
