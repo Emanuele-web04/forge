@@ -37,6 +37,7 @@
     "build:marketing": "turbo run build --filter=@synara/marketing",
     "build:desktop": "turbo run build --filter=@synara/desktop --filter=@synara/cli",
     "typecheck": "turbo run typecheck",
+    "typecheck:native": "effect-tsgo patch --typescript --typescript-package @typescript/native && turbo run typecheck:native",
     "lint": "oxlint --report-unused-disable-directives",
     "test": "turbo run test",
     "test:web:focused": "bun run --cwd apps/web test",
@@ -67,7 +68,9 @@
     "clean": "rm -rf node_modules apps/*/node_modules packages/*/node_modules scripts/node_modules apps/*/dist apps/*/dist-electron packages/*/dist .turbo apps/*/.turbo packages/*/.turbo"
   },
   "devDependencies": {
+    "@effect/tsgo": "0.41.0",
     "@types/node": "catalog:",
+    "@typescript/native": "npm:typescript@7.0.2",
     "oxfmt": "^0.40.0",
     "oxlint": "^1.55.0",
     "turbo": "^2.9.14",
