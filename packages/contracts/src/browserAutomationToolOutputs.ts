@@ -205,6 +205,8 @@ export const BrowserScreenshotOutput = closedStruct({
   mode: Schema.Literals(["viewport", "fullPage"]),
   clipped: Schema.Boolean,
   image: BrowserScreenshotImageMetadata,
+  artifactPath: Schema.optional(BoundedUtf8String(8_192, 1)),
+  artifactError: Schema.optional(BoundedUtf8String(512, 1)),
   ...optionalDialogFields,
 });
 const BrowserScreenshotImage = closedStruct({
@@ -373,11 +375,16 @@ export const BrowserWaitOutput = closedStruct({
   observed: closedStruct({ url: BoundedUrl, loadState: BrowserLoadState }),
   ...optionalDialogFields,
 });
-export const BrowserEvaluateOutput = closedStruct({
+const BrowserEvaluationOutputFields = {
   tabId: BrowserTabId,
   value: BrowserBoundedJson,
   serializedByteCount: boundedInt(0, 262_144),
   ...optionalDialogFields,
+};
+export const BrowserEvaluateOutput = closedStruct(BrowserEvaluationOutputFields);
+export const BrowserRunOutput = closedStruct({
+  ...BrowserEvaluationOutputFields,
+  ...BrowserPopupCorrelationOutputFields,
 });
 export const BrowserCloseOutput = closedStruct({
   closedTabId: BrowserTabId,
@@ -413,4 +420,5 @@ export type BrowserPressOutput = typeof BrowserPressOutput.Type;
 export type BrowserScrollOutput = typeof BrowserScrollOutput.Type;
 export type BrowserWaitOutput = typeof BrowserWaitOutput.Type;
 export type BrowserEvaluateOutput = typeof BrowserEvaluateOutput.Type;
+export type BrowserRunOutput = typeof BrowserRunOutput.Type;
 export type BrowserCloseOutput = typeof BrowserCloseOutput.Type;

@@ -8,7 +8,8 @@ import {
   BrowserWebMcpToolId,
 } from "./browserAutomationIds";
 import { BrowserBoundedJsonObject } from "./browserAutomationJson";
-import { BrowserNodeTarget, BrowserPointerTarget } from "./browserAutomationTargets";
+import { BrowserLocator, BrowserNodeTarget, BrowserPointerTarget } from "./browserAutomationTargets";
+import { BrowserCssSelector } from "./browserAutomationCssSelector";
 import {
   BrowserLoadState,
   browserBoundedInt as boundedInt,
@@ -21,7 +22,7 @@ const described = <S extends Schema.Top>(schema: S, description: string): S =>
 export const BROWSER_FIELD_INSTRUCTION_COPY = {
   tabId:
     "Optional scoped tab returned by browser_tabs/open; omit to use provider-session affinity.",
-  timeoutMs: "Optional end-to-end action deadline in milliseconds within the published bounds.",
+  timeoutMs: "Optional end-to-end action deadline: integer from 100 to 30000 milliseconds. Never pass 45000 or 60000; split longer workflows into smaller calls.",
   idempotencyKey:
     "Optional advanced retry key. Synara derives a stable key from the authenticated tool request when omitted; provide one only to deliberately deduplicate a byte-identical retry.",
   target:
@@ -208,6 +209,7 @@ export const BrowserWebMcpCallInput = closedStruct({
 export const BrowserScreenshotInput = closedStruct({
   ...invocationFields,
   ...optionalTabField,
+  kind: Schema.optional(described(Schema.Literals(["proof", "debug", "question"]), "Use proof to save a completion screenshot for embedding in chat; otherwise capture only for inspection.")),
   fullPage: optionalDefault(
     described(
       Schema.Boolean,
@@ -303,12 +305,18 @@ export const BrowserSelectInput = closedStruct({
     "One through 64 unique exact option values. A non-multiple select accepts exactly one value.",
   ),
 });
+export const BrowserUploadTarget = Schema.Union([
+  closedStruct({ selector: BrowserCssSelector }),
+  closedStruct({ locator: BrowserLocator }),
+]);
+export type BrowserUploadTarget = typeof BrowserUploadTarget.Type;
+
 export const BrowserUploadInput = closedStruct({
   ...invocationFields,
   ...optionalTabField,
   target: described(
-    BrowserNodeTarget,
-    "Exactly one enabled input[type=file] in the shared browser page; prefer a current snapshot {ref,snapshotId}.",
+    BrowserUploadTarget,
+    "One strict CSS selector or semantic locator for an enabled input[type=file]. Observe it with Betterwright first. Refs are scoped to a browser_run call and cannot be passed to this tool.",
   ),
   paths: described(
     Schema.Array(BrowserWorkspaceRelativePath)
@@ -418,6 +426,11 @@ export const BrowserEvaluateInput = closedStruct({
   ...optionalTabField,
   expression: BrowserEvaluateExpression,
 });
+export const BrowserRunInput = closedStruct({
+  ...invocationFields,
+  ...optionalTabField,
+  code: described(BoundedUtf8String(16_384, 1), "A bounded Betterwright snippet using page and snapshot(); return JSON. Snippet state does not persist between calls."),
+});
 export const BrowserCloseInput = closedStruct({
   ...invocationFields,
   ...optionalTabField,
@@ -447,4 +460,5 @@ export type BrowserScrollInput = typeof BrowserScrollInput.Type;
 export type BrowserWaitCondition = typeof BrowserWaitCondition.Type;
 export type BrowserWaitInput = typeof BrowserWaitInput.Type;
 export type BrowserEvaluateInput = typeof BrowserEvaluateInput.Type;
+export type BrowserRunInput = typeof BrowserRunInput.Type;
 export type BrowserCloseInput = typeof BrowserCloseInput.Type;

@@ -61,49 +61,19 @@ describe("browser automation catalogue projection", () => {
 
   it("keeps operational annotations and agent guidance canonical", () => {
     expect(BROWSER_TOOL_DEFINITIONS.map(({ annotations }) => annotations)).toEqual([
-      READ_ONLY_LOCAL,
-      READ_ONLY_LOCAL,
-      MUTATING_OPEN_WORLD,
-      MUTATING_OPEN_WORLD,
-      MUTATING_OPEN_WORLD,
-      MUTATING_OPEN_WORLD,
-      MUTATING_OPEN_WORLD,
-      IDEMPOTENT_LOCAL,
-      READ_ONLY_OPEN_WORLD,
-      READ_ONLY_OPEN_WORLD,
-      DESTRUCTIVE_OPEN_WORLD,
-      READ_ONLY_OPEN_WORLD,
-      READ_ONLY_OPEN_WORLD,
-      DESTRUCTIVE_OPEN_WORLD,
-      MUTATING_OPEN_WORLD,
-      DESTRUCTIVE_OPEN_WORLD,
-      DESTRUCTIVE_OPEN_WORLD,
-      DESTRUCTIVE_OPEN_WORLD,
-      DESTRUCTIVE_OPEN_WORLD,
-      DESTRUCTIVE_OPEN_WORLD,
-      MUTATING_OPEN_WORLD,
-      READ_ONLY_OPEN_WORLD,
-      DESTRUCTIVE_OPEN_WORLD,
-      DESTRUCTIVE_LOCAL,
+      READ_ONLY_LOCAL, READ_ONLY_LOCAL, MUTATING_OPEN_WORLD, MUTATING_OPEN_WORLD,
+      MUTATING_OPEN_WORLD, MUTATING_OPEN_WORLD, MUTATING_OPEN_WORLD, IDEMPOTENT_LOCAL,
+      READ_ONLY_OPEN_WORLD, READ_ONLY_OPEN_WORLD, DESTRUCTIVE_OPEN_WORLD, DESTRUCTIVE_OPEN_WORLD, DESTRUCTIVE_LOCAL,
     ]);
     for (const tool of BROWSER_TOOL_DEFINITIONS) {
       expect(utf8ByteLength(tool.description)).toBeGreaterThan(120);
-      expect(utf8ByteLength(tool.description)).toBeLessThanOrEqual(2_048);
+      expect(utf8ByteLength(tool.description)).toBeLessThanOrEqual(4_096);
     }
-    expect(BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_click.description).toContain(
-      "humanActionRequired",
-    );
     expect(BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_open.description).toContain(
       "when no assigned tab exists",
     );
     expect(BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_navigate.description).toContain(
       "use browser_open first",
-    );
-    expect(BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_snapshot.description).toContain(
-      "after navigation or human interaction",
-    );
-    expect(BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_wait.description).toContain(
-      "concrete condition",
     );
     expect(BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_logs.description).toContain(
       "diagnose visible-page behavior",
@@ -123,20 +93,35 @@ describe("browser automation catalogue projection", () => {
       }
     }
     expect(BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_navigate.description).toContain("annotationId");
-    expect(BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_wait.description).toContain('"kind":"text"');
-    expect(BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_wait.description).toContain('"timeMs":500');
-    expect(BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_type.description).toContain(
-      '"target":{"ref":"e3","snapshotId"',
-    );
-    expect(BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_press.description).toContain(
-      '"keys":["Enter"]',
-    );
   });
 
   it("serializes JSON stably regardless of object key insertion order", () => {
     expect(stableJsonStringify({ z: 1, a: { y: 2, x: 3 } })).toBe(
       stableJsonStringify({ a: { x: 3, y: 2 }, z: 1 }),
     );
+  });
+
+  it("keeps operation deadlines and OAuth handoff guidance consistent with the input contract", () => {
+    const batch = BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_run;
+    expect(batch.maximumTimeoutMs).toBe(30_000);
+    const decode = Schema.decodeUnknownSync(batch.input);
+    expect(() => decode({ code: "return true", timeoutMs: batch.maximumTimeoutMs })).not.toThrow();
+    expect(() => decode({ code: "return true", timeoutMs: batch.maximumTimeoutMs + 1 })).toThrow();
+    expect(batch.description).toContain("humanActionRequired");
+    expect(batch.description).toContain("oauth_popup");
+    expect(batch.description).toContain("100-30000");
+    expect(batch.description).toContain("credentials.commitGenerated({pendingId})");
+    expect(batch.description).toContain("passwordSelector");
+    expect(batch.description).toContain("credentials.listPending()");
+    expect(batch.description).toContain("one focused browser operation");
+    expect(batch.description).toContain("Use separate tool calls for subsequent steps");
+    expect(batch.description).toContain("Independent tool calls may run concurrently");
+    expect(batch.description).not.toContain("Batch related reads/actions");
+    expect(batch.description).not.toContain("controls.inspect/directory/batch");
+    expect(batch.description).not.toContain("webagents.discover/batch");
+    expect(batch.description).toContain("Return the smallest useful result");
+    expect(batch.description).toContain("not a whole-page snapshot by default");
+    expect(batch.description).toContain("snapshot diffs and aria refs do not persist between calls");
   });
 
   it("keeps the provider-facing tool catalogue below its context budget", () => {
@@ -146,6 +131,9 @@ describe("browser automation catalogue projection", () => {
       inputSchema,
     }));
     expect(JSON.stringify(providerCatalogue).length).toBeLessThanOrEqual(65_000);
+    expect(providerCatalogue.reduce((sum, tool) => sum + tool.description.length, 0))
+      .toBeLessThanOrEqual(11_000);
+    expect(BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_run.description.length).toBeLessThanOrEqual(2_900);
   });
 
   it("rejects undefined and non-finite JSON values", () => {

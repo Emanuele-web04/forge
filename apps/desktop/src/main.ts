@@ -25,6 +25,7 @@ import {
   nativeTheme,
   protocol,
   screen,
+  safeStorage,
   session,
   shell,
   systemPreferences,
@@ -228,6 +229,14 @@ import {
 import { buildGitHubReleasesPageUrl, resolveGitHubUpdateSource } from "./githubUpdateFeed";
 import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runtimeArch";
 import { BROWSER_SESSION_PARTITION, DesktopBrowserManager } from "./browserManager";
+import { BrowserSessionRestore } from "./browserAutomation/browserSessionRestore";
+import { createCookieSessionBackend } from "./browserAutomation/electronCookieSession";
+import { BrowserVault } from "./browserAutomation/browserVault";
+import { BrowserVaultCapture } from "./browserAutomation/browserVaultCapture";
+import { registerBrowserVaultIpc } from "./browserVaultIpc";
+import { registerSafariAccessIpc } from "./safariAccessIpc";
+import { BrowserCookieImport } from "./browserAutomation/browserCookieImport";
+import { shutdownBrowserServices } from "./browserAutomation/browserShutdown";
 import {
   registerBrowserIpcHandlers,
   sendBrowserAnnotationEvent,
@@ -414,7 +423,20 @@ let restoreStdIoCapture: (() => void) | null = null;
 let unreadBackgroundNotificationCount = 0;
 let browserPerfInterval: ReturnType<typeof setInterval> | null = null;
 const annotationGuestPreload = Path.join(__dirname, "guestPreload.js");
+const browserOsKeyStore = {
+  available: async () => {
+    await app.whenReady();
+    return safeStorage.isEncryptionAvailable() && (process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text");
+  },
+  encrypt: (value: string) => safeStorage.encryptString(value),
+  decrypt: (value: Buffer) => safeStorage.decryptString(value),
+};
+const browserVault = new BrowserVault(Path.join(BASE_DIR, "browser-vault"), browserOsKeyStore);
+let browserSessionRestore: BrowserSessionRestore | undefined;
+const browserVaultCapture = new BrowserVaultCapture(browserVault);
 const browserManager = new DesktopBrowserManager({
+  onRuntimeReady: (runtime) => browserVaultCapture.register(runtime),
+  onHumanControl: (threadId) => browserVaultCapture.noteHumanActivity(threadId),
   annotationPreloadPath: annotationGuestPreload,
   beforeInputEvent: (event, input) => {
     if (
@@ -493,6 +515,8 @@ async function ensureBrowserHostPipeServer(): Promise<void> {
     return;
   }
   const server = new BrowserHostPipeServer(browserManager, {
+    vault: browserVault,
+    vaultCapture: browserVaultCapture,
     capability: DESKTOP_BROWSER_HOST_CAPABILITY,
     requestOpenPanel: (threadId) => {
       if (!threadId) return;
@@ -4205,8 +4229,13 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
       cancelBackendReadinessWait();
       appSnapManager?.dispose();
       appSnapManager = null;
-      await disposeBrowserHostPipeServerForShutdown(reason);
-      browserManager.dispose();
+      await shutdownBrowserServices({
+        revokeHost: () => disposeBrowserHostPipeServerForShutdown(reason),
+        closePages: () => browserManager.dispose(),
+        stopCapture: () => browserVaultCapture.dispose(),
+        clearKeys: () => browserVault.dispose(),
+      });
+      await browserSessionRestore?.shutdown();
       restoreStdIoCapture?.();
       desktopShutdownComplete = true;
       writeDesktopLogHeader(`${reason} shutdown complete`);
@@ -4464,6 +4493,16 @@ function registerIpcHandlers(): void {
     },
   );
 
+  registerSafariAccessIpc(ipcMain, {
+    platform: process.platform,
+    systemVersion: process.getSystemVersion(),
+    execPath: process.execPath,
+    appName: app.getName(),
+    isTrustedRenderer: (id) => browserManager.isTrustedRenderer(id),
+    openExternal: (url) => shell.openExternal(url),
+    showItemInFolder: (path) => shell.showItemInFolder(path),
+  });
+
   ipcMain.removeHandler(IPC.openExternal);
   ipcMain.handle(IPC.openExternal, async (_event, rawUrl: unknown) => {
     const externalUrl = getSafeExternalUrl(rawUrl);
@@ -4652,6 +4691,17 @@ function registerIpcHandlers(): void {
   registerDesktopVoiceTranscriptionHandler();
   startBrowserPerformanceLogging();
   registerBrowserIpcHandlers(ipcMain, browserManager);
+  registerBrowserVaultIpc(ipcMain, browserManager, browserVault, () => {
+    mainWindow?.webContents.send(IPC.browser.vault.changed);
+  }, new BrowserCookieImport(Path.join(BASE_DIR, "browser-engine"), browserManager, async () => { await browserHostPipeServer?.waitForIdle(); }, async (domains) => {
+    if (!browserSessionRestore) throw new Error("Browser session restoration is unavailable.");
+    try { await browserSessionRestore.rememberImport(domains); }
+    catch (error) {
+      const allowed = ["Secure browser session storage is unavailable.", "Browser session metadata could not be read.", "Browser session metadata is unsupported.", "Secure browser session persistence failed."];
+      console.warn("[Synara browser]", error instanceof Error && allowed.includes(error.message) ? error.message : "Browser session checkpoint failed.");
+      throw new Error("Browser session checkpoint failed.");
+    }
+  }));
 }
 
 function getIconOption(): { icon: string } | Record<string, never> {
@@ -5111,6 +5161,13 @@ if (hasSingleInstanceLock) {
 
 configureAppIdentity();
 
+const browserEngineFeatures = new Set([
+  ...app.commandLine.getSwitchValue("enable-features").split(",").filter(Boolean),
+  "WebMCPTesting",
+  "DevToolsWebMCPSupport",
+]);
+app.commandLine.appendSwitch("enable-features", [...browserEngineFeatures].join(","));
+
 if (!hasSingleInstanceLock) {
   app.quit();
 } else {
@@ -5138,6 +5195,10 @@ async function bootstrap(): Promise<void> {
 
   backendAuthToken = Crypto.randomBytes(24).toString("hex");
   await reserveBackendEndpoint("bootstrap");
+
+  browserSessionRestore = new BrowserSessionRestore(Path.join(BASE_DIR, "browser-session-restore"), createCookieSessionBackend(BROWSER_SESSION_PARTITION), browserOsKeyStore);
+  try { await browserSessionRestore.initialize(); }
+  catch { console.warn("[Synara browser] Secure session restoration is unavailable; no saved session cookies were restored."); }
 
   registerIpcHandlers();
   writeDesktopLogHeader("bootstrap ipc handlers registered");

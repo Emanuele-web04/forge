@@ -8,6 +8,8 @@ import type { WebContents } from "electron";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { BrowserAutomationVisibleRuntime } from "../browserManager";
+import { runBetterwright } from "./betterwrightRuntime";
+vi.mock("./betterwrightRuntime", () => ({ runBetterwright: vi.fn() }));
 import {
   configureWorkspaceUploadForTests,
   resolveWorkspaceUploadFiles,
@@ -91,6 +93,11 @@ const createRuntime = (
     tabId: "3cc23e3f-fb69-499a-8e0c-a74b0cd5330a",
     webContents,
   } satisfies BrowserAutomationVisibleRuntime;
+  vi.mocked(runBetterwright).mockImplementation(async (options) => {
+    if (!multiple && options.uploadFiles?.length !== 1) return {code: "BrowserInputUnsupported"};
+    await sendCommand("DOM.setFileInputFiles", {objectId: "file-input", files: options.uploadFiles});
+    return {};
+  });
   if (uploadConfiguration) {
     configureWorkspaceUploadForTests(webContents, uploadConfiguration);
   }
@@ -162,7 +169,6 @@ describe("workspace-confined browser upload", () => {
         target: { selector: 'input[type="file"]' as BrowserCssSelector },
         paths: ["fixtures/avatar.txt"],
       },
-      undefined,
       workspaceRoot,
     );
 
@@ -194,7 +200,6 @@ describe("workspace-confined browser upload", () => {
           target: { selector: 'input[type="file"]' as BrowserCssSelector },
           paths: ["fixtures/avatar.txt"],
         },
-        undefined,
         workspaceRoot,
       ),
     ).resolves.toMatchObject({
@@ -242,7 +247,6 @@ describe("workspace-confined browser upload", () => {
         target: { selector: 'input[type="file"]' as BrowserCssSelector },
         paths: ["fixtures/avatar.txt"],
       },
-      undefined,
       workspaceRoot,
     );
 
@@ -270,7 +274,6 @@ describe("workspace-confined browser upload", () => {
           target: { selector: 'input[type="file"]' as BrowserCssSelector },
           paths: ["fixtures/avatar.txt"],
         },
-        undefined,
         workspaceRoot,
       ),
     ).rejects.toBeDefined();
@@ -295,7 +298,6 @@ describe("workspace-confined browser upload", () => {
           target: { selector: 'input[type="file"]' as BrowserCssSelector },
           paths: ["fixtures/avatar.txt"],
         },
-        undefined,
         workspaceRoot,
       ),
     ).rejects.toMatchObject({ browserError: { code: "BrowserUploadFileUnsupported" } });
@@ -325,7 +327,6 @@ describe("workspace-confined browser upload", () => {
           target: { selector: 'input[type="file"]' as BrowserCssSelector },
           paths: ["fixtures/empty.txt"],
         },
-        undefined,
         workspaceRoot,
       );
 
@@ -373,7 +374,6 @@ describe("workspace-confined browser upload", () => {
           target: { selector: 'input[type="file"]' as BrowserCssSelector },
           paths: [...paths],
         },
-        undefined,
         workspaceRoot,
       );
 
@@ -396,7 +396,6 @@ describe("workspace-confined browser upload", () => {
           target: { selector: 'input[type="file"]' as BrowserCssSelector },
           paths: ["fixtures/empty-a.txt", "fixtures/empty-b.txt"],
         },
-        undefined,
         workspaceRoot,
       ),
     ).resolves.toBeDefined();
@@ -423,7 +422,6 @@ describe("workspace-confined browser upload", () => {
           target: { selector: 'input[type="file"]' as BrowserCssSelector },
           paths: ["fixtures/avatar.txt"],
         },
-        undefined,
         workspaceRoot,
       );
 
@@ -468,7 +466,6 @@ describe("workspace-confined browser upload", () => {
           target: { selector: 'input[type="file"]' as BrowserCssSelector },
           paths: ["fixtures/avatar.txt"],
         },
-        undefined,
         workspaceRoot,
       );
 

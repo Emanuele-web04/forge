@@ -1,0 +1,634 @@
+diff --git a/node_modules/betterwright/.bun-tag-2818573c67d7b19b b/.bun-tag-2818573c67d7b19b
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/betterwright/.bun-tag-42f2166c6e2accf0 b/.bun-tag-42f2166c6e2accf0
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/betterwright/.bun-tag-4ade45b32361aba3 b/.bun-tag-4ade45b32361aba3
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/betterwright/.bun-tag-4ba60b008e829498 b/.bun-tag-4ba60b008e829498
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/betterwright/.bun-tag-755a3c0d947adbd0 b/.bun-tag-755a3c0d947adbd0
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/betterwright/.bun-tag-7ded427ef8e1cf82 b/.bun-tag-7ded427ef8e1cf82
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/betterwright/.bun-tag-8f96ea77d0fce2c4 b/.bun-tag-8f96ea77d0fce2c4
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/betterwright/.bun-tag-c7d3ed853f191214 b/.bun-tag-c7d3ed853f191214
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/betterwright/.bun-tag-ce72083686ab4ee7 b/.bun-tag-ce72083686ab4ee7
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/betterwright/.bun-tag-da1702e74478cad b/.bun-tag-da1702e74478cad
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/betterwright/.bun-tag-ec250626d41ee73c b/.bun-tag-ec250626d41ee73c
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/betterwright/.bun-tag-eed0a70e8998437f b/.bun-tag-eed0a70e8998437f
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/betterwright/.bun-tag-f713d9c4cebd79fc b/.bun-tag-f713d9c4cebd79fc
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/dist/src/client.js b/dist/src/client.js
+index 1701abbbbf141a6f47b8b15ffefe4c168fb77ca9..6e0aad76e3d6d45d15918428ae2d895ab4002f49 100644
+--- a/dist/src/client.js
++++ b/dist/src/client.js
+@@ -330,6 +330,14 @@ export class BetterWright {
+      *   machine on the network. Pass `{host:"127.0.0.1"}` for loopback-only.
+      */
+     constructor(options = {}) {
++        this.hostOwnedTarget = options.hostOwnedTarget === true;
++        this.hostUploadFiles = options.hostUploadFiles ?? [];
++        if (!Array.isArray(this.hostUploadFiles) || this.hostUploadFiles.some(file => typeof file !== "string" || !path.isAbsolute(file)) || (this.hostUploadFiles.length && !this.hostOwnedTarget)) {
++            throw new TypeError("Host uploads require a host-owned target and absolute staged paths.");
++        }
++        if (this.hostOwnedTarget && (!options.provider?.cdpUrl || options.downloadPolicy !== "deny")) {
++            throw new TypeError("Host-owned targets require a scoped CDP provider and host-enforced download denial.");
++        }
+         this.home = options.home || defaultHome();
+         // null == the historical `browser/profile`. A validated name scopes the
+         // profile directory and, through it, the profile lock — nothing else.
+@@ -448,6 +456,8 @@ export class BetterWright {
+         // shared, so ephemeral fallbacks and saved files are common to every
+         // profile, as is the vault.
+         return {
++            hostOwnedTarget: this.hostOwnedTarget,
++            hostUploadFiles: this.hostUploadFiles,
+             profileDir: profileDirFor(root, this.profile),
+             runtimeDir: runtime,
+             artifactsDir: artifacts,
+@@ -495,6 +505,7 @@ export class BetterWright {
+             throw new BrowserError("This browser has been closed.");
+         const env = {
+             ...process.env,
++            ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
+             NODE_NO_WARNINGS: "1",
+         };
+         // Playwright's pw:protocol debug scope logs complete CDP payloads. The
+@@ -524,7 +535,8 @@ export class BetterWright {
+             env.BETTERWRIGHT_STEALTH_ACTIVE = "1";
+         }
+         const child = spawn(process.execPath, [...bunInheritedExecArgv(env), ...execArgv, WORKER_PATH], {
+-            cwd: path.dirname(WORKER_PATH),
++            // Electron can read scripts in ASAR, but cannot use an archived cwd.
++            cwd: this.hostOwnedTarget ? this._workerConfig().runtimeDir : path.dirname(WORKER_PATH),
+             stdio: ["pipe", "pipe", "pipe"],
+             env,
+         });
+@@ -954,12 +966,13 @@ export class BetterWright {
+             extracted = await this._extractCookieSync(normalized);
+         }
+         catch (error) {
+-            return { ok: false, error: String(error?.message || error) };
++            return { ok: false, error: "Cookie Sync could not read the selected local browser profile.", cookieReaderCode: error?.cookieReaderCode || "reader_unavailable", cookiePermissionDenied: error?.cookiePermissionDenied === true, cookieReaderStage: error?.cookieReaderStage };
+         }
+         if (!extracted.cookies.length) {
+             return {
+                 ok: true,
+                 synced: 0,
++                ...(this.hostOwnedTarget ? { cookieImportDomains: [] } : {}),
+                 selected: extracted.selected,
+                 skipped: extracted.skipped,
+                 source: extracted.source,
+@@ -969,7 +982,7 @@ export class BetterWright {
+         }
+         const config = await this._prepare();
+         const timeoutSeconds = Math.max(Math.ceil(normalized.timeoutMs / 1000), this.defaultTimeout, 5);
+-        return this._dispatch({
++        const result = await this._dispatch({
+             type: "cookie_sync",
+             config,
+             cookies: extracted.cookies,
+@@ -979,6 +992,7 @@ export class BetterWright {
+             warnings: extracted.warnings,
+             cloudConsent: normalized.cloudConsent,
+         }, timeoutSeconds);
++        return result;
+     }
+     _extractCookieSync(options) {
+         return extractCookieSync(options);
+diff --git a/dist/src/cookie-sync.js b/dist/src/cookie-sync.js
+index ef705665c8c54d34f2f42c3a2d3820103e81dfc6..5a92ac2408b454ff19c839e913bd54eedc39393b 100644
+--- a/dist/src/cookie-sync.js
++++ b/dist/src/cookie-sync.js
+@@ -445,8 +445,36 @@ export async function extractCookieSync(options, load = loadCookieReader) {
+     try {
+         snapshot = await reader.read(readOptions);
+     }
+-    catch {
+-        throw new Error("Cookie Sync could not read the selected local browser profile. Check the browser id, profile, permissions, and platform support.");
++    catch (cause) {
++        const error = new Error("Cookie Sync could not read the selected local browser profile.");
++        const code = untrustedField(cause, "rookieCode");
++        error.cookieReaderCode = ["source_extraction_failed", "source_inspection_failed", "discovery_failed", "no_selected_source", "no_discovered_source", "timed_out", "cancelled", "resource_exhausted"].includes(code) ? code : "reader_failed";
++        // The native API does not expose errno separately. Match only explicit OS
++        // denial markers locally; never forward its diagnostic or source paths.
++        const message = untrustedField(cause, "message");
++        error.cookiePermissionDenied = isString(message) && /\b(?:Permission denied|Operation not permitted|os error (?:1|13))\b/i.test(message);
++        if (!error.cookiePermissionDenied && isCallable(untrustedField(reader, "report")) && code === "source_extraction_failed") {
++            try {
++                const report = await reader.report({ browser: options.source.browser, ...(options.source.profile ? { profile: options.source.profile } : {}), ...(options.domains ? { domains: options.domains } : {}), select: "legacy_first", timeoutMs: Math.min(options.timeoutMs, 10_000), appBound: "disabled" });
++                const pending = [report];
++                for (let visited = 0; pending.length && visited < 100; visited++) {
++                    const node = pending.shift();
++                    const issues = untrustedField(node, "issues");
++                    if (Array.isArray(issues)) for (const issue of issues.slice(0, 100)) {
++                        if (untrustedField(issue, "severity") !== "error") continue;
++                        const stage = untrustedField(issue, "stage");
++                        if (["acquisition", "parse", "decrypt", "decode", "query", "discovery"].includes(stage)) error.cookieReaderStage = stage;
++                        const diagnostic = untrustedField(issue, "message");
++                        if (isString(diagnostic) && /\b(?:Permission denied|Operation not permitted|os error (?:1|13))\b/i.test(diagnostic)) error.cookiePermissionDenied = true;
++                    }
++                    for (const field of ["profiles", "sources"]) {
++                        const children = untrustedField(node, field);
++                        if (Array.isArray(children)) pending.push(...children.slice(0, 100));
++                    }
++                }
++            } catch { /* Keep the original fixed failure when diagnostics are unavailable. */ }
++        }
++        throw error;
+     }
+     return normalizeCookieSnapshot(snapshot, options);
+ }
+diff --git a/dist/src/vault-capture.js b/dist/src/vault-capture.js
+index d704ee96ab1b8b89ca80f993572804327d0bb442..017e0a2d32dfa1315bfc8a7ab1351dd5096aa6f4 100644
+--- a/dist/src/vault-capture.js
++++ b/dist/src/vault-capture.js
+@@ -89,6 +89,8 @@ export function installVaultCapture(context, deps = {}) {
+     const state = {
+         disposed: false,
+         cdpByPage: new Map(), // page -> CDPSession
++        scriptByPage: new Map(),
++        attaching: new Set(),
+         framesByPage: new Map(), // page -> Map<frameId, {contextId, url}>
+         pendingByPage: new Map(), // page -> Map<frameId, capture>
+         prompts: new Map(), // promptId -> {page, frameId, capture, timer}
+@@ -136,7 +138,7 @@ export function installVaultCapture(context, deps = {}) {
+                 username: capture.username,
+                 password: capture.password,
+                 label: hostLabel(capture.origin),
+-                matchMode: "base-domain",
++                matchMode: deps.matchMode || "base-domain",
+                 deferToPending: true,
+             });
+         }
+@@ -165,6 +167,11 @@ export function installVaultCapture(context, deps = {}) {
+         }
+     }
+     async function showPrompt(page, frameId, capture, mode) {
++        if (deps.requestSave) {
++            const choice = await deps.requestSave({ page, origin: capture.origin, username: capture.username, mode });
++            if (!state.disposed && choice === "save") await saveCapture(capture);
++            return;
++        }
+         const frames = state.framesByPage.get(page);
+         const frame = frames?.get(frameId);
+         if (!frame)
+@@ -189,7 +196,12 @@ export function installVaultCapture(context, deps = {}) {
+         })
+             .catch(() => dropPrompt(promptId, false));
+     }
+-    async function resolveCapture(page, frameId) {
++    function resolveCapture(page, frameId) {
++        return resolveCaptureInner(page, frameId).catch(error => {
++            if (!state.disposed && !page.isClosed()) fail(error);
++        });
++    }
++    async function resolveCaptureInner(page, frameId) {
+         const pendings = state.pendingByPage.get(page);
+         const capture = pendings?.get(frameId);
+         if (!capture)
+@@ -198,6 +210,10 @@ export function installVaultCapture(context, deps = {}) {
+         clearTimeout(capture.timer);
+         if (neverOrigins.has(capture.origin))
+             return;
++        if (deps.shouldCapture && !await deps.shouldCapture(capture))
++            return;
++        if (state.disposed)
++            return;
+         const lastModelAt = deps.lastModelActivity(page, capture.origin);
+         if (Number.isFinite(lastModelAt) &&
+             Date.now() - lastModelAt <= timings.modelWindowMs) {
+@@ -334,6 +350,10 @@ export function installVaultCapture(context, deps = {}) {
+         catch {
+             return;
+         }
++        if (state.disposed || page.isClosed()) {
++            await cdp.detach().catch(() => {});
++            return;
++        }
+         state.cdpByPage.set(page, cdp);
+         state.framesByPage.set(page, new Map());
+         state.pendingByPage.set(page, new Map());
+@@ -356,7 +376,9 @@ export function installVaultCapture(context, deps = {}) {
+                 name: BINDING_NAME,
+                 executionContextName: WORLD_NAME,
+             })
+-                .catch(fail);
++                .catch(error => {
++                    if (!state.disposed && !page.isClosed() && frames.get(frameId)?.contextId === context.id) fail(error);
++                });
+             frames.set(frameId, {
+                 contextId: context.id,
+                 url: previous?.url || "",
+@@ -390,23 +412,27 @@ export function installVaultCapture(context, deps = {}) {
+         try {
+             await cdp.send("Page.enable");
+             await cdp.send("Runtime.enable");
+-            await cdp.send("Page.addScriptToEvaluateOnNewDocument", {
++            const script = await cdp.send("Page.addScriptToEvaluateOnNewDocument", {
+                 source: SENSOR_SOURCE,
+                 worldName: WORLD_NAME,
+                 runImmediately: true,
+             });
++            state.scriptByPage.set(page, script.identifier);
++            if (state.disposed || page.isClosed()) await detachPage(page);
++            else deps.onReady?.();
+         }
+         catch (error) {
+-            fail(error);
++            if (!state.disposed && !page.isClosed()) fail(error);
+         }
+     }
+-    function detachPage(page) {
++    async function detachPage(page) {
+         const pendings = state.pendingByPage.get(page);
+         if (pendings) {
+             for (const capture of pendings.values())
+                 clearTimeout(capture.timer);
+         }
+         state.pendingByPage.delete(page);
++        const frames = state.framesByPage.get(page);
+         state.framesByPage.delete(page);
+         for (const [promptId, prompt] of [...state.prompts]) {
+             if (prompt.page === page)
+@@ -414,21 +440,34 @@ export function installVaultCapture(context, deps = {}) {
+         }
+         const cdp = state.cdpByPage.get(page);
+         state.cdpByPage.delete(page);
+-        if (cdp)
+-            void cdp.detach().catch(() => { });
++        if (cdp) {
++            const script = state.scriptByPage.get(page);
++            state.scriptByPage.delete(page);
++            if (script) await cdp.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: script }).catch(() => {});
++            for (const frame of frames?.values() || []) {
++                if (frame.contextId) await cdp.send("Runtime.evaluate", {
++                    expression: "globalThis.__bwVaultDispose?.()", contextId: frame.contextId,
++                }).catch(() => {});
++            }
++            await cdp.detach().catch(() => {});
++        }
+     }
+-    const onPage = (page) => void attachPage(page);
++    const onPage = (page) => {
++        const operation = attachPage(page).catch(fail).finally(() => state.attaching.delete(operation));
++        state.attaching.add(operation);
++    };
+     context.on("page", onPage);
+     for (const page of context.pages())
+-        void attachPage(page);
++        onPage(page);
+     return {
+-        dispose() {
++        async dispose() {
+             if (state.disposed)
+                 return;
+             state.disposed = true;
+             context.off("page", onPage);
++            await Promise.all([...state.attaching]);
+             for (const page of [...state.cdpByPage.keys()])
+-                detachPage(page);
++                await detachPage(page);
+             for (const promptId of [...state.prompts.keys()]) {
+                 dropPrompt(promptId, false);
+             }
+diff --git a/dist/src/vault-sensor.js b/dist/src/vault-sensor.js
+index ed10d8db2a2fe10000b3cf085ebf9f33b1fe8806..1b0b16ab51937d173dcbdae63145243846c11a1a 100644
+--- a/dist/src/vault-sensor.js
++++ b/dist/src/vault-sensor.js
+@@ -17,6 +17,7 @@
+     if (globalThis.__bwVaultSensorInstalled)
+         return;
+     globalThis.__bwVaultSensorInstalled = true;
++    const lifecycle = new AbortController();
+     const BINDING_NAME = "__bwVaultEvent";
+     const PROMPT_TIMEOUT_MS = 30_000;
+     const CLEAR_WATCH_MS = 10_000;
+@@ -28,6 +29,7 @@
+         const encoded = JSON.stringify(payload);
+         let attempts = 0;
+         const deliver = () => {
++            if (lifecycle.signal.aborted) return;
+             try {
+                 const binding = globalThis[BINDING_NAME];
+                 if (isEventBinding(binding)) {
+@@ -136,7 +138,7 @@
+         clearTimer = null;
+     };
+     // A real navigation must not look like "the app unmounted the form".
+-    addEventListener("pagehide", () => stopClearWatch(), true);
++    addEventListener("pagehide", () => stopClearWatch(), { capture: true, signal: lifecycle.signal });
+     // Report whether this document still shows a password form. The worker uses
+     // it to confirm a post-submit navigation: a page that lands back on a
+     // password form is a rejected login, not one worth saving.
+@@ -159,6 +161,7 @@
+     if (document.readyState === "loading") {
+         document.addEventListener("DOMContentLoaded", reportPasswordFormScan, {
+             once: true,
++            signal: lifecycle.signal,
+         });
+     }
+     else {
+@@ -225,14 +228,14 @@
+         const field = passwordFieldFor(event.target);
+         if (field)
+             capture(field);
+-    }, true);
++    }, { capture: true, signal: lifecycle.signal });
+     document.addEventListener("click", (event) => {
+         if (!event.isTrusted || !isSubmitLikeControl(event.target))
+             return;
+         const field = passwordFieldFor(event.target);
+         if (field)
+             capture(field);
+-    }, true);
++    }, { capture: true, signal: lifecycle.signal });
+     // --- save prompt ---------------------------------------------------------
+     let activePrompt = null;
+     const removePrompt = () => {
+@@ -345,4 +348,14 @@
+             removePrompt();
+         }
+     };
++    globalThis.__bwVaultDispose = () => {
++        lifecycle.abort();
++        stopClearWatch();
++        removePrompt();
++        lastCapture = { field: null, password: "", at: 0 };
++        delete globalThis.__bwVaultSensorInstalled;
++        delete globalThis.__bwVaultShowPrompt;
++        delete globalThis.__bwVaultDismissPrompt;
++        delete globalThis.__bwVaultDispose;
++    };
+ })();
+diff --git a/dist/src/vault.js b/dist/src/vault.js
+index a0918cb207235ed2a36ab600518017583c20b3e3..71dcd4df2bdf2cfc7ca8a287bb4ec75ba39b1684 100644
+--- a/dist/src/vault.js
++++ b/dist/src/vault.js
+@@ -1147,16 +1147,22 @@ async function acquireLock(paths, timeoutMs, staleMs, afterPublish = null) {
+ function emptySnapshot() {
+     return { version: SNAPSHOT_VERSION, revision: 0, records: [], pending: [] };
+ }
+-async function loadKeyAndSnapshot(paths) {
++async function loadKeyAndSnapshot(paths, keyProvider) {
+     const [keyStats, dataStats] = await Promise.all([
+         regularFileStats(paths.key, { missing: true }),
+         regularFileStats(paths.data, { missing: true }),
+     ]);
+-    if (!keyStats && dataStats) {
++    if (!keyProvider && !keyStats && dataStats) {
+         throw vaultError("Credential vault key is missing; refusing to replace it while ciphertext exists.", "VAULT_KEY_MISSING");
+     }
+     let key;
+-    if (keyStats) {
++    if (keyProvider) {
++        key = await keyProvider();
++        if (!Buffer.isBuffer(key) || key.length !== KEY_BYTES) {
++            throw vaultError("Host vault key is invalid.", "VAULT_KEY_INVALID");
++        }
++    }
++    else if (keyStats) {
+         key = await readBoundedFile(paths.key, KEY_BYTES, "Credential vault key");
+         if (key.length !== KEY_BYTES) {
+             key.fill(0);
+@@ -1212,6 +1218,10 @@ export class LocalCredentialVault {
+     #afterLockPublishForTest = null;
+     constructor(options = {}) {
+         const resolved = normalizeOptions(options);
++        this.keyProvider = resolved.keyProvider;
++        if (this.keyProvider != null && !isCallable(this.keyProvider)) {
++            throw new TypeError("keyProvider must be a function.");
++        }
+         // Behavior note: the fallback used to hard-code ~/.betterwright, ignoring
+         // BETTERWRIGHT_HOME. It now uses the shared defaultHome() so a vault
+         // constructed without dir/home lands in the same home directory as every
+@@ -1730,7 +1740,7 @@ export class LocalCredentialVault {
+         return withAuditWarning(result, auditWarning);
+     }
+     async #dispatch(action, payload, target) {
+-        const { key, snapshot } = await loadKeyAndSnapshot(this.paths);
++        const { key, snapshot } = await loadKeyAndSnapshot(this.paths, this.keyProvider);
+         try {
+             if (action === "list")
+                 return await this.#list(snapshot, payload, target);
+@@ -1801,6 +1811,9 @@ export class LocalCredentialVault {
+             return result;
+         });
+     }
++    trackRedactionSecret(value) {
++        this.#trackSecret(value);
++    }
+     redact(value) {
+         // Delegates to the one shared algorithm so the host-side net cannot drift
+         // from the worker-side one; only the secret set differs per process.
+@@ -1831,7 +1844,7 @@ export class LocalCredentialVault {
+     async #readSnapshot() {
+         if (!(await pathExists(this.paths.data)))
+             return null;
+-        const { key, snapshot } = await loadKeyAndSnapshot(this.paths);
++        const { key, snapshot } = await loadKeyAndSnapshot(this.paths, this.keyProvider);
+         key.fill(0);
+         return snapshot;
+     }
+@@ -1938,7 +1951,7 @@ export class LocalCredentialVault {
+                 if (!(await pathExists(this.paths.data))) {
+                     throw vaultError("No credential vault exists yet.", "NOT_FOUND");
+                 }
+-                const { key, snapshot } = await loadKeyAndSnapshot(this.paths);
++                const { key, snapshot } = await loadKeyAndSnapshot(this.paths, this.keyProvider);
+                 try {
+                     const index = snapshot.records.findIndex((candidate) => candidate.id === wanted);
+                     const pendingIndex = index === -1
+diff --git a/dist/src/worker.js b/dist/src/worker.js
+index c53eda622f60b7f5084698e850ef6a00f66e60f3..78a248c4cfcb0ae495ecd4ab0b5ec89512ecafbd 100755
+--- a/dist/src/worker.js
++++ b/dist/src/worker.js
+@@ -580,6 +580,8 @@ const guardProxy = createGuardProxy({
+ });
+ async function installDownloadGuard(context) {
+     await closeDownloadGuard();
++    // Synara's target lease enforces downloads without changing a shared browser context.
++    if (launchConfig.hostOwnedTarget === true && launchConfig.downloadPolicy === "deny") return;
+     const browser = context.browser?.();
+     if (!browser || !isCallable(untrustedField(browser, "newBrowserCDPSession"))) {
+         throw new Error("Chromium download byte limits require a browser CDP session.");
+@@ -2025,9 +2027,10 @@ async function ensureBrowser(config, { requirePersistentProfile = false } = {})
+             // session. On success the context's "close" handler disarms and consumes
+             // this same reference, so the stop never runs twice.
+             try {
+-                const browser = await chromium.connectOverCDP(providerPlan.cdpUrl, Object.keys(providerPlan.headers || {}).length
+-                    ? { headers: providerPlan.headers }
+-                    : {});
++                const browser = await chromium.connectOverCDP(providerPlan.cdpUrl, {
++                    headers: providerPlan.headers || {},
++                    noDefaults: launchConfig.hostOwnedTarget === true,
++                });
+                 const existing = browser.contexts()[0];
+                 browserContext =
+                     existing ||
+@@ -2341,7 +2344,12 @@ function validateMethodPaths(kind, property, args) {
+             : args[1];
+         const files = Array.isArray(supplied) ? supplied : [supplied];
+         for (const file of files) {
+-            if (isString(file))
++            if (isString(file) && launchConfig.hostOwnedTarget === true && launchConfig.hostUploadFiles?.includes(file)) {
++                const resolved = fs.realpathSync(file);
++                if (resolved !== file || !fs.statSync(resolved).isFile())
++                    throw new Error("Host upload is not an exact regular staged file.");
++            }
++            else if (isString(file))
+                 assertReadableBrowserPath(file);
+         }
+     }
+@@ -2631,6 +2639,18 @@ function wrap(value, realm) {
+                 else {
+                     result = member.apply(value, prepared);
+                 }
++                if (launchConfig?.hostOwnedTarget && ["Keyboard", "Page", "Frame", "Locator"].includes(kind) &&
++                    ["press", "pressSequentially", "type", "fill", "down"].includes(property) && result?.catch) {
++                    result = result.catch(async (error) => {
++                        // Playwright press() skips its key-up sequence when CDP
++                        // denies a chord. Restore a neutral keyboard before reuse.
++                        const keyboard = kind === "Keyboard" ? value : kind === "Page" ? value.keyboard : value.page().keyboard;
++                        for (const key of ["AltLeft", "AltRight", "ControlLeft", "ControlRight", "MetaLeft", "MetaRight", "ShiftLeft", "ShiftRight"]) {
++                            await keyboard.up(key).catch(() => {});
++                        }
++                        throw error;
++                    });
++                }
+                 if (["Request", "Response"].includes(kind) &&
+                     property === "headers") {
+                     result = result && isCallable(untrustedField(result, "then"))
+@@ -6850,6 +6870,7 @@ async function cookieSync(message) {
+             id: message.id,
+             ok: true,
+             synced: storedCookies.length,
++            ...(launchConfig.hostOwnedTarget ? { cookieImportDomains: [...new Set(storedCookies.map((cookie) => cookie.domain))] } : {}),
+             selected,
+             skipped,
+             source,
+@@ -7353,7 +7374,8 @@ async function performShutdown() {
+     await closeDownloadGuard();
+     disposeVaultCapture();
+     try {
+-        await browserContext?.close();
++        if (launchConfig?.hostOwnedTarget === true) await browserContext?.browser()?.close();
++        else await browserContext?.close();
+     }
+     catch {
+         /* parent/process exit */
+diff --git a/package.json b/package.json
+index 6a77351c67f82950e967a6c7ad1808ad0157baf5..58b08d0bb606634230f70e2e82c3a6f1ec2fb6ba 100644
+--- a/package.json
++++ b/package.json
+@@ -6,6 +6,11 @@
+   "main": "dist/src/index.js",
+   "types": "types/index.d.ts",
+   "exports": {
++    "./capture": {
++      "types": "./types/capture.d.ts",
++      "import": "./dist/src/vault-capture.js",
++      "default": "./dist/src/vault-capture.js"
++    },
+     ".": {
+       "types": "./types/index.d.ts",
+       "import": "./dist/src/index.js",
+diff --git a/node_modules/betterwright/types/capture.d.ts b/types/capture.d.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..c28171ae9d5f84f147750060c2ac339f2dc0d023
+--- /dev/null
++++ b/types/capture.d.ts
+@@ -0,0 +1,26 @@
++export interface CapturePage {
++  isClosed(): boolean;
++  once(event: "close", callback: () => void): unknown;
++}
++export interface CaptureContext {
++  pages(): CapturePage[];
++  on(event: "page", callback: (page: CapturePage) => void): unknown;
++  off(event: "page", callback: (page: CapturePage) => void): unknown;
++  newCDPSession(page: CapturePage): Promise<{
++    send(method: string, params?: Record<string, unknown>): Promise<unknown>;
++    on(event: string, callback: (event: unknown) => void): unknown;
++    detach(): Promise<void>;
++  }>;
++}
++export function installVaultCapture(context: CaptureContext, deps: {
++  vaultCallAtOrigin(session: unknown, origin: string, action: string, payload: Record<string, unknown>): Promise<unknown>;
++  sessionForPage(page: CapturePage): unknown;
++  trackSecret(value: string): void;
++  isHeaded(): boolean;
++  lastModelActivity(page: CapturePage, origin: string): number;
++  shouldCapture?(input: { origin: string; username: string; password: string }): Promise<boolean>;
++  requestSave?(input: { page: CapturePage; origin: string; username: string; mode: string }): Promise<"save" | "dismiss">;
++  matchMode?: "exact-origin";
++  onError?(error: Error): void;
++  onReady?(): void;
++}): { dispose(): Promise<void>; isBusy(page: CapturePage): boolean };
+diff --git a/types/public.d.ts b/types/public.d.ts
+index 7fbd0aa6136ac82660443871a5177afdebf6818d..272b8fdce93dd5948d5e2b3fec0325c1c48b3173 100644
+--- a/types/public.d.ts
++++ b/types/public.d.ts
+@@ -106,8 +106,9 @@ export type CookieSyncResult =
+       target: string;
+       warnings?: CookieSyncWarning[];
+       profileMode?: "persistent" | "ephemeral";
++      cookieImportDomains?: string[];
+     }
+-  | { ok: false; error: string };
++  | { ok: false; error: string; cookieReaderCode?: string; cookiePermissionDenied?: boolean; cookieReaderStage?: string };
+ 
+ export interface CookieSourceBrowser {
+   id: string;
+@@ -122,6 +123,10 @@ export interface CookieSourceProfile {
+ }
+ 
+ export interface BetterWrightOptions {
++  /** Synara-local: caller owns a single scoped target and enforces download denial. */
++  hostOwnedTarget?: boolean;
++  /** Trusted host-only, exact staged paths allowed for file input selection. */
++  hostUploadFiles?: readonly string[];
+   home?: string;  /**
+    * Named persistent browser profile inside the home: a separate identity,
+    * with its own cookie jar, its own profile lock, and its own session daemon,
+diff --git a/types/vault.d.ts b/types/vault.d.ts
+index 0876c43aa1fab6643fc4c080cb0c5631295a7047..ca87e73231102ec4e4cd800611d1ee128a2c7899 100644
+--- a/types/vault.d.ts
++++ b/types/vault.d.ts
+@@ -23,6 +23,8 @@ export type VaultJsonValue =
+   | { [key: string]: VaultJsonValue };
+ 
+ export interface LocalCredentialVaultOptions {
++  /** Host-owned encryption key. Return a fresh 32-byte Buffer; the vault zeroes it. */
++  keyProvider?: () => Promise<Buffer>;
+   /** Exact vault directory. Takes precedence over `home`. */
+   dir?: string;
+   /** BetterWright home directory; the vault is stored in its `vault` child. */
+@@ -150,6 +152,8 @@ export class LocalCredentialVault {
+ 
+   /** Return a cloned value with every active secret replaced. */
+   redact<T>(value: T): T;
++  /** Synara-local: retain captured secrets while host-owned pages remain alive. */
++  trackRedactionSecret(value: string): void;
+ 
+   /** Clear tracked material after every page in the owning worker is closed. */
+   resetRedactionSecrets(): void;

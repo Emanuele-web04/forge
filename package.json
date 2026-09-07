@@ -76,7 +76,8 @@
     "oxfmt": "^0.40.0",
     "oxlint": "^1.55.0",
     "turbo": "^2.9.14",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "@vitest/coverage-v8": "4.1.10"
   },
   "overrides": {
     "axios": "^1.16.0",
@@ -109,6 +110,7 @@
   },
   "patchedDependencies": {
     "@effect/platform-node-shared@https://pkg.pr.new/Effect-TS/effect-smol/@effect/platform-node-shared@8881a9b606d84a6f5eb6615279138322984f5368": "patches/@effect%2Fplatform-node-shared@8881a9b.patch",
-    "@legendapp/list@3.3.3": "patches/@legendapp%2Flist@3.3.3.patch"
+    "@legendapp/list@3.3.3": "patches/@legendapp%2Flist@3.3.3.patch",
+    "betterwright@2.4.0": "patches/betterwright@2.4.0.patch"
   }
 }

@@ -9,10 +9,13 @@ import { describe, expect, it, vi } from "vitest";
 import type { BrowserAutomationVisibleRuntime, DesktopBrowserManager } from "../browserManager";
 import { DesktopBrowserAutomationHost } from "./desktopBrowserAutomationHost";
 import { BrowserAutomationHostError } from "./hostErrors";
-import { resolveBrowserTarget } from "./targets";
 import { configureWorkspaceUploadForTests } from "./workspaceUpload";
+import { runBetterwright } from "./betterwrightRuntime";
+
+vi.mock("./betterwrightRuntime", () => ({ runBetterwright: vi.fn() }));
 
 vi.mock("electron", () => ({
+  app: { getPath: () => "/isolated/synara/userdata" },
   webContents: { getFocusedWebContents: () => null },
 }));
 
@@ -350,6 +353,7 @@ const createManager = () => {
   };
   const manager = {
     isAnnotationInteractive: vi.fn(() => false),
+    isHumanBrowserOperationActive: vi.fn(() => false),
     getState: vi.fn(() => state),
     getAutomationHumanControlEpoch: vi.fn(() => 0),
     subscribeAutomationHumanControl: vi.fn(
@@ -384,208 +388,62 @@ const createManager = () => {
 };
 
 describe("DesktopBrowserAutomationHost", () => {
-  it("releases another session's WebMCP discovery before navigating the shared tab", async () => {
-    const { manager, webContents } = createManager();
+  it.each([45000, 60000])("rejects invalid timeout before running the browser (%s)", async (timeoutMs) => {
+    const { manager } = createManager();
     const host = new DesktopBrowserAutomationHost(manager);
-
-    await host.executeTool({
-      sessionId: "session-webmcp-owner",
-      provider: "codex",
-      threadId: THREAD_ID,
-      name: "browser_webmcp_tools",
-      arguments: {},
-    });
-    await host.executeTool({
-      sessionId: "session-shared-navigation",
-      provider: "claude",
-      threadId: THREAD_ID,
-      name: "browser_navigate",
-      arguments: { url: "https://example.test/next" },
-    });
-
-    expect(webContents.debugger.sendCommand).toHaveBeenCalledWith("Runtime.releaseObject", {
-      objectId: "webmcp-bridge",
-    });
+    vi.mocked(runBetterwright).mockReset();
+    await expect(host.executeTool({ sessionId: "bounds", provider: "codex", threadId: THREAD_ID,
+      name: "browser_run", arguments: { timeoutMs, code: "return null" },
+    })).rejects.toMatchObject({ browserError: { code: "BrowserInvalidTimeout", effectMayHaveCommitted: false } });
+    expect(runBetterwright).not.toHaveBeenCalled();
+    await host.dispose();
   });
 
-  it("invalidates WebMCP discovery when the page navigates outside a browser tool", async () => {
-    const { manager, webContents } = createManager();
+  it("preserves safe credential recovery guidance from the runtime", async () => {
+    const { manager } = createManager();
     const host = new DesktopBrowserAutomationHost(manager);
-    const discovery = (await host.executeTool({
-      sessionId: "session-webmcp-spontaneous-navigation",
+    vi.mocked(runBetterwright).mockReset().mockRejectedValueOnce(new BrowserAutomationHostError({
+      code: "BrowserCredentialTargetRequired", phase: "evaluate", retryable: false, effectMayHaveCommitted: true,
+    }));
+    await expect(host.executeTool({ sessionId: "credential-error", provider: "codex", threadId: THREAD_ID,
+      name: "browser_run", arguments: { code: "await credentials.generateAndFill()" },
+    })).rejects.toMatchObject({ browserError: { code: "BrowserCredentialTargetRequired", effectMayHaveCommitted: true,
+      message: expect.stringContaining("passwordSelector"),
+    } });
+    await host.dispose();
+  });
+
+  it("runs Betterwright in the authorized tab and replays a completed batch only once", async () => {
+    const { manager, webContents, raw } = createManager();
+    const host = new DesktopBrowserAutomationHost(manager);
+    vi.mocked(runBetterwright).mockReset().mockResolvedValue({ answer: 42 });
+    const request = {
+      sessionId: "session-betterwright",
       provider: "codex",
       threadId: THREAD_ID,
-      name: "browser_webmcp_tools",
-      arguments: {},
-    })) as {
-      readonly discoveryId: string;
-      readonly tools: readonly [{ readonly toolId: string }];
+      name: "browser_run" as const,
+      arguments: { code: "return {answer: 42}", idempotencyKey: "run-1" },
     };
-
-    webContents.emitDebuggerMessage("Page.frameNavigated", {
-      frame: { id: "main-frame", url: "https://example.test/delayed" },
-    });
-    await Promise.resolve();
-
-    await expect(
-      host.executeTool({
-        sessionId: "session-webmcp-spontaneous-navigation",
-        provider: "codex",
-        threadId: THREAD_ID,
-        name: "browser_webmcp_call",
-        arguments: {
-          discoveryId: discovery.discoveryId,
-          toolId: discovery.tools[0].toolId,
-          arguments: {},
-        },
-      }),
-    ).rejects.toMatchObject({ browserError: { code: "BrowserWebMcpDiscoveryStale" } });
+    const result = await host.executeTool(request);
+    expect(result).toMatchObject({ tabId: TAB_ID, value: { answer: 42 }, serializedByteCount: 13 });
+    expect(await host.executeTool(request)).toEqual(result);
+    expect(runBetterwright).toHaveBeenCalledTimes(1);
+    expect(runBetterwright).toHaveBeenCalledWith(expect.objectContaining({
+      contents: webContents, home: "/isolated/synara/userdata/browser-engine", code: "return {answer: 42}",
+    }));
+    expect(raw.trackAutomationDownload).toHaveBeenCalled();
+    await host.dispose();
   });
 
-  it("preserves the current WebMCP discovery after mismatched caller tokens", async () => {
-    const { manager, webContents } = createManager();
+  it("sanitizes Betterwright failures and rejects unbounded batch results", async () => {
+    const { manager } = createManager();
     const host = new DesktopBrowserAutomationHost(manager);
-    const discovery = (await host.executeTool({
-      sessionId: "session-webmcp-mismatch",
-      provider: "codex",
-      threadId: THREAD_ID,
-      name: "browser_webmcp_tools",
-      arguments: {},
-    })) as {
-      readonly discoveryId: string;
-      readonly tools: readonly [{ readonly toolId: string }];
-    };
-    const call = (discoveryId: string, toolId: string) =>
-      host.executeTool({
-        sessionId: "session-webmcp-mismatch",
-        provider: "codex",
-        threadId: THREAD_ID,
-        name: "browser_webmcp_call",
-        arguments: { discoveryId, toolId, arguments: {} },
-      });
-
-    await expect(call(crypto.randomUUID(), discovery.tools[0].toolId)).rejects.toMatchObject({
-      browserError: { code: "BrowserWebMcpDiscoveryStale" },
-    });
-    await expect(call(discovery.discoveryId, "w2")).rejects.toMatchObject({
-      browserError: { code: "BrowserWebMcpDiscoveryStale" },
-    });
-    expect(webContents.debugger.sendCommand).not.toHaveBeenCalledWith("Runtime.releaseObject", {
-      objectId: "webmcp-bridge",
-    });
-    await expect(call(discovery.discoveryId, discovery.tools[0].toolId)).resolves.toMatchObject({
-      status: "completed",
-      result: { ok: true },
-    });
-  });
-
-  it("preserves an ambiguous WebMCP invocation error after navigation starts", async () => {
-    const { manager, webContents } = createManager();
-    const host = new DesktopBrowserAutomationHost(manager);
-    const discovery = (await host.executeTool({
-      sessionId: "session-webmcp-ambiguous",
-      provider: "codex",
-      threadId: THREAD_ID,
-      name: "browser_webmcp_tools",
-      arguments: {},
-    })) as {
-      readonly discoveryId: string;
-      readonly tools: readonly [{ readonly toolId: string }];
-    };
-    const sendCommand = webContents.debugger.sendCommand as ReturnType<typeof vi.fn>;
-    const original = sendCommand.getMockImplementation() as SendCommand;
-    sendCommand.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
-      const declaration = String(params?.functionDeclaration ?? "");
-      if (method === "Runtime.callFunctionOn" && declaration.includes("return await this.invoke")) {
-        webContents.reload();
-        await Promise.resolve();
-        throw new Error("execution context was destroyed");
-      }
-      return original(method, params);
-    });
-
-    await expect(
-      host.executeTool({
-        sessionId: "session-webmcp-ambiguous",
-        provider: "codex",
-        threadId: THREAD_ID,
-        name: "browser_webmcp_call",
-        arguments: {
-          discoveryId: discovery.discoveryId,
-          toolId: discovery.tools[0].toolId,
-          arguments: {},
-        },
-      }),
-    ).rejects.toMatchObject({
-      browserError: {
-        code: "BrowserAmbiguousResult",
-        retryable: false,
-        effectMayHaveCommitted: true,
-      },
-    });
-  });
-
-  it("waits for draining CDP work before releasing WebMCP discoveries on disposal", async () => {
-    const { manager, webContents } = createManager();
-    const host = new DesktopBrowserAutomationHost(manager);
-    await host.executeTool({
-      sessionId: "session-webmcp-dispose",
-      provider: "codex",
-      threadId: THREAD_ID,
-      name: "browser_webmcp_tools",
-      arguments: {},
-    });
-
-    const sendCommand = webContents.debugger.sendCommand as ReturnType<typeof vi.fn>;
-    const original = sendCommand.getMockImplementation() as SendCommand;
-    const evaluation = deferred<unknown>();
-    sendCommand.mockImplementation((method: string, params?: Record<string, unknown>) => {
-      if (method === "Runtime.evaluate" && params?.expression === "({answer: 42})") {
-        return evaluation.promise;
-      }
-      return original(method, params);
-    });
-    const controller = new AbortController();
-    const operation = host.executeTool({
-      sessionId: "session-webmcp-dispose",
-      provider: "codex",
-      threadId: THREAD_ID,
-      name: "browser_evaluate",
-      arguments: { expression: "({answer: 42})" },
-      signal: controller.signal,
-    });
-    await vi.waitFor(() =>
-      expect(sendCommand).toHaveBeenCalledWith(
-        "Runtime.evaluate",
-        expect.objectContaining({ expression: "({answer: 42})" }),
-      ),
-    );
-    controller.abort();
-    await expect(operation).rejects.toMatchObject({
-      browserError: { code: "BrowserCancelled" },
-    });
-
-    const disposed = host.dispose();
-    await Promise.resolve();
-    expect(disposed).not.toBe(undefined);
-    expect(sendCommand).not.toHaveBeenCalledWith("Runtime.releaseObject", {
-      objectId: "webmcp-bridge",
-    });
-
-    evaluation.resolve({ result: { value: { answer: 42 } } });
-    await disposed;
-    expect(sendCommand).toHaveBeenCalledWith("Runtime.releaseObject", {
-      objectId: "webmcp-bridge",
-    });
-    await expect(
-      host.executeTool({
-        sessionId: "session-after-dispose",
-        provider: "codex",
-        threadId: THREAD_ID,
-        name: "browser_status",
-        arguments: {},
-      }),
-    ).rejects.toMatchObject({ browserError: { code: "BrowserHostUnavailable" } });
+    vi.mocked(runBetterwright).mockReset().mockRejectedValueOnce(new Error("private-password"));
+    const request = { sessionId: "batch-errors", provider: "codex", threadId: THREAD_ID, name: "browser_run" as const, arguments: { code: "return null" } };
+    await expect(host.executeTool(request)).rejects.toMatchObject({ browserError: { code: "BrowserEvaluationFailed" } });
+    vi.mocked(runBetterwright).mockResolvedValueOnce("x".repeat(262_145));
+    await expect(host.executeTool({ ...request, arguments: { code: "return 'large'" } })).rejects.toMatchObject({ browserError: { code: "BrowserEvaluationResultTooLarge" } });
+    await host.dispose();
   });
 
   it("blocks new DOM tools while a human annotation picker is interactive", async () => {
@@ -598,7 +456,7 @@ describe("DesktopBrowserAutomationHost", () => {
         sessionId: "annotation-takeover",
         provider: "codex",
         threadId: THREAD_ID,
-        name: "browser_snapshot",
+        name: "browser_logs",
         arguments: {},
       }),
     ).rejects.toMatchObject({
@@ -904,229 +762,6 @@ describe("DesktopBrowserAutomationHost", () => {
         ([method]) => method === "Emulation.setDeviceMetricsOverride",
       ),
     ).toHaveLength(1);
-  });
-
-  it("rejects replay of a snapshot superseded by a newer semantic observation", async () => {
-    const { manager } = createManager();
-    const host = new DesktopBrowserAutomationHost(manager);
-    const firstRequest = {
-      sessionId: "session-snapshot-replay",
-      provider: "codex",
-      threadId: THREAD_ID,
-      name: "browser_snapshot" as const,
-      arguments: { idempotencyKey: "snapshot-old", includeImage: false },
-    };
-    const first = (await host.executeTool(firstRequest)) as {
-      structuredContent: { snapshotId: string };
-    };
-    const second = (await host.executeTool({
-      ...firstRequest,
-      arguments: { idempotencyKey: "snapshot-new", includeImage: false },
-    })) as { structuredContent: { snapshotId: string } };
-    expect(second.structuredContent.snapshotId).not.toBe(first.structuredContent.snapshotId);
-
-    await expect(host.executeTool(firstRequest)).rejects.toMatchObject({
-      browserError: {
-        code: "BrowserStaleReference",
-        retryable: false,
-        effectMayHaveCommitted: false,
-      },
-    });
-  });
-
-  it("executes the complete 22-tool catalogue against one shared visible runtime", async () => {
-    const { manager, raw, webContents } = createManager();
-    const host = new DesktopBrowserAutomationHost(manager, {
-      requestOpenPanel: async () => undefined,
-    });
-    let sequence = 0;
-    const call = (
-      name: Parameters<typeof host.executeTool>[0]["name"],
-      arguments_: Record<string, unknown>,
-      workspaceRoot?: string,
-    ) =>
-      host.executeTool({
-        sessionId: "session-all-tools",
-        provider: "opencode",
-        threadId: THREAD_ID,
-        name,
-        arguments: arguments_,
-        ...(workspaceRoot === undefined ? {} : { workspaceRoot }),
-      });
-    const key = () => `intent-${++sequence}`;
-
-    await expect(call("browser_status", {})).resolves.toMatchObject({ available: true });
-    await expect(call("browser_tabs", {})).resolves.toMatchObject({ tabs: [{ tabId: TAB_ID }] });
-    await expect(
-      call("browser_open", {
-        idempotencyKey: key(),
-        url: "https://example.test/",
-        reuse: true,
-      }),
-    ).resolves.toMatchObject({ tabId: TAB_ID, disposition: "reused" });
-    raw.prepareAutomationNavigation.mockClear();
-    raw.getVisibleAutomationRuntime.mockClear();
-    await expect(
-      call("browser_navigate", {
-        idempotencyKey: key(),
-        url: "https://example.test/next",
-      }),
-    ).resolves.toMatchObject({ tabId: TAB_ID, finalUrl: "https://example.test/next" });
-    expect(raw.prepareAutomationNavigation).toHaveBeenCalledBefore(raw.getVisibleAutomationRuntime);
-    await expect(
-      call("browser_back", {
-        idempotencyKey: key(),
-        waitUntil: "domcontentloaded",
-      }),
-    ).resolves.toMatchObject({ finalUrl: "https://example.test/" });
-    await expect(
-      call("browser_forward", {
-        idempotencyKey: key(),
-        waitUntil: "domcontentloaded",
-      }),
-    ).resolves.toMatchObject({ finalUrl: "https://example.test/next" });
-    await expect(
-      call("browser_reload", {
-        idempotencyKey: key(),
-        waitUntil: "domcontentloaded",
-        ignoreCache: true,
-      }),
-    ).resolves.toMatchObject({ finalUrl: "https://example.test/next" });
-    await expect(
-      call("browser_resize", {
-        idempotencyKey: key(),
-        width: 1024,
-        height: 768,
-      }),
-    ).resolves.toMatchObject({ requested: { width: 1024, height: 768 } });
-    const snapshot = await call("browser_snapshot", { includeImage: false });
-    expect(snapshot).toMatchObject({
-      structuredContent: { tabId: TAB_ID, elements: [{ ref: "e1", role: "button" }] },
-    });
-    await expect(call("browser_screenshot", { fullPage: false })).resolves.toMatchObject({
-      structuredContent: {
-        tabId: TAB_ID,
-        mode: "viewport",
-        image: { width: 1_024, height: 768 },
-      },
-      image: { mimeType: "image/png", data: expect.any(String) },
-    });
-    await expect(
-      call("browser_logs", {
-        includeConsole: true,
-        includeNetwork: true,
-        limit: 100,
-      }),
-    ).resolves.toMatchObject({
-      tabId: TAB_ID,
-      entries: expect.arrayContaining([
-        expect.objectContaining({ kind: "network", phase: "request" }),
-      ]),
-    });
-    await expect(
-      call("browser_click", {
-        idempotencyKey: key(),
-        target: { selector: "#save" },
-      }),
-    ).resolves.toMatchObject({ tabId: TAB_ID, point: { x: 60, y: 40 } });
-    expect(webContents.debugger.sendCommand).toHaveBeenCalledWith(
-      "Input.dispatchMouseEvent",
-      expect.objectContaining({ type: "mousePressed", x: 60, y: 40 }),
-    );
-    await expect(
-      call("browser_hover", {
-        idempotencyKey: key(),
-        target: { selector: "#save" },
-      }),
-    ).resolves.toMatchObject({ tabId: TAB_ID, point: { x: 60, y: 40 } });
-    await expect(
-      call("browser_drag", {
-        idempotencyKey: key(),
-        source: { selector: "#source" },
-        target: { selector: "#target" },
-        steps: 2,
-      }),
-    ).resolves.toMatchObject({
-      tabId: TAB_ID,
-      source: { point: { x: 60, y: 40 } },
-      target: { point: { x: 60, y: 40 } },
-    });
-    await expect(
-      call("browser_type", {
-        idempotencyKey: key(),
-        target: { selector: "#field" },
-        text: "hello",
-      }),
-    ).resolves.toMatchObject({ resultingValue: { kind: "text", value: "hello" } });
-    expect(webContents.insertText).toHaveBeenCalledWith("hello");
-    expect(webContents.debugger.sendCommand).not.toHaveBeenCalledWith(
-      "Input.insertText",
-      expect.anything(),
-    );
-    await expect(
-      call("browser_select", {
-        idempotencyKey: key(),
-        target: { selector: "#choice" },
-        values: ["primary"],
-      }),
-    ).resolves.toMatchObject({ selectedValues: ["primary"] });
-    const workspaceRoot = await mkdtemp(join(tmpdir(), "synara-browser-host-upload-"));
-    const uploadUserDataRoot = await mkdtemp(join(tmpdir(), "synara-browser-host-user-data-"));
-    configureWorkspaceUploadForTests(webContents, { userDataRoot: uploadUserDataRoot });
-    await writeFile(join(workspaceRoot, "avatar.txt"), "avatar");
-    try {
-      await expect(
-        call(
-          "browser_upload",
-          {
-            idempotencyKey: key(),
-            target: { selector: "#upload" },
-            paths: ["avatar.txt"],
-          },
-          workspaceRoot,
-        ),
-      ).resolves.toMatchObject({
-        tabId: TAB_ID,
-        files: [{ name: "avatar.txt", byteLength: 6 }],
-      });
-    } finally {
-      await Promise.all([
-        rm(workspaceRoot, { recursive: true, force: true }),
-        rm(uploadUserDataRoot, { recursive: true, force: true }),
-      ]);
-    }
-    await expect(
-      call("browser_press", {
-        idempotencyKey: key(),
-        keys: ["Enter"],
-      }),
-    ).resolves.toMatchObject({ emitted: ["Enter"], modifiersReleased: true });
-    expect(webContents.sendInputEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "keyDown", keyCode: "Enter", skipIfUnhandled: true }),
-    );
-    await expect(
-      call("browser_scroll", {
-        idempotencyKey: key(),
-        mode: "pixels",
-        deltaY: 100,
-      }),
-    ).resolves.toMatchObject({ before: { y: 0 }, after: { y: 100 } });
-    await expect(
-      call("browser_wait", {
-        conditions: [{ kind: "text", text: "Ready", state: "present" }],
-      }),
-    ).resolves.toMatchObject({ satisfiedConditionIndexes: [0] });
-    await expect(
-      call("browser_evaluate", {
-        idempotencyKey: key(),
-        expression: "({answer: 42})",
-      }),
-    ).resolves.toMatchObject({ value: { answer: 42 } });
-    await expect(
-      call("browser_close", {
-        idempotencyKey: key(),
-      }),
-    ).resolves.toMatchObject({ closedTabId: TAB_ID, activeTabId: null });
   });
 
   it("opens the blank launcher without waiting for a guest webview that does not exist", async () => {
@@ -1511,117 +1146,6 @@ describe("DesktopBrowserAutomationHost", () => {
     expect(raw.closeAutomationTab).toHaveBeenCalledWith({ threadId: THREAD_ID, tabId: TAB_ID });
   });
 
-  it("resolves a scroll point to the element under the cursor", async () => {
-    const { manager, webContents } = createManager();
-    const host = new DesktopBrowserAutomationHost(manager);
-
-    await expect(
-      host.executeTool({
-        sessionId: "session-scroll-point",
-        provider: "gemini",
-        threadId: THREAD_ID,
-        name: "browser_scroll",
-        arguments: {
-          idempotencyKey: "scroll-point",
-          mode: "pixels",
-          deltaY: 100,
-          target: { point: { x: 50, y: 60 } },
-        },
-      }),
-    ).resolves.toMatchObject({ after: { y: 100 } });
-
-    const commands = (webContents.debugger.sendCommand as ReturnType<typeof vi.fn>).mock.calls;
-    expect(commands).toContainEqual([
-      "Runtime.callFunctionOn",
-      expect.objectContaining({ objectId: "point-target" }),
-    ]);
-  });
-
-  it("clicks the exact guest element and coordinates resolved from a viewport point", async () => {
-    const { manager, webContents } = createManager();
-    const host = new DesktopBrowserAutomationHost(manager);
-
-    await expect(
-      host.executeTool({
-        sessionId: "session-click-point",
-        provider: "codex",
-        threadId: THREAD_ID,
-        name: "browser_click",
-        arguments: {
-          idempotencyKey: "click-point",
-          target: { point: { x: 50, y: 60 } },
-        },
-      }),
-    ).resolves.toMatchObject({ point: { x: 50, y: 60 } });
-
-    const commands = (webContents.debugger.sendCommand as ReturnType<typeof vi.fn>).mock.calls;
-    expect(commands).toContainEqual([
-      "Runtime.callFunctionOn",
-      expect.objectContaining({
-        objectId: "point-target",
-        functionDeclaration: expect.stringContaining("requestedPoint"),
-        arguments: [
-          {
-            value: expect.objectContaining({ point: { x: 50, y: 60 } }),
-          },
-        ],
-      }),
-    ]);
-    expect(webContents.debugger.sendCommand).toHaveBeenCalledWith(
-      "Input.dispatchMouseEvent",
-      expect.objectContaining({ type: "mousePressed", x: 50, y: 60 }),
-    );
-  });
-
-  it("rejects the originating agent action when its download is contained", async () => {
-    const { manager, raw, webContents } = createManager();
-    let reportDownload: ((event: { threadId: ThreadId; sourceTabId: string }) => void) | undefined;
-    const releaseTracking = vi.fn();
-    raw.trackAutomationDownload.mockImplementation((_input, listener) => {
-      reportDownload = listener as typeof reportDownload;
-      return releaseTracking;
-    });
-    const sendCommand = webContents.debugger.sendCommand as ReturnType<typeof vi.fn>;
-    const original = sendCommand.getMockImplementation() as SendCommand;
-    sendCommand.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
-      const result = await original(method, params);
-      if (method === "Input.dispatchMouseEvent" && params?.type === "mouseReleased") {
-        reportDownload?.({ threadId: THREAD_ID, sourceTabId: TAB_ID });
-      }
-      return result;
-    });
-    const host = new DesktopBrowserAutomationHost(manager);
-
-    await expect(
-      host.executeTool({
-        sessionId: "session-download",
-        provider: "codex",
-        threadId: THREAD_ID,
-        name: "browser_click",
-        arguments: {
-          idempotencyKey: "click-download",
-          target: { selector: "#download" },
-        },
-      }),
-    ).rejects.toSatisfy(
-      (error: unknown) =>
-        error instanceof BrowserAutomationHostError &&
-        error.browserError.code === "BrowserDownloadApprovalRequired" &&
-        error.browserError.retryable === false &&
-        error.browserError.phase === "input" &&
-        error.browserError.effectMayHaveCommitted === true &&
-        error.browserError.tabId === TAB_ID,
-    );
-    expect(raw.trackAutomationDownload).toHaveBeenCalledWith(
-      { threadId: THREAD_ID, tabId: TAB_ID },
-      expect.any(Function),
-    );
-    // The public abort is immediate, while the tab lock deliberately drains
-    // the native input operation before releasing its correlation lease.
-    await new Promise((resolve) => setTimeout(resolve, 25));
-    expect(releaseTracking).toHaveBeenCalledOnce();
-  });
-
   it("guards a downloadable browser_open response before projecting its URL", async () => {
     const { manager, raw } = createManager();
     let reportDownload: ((event: { threadId: ThreadId; sourceTabId: string }) => void) | undefined;
@@ -1662,462 +1186,6 @@ describe("DesktopBrowserAutomationHost", () => {
     expect(raw.trackAutomationDownload).toHaveBeenCalledBefore(raw.prepareAutomationNavigation);
   });
 
-  it("does not attribute downloads to read-only observation tools", async () => {
-    const { manager, raw } = createManager();
-    const host = new DesktopBrowserAutomationHost(manager);
-
-    await host.executeTool({
-      sessionId: "session-read-only",
-      provider: "codex",
-      threadId: THREAD_ID,
-      name: "browser_snapshot",
-      arguments: { includeImage: false },
-    });
-
-    expect(raw.trackAutomationDownload).not.toHaveBeenCalled();
-  });
-
-  it("adopts a target=_blank tab created during a reconciled agent gesture", async () => {
-    const { manager, raw, webContents } = createManager();
-    const state = raw.getState();
-    const tabOpened = deferred<void>();
-    let reportWindowOpen:
-      | ((event: {
-          threadId: ThreadId;
-          sourceTabId: string;
-          kind: "tab";
-          openedTabId: string;
-        }) => void)
-      | undefined;
-    raw.trackAutomationWindowOpen.mockImplementation((_input, listener) => {
-      reportWindowOpen = listener as typeof reportWindowOpen;
-      return () => {
-        reportWindowOpen = undefined;
-      };
-    });
-    const sendCommand = webContents.debugger.sendCommand as ReturnType<typeof vi.fn>;
-    const original = sendCommand.getMockImplementation() as SendCommand;
-    sendCommand.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
-      const result = await original(method, params);
-      if (method === "Input.dispatchMouseEvent" && params?.type === "mouseReleased") {
-        setTimeout(() => {
-          state.tabs.push({
-            ...state.tabs[0]!,
-            id: OPENED_TAB_ID,
-            url: "https://opened.example/",
-            lastCommittedUrl: "https://opened.example/",
-          });
-          state.activeTabId = OPENED_TAB_ID;
-          reportWindowOpen?.({
-            threadId: THREAD_ID,
-            sourceTabId: TAB_ID,
-            kind: "tab",
-            openedTabId: OPENED_TAB_ID,
-          });
-          tabOpened.resolve();
-        }, 0);
-      }
-      return result;
-    });
-    const host = new DesktopBrowserAutomationHost(manager);
-
-    const result = await host.executeTool({
-      sessionId: "session-opened-tab",
-      provider: "codex",
-      threadId: THREAD_ID,
-      name: "browser_click",
-      arguments: {
-        idempotencyKey: "click-opens-tab",
-        target: { selector: "#external" },
-      },
-    });
-    await tabOpened.promise;
-    expect(result).toMatchObject({ openedTabId: OPENED_TAB_ID });
-    await expect(
-      host.executeTool({
-        sessionId: "session-opened-tab",
-        provider: "codex",
-        threadId: THREAD_ID,
-        name: "browser_status",
-        arguments: {},
-      }),
-    ).resolves.toMatchObject({ assignedTabId: OPENED_TAB_ID });
-  });
-
-  it("commits and adopts a target=_blank tab opened by a keyboard activation", async () => {
-    const { manager, raw, webContents } = createManager();
-    const state = raw.getState();
-    let reportWindowOpen:
-      | ((event: {
-          threadId: ThreadId;
-          sourceTabId: string;
-          kind: "tab";
-          openedTabId: string;
-        }) => void)
-      | undefined;
-    const releaseTracking = vi.fn(() => {
-      state.tabs.push({
-        ...state.tabs[0]!,
-        id: OPENED_TAB_ID,
-        url: "https://opened.example/",
-        lastCommittedUrl: "https://opened.example/",
-      });
-      state.activeTabId = OPENED_TAB_ID;
-      reportWindowOpen = undefined;
-      return undefined;
-    });
-    raw.trackAutomationWindowOpen.mockImplementation((_input, listener) => {
-      reportWindowOpen = listener as typeof reportWindowOpen;
-      return releaseTracking;
-    });
-    let dispatched = false;
-    (webContents.sendInputEvent as ReturnType<typeof vi.fn>).mockImplementation((event) => {
-      if (dispatched || event.type !== "keyDown") return;
-      dispatched = true;
-      webContents.emitDebuggerMessage("Page.windowOpen", {});
-      setImmediate(() => {
-        reportWindowOpen?.({
-          threadId: THREAD_ID,
-          sourceTabId: TAB_ID,
-          kind: "tab",
-          openedTabId: OPENED_TAB_ID,
-        });
-      });
-    });
-    const host = new DesktopBrowserAutomationHost(manager);
-
-    await expect(
-      host.executeTool({
-        sessionId: "session-press-opened-tab",
-        provider: "codex",
-        threadId: THREAD_ID,
-        name: "browser_press",
-        arguments: {
-          idempotencyKey: "press-opens-tab",
-          keys: ["Enter"],
-        },
-      }),
-    ).resolves.toMatchObject({
-      emitted: ["Enter"],
-      openedTabId: OPENED_TAB_ID,
-    });
-    expect(releaseTracking).toHaveBeenCalledOnce();
-    await expect(
-      host.executeTool({
-        sessionId: "session-press-opened-tab",
-        provider: "codex",
-        threadId: THREAD_ID,
-        name: "browser_status",
-        arguments: {},
-      }),
-    ).resolves.toMatchObject({ assignedTabId: OPENED_TAB_ID });
-  });
-
-  it("hands an OAuth popup to the user and stops automated follow-up", async () => {
-    const { manager, raw, webContents } = createManager();
-    let reportWindowOpen:
-      | ((event: {
-          threadId: ThreadId;
-          sourceTabId: string;
-          kind: "popup";
-          openedTabId: null;
-        }) => void)
-      | undefined;
-    raw.trackAutomationWindowOpen.mockImplementation((_input, listener) => {
-      reportWindowOpen = listener as typeof reportWindowOpen;
-      return () => {
-        reportWindowOpen = undefined;
-      };
-    });
-    const sendCommand = webContents.debugger.sendCommand as ReturnType<typeof vi.fn>;
-    const original = sendCommand.getMockImplementation() as SendCommand;
-    sendCommand.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
-      const result = await original(method, params);
-      if (method === "Input.dispatchMouseEvent" && params?.type === "mouseReleased") {
-        reportWindowOpen?.({
-          threadId: THREAD_ID,
-          sourceTabId: TAB_ID,
-          kind: "popup",
-          openedTabId: null,
-        });
-      }
-      return result;
-    });
-    const host = new DesktopBrowserAutomationHost(manager);
-
-    await expect(
-      host.executeTool({
-        sessionId: "session-oauth-popup",
-        provider: "codex",
-        threadId: THREAD_ID,
-        name: "browser_click",
-        arguments: {
-          idempotencyKey: "click-oauth-popup",
-          target: { selector: "#sign-in" },
-        },
-      }),
-    ).resolves.toMatchObject({
-      tabId: TAB_ID,
-      humanActionRequired: {
-        kind: "oauth_popup",
-        instruction: "Complete sign-in in the visible popup before continuing.",
-      },
-    });
-    expect(raw.getState().activeTabId).toBe(TAB_ID);
-  });
-
-  it("hands a keyboard-opened OAuth popup to the user", async () => {
-    const { manager, raw, webContents } = createManager();
-    let reportWindowOpen:
-      | ((event: {
-          threadId: ThreadId;
-          sourceTabId: string;
-          kind: "popup";
-          openedTabId: null;
-        }) => void)
-      | undefined;
-    raw.trackAutomationWindowOpen.mockImplementation((_input, listener) => {
-      reportWindowOpen = listener as typeof reportWindowOpen;
-      return () => {
-        reportWindowOpen = undefined;
-      };
-    });
-    let dispatched = false;
-    (webContents.sendInputEvent as ReturnType<typeof vi.fn>).mockImplementation((event) => {
-      if (dispatched || event.type !== "keyDown") return;
-      dispatched = true;
-      reportWindowOpen?.({
-        threadId: THREAD_ID,
-        sourceTabId: TAB_ID,
-        kind: "popup",
-        openedTabId: null,
-      });
-    });
-    const host = new DesktopBrowserAutomationHost(manager);
-
-    await expect(
-      host.executeTool({
-        sessionId: "session-press-oauth-popup",
-        provider: "codex",
-        threadId: THREAD_ID,
-        name: "browser_press",
-        arguments: {
-          idempotencyKey: "press-oauth-popup",
-          keys: ["Enter"],
-        },
-      }),
-    ).resolves.toMatchObject({
-      tabId: TAB_ID,
-      humanActionRequired: {
-        kind: "oauth_popup",
-        instruction: "Complete sign-in in the visible popup before continuing.",
-      },
-    });
-    expect(raw.getState().activeTabId).toBe(TAB_ID);
-  });
-
-  it("reports a clean error when page code requests a blocked native popup", async () => {
-    const { manager, raw, webContents } = createManager();
-    let reportWindowOpen:
-      | ((event: {
-          threadId: ThreadId;
-          sourceTabId: string;
-          kind: "blocked";
-          openedTabId: null;
-        }) => void)
-      | undefined;
-    raw.trackAutomationWindowOpen.mockImplementation((_input, listener) => {
-      reportWindowOpen = listener as typeof reportWindowOpen;
-      return () => {
-        reportWindowOpen = undefined;
-      };
-    });
-    const sendCommand = webContents.debugger.sendCommand as ReturnType<typeof vi.fn>;
-    const original = sendCommand.getMockImplementation() as SendCommand;
-    sendCommand.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
-      const result = await original(method, params);
-      if (method === "Input.dispatchMouseEvent" && params?.type === "mouseReleased") {
-        reportWindowOpen?.({
-          threadId: THREAD_ID,
-          sourceTabId: TAB_ID,
-          kind: "blocked",
-          openedTabId: null,
-        });
-      }
-      return result;
-    });
-    const host = new DesktopBrowserAutomationHost(manager);
-
-    await expect(
-      host.executeTool({
-        sessionId: "session-blocked-popup",
-        provider: "codex",
-        threadId: THREAD_ID,
-        name: "browser_click",
-        arguments: {
-          idempotencyKey: "click-blocked-popup",
-          target: { selector: "#native-handler" },
-        },
-      }),
-    ).rejects.toSatisfy(
-      (error: unknown) =>
-        error instanceof BrowserAutomationHostError &&
-        error.browserError.code === "BrowserPopupBlocked" &&
-        error.browserError.retryable === false &&
-        error.browserError.phase === "navigation" &&
-        error.browserError.effectMayHaveCommitted === true,
-    );
-  });
-
-  it("reports a blocked native popup requested by a keyboard activation", async () => {
-    const { manager, raw, webContents } = createManager();
-    let reportWindowOpen:
-      | ((event: {
-          threadId: ThreadId;
-          sourceTabId: string;
-          kind: "blocked";
-          openedTabId: null;
-        }) => void)
-      | undefined;
-    raw.trackAutomationWindowOpen.mockImplementation((_input, listener) => {
-      reportWindowOpen = listener as typeof reportWindowOpen;
-      return () => {
-        reportWindowOpen = undefined;
-      };
-    });
-    let dispatched = false;
-    (webContents.sendInputEvent as ReturnType<typeof vi.fn>).mockImplementation((event) => {
-      if (dispatched || event.type !== "keyDown") return;
-      dispatched = true;
-      reportWindowOpen?.({
-        threadId: THREAD_ID,
-        sourceTabId: TAB_ID,
-        kind: "blocked",
-        openedTabId: null,
-      });
-    });
-    const host = new DesktopBrowserAutomationHost(manager);
-
-    await expect(
-      host.executeTool({
-        sessionId: "session-press-blocked-popup",
-        provider: "codex",
-        threadId: THREAD_ID,
-        name: "browser_press",
-        arguments: {
-          idempotencyKey: "press-blocked-popup",
-          keys: ["Enter"],
-        },
-      }),
-    ).rejects.toSatisfy(
-      (error: unknown) =>
-        error instanceof BrowserAutomationHostError &&
-        error.browserError.code === "BrowserPopupBlocked" &&
-        error.browserError.retryable === false &&
-        error.browserError.phase === "navigation" &&
-        error.browserError.effectMayHaveCommitted === true,
-    );
-  });
-
-  it("reports the committed destination when a click navigates the current tab", async () => {
-    const { manager, webContents } = createManager();
-    const sendCommand = webContents.debugger.sendCommand as ReturnType<typeof vi.fn>;
-    const original = sendCommand.getMockImplementation() as SendCommand;
-    sendCommand.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
-      const result = await original(method, params);
-      if (
-        method === "Runtime.callFunctionOn" &&
-        String(params?.functionDeclaration ?? "").includes("requestedPoint")
-      ) {
-        webContents.emitDebuggerMessage("Network.requestWillBeSent", {
-          requestId: "clicked-document",
-          frameId: "main-frame",
-          loaderId: "clicked-loader",
-          type: "Document",
-          request: { url: "https://destination.example/" },
-          redirectResponse: { url: "https://example.test/redirect" },
-        });
-        webContents.emitDebuggerMessage("Page.frameNavigated", {
-          frame: {
-            id: "main-frame",
-            loaderId: "clicked-loader",
-            url: "https://destination.example/",
-          },
-        });
-      }
-      return result;
-    });
-    const host = new DesktopBrowserAutomationHost(manager);
-
-    await expect(
-      host.executeTool({
-        sessionId: "session-click-navigation",
-        provider: "codex",
-        threadId: THREAD_ID,
-        name: "browser_click",
-        arguments: {
-          idempotencyKey: "click-navigation",
-          target: { selector: "#navigate" },
-        },
-      }),
-    ).resolves.toMatchObject({
-      finalUrl: "https://destination.example/",
-      redirects: ["https://example.test/redirect"],
-      loadState: "commit",
-    });
-  });
-
-  it("waits for a delayed commit after a click starts a main-frame document request", async () => {
-    const { manager, webContents } = createManager();
-    const sendCommand = webContents.debugger.sendCommand as ReturnType<typeof vi.fn>;
-    const original = sendCommand.getMockImplementation() as SendCommand;
-    let navigationStarted = false;
-    sendCommand.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
-      const result = await original(method, params);
-      if (
-        !navigationStarted &&
-        method === "Runtime.callFunctionOn" &&
-        String(params?.functionDeclaration ?? "").includes("requestedPoint")
-      ) {
-        navigationStarted = true;
-        webContents.emitDebuggerMessage("Network.requestWillBeSent", {
-          requestId: "delayed-clicked-document",
-          frameId: "main-frame",
-          loaderId: "delayed-clicked-loader",
-          type: "Document",
-          request: { url: "https://delayed-destination.example/" },
-        });
-        setTimeout(() => {
-          webContents.emitDebuggerMessage("Page.frameNavigated", {
-            frame: {
-              id: "main-frame",
-              loaderId: "delayed-clicked-loader",
-              url: "https://delayed-destination.example/",
-            },
-          });
-        }, 40);
-      }
-      return result;
-    });
-    const host = new DesktopBrowserAutomationHost(manager);
-
-    await expect(
-      host.executeTool({
-        sessionId: "session-click-delayed-navigation",
-        provider: "codex",
-        threadId: THREAD_ID,
-        name: "browser_click",
-        arguments: {
-          idempotencyKey: "click-delayed-navigation",
-          target: { selector: "#navigate-later" },
-        },
-      }),
-    ).resolves.toMatchObject({
-      finalUrl: "https://delayed-destination.example/",
-      loadState: "commit",
-    });
-  });
-
   it("reports human takeover when manual control changes during an agent action", async () => {
     const { manager, raw } = createManager();
     raw.getAutomationHumanControlEpoch.mockReturnValueOnce(10).mockReturnValue(11);
@@ -2138,36 +1206,6 @@ describe("DesktopBrowserAutomationHost", () => {
         error instanceof BrowserAutomationHostError &&
         error.browserError.code === "BrowserInterruptedByHuman",
     );
-  });
-
-  it("invalidates a stored snapshot when the user acted between agent calls", async () => {
-    const { manager, raw } = createManager();
-    let epoch = 0;
-    raw.getAutomationHumanControlEpoch.mockImplementation(() => epoch);
-    const host = new DesktopBrowserAutomationHost(manager);
-    const snapshot = (await host.executeTool({
-      sessionId: "session-human-between-calls",
-      provider: "codex",
-      threadId: THREAD_ID,
-      name: "browser_snapshot",
-      arguments: { includeImage: false },
-    })) as { structuredContent: { snapshotId: string } };
-
-    epoch += 1;
-    await expect(
-      host.executeTool({
-        sessionId: "session-human-between-calls",
-        provider: "codex",
-        threadId: THREAD_ID,
-        name: "browser_click",
-        arguments: {
-          idempotencyKey: "click-after-human",
-          target: { ref: "e1", snapshotId: snapshot.structuredContent.snapshotId },
-        },
-      }),
-    ).rejects.toMatchObject({
-      browserError: { code: "BrowserStaleReference" },
-    });
   });
 
   it("releases the session lock after a timed-out native navigation has drained", async () => {
@@ -2355,8 +1393,8 @@ describe("DesktopBrowserAutomationHost", () => {
       sessionId: "session-runtime-abort",
       provider: "codex",
       threadId: THREAD_ID,
-      name: "browser_snapshot",
-      arguments: { includeImage: false },
+      name: "browser_logs",
+      arguments: {},
       signal: controller.signal,
     });
 
@@ -2377,15 +1415,15 @@ describe("DesktopBrowserAutomationHost", () => {
       sessionId: "session-panel-abort",
       provider: "codex",
       threadId: THREAD_ID,
-      name: "browser_snapshot",
-      arguments: { includeImage: false },
+      name: "browser_logs",
+      arguments: {},
     });
 
     await vi.waitFor(() => {
       expect(requestOpenPanel).toHaveBeenCalledWith(THREAD_ID);
     });
     await expect(operation).resolves.toMatchObject({
-      structuredContent: { tabId: TAB_ID },
+      tabId: TAB_ID,
     });
     await expect(
       host.executeTool({
@@ -2399,130 +1437,8 @@ describe("DesktopBrowserAutomationHost", () => {
     panelReveal.resolve();
   });
 
-  it("terminates an in-flight page evaluation when the request is aborted", async () => {
-    const { manager, webContents } = createManager();
-    const evaluation = deferred<never>();
-    const evaluationStarted = deferred<void>();
-    const sendCommand = webContents.debugger.sendCommand as ReturnType<typeof vi.fn>;
-    const original = sendCommand.getMockImplementation() as SendCommand;
-    sendCommand.mockImplementation((method: string, params?: Record<string, unknown>) => {
-      if (method === "Runtime.evaluate" && params?.expression === "new Promise(() => {})") {
-        evaluationStarted.resolve();
-        return evaluation.promise;
-      }
-      if (method === "Runtime.terminateExecution") {
-        evaluation.reject(new Error("Execution was terminated"));
-        return Promise.resolve({});
-      }
-      return original(method, params);
-    });
-    const host = new DesktopBrowserAutomationHost(manager);
-    const controller = new AbortController();
-    const operation = host.executeTool({
-      sessionId: "session-evaluate-abort",
-      provider: "codex",
-      threadId: THREAD_ID,
-      name: "browser_evaluate",
-      arguments: { idempotencyKey: "evaluate-abort", expression: "new Promise(() => {})" },
-      signal: controller.signal,
-    });
-
-    await evaluationStarted.promise;
-    controller.abort();
-    await expect(operation).rejects.toMatchObject({ browserError: { code: "BrowserCancelled" } });
-    await expect(
-      host.executeTool({
-        sessionId: "session-evaluate-abort",
-        provider: "codex",
-        threadId: THREAD_ID,
-        name: "browser_tabs",
-        arguments: {},
-      }),
-    ).resolves.toMatchObject({ activeTabId: TAB_ID });
-    expect(sendCommand).toHaveBeenCalledWith("Runtime.terminateExecution");
-    const terminationIndex = sendCommand.mock.calls.findIndex(
-      ([method]) => method === "Runtime.terminateExecution",
-    );
-    const commandsAfterTermination = sendCommand.mock.calls.slice(terminationIndex + 1);
-    expect(commandsAfterTermination).toHaveLength(1);
-    expect(commandsAfterTermination[0]?.[0]).toBe("Runtime.evaluate");
-    expect(String(commandsAfterTermination[0]?.[1]?.expression)).toContain("delete window[key]");
-  });
 });
 
 describe("snapshot target validity", () => {
-  it("keeps a ref valid across unrelated page mutation generations", async () => {
-    const webContents = createWebContents();
-    (webContents.debugger.sendCommand as ReturnType<typeof vi.fn>).mockImplementation(
-      async (method: string, params?: Record<string, unknown>) => {
-        if (method === "Runtime.evaluate") {
-          const expression = String(params?.expression ?? "");
-          if (expression.includes("state.refs.get")) {
-            return { result: { value: { count: 1, generation: 999, stale: false } } };
-          }
-          if (expression.includes("globalThis.__synaraBrowserAutomationV1.currentTarget")) {
-            return { result: { objectId: "target-1", type: "object", subtype: "node" } };
-          }
-        }
-        if (method === "Runtime.callFunctionOn") {
-          return {
-            result: {
-              value: {
-                attached: true,
-                visible: true,
-                enabled: true,
-                editable: false,
-                role: "button",
-                name: "Save",
-                point: { x: 50, y: 20 },
-              },
-            },
-          };
-        }
-        return {};
-      },
-    );
-    const runtime = { threadId: THREAD_ID, tabId: TAB_ID, webContents };
 
-    await expect(
-      resolveBrowserTarget(
-        runtime,
-        { ref: ELEMENT_REF, snapshotId: SNAPSHOT_ID },
-        {
-          snapshotId: SNAPSHOT_ID,
-          tabId: TAB_ID,
-          contextId: 12,
-          generation: 1,
-          humanControlEpoch: 0,
-        },
-      ),
-    ).resolves.toMatchObject({ attached: true, info: { ref: "e1" } });
-  });
-
-  it("rejects a ref whose exact node was detached or changed identity", async () => {
-    const webContents = createWebContents();
-    (webContents.debugger.sendCommand as ReturnType<typeof vi.fn>).mockImplementation(
-      async (method: string) =>
-        method === "Runtime.evaluate" ? { result: { value: { count: 0, stale: true } } } : {},
-    );
-    const runtime = { threadId: THREAD_ID, tabId: TAB_ID, webContents };
-
-    await expect(
-      resolveBrowserTarget(
-        runtime,
-        { ref: ELEMENT_REF, snapshotId: SNAPSHOT_ID },
-        {
-          snapshotId: SNAPSHOT_ID,
-          tabId: TAB_ID,
-          contextId: 12,
-          generation: 1,
-          humanControlEpoch: 0,
-        },
-      ),
-    ).rejects.toSatisfy(
-      (error: unknown) =>
-        error instanceof BrowserAutomationHostError &&
-        error.browserError.code === "BrowserStaleReference",
-    );
-  });
 });

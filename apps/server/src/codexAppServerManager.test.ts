@@ -88,7 +88,17 @@ describe("Codex Synara harness policy", () => {
         expect(instructions, name).toContain(`\`${name.slice("browser_".length)}\``);
       }
       expect(instructions).toContain("Do not search or filter \`ALL_TOOLS\`");
-      expect(instructions).toContain("sequentially in one \`functions.exec\` invocation");
+      expect(instructions).toContain("Use separate tool calls for browser steps");
+      expect(instructions).toContain("Independent tool calls may still run concurrently");
+      expect(instructions).toContain("one focused browser operation");
+      expect(instructions).not.toContain("Batch deterministic steps");
+      expect(instructions).toContain("your first tool call is");
+      expect(instructions).toContain("text(r.structuredContent ?? r)");
+      expect(instructions).toContain("errors may only have");
+      expect(instructions).toContain("not a fresh whole-page snapshot by default");
+      expect(instructions).toContain("Do not rediscover tools after a model switch");
+      expect(instructions).toContain("print no unrelated catalogue");
+      expect(instructions).toContain("Snapshot diffs and aria refs do not persist between calls");
     }
   });
 
