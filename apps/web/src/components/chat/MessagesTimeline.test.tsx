@@ -209,7 +209,7 @@ describe("MessagesTimeline", () => {
             entry: {
               id: "context-restart-entry",
               createdAt: "2026-03-17T19:12:28.000Z",
-              label: "Native session history was unavailable, so the model continued from a recap.",
+              label: "The session's history was lost, so the model continues from a summary.",
               tone: "error",
               activityKind: "provider.context.changed",
               providerContextLifecycle: {
@@ -219,7 +219,7 @@ describe("MessagesTimeline", () => {
                 sessionRestarted: true,
                 recapInjected: true,
                 recapCharacters: 4_200,
-                recapPreview: "Bounded recap preview",
+                recapPreview: "Bounded summary preview",
                 recapPreviewTruncated: true,
               },
             },
@@ -228,10 +228,10 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Native session history was unavailable");
+    expect(markup).toContain("history was lost, so the model continues from a summary.");
     expect(markup).toContain('data-tool-detail-trigger="true"');
     expect(markup).not.toContain('data-provider-context-lifecycle-details="true"');
-    expect(markup).not.toContain("Bounded recap preview");
+    expect(markup).not.toContain("Bounded summary preview");
   });
 
   it("keeps small transcripts on the simple non-virtualized path", async () => {

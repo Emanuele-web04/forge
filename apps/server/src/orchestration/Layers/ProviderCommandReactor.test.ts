@@ -4139,6 +4139,81 @@ describe("ProviderCommandReactor", () => {
     expect(followUpInput?.input).toBe("Continue after interrupt escalation");
   });
 
+  it("attributes context-loss markers to interrupt escalation when history is gone", async () => {
+    const harness = await createHarness({
+      interruptTurn: () =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: "codex",
+            method: "turn/interrupt",
+            detail: "connection closed after request write",
+          }),
+        ),
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const now = new Date().toISOString();
+
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "interrupt-escalation-context-seed",
+      text: "Remember that the release train is amber.",
+      createdAt: now,
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    harness.setRuntimeSessionTurnState({
+      threadId,
+      status: "running",
+      activeTurnId: asTurnId("turn-1"),
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.makeUnsafe("cmd-interrupt-escalation-context-loss"),
+        threadId,
+        turnId: asTurnId("turn-1"),
+        createdAt: now,
+      }),
+    );
+    await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "stopped");
+    expect(harness.stopRuntimeSession).toHaveBeenCalledWith({ threadId });
+
+    // Simulate residual cursor loss after the escalated stop (e.g. provider-side wipe).
+    await Effect.runPromise(harness.clearSessionResumeCursor({ threadId }));
+
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "interrupt-escalation-context-follow-up",
+      text: "What release train did we pick?",
+      createdAt: new Date().toISOString(),
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    const followUpInput = harness.sendTurn.mock.calls[1]?.[0] as { readonly input?: string };
+    expect(followUpInput.input).toBe("What release train did we pick?");
+
+    await waitFor(async () => {
+      const lifecycleActivities = (await readHarnessThread(harness))?.activities.filter(
+        (activity) => activity.kind === "provider.context.changed",
+      );
+      return lifecycleActivities?.length === 1;
+    });
+    const [lifecycleActivity] = (await readHarnessThread(harness))?.activities.filter(
+      (activity) => activity.kind === "provider.context.changed",
+    ) ?? [undefined];
+    expect(lifecycleActivity).toMatchObject({
+      tone: "error",
+      summary: "The turn could not be stopped cleanly, so the session was restarted.",
+      payload: {
+        provider: "codex",
+        nativeHistory: "unavailable",
+        sessionRestarted: true,
+        restartReason: "interrupt-escalation",
+        recapInjected: false,
+        recapCharacters: 0,
+        recapPreview: null,
+        recapPreviewTruncated: false,
+      },
+    });
+  });
+
   it("rolls back provider conversation state for message edits", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -9786,7 +9861,7 @@ describe("ProviderCommandReactor", () => {
       ) ?? [undefined];
       expect(lifecycleActivity).toMatchObject({
         tone: "error",
-        summary: "Native session history was unavailable, so the model continued from a recap.",
+        summary: "The session's history was lost, so the model continues from a summary.",
         turnId: asTurnId("turn-1"),
         payload: {
           provider,
@@ -10095,7 +10170,7 @@ describe("ProviderCommandReactor", () => {
     ) ?? [undefined];
     expect(lifecycleActivity).toMatchObject({
       tone: "error",
-      summary: "The session restarted without its native history.",
+      summary: "The session restarted without its previous history.",
       turnId: asTurnId("turn-1"),
       payload: {
         provider: "codex",

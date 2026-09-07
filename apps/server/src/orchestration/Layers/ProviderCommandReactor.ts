@@ -306,6 +306,7 @@ const SESSION_CONTEXT_RECAP_PREVIEW_MAX_CHARS = 600;
 type ProviderContextLifecycleReason =
   | "conversation-rebuilt"
   | "fresh-session"
+  | "interrupt-escalation"
   | "native-history-unavailable"
   | "native-resume-failed";
 
@@ -350,18 +351,23 @@ function recapTailPreview(recapText: string): string {
 }
 
 function providerContextLifecycleSummary(evidence: ProviderContextLifecycleEvidence): string {
+  if (evidence.reason === "interrupt-escalation") {
+    return evidence.recapText !== null
+      ? "The turn could not be stopped cleanly, so the session was restarted and your message included a summary."
+      : "The turn could not be stopped cleanly, so the session was restarted.";
+  }
   if (evidence.recapText !== null && evidence.nativeHistory === "unavailable") {
-    return "Native session history was unavailable, so the model continued from a recap.";
+    return "The session's history was lost, so the model continues from a summary.";
   }
   if (evidence.recapText !== null && evidence.sessionRestarted) {
-    return "The session restarted, so the model received a recap.";
+    return "The session was restarted, so your message included a summary.";
   }
   if (evidence.recapText !== null) {
-    return "The model received a recap while recovering its session context.";
+    return "Your message included a summary while the session recovered its context.";
   }
   return evidence.sessionRestarted
-    ? "The session restarted without its native history."
-    : "Native session history was unavailable for this turn.";
+    ? "The session restarted without its previous history."
+    : "The session's history was unavailable for this turn.";
 }
 
 const turnStartKeyForEvent = (event: ProviderIntentEvent): string =>
@@ -809,6 +815,10 @@ const make = Effect.gen(function* () {
   // Providers without native rewind restart after rollback and receive the
   // retained projection transcript once on their next prompt.
   const rollbackContextBootstrapThreadIds = new Set<string>();
+  // Interrupt escalation settled the turn by stopping the runtime. Remember
+  // that until the next turn so a consequential context loss can name the
+  // cause instead of a generic fresh-session reason.
+  const interruptEscalatedThreadIds = new Set<string>();
   // Retry state keeps only the bounded derived record; the full recap text is
   // never retained here after the provider turn has been accepted.
   const pendingProviderContextLifecycleActivities = new Map<
@@ -1390,6 +1400,7 @@ const make = Effect.gen(function* () {
       // thread while the first is still running.
       suppressContextBootstrapOnNextStartThreadIds.delete(threadId);
       clearPendingContextBootstraps(threadId);
+      interruptEscalatedThreadIds.delete(threadId);
       const lifecyclePrefix = `${threadId}:`;
       for (const activityKey of pendingProviderContextLifecycleActivities.keys()) {
         if (activityKey.startsWith(lifecyclePrefix)) {
@@ -2196,13 +2207,16 @@ const make = Effect.gen(function* () {
             priorTranscriptBootstrapAvailableChars,
           )
         : null;
-    const restartReason: ProviderContextLifecycleReason = nativeResumeFailed
-      ? "native-resume-failed"
-      : rollbackContextBootstrapThreadIds.has(input.threadId)
-        ? "conversation-rebuilt"
-        : freshSessionContextBootstrapThreadIds.has(input.threadId)
-          ? "fresh-session"
-          : "native-history-unavailable";
+    const interruptedEscalationPending = interruptEscalatedThreadIds.has(input.threadId);
+    const restartReason: ProviderContextLifecycleReason = interruptedEscalationPending
+      ? "interrupt-escalation"
+      : nativeResumeFailed
+        ? "native-resume-failed"
+        : rollbackContextBootstrapThreadIds.has(input.threadId)
+          ? "conversation-rebuilt"
+          : freshSessionContextBootstrapThreadIds.has(input.threadId)
+            ? "fresh-session"
+            : "native-history-unavailable";
     let providerContextLifecycleEvidence: ProviderContextLifecycleEvidence | null =
       input.reviewTarget === undefined &&
       input.dispatchMode !== "steer" &&
@@ -2217,6 +2231,11 @@ const make = Effect.gen(function* () {
             sessionRestarted: nativeSessionRestarted,
           }
         : null;
+    // Consume the escalation marker on the next turn whether or not a
+    // consequential context-loss activity is emitted (clean resumes stay quiet).
+    if (interruptedEscalationPending) {
+      interruptEscalatedThreadIds.delete(input.threadId);
+    }
     // The guards above make the three bootstrap flavors mutually exclusive, so
     // a turn carries at most one context block.
     const selectedBootstrapContext: BootstrapContextSelection | null =
@@ -3655,6 +3674,7 @@ const make = Effect.gen(function* () {
           ? `${result.detail} Stopping the provider session to settle the turn.`
           : `${result.outcome.detail}\nStopping the provider session to settle the turn.`;
       yield* reportInterruptFailure(detail, "uncertain");
+      interruptEscalatedThreadIds.add(input.threadId);
       return yield* processThreadSessionStop({
         threadId: input.threadId,
         createdAt: input.createdAt,

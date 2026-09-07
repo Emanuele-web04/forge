@@ -362,7 +362,7 @@ describe("deriveWorkLogEntries", () => {
         id: "context-restart",
         turnId: "turn-hidden",
         kind: "provider.context.changed",
-        summary: "Native session history was unavailable.",
+        summary: "The session's history was lost, so the model continues from a summary.",
         tone: "error",
         payload: {
           provider: "opencode",
@@ -411,7 +411,7 @@ describe("deriveWorkLogEntries", () => {
           id: "context-restart-without-recap",
           turnId: "turn-2",
           kind: "provider.context.changed",
-          summary: "The session restarted without its native history.",
+          summary: "The session restarted without its previous history.",
           tone: "error",
           payload: {
             provider: "codex",
@@ -436,6 +436,43 @@ describe("deriveWorkLogEntries", () => {
       recapInjected: false,
       recapCharacters: 0,
       recapPreview: null,
+      recapPreviewTruncated: false,
+    });
+  });
+
+  it("keeps interrupt-escalation context-loss markers visible", () => {
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "interrupt-escalation-context",
+          turnId: "turn-3",
+          kind: "provider.context.changed",
+          summary:
+            "The turn could not be stopped cleanly, so the session was restarted and your message included a summary.",
+          tone: "error",
+          payload: {
+            provider: "opencode",
+            nativeHistory: "unavailable",
+            sessionRestarted: true,
+            restartReason: "interrupt-escalation",
+            recapInjected: true,
+            recapCharacters: 900,
+            recapPreview: "Earlier conversation summary",
+            recapPreviewTruncated: false,
+          },
+        }),
+      ],
+      TurnId.makeUnsafe("turn-3"),
+    );
+
+    expect(entry?.providerContextLifecycle).toEqual({
+      provider: "opencode",
+      nativeHistory: "unavailable",
+      sessionRestarted: true,
+      restartReason: "interrupt-escalation",
+      recapInjected: true,
+      recapCharacters: 900,
+      recapPreview: "Earlier conversation summary",
       recapPreviewTruncated: false,
     });
   });
