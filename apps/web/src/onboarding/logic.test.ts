@@ -3,20 +3,33 @@ import { describe, expect, it } from "vitest";
 import {
   ONBOARDING_STEPS,
   classifyProviderSetup,
+  isOnboardingSetupStep,
   nextOnboardingStep,
   previousOnboardingStep,
+  resolveOnboardingCompletionToReconcile,
   resolveOnboardingGate,
   summarizeProviderSetup,
   toggleSelection,
 } from "./logic";
 
+const COMPLETED_AT = "2026-09-07T00:00:00.000Z";
+const NOW = "2026-09-08T00:00:00.000Z";
+
 const GATE_BASE = {
   threadsHydrated: true,
   settingsSettled: true,
+  projectCount: 0,
+  serverCompletedAt: null,
+  localCompletedAt: null,
+} as const;
+
+const RECONCILE_BASE = {
+  threadsHydrated: true,
   settingsAvailable: true,
   projectCount: 0,
   serverCompletedAt: null,
   localCompletedAt: null,
+  now: NOW,
 } as const;
 
 describe("onboarding steps", () => {
@@ -29,6 +42,13 @@ describe("onboarding steps", () => {
     expect(nextOnboardingStep("done")).toBe("done");
     expect(previousOnboardingStep("tour")).toBe("welcome");
     expect(previousOnboardingStep("welcome")).toBe("welcome");
+  });
+
+  it("treats everything after the tour as a setup step", () => {
+    expect(isOnboardingSetupStep("welcome")).toBe(false);
+    expect(isOnboardingSetupStep("tour")).toBe(false);
+    expect(isOnboardingSetupStep("providers")).toBe(true);
+    expect(isOnboardingSetupStep("done")).toBe(true);
   });
 });
 
@@ -46,25 +66,58 @@ describe("resolveOnboardingGate", () => {
     expect(resolveOnboardingGate({ ...GATE_BASE, projectCount: 1 })).toBe("hidden");
   });
 
-  it("prefers the server marker when settings are readable", () => {
-    expect(
-      resolveOnboardingGate({ ...GATE_BASE, serverCompletedAt: "2026-09-07T00:00:00.000Z" }),
-    ).toBe("hidden");
-    // A stale local marker must not suppress the tour on a reconfigured server.
-    expect(
-      resolveOnboardingGate({ ...GATE_BASE, localCompletedAt: "2026-09-07T00:00:00.000Z" }),
-    ).toBe("show");
+  it("hides when either completion marker is set", () => {
+    expect(resolveOnboardingGate({ ...GATE_BASE, serverCompletedAt: COMPLETED_AT })).toBe("hidden");
+    // A local marker covers a completion whose server write failed.
+    expect(resolveOnboardingGate({ ...GATE_BASE, localCompletedAt: COMPLETED_AT })).toBe("hidden");
   });
 
-  it("falls back to the local marker when server settings are unavailable", () => {
+  it("is re-evaluated, not latched: a later non-empty snapshot flips show to hidden", () => {
+    expect(resolveOnboardingGate(GATE_BASE)).toBe("show");
+    expect(resolveOnboardingGate({ ...GATE_BASE, projectCount: 2 })).toBe("hidden");
+  });
+});
+
+describe("resolveOnboardingCompletionToReconcile", () => {
+  it("does nothing before hydration, without readable settings, or once the server has a marker", () => {
     expect(
-      resolveOnboardingGate({
-        ...GATE_BASE,
-        settingsAvailable: false,
-        localCompletedAt: "2026-09-07T00:00:00.000Z",
+      resolveOnboardingCompletionToReconcile({
+        ...RECONCILE_BASE,
+        threadsHydrated: false,
+        localCompletedAt: COMPLETED_AT,
       }),
-    ).toBe("hidden");
-    expect(resolveOnboardingGate({ ...GATE_BASE, settingsAvailable: false })).toBe("show");
+    ).toBeNull();
+    expect(
+      resolveOnboardingCompletionToReconcile({
+        ...RECONCILE_BASE,
+        settingsAvailable: false,
+        localCompletedAt: COMPLETED_AT,
+      }),
+    ).toBeNull();
+    expect(
+      resolveOnboardingCompletionToReconcile({
+        ...RECONCILE_BASE,
+        serverCompletedAt: COMPLETED_AT,
+        localCompletedAt: COMPLETED_AT,
+        projectCount: 3,
+      }),
+    ).toBeNull();
+  });
+
+  it("replays a local completion whose server write failed", () => {
+    expect(
+      resolveOnboardingCompletionToReconcile({ ...RECONCILE_BASE, localCompletedAt: COMPLETED_AT }),
+    ).toBe(COMPLETED_AT);
+  });
+
+  it("exempts an installation that predates the tour", () => {
+    expect(resolveOnboardingCompletionToReconcile({ ...RECONCILE_BASE, projectCount: 1 })).toBe(
+      NOW,
+    );
+  });
+
+  it("writes nothing on a genuine fresh install", () => {
+    expect(resolveOnboardingCompletionToReconcile(RECONCILE_BASE)).toBeNull();
   });
 });
 

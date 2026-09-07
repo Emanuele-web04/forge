@@ -62,27 +62,57 @@ function useDetectedProviderStatuses(): readonly ServerProviderStatus[] {
   );
 }
 
-function setDisabled(
-  current: ReadonlyArray<ProviderKind>,
-  provider: ProviderKind,
-  disabled: boolean,
-): ProviderKind[] {
-  const without = current.filter((entry) => entry !== provider);
-  return disabled ? [...without, provider] : without;
+/**
+ * Optimistic disabled-provider selection. `disabledProviders` is server-owned and is not
+ * applied to local settings until the round-trip completes, so deriving each write from
+ * `settings.disabledProviders` would let a second toggle rebuild the list without the
+ * first change. Every write instead comes from this draft, and the draft only resyncs
+ * from the server once no write is in flight (e.g. after a failed request is rolled back).
+ */
+function useDisabledProvidersDraft(): {
+  readonly disabled: ReadonlySet<ProviderKind>;
+  readonly setProviderDisabled: (provider: ProviderKind, disabled: boolean) => void;
+} {
+  const { settings, updateSettingsAndWait } = useAppSettings();
+  const [draft, setDraft] = useState<ReadonlySet<ProviderKind>>(
+    () => new Set(settings.disabledProviders),
+  );
+  const draftRef = useRef(draft);
+  const pendingWritesRef = useRef(0);
+  const serverDisabledProviders = settings.disabledProviders;
+
+  useEffect(() => {
+    if (pendingWritesRef.current > 0) return;
+    const next = new Set(serverDisabledProviders);
+    draftRef.current = next;
+    setDraft(next);
+  }, [serverDisabledProviders]);
+
+  const setProviderDisabled = (provider: ProviderKind, disabled: boolean) => {
+    const next = new Set(draftRef.current);
+    if (disabled) {
+      next.add(provider);
+    } else {
+      next.delete(provider);
+    }
+    draftRef.current = next;
+    setDraft(next);
+    pendingWritesRef.current += 1;
+    void updateSettingsAndWait({ disabledProviders: [...next] }).finally(() => {
+      pendingWritesRef.current -= 1;
+    });
+  };
+
+  return { disabled: draft, setProviderDisabled };
 }
 
 export function ProvidersStep() {
-  const { settings, updateSettings } = useAppSettings();
   const statuses = useDetectedProviderStatuses();
   const refreshProviderStatuses = useRefreshProviderStatusesNow();
   const homeDir = useWorkspacePathsStore((store) => store.homeDir);
   const [connectingProvider, setConnectingProvider] = useState<ProviderKind | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-
-  const disabledSet = useMemo(
-    () => new Set<ProviderKind>(settings.disabledProviders),
-    [settings.disabledProviders],
-  );
+  const { disabled: disabledSet, setProviderDisabled } = useDisabledProvidersDraft();
 
   const refresh = async () => {
     setRefreshing(true);
@@ -150,13 +180,7 @@ export function ProvidersStep() {
                   checked={enabled}
                   aria-label={`${enabled ? "Disable" : "Enable"} ${descriptor.displayName}`}
                   onCheckedChange={(checked) =>
-                    updateSettings({
-                      disabledProviders: setDisabled(
-                        settings.disabledProviders,
-                        descriptor.kind,
-                        !Boolean(checked),
-                      ),
-                    })
+                    setProviderDisabled(descriptor.kind, checked !== true)
                   }
                 />
                 <ProviderIcon

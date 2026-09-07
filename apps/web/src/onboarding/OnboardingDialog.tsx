@@ -4,7 +4,7 @@
 // Layer: Web UI overlay (mounted once from the root route)
 
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { useAppSettings } from "~/appSettings";
 import { APP_BASE_NAME } from "~/branding";
@@ -21,11 +21,13 @@ import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesFo
 import { findProviderStatus } from "~/lib/providerAvailability";
 import {
   classifyProviderSetup,
+  isOnboardingSetupStep,
   nextOnboardingStep,
   previousOnboardingStep,
   summarizeProviderSetup,
   type OnboardingStep,
 } from "./logic";
+import { useOnboardingDialogStore } from "./onboardingDialogStore";
 import { OnboardingStepFooter } from "./OnboardingStepFooter";
 import { DoneStep } from "./steps/DoneStep";
 import { FeatureTourStep } from "./steps/FeatureTourStep";
@@ -60,6 +62,12 @@ function OnboardingFlow(props: { onComplete: () => void }) {
 
   const goBack = () => setStep(previousOnboardingStep(step));
   const goNext = () => setStep(nextOnboardingStep(step));
+
+  // Once the user reaches a setup step the first-run gate must not auto-close the dialog.
+  const markEngaged = useOnboardingDialogStore((store) => store.markEngaged);
+  useEffect(() => {
+    if (isOnboardingSetupStep(step)) markEngaged();
+  }, [markEngaged, step]);
 
   const providerSummary = summarizeProviderSetup(
     PROVIDER_DESCRIPTORS.map((descriptor) => ({

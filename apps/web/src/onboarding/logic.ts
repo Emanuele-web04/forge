@@ -2,7 +2,8 @@
 // Purpose: Pure step, gate, and provider-classification rules for the first-run welcome tour.
 // Layer: Web domain helper (no React, no I/O)
 // Exports: ONBOARDING_STEPS, nextOnboardingStep, previousOnboardingStep, resolveOnboardingGate,
-//          classifyProviderSetup, summarizeProviderSetup, toggleSelection
+//          resolveOnboardingCompletionToReconcile, classifyProviderSetup, summarizeProviderSetup,
+//          toggleSelection
 
 import type { ProviderKind, ServerProviderStatus } from "@synara/contracts";
 
@@ -26,6 +27,11 @@ export function previousOnboardingStep(step: OnboardingStep): OnboardingStep {
   return ONBOARDING_STEPS[Math.max(index - 1, 0)] ?? "welcome";
 }
 
+/** Steps where the user has started making setup choices; the tour must not auto-close past here. */
+export function isOnboardingSetupStep(step: OnboardingStep): boolean {
+  return step !== "welcome" && step !== "tour";
+}
+
 export type OnboardingGate = "pending" | "show" | "hidden";
 
 export interface OnboardingGateInputs {
@@ -33,8 +39,6 @@ export interface OnboardingGateInputs {
   readonly threadsHydrated: boolean;
   /** The server settings query has settled (success or error). */
   readonly settingsSettled: boolean;
-  /** The server settings query succeeded, so `serverCompletedAt` is authoritative. */
-  readonly settingsAvailable: boolean;
   /** Count of ordinary (non-container) projects. */
   readonly projectCount: number;
   readonly serverCompletedAt: string | null;
@@ -42,19 +46,51 @@ export interface OnboardingGateInputs {
 }
 
 /**
- * The tour shows exactly once: on a fresh install (no ordinary projects) that has not
- * recorded completion. The server marker wins whenever it is readable so a cleared
- * browser profile cannot replay setup on an already configured machine; the local
- * marker only covers the case where server settings are unreachable.
+ * The tour shows on a fresh install (no ordinary projects) that has not recorded
+ * completion anywhere. Either marker counts: the server one is durable across browser
+ * profiles, the local one covers a completion whose server write failed and is
+ * reconciled back to the server on the next launch (see
+ * `resolveOnboardingCompletionToReconcile`).
+ *
+ * The result is *not* authoritative until the inputs are: callers re-evaluate as
+ * snapshots and settings arrive instead of latching the first non-pending answer.
  */
 export function resolveOnboardingGate(input: OnboardingGateInputs): OnboardingGate {
   if (!input.threadsHydrated || !input.settingsSettled) {
     return "pending";
   }
-  const alreadyCompleted = input.settingsAvailable
-    ? input.serverCompletedAt !== null
-    : input.localCompletedAt !== null;
-  return !alreadyCompleted && input.projectCount === 0 ? "show" : "hidden";
+  const completed = input.serverCompletedAt !== null || input.localCompletedAt !== null;
+  return !completed && input.projectCount === 0 ? "show" : "hidden";
+}
+
+export interface OnboardingReconcileInputs {
+  readonly threadsHydrated: boolean;
+  /** Server settings are readable, so a null marker is a real absence, not a fetch error. */
+  readonly settingsAvailable: boolean;
+  readonly projectCount: number;
+  readonly serverCompletedAt: string | null;
+  readonly localCompletedAt: string | null;
+  /** ISO timestamp used when an existing install is exempted without a local marker. */
+  readonly now: string;
+}
+
+/**
+ * Returns the completion timestamp to write to the server, or null when nothing is owed.
+ * Two cases need the marker persisted after the fact:
+ * - a completion whose server write failed (only the local marker exists), and
+ * - an installation that predates the tour (projects exist, no marker anywhere), which
+ *   must never see the "first run" tour just because its last project is later removed.
+ */
+export function resolveOnboardingCompletionToReconcile(
+  input: OnboardingReconcileInputs,
+): string | null {
+  if (!input.threadsHydrated || !input.settingsAvailable || input.serverCompletedAt !== null) {
+    return null;
+  }
+  if (input.localCompletedAt !== null) {
+    return input.localCompletedAt;
+  }
+  return input.projectCount > 0 ? input.now : null;
 }
 
 export type ProviderSetupState = "connected" | "needs-sign-in" | "not-installed" | "disabled";

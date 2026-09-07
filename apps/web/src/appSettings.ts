@@ -1482,12 +1482,21 @@ export function useAppSettings() {
   };
 
   const resetSettings = async (): Promise<void> => {
-    setSettings(DEFAULT_APP_SETTINGS);
+    // "Restore defaults" resets preferences, not lifecycle markers: clearing the
+    // onboarding completion timestamp would replay the first-run tour on the next launch.
+    const { onboardingCompletedAt: _keepOnboardingCompletedAt, ...resettableDefaults } = defaults;
+    setSettings((prev) => ({
+      ...DEFAULT_APP_SETTINGS,
+      onboardingCompletedAt: prev.onboardingCompletedAt,
+    }));
     await enqueueServerSettingsMutation(async () => {
       const currentServerSettings =
         queryClient.getQueryData<ServerSettingsView>(serverQueryKeys.settings()) ??
         serverSettingsQuery.data;
-      const serverPatch = appSettingsPatchToServerSettingsPatch(defaults, currentServerSettings);
+      const serverPatch = appSettingsPatchToServerSettingsPatch(
+        resettableDefaults,
+        currentServerSettings,
+      );
       const providerSettingsChanged = Boolean(
         serverPatch.providers && Object.keys(serverPatch.providers).length > 0,
       );
