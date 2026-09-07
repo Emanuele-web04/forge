@@ -2,10 +2,12 @@ import { Schema } from "effect";
 import {
   CloudTaskId,
   CloudWorkspaceId,
+  ConnectedRepositoryId,
   NonNegativeInt,
   OrganizationId,
   PositiveInt,
   TrimmedNonEmptyString,
+  UserId,
 } from "./baseSchemas";
 
 // Cloud (SaaS) workspace contracts. Design source:
@@ -39,6 +41,51 @@ export type CloudNetworkMode = typeof CloudNetworkMode.Type;
 const CloudIsolation = Schema.Literals(["container-hardened", "microvm"]);
 export type CloudIsolation = typeof CloudIsolation.Type;
 
+/** Roles are organization-scoped. They deliberately do not overlap with the
+ * desktop server's `owner`/`client` pairing roles. */
+export const CloudOrganizationRole = Schema.Literals(["owner", "admin", "member", "viewer"]);
+export type CloudOrganizationRole = typeof CloudOrganizationRole.Type;
+
+export const CloudOrganization = Schema.Struct({
+  id: OrganizationId,
+  slug: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  personal: Schema.Boolean,
+  createdAt: Schema.DateTimeUtcFromString,
+});
+export type CloudOrganization = typeof CloudOrganization.Type;
+
+export const CloudMembership = Schema.Struct({
+  organizationId: OrganizationId,
+  userId: UserId,
+  role: CloudOrganizationRole,
+  createdAt: Schema.DateTimeUtcFromString,
+});
+export type CloudMembership = typeof CloudMembership.Type;
+
+export const CloudUser = Schema.Struct({
+  id: UserId,
+  email: TrimmedNonEmptyString,
+  displayName: Schema.optional(TrimmedNonEmptyString),
+  avatarUrl: Schema.optional(Schema.String),
+  emailVerifiedAt: Schema.optional(Schema.DateTimeUtcFromString),
+  createdAt: Schema.DateTimeUtcFromString,
+});
+export type CloudUser = typeof CloudUser.Type;
+
+export const CloudConnectedRepository = Schema.Struct({
+  id: ConnectedRepositoryId,
+  organizationId: OrganizationId,
+  provider: Schema.Literal("github"),
+  owner: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  defaultBranch: TrimmedNonEmptyString,
+  installationId: TrimmedNonEmptyString,
+  permissions: Schema.Literals(["read", "write", "admin"]),
+  connectedAt: Schema.DateTimeUtcFromString,
+});
+export type CloudConnectedRepository = typeof CloudConnectedRepository.Type;
+
 export const CloudWorkspaceQuotas = Schema.Struct({
   cpu: Schema.Number,
   cpuLimit: Schema.Number,
@@ -49,6 +96,7 @@ export const CloudWorkspaceQuotas = Schema.Struct({
 export type CloudWorkspaceQuotas = typeof CloudWorkspaceQuotas.Type;
 
 export const CloudWorkspaceRepository = Schema.Struct({
+  connectedRepositoryId: ConnectedRepositoryId,
   owner: TrimmedNonEmptyString,
   repo: TrimmedNonEmptyString,
   branch: TrimmedNonEmptyString,
@@ -83,6 +131,22 @@ export const CloudWorkspace = Schema.Struct({
   isolation: CloudIsolation,
 });
 export type CloudWorkspace = typeof CloudWorkspace.Type;
+
+export const CloudCreateWorkspaceInput = Schema.Struct({
+  organizationId: OrganizationId,
+  connectedRepositoryId: ConnectedRepositoryId,
+  name: TrimmedNonEmptyString,
+  baseBranch: TrimmedNonEmptyString,
+  region: CloudRegion,
+});
+export type CloudCreateWorkspaceInput = typeof CloudCreateWorkspaceInput.Type;
+
+export const CloudCreateTaskInput = Schema.Struct({
+  workspaceId: CloudWorkspaceId,
+  title: TrimmedNonEmptyString,
+  provider: TrimmedNonEmptyString,
+});
+export type CloudCreateTaskInput = typeof CloudCreateTaskInput.Type;
 
 export const CloudTask = Schema.Struct({
   id: CloudTaskId,
@@ -135,6 +199,6 @@ export type CloudRunnerHeartbeat = typeof CloudRunnerHeartbeat.Type;
 
 export const CloudTerminateWorkspaceInput = Schema.Struct({
   workspaceId: CloudWorkspaceId,
-  reason: TrimmedNonEmptyString,
+  reason: Schema.Literals(["user-request", "expired", "quota-exceeded", "security-incident"]),
 });
 export type CloudTerminateWorkspaceInput = typeof CloudTerminateWorkspaceInput.Type;
