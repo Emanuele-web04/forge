@@ -4,7 +4,7 @@
 // Exports: repo diff scope labels, validation, and a persisted Zustand store.
 
 import type { GitReadWorkingTreeDiffInput } from "@synara/contracts";
-import { useEffect } from "react";
+import { useMemo } from "react";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
@@ -53,48 +53,81 @@ export function isRepoDiffScope(value: string): value is RepoDiffScope {
 
 interface RepoDiffScopeStore {
   scope: RepoDiffScope;
-  compareRef: string | null;
-  /** Repository the scope currently belongs to (not persisted). */
-  cwd: string | null;
+  /**
+   * Compare refs are repository-specific: a branch or SHA picked for one
+   * project is usually meaningless in another, so they are keyed by cwd.
+   */
+  compareRefs: Readonly<Record<string, string>>;
   setScope: (scope: RepoDiffScope) => void;
-  setCompareRef: (compareRef: string | null) => void;
-  syncCwd: (cwd: string | null) => void;
+  setCompareRef: (cwd: string, compareRef: string | null) => void;
+}
+
+export interface RepoDiffScopeSelection {
+  scope: RepoDiffScope;
+  compareRef: string | null;
 }
 
 const REPO_DIFF_SCOPE_STORAGE_KEY = "synara:repo-diff-scope:v1";
+
+export function sanitizeRepoDiffCompareRefs(value: unknown): Record<string, string> {
+  if (typeof value !== "object" || value === null) {
+    return {};
+  }
+  const compareRefs: Record<string, string> = {};
+  for (const [cwd, compareRef] of Object.entries(value)) {
+    if (typeof compareRef === "string" && compareRef.trim().length > 0) {
+      compareRefs[cwd] = compareRef;
+    }
+  }
+  return compareRefs;
+}
+
+/**
+ * The ref scope only makes sense with a ref for the repository being shown;
+ * a repository without one falls back to the default scope.
+ */
+export function resolveRepoDiffScopeSelection(
+  scope: RepoDiffScope,
+  compareRef: string | null,
+): RepoDiffScopeSelection {
+  return scope === "ref" && compareRef === null
+    ? { scope: DEFAULT_REPO_DIFF_SCOPE, compareRef: null }
+    : { scope, compareRef };
+}
 
 export const useRepoDiffScopeStore = create<RepoDiffScopeStore>()(
   persist(
     (set) => ({
       scope: DEFAULT_REPO_DIFF_SCOPE,
-      compareRef: null,
-      cwd: null,
+      compareRefs: {},
       setScope: (scope) => set({ scope }),
-      setCompareRef: (compareRef) => set({ compareRef }),
-      syncCwd: (cwd) => set({ cwd }),
+      setCompareRef: (cwd, compareRef) =>
+        set((state) => {
+          const trimmed = compareRef?.trim() ?? "";
+          const compareRefs = Object.fromEntries(
+            Object.entries(state.compareRefs).filter(([key]) => key !== cwd),
+          );
+          return {
+            compareRefs: trimmed.length > 0 ? { ...compareRefs, [cwd]: trimmed } : compareRefs,
+          };
+        }),
     }),
     {
       name: REPO_DIFF_SCOPE_STORAGE_KEY,
       storage: createJSONStorage(() => localStorage),
-      partialize: (state) => ({ scope: state.scope, compareRef: state.compareRef }),
-      // Validate the persisted scope on rehydrate: an unknown/legacy value would
+      partialize: (state) => ({ scope: state.scope, compareRefs: state.compareRefs }),
+      // Validate the persisted state on rehydrate: an unknown/legacy value would
       // otherwise flow into the diff request and the label lookup unchecked.
       merge: (persisted, current) => {
-        const persistedState = persisted as { scope?: unknown; compareRef?: unknown } | undefined;
+        const persistedState = persisted as { scope?: unknown; compareRefs?: unknown } | undefined;
         const persistedScope = persistedState?.scope;
-        const persistedCompareRef = persistedState?.compareRef;
-        const compareRef =
-          typeof persistedCompareRef === "string" && persistedCompareRef.trim().length > 0
-            ? persistedCompareRef
-            : null;
-        const scope =
-          typeof persistedScope === "string" && isRepoDiffScope(persistedScope)
-            ? persistedScope
-            : DEFAULT_REPO_DIFF_SCOPE;
         return {
           ...current,
-          scope: scope === "ref" && compareRef === null ? DEFAULT_REPO_DIFF_SCOPE : scope,
-          compareRef,
+          scope:
+            typeof persistedScope === "string" && isRepoDiffScope(persistedScope)
+              ? persistedScope
+              : DEFAULT_REPO_DIFF_SCOPE,
+          compareRefs: sanitizeRepoDiffCompareRefs(persistedState?.compareRefs),
         };
       },
     },
@@ -102,23 +135,14 @@ export const useRepoDiffScopeStore = create<RepoDiffScopeStore>()(
 );
 
 /**
- * Compare refs are repository-specific: a branch or SHA picked for one project
- * is usually meaningless in another. When the active repository changes, drop a
- * persisted ref scope (and its ref) so the next repository does not open with a
- * diff error; other scopes transfer safely. Pass every active consumer's cwd so
- * the tracking stays correct wherever the panel is mounted.
+ * Reads the scope for one repository. Every mounted consumer resolves its own
+ * cwd here, so split panes showing different repositories never contend over
+ * a single "active" repository.
  */
-export function useRepoDiffScopeCwdSync(cwd: string | null): void {
-  const storeCwd = useRepoDiffScopeStore((store) => store.cwd);
-  useEffect(() => {
-    if (cwd === null || storeCwd === cwd) {
-      return;
-    }
-    const switching = storeCwd !== null;
-    useRepoDiffScopeStore.setState((state) =>
-      switching && state.scope === "ref"
-        ? { cwd, scope: DEFAULT_REPO_DIFF_SCOPE, compareRef: null }
-        : { cwd },
-    );
-  }, [cwd, storeCwd]);
+export function useRepoDiffScope(cwd: string | null): RepoDiffScopeSelection {
+  const scope = useRepoDiffScopeStore((store) => store.scope);
+  const compareRef = useRepoDiffScopeStore((store) =>
+    cwd === null ? null : (store.compareRefs[cwd] ?? null),
+  );
+  return useMemo(() => resolveRepoDiffScopeSelection(scope, compareRef), [compareRef, scope]);
 }

@@ -52,6 +52,7 @@ import { resolveThreadWorkspaceCwd } from "./checkpointing/Utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { realpathNearestExisting } from "./realpathNearestExisting";
 import { workspaceRootsEqual } from "@synara/shared/threadWorkspace";
+import { WORKSPACE_FILE_WRITE_CONFLICT_CODE } from "@synara/shared/workspaceFileWrite";
 import {
   isThreadDetailEventFor,
   THREAD_DETAIL_EVENT_TYPES,
@@ -1221,7 +1222,7 @@ const makeWsRpcHandlersLayer = () =>
               cause instanceof WorkspaceFileConflictError
                 ? new WsRpcError({
                     message: cause.message,
-                    code: "WORKSPACE_FILE_CONFLICT",
+                    code: WORKSPACE_FILE_WRITE_CONFLICT_CODE,
                     retryable: false,
                   })
                 : cause instanceof WorkspaceFileDeletedError

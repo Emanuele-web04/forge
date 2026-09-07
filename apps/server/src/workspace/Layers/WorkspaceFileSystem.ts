@@ -4,7 +4,6 @@ import * as NodeFs from "node:fs/promises";
 import * as NodePath from "node:path";
 
 import { isLocalAbsolutePath } from "@synara/shared/path";
-import { WORKSPACE_FILE_WRITE_CONFLICT_MESSAGE } from "@synara/shared/workspaceFileWrite";
 import { Effect, Layer, Path } from "effect";
 
 import { resolveLocalPreviewGrantRealPath } from "../../localImageFiles";
@@ -67,25 +66,6 @@ function isBinaryLike(bytes: Uint8Array): boolean {
 
 function isFileNotFoundError(cause: unknown): boolean {
   return (cause as NodeJS.ErrnoException | null)?.code === "ENOENT";
-}
-
-async function assertFileMatchesExpectedHash(
-  filePath: string,
-  expectedContentsSha256: string,
-): Promise<void> {
-  const currentContents = await NodeFs.readFile(filePath, "utf8").catch((cause: unknown) => {
-    if (isFileNotFoundError(cause)) return null;
-    throw cause;
-  });
-  if (currentContents === null) {
-    throw new Error(WORKSPACE_FILE_WRITE_CONFLICT_MESSAGE);
-  }
-  const currentSha256 = createHash("sha256")
-    .update(Buffer.from(currentContents, "utf8"))
-    .digest("hex");
-  if (currentSha256 !== expectedContentsSha256) {
-    throw new Error(WORKSPACE_FILE_WRITE_CONFLICT_MESSAGE);
-  }
 }
 
 function sameFileState(left: BigIntStats, right: BigIntStats): boolean {
@@ -491,12 +471,13 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
     });
 
     const guardedWrite = input.expectedVersion !== undefined;
-    if (
-      guardedWrite &&
-      (input.encoding === undefined ||
-        input.lineEnding === undefined ||
-        input.lineEnding === "mixed")
-    ) {
+    // Any save that knows the file's format re-encodes with it, so an
+    // unguarded overwrite keeps CRLF/BOM files in their original shape too.
+    const textFormat =
+      input.encoding !== undefined && input.lineEnding !== undefined && input.lineEnding !== "mixed"
+        ? { encoding: input.encoding, lineEnding: input.lineEnding }
+        : null;
+    if (guardedWrite && textFormat === null) {
       return yield* new WorkspaceFileSystemError({
         cwd: input.cwd,
         relativePath: input.relativePath,
@@ -504,12 +485,8 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
         detail: "Guarded text saves require a supported encoding and consistent line endings.",
       });
     }
-    const bytes = guardedWrite
-      ? encodeWorkspaceText(
-          input.contents,
-          input.encoding as "utf8" | "utf8-bom",
-          input.lineEnding as "lf" | "crlf" | "cr",
-        )
+    const bytes = textFormat
+      ? encodeWorkspaceText(input.contents, textFormat.encoding, textFormat.lineEnding)
       : Buffer.from(input.contents, "utf8");
     if (guardedWrite && bytes.length > DEFAULT_READ_FILE_MAX_BYTES) {
       return yield* new WorkspaceFileSystemError({
@@ -547,10 +524,6 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
         );
         if (finalRealTarget === null) {
           return "outside" as const;
-        }
-
-        if (input.expectedContentsSha256 !== undefined) {
-          await assertFileMatchesExpectedHash(finalRealTarget, input.expectedContentsSha256);
         }
 
         await writeFileAtomically(input.cwd, finalRealTarget, bytes, input.expectedVersion);

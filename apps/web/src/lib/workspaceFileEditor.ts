@@ -1,49 +1,37 @@
 import type { ProjectFileEncoding, ProjectFileLineEnding } from "@synara/contracts";
 
-export interface WorkspaceFileEditorEncoding {
+/** On-disk format of a loaded buffer; every save re-encodes with it. */
+export interface WorkspaceFileEditorFormat {
   /** Server-side version of the loaded bytes (`sha256:<hex>` of the raw file). */
-  expectedVersion: string | null;
-  encoding: ProjectFileEncoding | null;
-  lineEnding: Exclude<ProjectFileLineEnding, "mixed"> | null;
+  expectedVersion: string;
+  encoding: ProjectFileEncoding;
+  lineEnding: Exclude<ProjectFileLineEnding, "mixed">;
 }
 
-export const EMPTY_WORKSPACE_FILE_EDITOR_ENCODING: WorkspaceFileEditorEncoding = {
-  expectedVersion: null,
-  encoding: null,
-  lineEnding: null,
-};
+export interface WorkspaceFileEditorSource {
+  truncated: boolean;
+  version: string | null;
+  encoding: ProjectFileEncoding | null;
+  lineEnding: ProjectFileLineEnding | null;
+}
 
-export interface WorkspaceFileEditorState extends WorkspaceFileEditorEncoding {
+export interface WorkspaceFileEditorState {
   key: string | null;
   baseline: string;
-  baselineSha256: string;
   value: string;
   version: number;
+  format: WorkspaceFileEditorFormat | null;
   conflict: boolean;
   saving: boolean;
   saveError: string | null;
 }
 
 export type WorkspaceFileEditorAction =
-  | ({
-      type: "loaded";
-      key: string;
-      contents: string;
-      sha256: string;
-    } & Partial<WorkspaceFileEditorEncoding>)
-  | ({
-      type: "reloaded";
-      key: string;
-      contents: string;
-      sha256: string;
-    } & Partial<WorkspaceFileEditorEncoding>)
+  | { type: "loaded"; key: string; contents: string; format: WorkspaceFileEditorFormat }
+  | { type: "reloaded"; key: string; contents: string; format: WorkspaceFileEditorFormat }
   | { type: "changed"; value: string }
   | { type: "saveStarted" }
-  | ({
-      type: "saveSucceeded";
-      contents: string;
-      sha256: string;
-    } & Partial<WorkspaceFileEditorEncoding>)
+  | { type: "saveSucceeded"; contents: string; expectedVersion: string }
   | { type: "saveFailed"; message: string; conflict: boolean }
   | { type: "conflictDismissed" }
   | { type: "closed" };
@@ -51,14 +39,52 @@ export type WorkspaceFileEditorAction =
 export const INITIAL_WORKSPACE_FILE_EDITOR_STATE: WorkspaceFileEditorState = {
   key: null,
   baseline: "",
-  baselineSha256: "",
   value: "",
   version: 0,
+  format: null,
   conflict: false,
   saving: false,
   saveError: null,
-  ...EMPTY_WORKSPACE_FILE_EDITOR_ENCODING,
 };
+
+/**
+ * Why a read cannot be edited in place, or null when it can. Mixed line
+ * endings cannot round-trip through a re-encoding save, so they stay
+ * read-only rather than being silently normalized.
+ */
+export function resolveWorkspaceFileEditorReadOnlyReason(
+  source: WorkspaceFileEditorSource,
+): string | null {
+  if (source.truncated) {
+    return "Large files are read-only.";
+  }
+  if (source.lineEnding === "mixed") {
+    return "Files with mixed line endings are read-only to preserve their exact format.";
+  }
+  if (source.version === null || source.encoding === null || source.lineEnding === null) {
+    return "This file format is read-only.";
+  }
+  return null;
+}
+
+export function resolveWorkspaceFileEditorFormat(
+  source: WorkspaceFileEditorSource,
+): WorkspaceFileEditorFormat | null {
+  if (
+    source.truncated ||
+    source.version === null ||
+    source.encoding === null ||
+    source.lineEnding === null ||
+    source.lineEnding === "mixed"
+  ) {
+    return null;
+  }
+  return {
+    expectedVersion: source.version,
+    encoding: source.encoding,
+    lineEnding: source.lineEnding,
+  };
+}
 
 export function isWorkspaceFileEditorDirty(state: WorkspaceFileEditorState): boolean {
   return state.key !== null && state.value !== state.baseline;
@@ -68,21 +94,17 @@ function replaceBuffer(
   state: WorkspaceFileEditorState,
   key: string,
   contents: string,
-  sha256: string,
-  encoding?: Partial<WorkspaceFileEditorEncoding>,
+  format: WorkspaceFileEditorFormat,
 ): WorkspaceFileEditorState {
   return {
     key,
     baseline: contents,
-    baselineSha256: sha256,
     value: contents,
     version: state.version + 1,
+    format,
     conflict: false,
     saving: false,
     saveError: null,
-    expectedVersion: encoding?.expectedVersion ?? null,
-    encoding: encoding?.encoding ?? null,
-    lineEnding: encoding?.lineEnding ?? null,
   };
 }
 
@@ -98,14 +120,14 @@ export function workspaceFileEditorReducer(
       if (
         state.key === action.key &&
         state.baseline === action.contents &&
-        state.baselineSha256 === action.sha256
+        state.format?.expectedVersion === action.format.expectedVersion
       ) {
         return state;
       }
-      return replaceBuffer(state, action.key, action.contents, action.sha256, action);
+      return replaceBuffer(state, action.key, action.contents, action.format);
     }
     case "reloaded":
-      return replaceBuffer(state, action.key, action.contents, action.sha256, action);
+      return replaceBuffer(state, action.key, action.contents, action.format);
     case "changed":
       return state.key === null || state.value === action.value
         ? state
@@ -116,13 +138,10 @@ export function workspaceFileEditorReducer(
       return {
         ...state,
         baseline: action.contents,
-        baselineSha256: action.sha256,
+        format: state.format ? { ...state.format, expectedVersion: action.expectedVersion } : null,
         saving: false,
         conflict: false,
         saveError: null,
-        expectedVersion: action.expectedVersion ?? state.expectedVersion,
-        encoding: action.encoding ?? state.encoding,
-        lineEnding: action.lineEnding ?? state.lineEnding,
       };
     case "saveFailed":
       return { ...state, saving: false, conflict: action.conflict, saveError: action.message };

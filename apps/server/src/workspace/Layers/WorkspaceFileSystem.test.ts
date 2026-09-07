@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import * as NodeFs from "node:fs/promises";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -41,9 +40,6 @@ const writeTextFile = Effect.fn(function* (cwd: string, relativePath: string, co
     .pipe(Effect.orDie);
   yield* fileSystem.writeFileString(absolutePath, contents).pipe(Effect.orDie);
 });
-
-const sha256Hex = (contents: string) =>
-  createHash("sha256").update(Buffer.from(contents, "utf8")).digest("hex");
 
 const makeDirectorySymlink = (target: string, linkPath: string) =>
   NodeFs.symlink(target, linkPath, process.platform === "win32" ? "junction" : "dir");
@@ -299,72 +295,7 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
       }),
     );
 
-    it.effect("writes when the expected hash still matches the file on disk", () =>
-      Effect.gen(function* () {
-        const workspaceFileSystem = yield* WorkspaceFileSystem;
-        const cwd = yield* makeTempDir;
-        const fileSystem = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        yield* writeTextFile(cwd, "src/app.ts", "one\n");
-
-        yield* workspaceFileSystem.writeFile({
-          cwd,
-          relativePath: "src/app.ts",
-          contents: "two\n",
-          expectedContentsSha256: sha256Hex("one\n"),
-        });
-
-        const saved = yield* fileSystem
-          .readFileString(path.join(cwd, "src/app.ts"))
-          .pipe(Effect.orDie);
-        expect(saved).toBe("two\n");
-      }),
-    );
-
-    it.effect("rejects a write whose expected hash no longer matches disk", () =>
-      Effect.gen(function* () {
-        const workspaceFileSystem = yield* WorkspaceFileSystem;
-        const cwd = yield* makeTempDir;
-        const fileSystem = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        yield* writeTextFile(cwd, "src/app.ts", "changed by someone else\n");
-
-        const error = yield* workspaceFileSystem
-          .writeFile({
-            cwd,
-            relativePath: "src/app.ts",
-            contents: "mine\n",
-            expectedContentsSha256: sha256Hex("one\n"),
-          })
-          .pipe(Effect.flip);
-
-        expect(error.message).toContain("File changed on disk since it was loaded.");
-        const saved = yield* fileSystem
-          .readFileString(path.join(cwd, "src/app.ts"))
-          .pipe(Effect.orDie);
-        expect(saved).toBe("changed by someone else\n");
-      }),
-    );
-
-    it.effect("treats a missing file as a conflict when an expected hash is supplied", () =>
-      Effect.gen(function* () {
-        const workspaceFileSystem = yield* WorkspaceFileSystem;
-        const cwd = yield* makeTempDir;
-
-        const error = yield* workspaceFileSystem
-          .writeFile({
-            cwd,
-            relativePath: "src/gone.ts",
-            contents: "mine\n",
-            expectedContentsSha256: sha256Hex("one\n"),
-          })
-          .pipe(Effect.flip);
-
-        expect(error.message).toContain("File changed on disk since it was loaded.");
-      }),
-    );
-
-    it.effect("overwrites unconditionally when no expected hash is supplied", () =>
+    it.effect("overwrites unconditionally when no version guard is supplied", () =>
       Effect.gen(function* () {
         const workspaceFileSystem = yield* WorkspaceFileSystem;
         const cwd = yield* makeTempDir;
@@ -382,6 +313,27 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
           .readFileString(path.join(cwd, "src/app.ts"))
           .pipe(Effect.orDie);
         expect(saved).toBe("mine\n");
+      }),
+    );
+
+    it.effect("re-encodes an unguarded overwrite with the supplied format", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        yield* writeTextFile(cwd, "src/app.ts", "changed by someone else\r\n");
+
+        yield* workspaceFileSystem.writeFile({
+          cwd,
+          relativePath: "src/app.ts",
+          contents: "mine\nagain\n",
+          encoding: "utf8-bom",
+          lineEnding: "crlf",
+        });
+
+        const saved = yield* fileSystem.readFile(path.join(cwd, "src/app.ts")).pipe(Effect.orDie);
+        expect(Buffer.from(saved).toString("utf8")).toBe("\uFEFFmine\r\nagain\r\n");
       }),
     );
 

@@ -1,9 +1,11 @@
-export const WORKSPACE_FILE_WRITE_CONFLICT_MESSAGE = "File changed on disk since it was loaded.";
-
-export function isWorkspaceFileWriteConflictMessage(message: string): boolean {
-  return message.includes(WORKSPACE_FILE_WRITE_CONFLICT_MESSAGE);
-}
+/** RPC error code the server attaches when a guarded write no longer matches the file on disk. */
+export const WORKSPACE_FILE_WRITE_CONFLICT_CODE = "WORKSPACE_FILE_CONFLICT";
 
 export function isWorkspaceFileWriteConflictError(error: unknown): boolean {
-  return error instanceof Error && isWorkspaceFileWriteConflictMessage(error.message);
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === WORKSPACE_FILE_WRITE_CONFLICT_CODE
+  );
 }

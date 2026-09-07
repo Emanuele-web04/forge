@@ -45,10 +45,7 @@ export function WorkspaceFileDiffEditorPane(props: WorkspaceFileDiffEditorPanePr
     gitReadFileAtRevQueryOptions({
       cwd: props.workspaceRoot,
       filePath: props.basePath ?? props.filePath,
-      ...(props.baseRev.rev !== undefined ? { rev: props.baseRev.rev } : {}),
-      ...(props.baseRev.mergeBaseWith !== undefined
-        ? { mergeBaseWith: props.baseRev.mergeBaseWith }
-        : {}),
+      ...props.baseRev,
     }),
   );
   const original = originalQuery.data?.missing ? "" : (originalQuery.data?.contents ?? "");
@@ -127,9 +124,9 @@ export function WorkspaceFileDiffEditorPane(props: WorkspaceFileDiffEditorPanePr
             {session.loadError ?? originalError}
           </p>
         </PanelStateMessage>
-      ) : session.truncated ? (
+      ) : session.readOnlyReason ? (
         <PanelStateMessage density="compact" fill="flex">
-          <p>This file is too large to open in the editor without truncating it.</p>
+          <p>{session.readOnlyReason}</p>
         </PanelStateMessage>
       ) : session.loading || originalQuery.isLoading || !session.canEdit ? (
         <PanelStateMessage density="compact" fill="flex">

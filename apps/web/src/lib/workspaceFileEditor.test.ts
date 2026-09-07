@@ -3,9 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   INITIAL_WORKSPACE_FILE_EDITOR_STATE,
   isWorkspaceFileEditorDirty,
+  resolveWorkspaceFileEditorFormat,
+  resolveWorkspaceFileEditorReadOnlyReason,
   workspaceFileEditorKey,
   workspaceFileEditorReducer,
   type WorkspaceFileEditorAction,
+  type WorkspaceFileEditorFormat,
   type WorkspaceFileEditorState,
 } from "./workspaceFileEditor";
 
@@ -16,12 +19,22 @@ function reduce(
   return actions.reduce(workspaceFileEditorReducer, state);
 }
 
+const FORMAT: WorkspaceFileEditorFormat = {
+  expectedVersion: "sha256:one",
+  encoding: "utf8",
+  lineEnding: "lf",
+};
+
 const LOADED: WorkspaceFileEditorAction = {
   type: "loaded",
   key: "a",
   contents: "one\n",
-  sha256: "sha-one",
+  format: FORMAT,
 };
+
+function format(expectedVersion: string): WorkspaceFileEditorFormat {
+  return { ...FORMAT, expectedVersion };
+}
 
 describe("workspaceFileEditorKey", () => {
   it("returns null until both a workspace and a file are known", () => {
@@ -34,12 +47,49 @@ describe("workspaceFileEditorKey", () => {
   });
 });
 
+describe("resolveWorkspaceFileEditorReadOnlyReason", () => {
+  it("keeps mixed line endings read-only instead of normalizing them on save", () => {
+    const mixed = {
+      truncated: false,
+      version: "sha256:x",
+      encoding: "utf8",
+      lineEnding: "mixed",
+    } as const;
+    expect(resolveWorkspaceFileEditorReadOnlyReason(mixed)).toMatch(/mixed line endings/);
+    expect(resolveWorkspaceFileEditorFormat(mixed)).toBeNull();
+  });
+
+  it("keeps truncated and unversioned reads read-only", () => {
+    const truncated = { truncated: true, version: null, encoding: null, lineEnding: null };
+    expect(resolveWorkspaceFileEditorReadOnlyReason(truncated)).toMatch(/Large files/);
+    expect(resolveWorkspaceFileEditorFormat(truncated)).toBeNull();
+    const unversioned = { truncated: false, version: null, encoding: null, lineEnding: null };
+    expect(resolveWorkspaceFileEditorReadOnlyReason(unversioned)).toMatch(/read-only/);
+    expect(resolveWorkspaceFileEditorFormat(unversioned)).toBeNull();
+  });
+
+  it("exposes the on-disk format for editable reads", () => {
+    const source = {
+      truncated: false,
+      version: "sha256:x",
+      encoding: "utf8-bom",
+      lineEnding: "crlf",
+    } as const;
+    expect(resolveWorkspaceFileEditorReadOnlyReason(source)).toBeNull();
+    expect(resolveWorkspaceFileEditorFormat(source)).toEqual({
+      expectedVersion: "sha256:x",
+      encoding: "utf8-bom",
+      lineEnding: "crlf",
+    });
+  });
+});
+
 describe("workspaceFileEditorReducer", () => {
   it("adopts a first load as the baseline and bumps the buffer version", () => {
     const state = reduce(INITIAL_WORKSPACE_FILE_EDITOR_STATE, LOADED);
     expect(state.key).toBe("a");
     expect(state.baseline).toBe("one\n");
-    expect(state.baselineSha256).toBe("sha-one");
+    expect(state.format).toEqual(FORMAT);
     expect(state.value).toBe("one\n");
     expect(state.version).toBe(1);
     expect(isWorkspaceFileEditorDirty(state)).toBe(false);
@@ -72,7 +122,7 @@ describe("workspaceFileEditorReducer", () => {
       type: "loaded",
       key: "a",
       contents: "theirs\n",
-      sha256: "sha-theirs",
+      format: format("sha256:theirs"),
     });
     expect(afterRefetch).toBe(dirty);
     expect(afterRefetch.value).toBe("mine\n");
@@ -84,7 +134,7 @@ describe("workspaceFileEditorReducer", () => {
       type: "loaded",
       key: "a",
       contents: "theirs\n",
-      sha256: "sha-theirs",
+      format: format("sha256:theirs"),
     });
     expect(afterRefetch.value).toBe("theirs\n");
     expect(afterRefetch.version).toBe(clean.version + 1);
@@ -104,7 +154,7 @@ describe("workspaceFileEditorReducer", () => {
       type: "loaded",
       key: "b",
       contents: "other\n",
-      sha256: "sha-other",
+      format: format("sha256:other"),
     });
     expect(next.key).toBe("b");
     expect(next.value).toBe("other\n");
@@ -120,7 +170,7 @@ describe("workspaceFileEditorReducer", () => {
       type: "reloaded",
       key: "a",
       contents: "theirs\n",
-      sha256: "sha-theirs",
+      format: format("sha256:theirs"),
     });
     expect(reloaded.value).toBe("theirs\n");
     expect(reloaded.version).toBe(dirty.version + 1);
@@ -131,11 +181,11 @@ describe("workspaceFileEditorReducer", () => {
     const dirty = reduce(INITIAL_WORKSPACE_FILE_EDITOR_STATE, LOADED, { type: "saveStarted" });
     const saved = workspaceFileEditorReducer(
       workspaceFileEditorReducer(dirty, { type: "changed", value: "two\n" }),
-      { type: "saveSucceeded", contents: "two\n", sha256: "sha-two" },
+      { type: "saveSucceeded", contents: "two\n", expectedVersion: "sha256:two" },
     );
     expect(saved.saving).toBe(false);
     expect(saved.baseline).toBe("two\n");
-    expect(saved.baselineSha256).toBe("sha-two");
+    expect(saved.format).toEqual(format("sha256:two"));
     expect(saved.version).toBe(dirty.version);
     expect(isWorkspaceFileEditorDirty(saved)).toBe(false);
   });
@@ -147,7 +197,7 @@ describe("workspaceFileEditorReducer", () => {
       { type: "changed", value: "two\n" },
       { type: "saveStarted" },
       { type: "changed", value: "three\n" },
-      { type: "saveSucceeded", contents: "two\n", sha256: "sha-two" },
+      { type: "saveSucceeded", contents: "two\n", expectedVersion: "sha256:two" },
     );
     expect(isWorkspaceFileEditorDirty(state)).toBe(true);
     expect(state.value).toBe("three\n");

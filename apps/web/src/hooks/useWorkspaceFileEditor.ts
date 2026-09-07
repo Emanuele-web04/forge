@@ -7,10 +7,11 @@ import {
   invalidateProjectFileQueriesForCwds,
   projectReadFileQueryOptions,
 } from "~/lib/projectReactQuery";
-import { sha256Hex } from "~/lib/sha256";
 import {
   INITIAL_WORKSPACE_FILE_EDITOR_STATE,
   isWorkspaceFileEditorDirty,
+  resolveWorkspaceFileEditorFormat,
+  resolveWorkspaceFileEditorReadOnlyReason,
   workspaceFileEditorKey,
   workspaceFileEditorReducer,
   type WorkspaceFileEditorState,
@@ -28,7 +29,8 @@ export interface WorkspaceFileEditorController {
   dirty: boolean;
   loading: boolean;
   loadError: string | null;
-  truncated: boolean;
+  /** Why the loaded file cannot be edited in place, or null when it can. */
+  readOnlyReason: string | null;
   canEdit: boolean;
   handleChange: (value: string) => void;
   save: () => void;
@@ -53,41 +55,24 @@ export function useWorkspaceFileEditor(
     enabled: enabled && cwd !== null && filePath !== null,
   });
   const fileQuery = useQuery(queryOptions);
-  const contents = fileQuery.data?.contents ?? null;
-  const truncated = fileQuery.data?.truncated ?? false;
-  const resolvedRelativePath = fileQuery.data?.relativePath ?? filePath;
+  const file = fileQuery.data;
+  const readOnlyReason = file === undefined ? null : resolveWorkspaceFileEditorReadOnlyReason(file);
+  const resolvedRelativePath = file?.relativePath ?? filePath;
   const stateRef = useRef(state);
   stateRef.current = state;
   const resolvedRelativePathRef = useRef(resolvedRelativePath);
   resolvedRelativePathRef.current = resolvedRelativePath;
-  const truncatedRef = useRef(truncated);
-  truncatedRef.current = truncated;
 
   useEffect(() => {
-    if (editorKey === null || contents === null || truncated) {
+    if (editorKey === null || file === undefined) {
       return;
     }
-    let cancelled = false;
-    void sha256Hex(contents).then((sha256) => {
-      if (!cancelled) {
-        const lineEnding = fileQuery.data?.lineEnding;
-        dispatch({
-          type: "loaded",
-          key: editorKey,
-          contents,
-          sha256,
-          expectedVersion: fileQuery.data?.version ?? null,
-          encoding: fileQuery.data?.encoding ?? null,
-          // Mixed endings cannot round-trip through a guarded write; treat
-          // them like unversioned reads and fall back to the hash guard.
-          lineEnding: lineEnding === "mixed" || lineEnding == null ? null : lineEnding,
-        });
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [contents, editorKey, truncated, fileQuery.data]);
+    const format = resolveWorkspaceFileEditorFormat(file);
+    if (format === null) {
+      return;
+    }
+    dispatch({ type: "loaded", key: editorKey, contents: file.contents, format });
+  }, [editorKey, file]);
 
   useEffect(() => {
     if (editorKey === null) {
@@ -100,15 +85,15 @@ export function useWorkspaceFileEditor(
   }, []);
 
   const writeContents = useCallback(
-    async (options: { useExpectedHash: boolean }) => {
+    async (options: { guarded: boolean }) => {
       const current = stateRef.current;
       const relativePath = resolvedRelativePathRef.current;
       if (
         cwd === null ||
         relativePath === null ||
         current.key === null ||
-        current.saving ||
-        truncatedRef.current
+        current.format === null ||
+        current.saving
       ) {
         return;
       }
@@ -116,38 +101,27 @@ export function useWorkspaceFileEditor(
       dispatch({ type: "saveStarted" });
       try {
         const api = ensureNativeApi();
-        // Prefer the server's guarded-write path: it verifies the version it
-        // issued and re-encodes the save with the file's original encoding and
-        // line endings, so CRLF/BOM files neither false-conflict nor silently
-        // change format. The contents hash remains the fallback for reads that
-        // carried no version. Overwrite deliberately skips version guards so it
-        // stays an escape hatch when the file changed on disk.
+        // The server re-encodes every save with the file's original encoding
+        // and line endings, so CRLF/BOM files keep their format. A guarded save
+        // also verifies the version it issued; Overwrite deliberately skips that
+        // guard so it stays an escape hatch when the file changed on disk.
         const writeResult = await api.projects.writeFile({
           cwd,
           relativePath,
           contents: nextContents,
-          ...(options.useExpectedHash &&
-          current.expectedVersion !== null &&
-          current.encoding !== null &&
-          current.lineEnding !== null
-            ? {
-                expectedVersion: current.expectedVersion,
-                encoding: current.encoding,
-                lineEnding: current.lineEnding,
-              }
-            : options.useExpectedHash && current.baselineSha256.length > 0
-              ? { expectedContentsSha256: current.baselineSha256 }
-              : {}),
+          encoding: current.format.encoding,
+          lineEnding: current.format.lineEnding,
+          ...(options.guarded ? { expectedVersion: current.format.expectedVersion } : {}),
         });
-        const sha256 = await sha256Hex(nextContents);
         dispatch({
           type: "saveSucceeded",
           contents: nextContents,
-          sha256,
           expectedVersion: writeResult.version,
         });
         queryClient.setQueryData(queryOptions.queryKey, (previous) =>
-          previous ? { ...previous, contents: nextContents } : previous,
+          previous
+            ? { ...previous, contents: nextContents, version: writeResult.version }
+            : previous,
         );
         await Promise.all([
           invalidateGitQueriesForCwds(queryClient, [cwd]),
@@ -165,11 +139,11 @@ export function useWorkspaceFileEditor(
   );
 
   const save = useCallback(() => {
-    void writeContents({ useExpectedHash: true });
+    void writeContents({ guarded: true });
   }, [writeContents]);
 
   const overwrite = useCallback(() => {
-    void writeContents({ useExpectedHash: false });
+    void writeContents({ guarded: false });
   }, [writeContents]);
 
   const reloadFromDisk = useCallback(() => {
@@ -181,20 +155,12 @@ export function useWorkspaceFileEditor(
     const valueAtReloadStart = stateRef.current.value;
     void queryClient
       .fetchQuery({ ...queryOptions, staleTime: 0 })
-      .then(async (result) => {
-        if (stateRef.current.value !== valueAtReloadStart) {
+      .then((result) => {
+        const format = resolveWorkspaceFileEditorFormat(result);
+        if (stateRef.current.value !== valueAtReloadStart || format === null) {
           return;
         }
-        dispatch({
-          type: "reloaded",
-          key: editorKey,
-          contents: result.contents,
-          sha256: await sha256Hex(result.contents),
-          expectedVersion: result.version,
-          encoding: result.encoding,
-          lineEnding:
-            result.lineEnding === "mixed" || result.lineEnding == null ? null : result.lineEnding,
-        });
+        dispatch({ type: "reloaded", key: editorKey, contents: result.contents, format });
       })
       .catch((error: unknown) => {
         dispatch({
@@ -219,8 +185,8 @@ export function useWorkspaceFileEditor(
         : fileQuery.error
           ? "Could not read file."
           : null,
-    truncated,
-    canEdit: state.key !== null && state.key === editorKey && !truncated,
+    readOnlyReason,
+    canEdit: state.key !== null && state.key === editorKey && readOnlyReason === null,
     handleChange,
     save,
     overwrite,

@@ -217,7 +217,7 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
-    it.effect("resolves the merge base when comparing against another branch", () =>
+    it.effect("reads the branch base from the upstream merge base", () =>
       Effect.gen(function* () {
         const core = yield* GitCore;
         const tmp = yield* makeTmpDir();
@@ -227,6 +227,7 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* git(tmp, ["commit", "-m", "base"]);
         const mergeBase = yield* git(tmp, ["rev-parse", "HEAD"]);
         yield* git(tmp, ["checkout", "-b", "feature"]);
+        yield* git(tmp, ["branch", `--set-upstream-to=${initialBranch}`]);
         yield* writeTextFile(path.join(tmp, "src.ts"), "feature\n");
         yield* git(tmp, ["add", "."]);
         yield* git(tmp, ["commit", "-m", "feature"]);
@@ -234,7 +235,35 @@ it.layer(TestLayer)("git integration", (it) => {
         const result = yield* core.readFileAtRev({
           cwd: tmp,
           filePath: "src.ts",
-          mergeBaseWith: initialBranch,
+          base: "branch",
+        });
+
+        expect(result.resolvedRev).toBe(mergeBase);
+        expect(result.contents).toBe("base\n");
+      }),
+    );
+
+    it.effect("reads the branch base from the fallback base when there is no upstream", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "src.ts"), "base\n");
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "base"]);
+        const mergeBase = yield* git(tmp, ["rev-parse", "HEAD"]);
+        yield* git(tmp, ["checkout", "-b", "feature"]);
+        // The branch diff falls back to a default base branch name when the
+        // current branch tracks nothing; pin one so the fixture is deterministic.
+        yield* git(tmp, ["branch", "-f", "main", mergeBase]);
+        yield* writeTextFile(path.join(tmp, "src.ts"), "feature\n");
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "feature"]);
+
+        const result = yield* core.readFileAtRev({
+          cwd: tmp,
+          filePath: "src.ts",
+          base: "branch",
         });
 
         expect(result.resolvedRev).toBe(mergeBase);

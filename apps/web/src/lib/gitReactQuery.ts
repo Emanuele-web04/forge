@@ -64,8 +64,8 @@ export const gitQueryKeys = {
     cwd: string | null,
     filePath: string | null,
     rev: string | null,
-    mergeBaseWith: string | null,
-  ) => ["git", "file-at-rev", cwd, filePath, rev, mergeBaseWith] as const,
+    base: "branch" | null,
+  ) => ["git", "file-at-rev", cwd, filePath, rev, base] as const,
   diffSummary: (
     cacheScope: string | null,
     model: string | null,
@@ -550,12 +550,12 @@ export function gitReadFileAtRevQueryOptions(input: {
   cwd: string | null;
   filePath: string | null;
   rev?: string | undefined;
-  mergeBaseWith?: string | undefined;
+  base?: "branch" | undefined;
   enabled?: boolean;
 }) {
-  const { cwd, filePath, mergeBaseWith, rev } = input;
+  const { cwd, filePath, base, rev } = input;
   return queryOptions({
-    queryKey: gitQueryKeys.fileAtRev(cwd, filePath, rev ?? null, mergeBaseWith ?? null),
+    queryKey: gitQueryKeys.fileAtRev(cwd, filePath, rev ?? null, base ?? null),
     queryFn: async () => {
       const api = ensureNativeApi();
       if (!cwd || !filePath) {
@@ -565,7 +565,7 @@ export function gitReadFileAtRevQueryOptions(input: {
         cwd,
         filePath,
         ...(rev !== undefined ? { rev } : {}),
-        ...(mergeBaseWith !== undefined ? { mergeBaseWith } : {}),
+        ...(base !== undefined ? { base } : {}),
       });
     },
     enabled: (input.enabled ?? true) && cwd !== null && filePath !== null,

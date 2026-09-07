@@ -75,6 +75,7 @@ import {
   highlightCodeToHtmlWithFallback,
 } from "~/lib/syntaxHighlighting";
 import { cn } from "~/lib/utils";
+import { resolveWorkspaceFileEditorReadOnlyReason } from "~/lib/workspaceFileEditor";
 import { readNativeApi } from "~/nativeApi";
 import ChatMarkdown from "./ChatMarkdown";
 import { FileLineCommentBox } from "./chat/FileLineCommentBox";
@@ -647,13 +648,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       ? null
       : !fileIsWorkspaceRelative
         ? "Only files inside the project can be edited."
-        : fileQuery.data.truncated
-          ? "Large files are read-only."
-          : fileQuery.data.lineEnding === "mixed"
-            ? "Files with mixed line endings are read-only to preserve their exact format."
-            : fileQuery.data.version === null || fileQuery.data.encoding === null
-              ? "This file format is read-only."
-              : null;
+        : resolveWorkspaceFileEditorReadOnlyReason(fileQuery.data);
 
   const handleEditBufferChange = (contents: string) => {
     if (!editableDocument) return;

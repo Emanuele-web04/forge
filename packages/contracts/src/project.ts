@@ -178,9 +178,6 @@ export const ProjectWriteFileInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   relativePath: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_FILE_PATH_MAX_LENGTH)),
   contents: Schema.String.check(Schema.isMaxLength(PROJECT_READ_FILE_MAX_BYTES)),
-  expectedContentsSha256: Schema.optional(
-    TrimmedNonEmptyString.check(Schema.isPattern(/^[0-9a-f]{64}$/)),
-  ),
   expectedVersion: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(128))),
   encoding: Schema.optional(ProjectFileEncoding),
   lineEnding: Schema.optional(ProjectFileLineEnding),

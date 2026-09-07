@@ -1834,15 +1834,10 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         }
 
         const maxBytes = input.maxBytes ?? GIT_READ_FILE_AT_REV_MAX_BYTES;
-        const requestedRev = input.rev?.trim() || "HEAD";
-        const baseRev = input.mergeBaseWith
-          ? (yield* executeGit(
-              "GitCore.readFileAtRev.mergeBase",
-              input.cwd,
-              ["merge-base", input.mergeBaseWith, "HEAD"],
-              { allowNonZeroExit: true },
-            ).pipe(Effect.map((result) => result.stdout.trim()))) || "HEAD"
-          : requestedRev;
+        const baseRev =
+          input.base === "branch"
+            ? yield* resolveBranchMergeBase(input.cwd)
+            : input.rev?.trim() || "HEAD";
 
         const resolvedRev =
           (yield* executeGit(

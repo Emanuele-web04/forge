@@ -398,11 +398,18 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
   const centerFamily = editorCenterModeFamily(centerMode);
   const [editDirty, setEditDirty] = useState(false);
   const [pendingLeaveEdit, setPendingLeaveEdit] = useState<{ run: () => void } | null>(null);
+  // A confirmed in-editor exit runs only once the dirty flag has cleared and
+  // the route-level guard has unmounted; running it synchronously would let
+  // the still-registered guard intercept the already-confirmed navigation.
+  const [confirmedLeaveEdit, setConfirmedLeaveEdit] = useState<{ run: () => void } | null>(null);
   const inEditMode = centerMode === "fileEdit" || centerMode === "diffEdit";
-  // The in-editor exits below confirm before navigating; once confirmed they
-  // must not trip the route-level dirty guard a second time (state updates are
-  // async, so the guard's subscription would still see the stale dirty flag).
-  const bypassRouteBlockRef = useRef(false);
+  useEffect(() => {
+    if (confirmedLeaveEdit === null || editDirty) {
+      return;
+    }
+    setConfirmedLeaveEdit(null);
+    confirmedLeaveEdit.run();
+  }, [confirmedLeaveEdit, editDirty]);
   const guardLeavingEdit = (run: () => void) => {
     if (inEditMode && editDirty) {
       setPendingLeaveEdit({ run });
@@ -750,17 +757,9 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
           }
         }}
         onConfirm={() => {
-          const pending = pendingLeaveEdit;
           setPendingLeaveEdit(null);
           setEditDirty(false);
-          if (pending) {
-            bypassRouteBlockRef.current = true;
-            try {
-              pending.run();
-            } finally {
-              bypassRouteBlockRef.current = false;
-            }
-          }
+          setConfirmedLeaveEdit(pendingLeaveEdit);
         }}
       />
       {inEditMode && editDirty ? <EditorDirtyRouteGuard enabled /> : null}
