@@ -61,6 +61,7 @@ import { ServerLoggerLive } from "./serverLogger";
 import { ServerSettingsService } from "./serverSettings";
 import { formatHostForUrl, isLoopbackHost, isWildcardHost } from "./startupAccess";
 import { startHostConnectivity } from "./hostConnectivity";
+import { superviseHostConnectivity } from "./hostConnectivitySupervisor";
 import { RemoteSessionRegistryService } from "./remoteSessions/sessionRegistry";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { startThreadRetentionJob } from "./threadRetention";
@@ -439,16 +440,29 @@ const makeServerProgram = (input: CliInput) =>
     }
 
     yield* start;
-    const stopHostConnectivity = yield* Effect.tryPromise(() =>
-      startHostConnectivity({ config, listeningPort: config.port, localSessions, remoteSessions }),
+    // Follows the credentials file for the server's lifetime: signing in and
+    // linking this machine starts the relay dial right away, and unlinking
+    // stops it, with no restart in between.
+    const hostConnectivity = yield* Effect.tryPromise(() =>
+      superviseHostConnectivity({
+        baseDir: config.baseDir,
+        start: () =>
+          startHostConnectivity({
+            config,
+            listeningPort: config.port,
+            localSessions,
+            remoteSessions,
+          }),
+        log: (message, detail) => console.warn(`[synara] ${message}`, detail ?? ""),
+      }),
     ).pipe(
       Effect.catch((cause) =>
-        Effect.logWarning("Host connectivity did not start.", { cause: String(cause) }).pipe(
-          Effect.as(() => {}),
-        ),
+        Effect.logWarning("Host connectivity supervisor did not start.", {
+          cause: String(cause),
+        }).pipe(Effect.as({ reconcile: () => Promise.resolve(), stop: () => {} })),
       ),
     );
-    yield* Effect.addFinalizer(() => Effect.sync(stopHostConnectivity));
+    yield* Effect.addFinalizer(() => Effect.sync(() => hostConnectivity.stop()));
 
     const localUrl = `http://localhost:${config.port}`;
     const bindUrl =
