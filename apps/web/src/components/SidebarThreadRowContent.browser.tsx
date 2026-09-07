@@ -60,6 +60,28 @@ describe("SidebarThreadRowContent", () => {
     document.body.innerHTML = "";
   });
 
+  it("keeps space between the provider icon and thread title inside the navigation button", async () => {
+    const screen = await render(
+      <button type="button" className="flex min-w-0 items-center">
+        <SidebarThreadRowContent
+          thread={makeThread()}
+          terminalEntryPoint={false}
+          terminalStatus={null}
+          terminalCount={0}
+          isActive={false}
+          variant="standard"
+        />
+      </button>,
+    );
+
+    const providerIcon = screen.container.querySelector("svg");
+    expect(providerIcon).not.toBeNull();
+    const iconRight = providerIcon!.getBoundingClientRect().right;
+    const titleLeft = screen.getByText("Shared thread row").element().getBoundingClientRect().left;
+
+    expect(titleLeft - iconRight).toBeCloseTo(8, 0);
+  });
+
   it("preserves the pinned title, pending state, terminal count, and suffix", async () => {
     const thread = makeThread();
     const screen = await render(

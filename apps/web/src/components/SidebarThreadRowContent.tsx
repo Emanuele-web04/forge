@@ -11,7 +11,7 @@ import { createThreadSelector } from "../storeSelectors";
 import { useStore } from "../store";
 import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
 import { resolveThreadHandoffBadgeLabel } from "../lib/threadHandoff";
-import { SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME } from "../sidebarRowStyles";
+import { SIDEBAR_ROW_GAP_CLASS_NAME, SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME } from "../sidebarRowStyles";
 import type { SidebarThreadSummary } from "../types";
 import { TerminalIcon } from "../lib/icons";
 import { cn } from "../lib/utils";
@@ -190,7 +190,12 @@ export function SidebarThreadRowContent({
   const showThreadProviderAvatar = !isGenericChatThreadTitle(thread.title);
 
   return (
-    <>
+    <div
+      className={cn(
+        "flex min-w-0 flex-1 items-center",
+        variant === "pinned" ? "gap-1.5" : SIDEBAR_ROW_GAP_CLASS_NAME,
+      )}
+    >
       {terminalEntryPoint ? (
         <SidebarGlyph icon={TerminalIcon} variant="chrome" />
       ) : showThreadProviderAvatar ? (
@@ -235,6 +240,6 @@ export function SidebarThreadRowContent({
         ) : null}
       </div>
       {suffix}
-    </>
+    </div>
   );
 }
