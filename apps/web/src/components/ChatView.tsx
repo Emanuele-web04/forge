@@ -540,6 +540,12 @@ import { useChatTerminalController } from "./chat/useChatTerminalController";
 import { useChatAutomationSetup } from "./chat/useChatAutomationSetup";
 import { ComposerActiveTaskListCard } from "./chat/ComposerActiveTaskListCard";
 import { ComposerSubagentStrip } from "./chat/ComposerSubagentStrip";
+import { ComposerBackgroundTasksPanel } from "./chat/ComposerBackgroundTasksPanel";
+import {
+  deriveComposerBackgroundTaskRows,
+  summarizeComposerBackgroundTaskRows,
+  type ComposerBackgroundTaskRow,
+} from "./chat/ComposerBackgroundTasksPanel.logic";
 import {
   collectForegroundRunningSubagentStripItems,
   collectRunningSubagentStripItems,
@@ -1527,6 +1533,7 @@ export default function ChatView({
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false);
   const [activeTaskListCompact, setActiveTaskListCompact] = useState(false);
   const [subagentStripCompact, setSubagentStripCompact] = useState(false);
+  const [backgroundTasksPanelCompact, setBackgroundTasksPanelCompact] = useState(false);
   const [workflowRunCardCompact, setWorkflowRunCardCompact] = useState(false);
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
   // Width-aware visibility for the footer picker cluster (context meter,
@@ -3100,6 +3107,26 @@ export default function ChatView({
     ],
   );
   const workflowNowMs = useNowMs(workflowRunState !== null && !workflowRunState.settled);
+  // Detached work still running for the turn (backgrounded shell commands,
+  // provider-native tasks) that no other composer panel represents: the
+  // workflow card lists its run and members, the strip lists Task subagents.
+  const composerBackgroundTaskRows = useMemo(
+    () =>
+      deriveComposerBackgroundTaskRows({
+        activeBackgroundTasks,
+        workflowTaskIds: workflowRunState?.taskIds,
+        subagentToolUseIds: new Set(
+          composerSubagentStripItems.flatMap((item) =>
+            item.kind === "subagent" ? [item.providerThreadId] : [],
+          ),
+        ),
+      }),
+    [activeBackgroundTasks, composerSubagentStripItems, workflowRunState?.taskIds],
+  );
+  const composerBackgroundWorkSummary = useMemo(
+    () => summarizeComposerBackgroundTaskRows(composerBackgroundTaskRows),
+    [composerBackgroundTaskRows],
+  );
   const showPlanFollowUpPrompt =
     pendingUserInputs.length === 0 &&
     interactionMode === "plan" &&
@@ -6552,6 +6579,23 @@ export default function ChatView({
       createdAt: new Date().toISOString(),
     });
   }, [activeThread, workflowRunState]);
+
+  // Background rows carry the provider task id directly, so stop goes through
+  // the same task-stop command the workflow card uses.
+  const onStopBackgroundTask = useCallback(
+    async (row: ComposerBackgroundTaskRow) => {
+      const api = readNativeApi();
+      if (!api || !activeThread) return;
+      await api.orchestration.dispatchCommand({
+        type: "thread.task.stop",
+        commandId: newCommandId(),
+        threadId: activeThread.id,
+        taskId: row.taskId,
+        createdAt: new Date().toISOString(),
+      });
+    },
+    [activeThread],
+  );
 
   const onBackgroundSubagentStripItem = useCallback(
     async (item: ComposerSubagentStripItem) => {
@@ -11758,6 +11802,7 @@ export default function ChatView({
   const showComposerActiveTaskListCard = Boolean(activeTaskList && !planSidebarOpen);
   const showComposerWorkflowRunCard = workflowRunState !== null;
   const showComposerSubagentStrip = composerSubagentStripItems.length > 0;
+  const showComposerBackgroundTasksPanel = composerBackgroundTaskRows.length > 0;
   const activeThreadGoalText = activeThread?.goal?.trim() ?? "";
   const showComposerGoalHeader = activeThreadGoalText.length > 0;
   const startReplacementSidechat = () => {
@@ -11786,20 +11831,12 @@ export default function ChatView({
         });
       });
   };
-  // The workflow card already lists its run and member agents, so the generic
-  // "N background agents" footer only counts tasks outside the workflow.
-  const composerBackgroundTaskCount = workflowRunState
-    ? (activeBackgroundTasks?.taskIds.filter((taskId) => !workflowRunState.taskIds.includes(taskId))
-        .length ?? 0)
-    : (activeBackgroundTasks?.activeCount ?? 0);
-
   // Composer layout keeps the task list and footer actions in one render path so
   // follow-up prompts and normal chat mode stay visually in sync.
   const renderActiveTaskListCard = (attachedToPrevious: boolean) =>
     activeTaskList && showComposerActiveTaskListCard ? (
       <ComposerActiveTaskListCard
         activeTaskList={activeTaskList}
-        backgroundTaskCount={composerBackgroundTaskCount}
         compact={activeTaskListCompact}
         onCompactChange={setActiveTaskListCompact}
         onOpenSidebar={() => setPlanSidebarOpen(true)}
@@ -11870,6 +11907,20 @@ export default function ChatView({
                   }
                 />
               ) : null}
+              {showComposerBackgroundTasksPanel ? (
+                <ComposerBackgroundTasksPanel
+                  rows={composerBackgroundTaskRows}
+                  compact={backgroundTasksPanelCompact}
+                  onCompactChange={setBackgroundTasksPanelCompact}
+                  onStopTask={onStopBackgroundTask}
+                  attachedToPrevious={
+                    showComposerLiveChangesHeader ||
+                    showComposerActiveTaskListCard ||
+                    showComposerWorkflowRunCard ||
+                    showComposerSubagentStrip
+                  }
+                />
+              ) : null}
               <ComposerQueuedHeader
                 queuedTurns={queuedComposerTurns}
                 onSteer={onSteerQueuedComposerTurn}
@@ -11880,7 +11931,8 @@ export default function ChatView({
                   showComposerLiveChangesHeader ||
                   showComposerActiveTaskListCard ||
                   showComposerWorkflowRunCard ||
-                  showComposerSubagentStrip
+                  showComposerSubagentStrip ||
+                  showComposerBackgroundTasksPanel
                 }
               />
               {showComposerGoalHeader && activeThread ? (
@@ -11899,6 +11951,7 @@ export default function ChatView({
                     showComposerActiveTaskListCard ||
                     showComposerWorkflowRunCard ||
                     showComposerSubagentStrip ||
+                    showComposerBackgroundTasksPanel ||
                     queuedComposerTurns.length > 0
                   }
                 />
@@ -12682,6 +12735,7 @@ export default function ChatView({
                       turnTakenOver,
                       isConnecting,
                       providerName: providerDisplayName,
+                      backgroundWorkSummary: composerBackgroundWorkSummary,
                     })}
                     worktreeSetup={activeWorktreeSetup}
                     worktreeSetupPendingAction={worktreeSetupPendingAction}

@@ -120,6 +120,9 @@ export interface WorkLogLiveActivity {
   detail?: string;
   progress?: number;
   elapsedSeconds?: number;
+  // Detached work (a backgrounded shell command) reports no activity while it
+  // runs, so the live meta must not read its silence as "no activity".
+  background?: boolean;
 }
 
 // Created-automation rows render as a dedicated card (icon + name + cadence + Open)
@@ -322,7 +325,7 @@ export function deriveWorkLogEntries(
   // `toolName` here previously made those icon checks dead code, leaving the
   // generic wrench.
   return reconcileSettledLiveActivities(
-    collapseDerivedWorkLogEntries(entries),
+    linkBackgroundTaskRows(collapseDerivedWorkLogEntries(entries), ordered),
     ordered,
     latestTurnId,
     options,
@@ -1329,6 +1332,129 @@ function mergeWorkLogLiveActivity(
         ? { elapsedSeconds: next.elapsedSeconds ?? carriedElapsedSeconds }
         : {}),
   };
+}
+
+interface BackgroundTaskLink {
+  taskId: string;
+  startedAt: string;
+  settled?: {
+    state: Extract<WorkLogLiveActivityState, "completed" | "failed" | "cancelled">;
+    settledAt: string;
+    summary?: string;
+  };
+}
+
+// A backgrounded command (Claude's `run_in_background` Bash call) returns its
+// tool_result the instant the work is detached, so the tool.completed row lands
+// while the command is still running. The task lifecycle rows are the real
+// boundaries: task.started carries the tool_use_id, and task.completed (or a
+// terminal task.updated patch) says when and how the work actually ended.
+function collectBackgroundTaskLinks(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): Map<string, BackgroundTaskLink> {
+  const linksByToolUseId = new Map<string, BackgroundTaskLink>();
+  const toolUseIdByTaskId = new Map<string, string>();
+  for (const activity of activities) {
+    if (
+      activity.kind !== "task.started" &&
+      activity.kind !== "task.updated" &&
+      activity.kind !== "task.completed"
+    ) {
+      continue;
+    }
+    const payload = asRecord(activity.payload);
+    const taskId = asTrimmedString(payload?.taskId);
+    if (!taskId) {
+      continue;
+    }
+    if (activity.kind === "task.started") {
+      const toolUseId = asTrimmedString(payload?.toolUseId);
+      // Task-tool subagents own a collab row with its own lifecycle and strip;
+      // only detached shell work needs its tool row tied to the task.
+      const isDetachedCommand =
+        payload?.isBackgrounded === true || asTrimmedString(payload?.taskType) === "local_bash";
+      if (!toolUseId || !isDetachedCommand) {
+        continue;
+      }
+      toolUseIdByTaskId.set(taskId, toolUseId);
+      linksByToolUseId.set(toolUseId, { taskId, startedAt: activity.createdAt });
+      continue;
+    }
+    const toolUseId = toolUseIdByTaskId.get(taskId);
+    const link = toolUseId ? linksByToolUseId.get(toolUseId) : undefined;
+    if (!link || link.settled) {
+      continue;
+    }
+    const status = asTrimmedString(payload?.status);
+    if (activity.kind === "task.updated") {
+      if (status === "completed" || status === "failed" || status === "killed") {
+        link.settled = {
+          state:
+            status === "completed" ? "completed" : status === "failed" ? "failed" : "cancelled",
+          settledAt: activity.createdAt,
+        };
+      }
+      continue;
+    }
+    const summary = asTrimmedString(payload?.detail);
+    link.settled = {
+      state: status === "failed" ? "failed" : status === "stopped" ? "cancelled" : "completed",
+      settledAt: activity.createdAt,
+      ...(summary ? { summary } : {}),
+    };
+  }
+  return linksByToolUseId;
+}
+
+function linkBackgroundTaskRows(
+  entries: ReadonlyArray<DerivedWorkLogEntry>,
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): DerivedWorkLogEntry[] {
+  const links = collectBackgroundTaskLinks(activities);
+  if (links.size === 0) {
+    return [...entries];
+  }
+  return entries.map((entry) => {
+    if (!entry.toolCallId || !isRenderableToolLifecycleActivity(entry.activityKind)) {
+      return entry;
+    }
+    const link = links.get(entry.toolCallId);
+    if (!link) {
+      return entry;
+    }
+    const label = entry.toolTitle ?? entry.label;
+    const startedAt = entry.liveActivity?.startedAt ?? entry.createdAt;
+    if (!link.settled) {
+      return {
+        ...entry,
+        toolStatus: "running",
+        liveActivity: {
+          state: "waiting",
+          label,
+          startedAt,
+          lastActivityAt: link.startedAt,
+          background: true,
+        },
+      };
+    }
+    return {
+      ...entry,
+      toolStatus:
+        link.settled.state === "failed"
+          ? "failed"
+          : link.settled.state === "cancelled"
+            ? "cancelled"
+            : "completed",
+      liveActivity: {
+        state: link.settled.state,
+        label,
+        startedAt,
+        lastActivityAt: link.settled.settledAt,
+        background: true,
+        ...(link.settled.summary ? { detail: link.settled.summary } : {}),
+      },
+    };
+  });
 }
 
 function reconcileSettledLiveActivities(

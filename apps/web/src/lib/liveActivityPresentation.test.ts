@@ -31,6 +31,19 @@ describe("live activity presentation", () => {
     expect(formatLiveActivityMeta(activity, nowMs)).toBe("Active 3s ago · 2m 14s elapsed");
   });
 
+  it("describes detached work as running in the background instead of idle", () => {
+    const activity: WorkLogLiveActivity = {
+      state: "waiting",
+      label: "Bash",
+      startedAt: STARTED_AT,
+      lastActivityAt: STARTED_AT,
+      background: true,
+    };
+    const nowMs = Date.parse("2026-07-26T14:03:00.000Z");
+
+    expect(formatLiveActivityMeta(activity, nowMs)).toBe("Running in background · 3m elapsed");
+  });
+
   it("reports quiet live tools without claiming they are frozen", () => {
     expect(
       formatLiveActivityMeta(

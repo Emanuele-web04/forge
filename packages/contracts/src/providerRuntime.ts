@@ -570,6 +570,10 @@ const TaskStartedPayload = Schema.Struct({
   // text. Superset of workflowAgentPhases (kept for already-persisted events).
   workflowAgentPlans: Schema.optional(Schema.Record(Schema.String, WorkflowAgentPlan)),
   toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
+  // True when the task was launched straight into the background (Claude's
+  // `run_in_background` Bash calls): the tool result returns immediately while
+  // the work keeps running until task.completed.
+  isBackgrounded: Schema.optional(Schema.Boolean),
 });
 export type TaskStartedPayload = typeof TaskStartedPayload.Type;
 

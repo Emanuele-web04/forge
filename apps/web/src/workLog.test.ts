@@ -97,6 +97,138 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["task-progress"]);
   });
 
+  it("keeps a backgrounded command row live until its task settles", () => {
+    const bashPayload = {
+      itemType: "command_execution",
+      title: "Command run",
+      detail: "Bash: bunx vitest run",
+      data: {
+        toolCallId: "toolu_bg",
+        toolName: "Bash",
+        input: { command: "bunx vitest run", run_in_background: true },
+      },
+    };
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "bash-start",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.started",
+        summary: "Command run started",
+        turnId: "turn-1",
+        payload: { ...bashPayload, status: "inProgress" },
+      }),
+      makeActivity({
+        id: "bash-backgrounded",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "task.started",
+        summary: "local_bash task started",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          taskId: "bg-1",
+          taskType: "local_bash",
+          toolUseId: "toolu_bg",
+          isBackgrounded: true,
+          detail: "Run the browser suite",
+        },
+      }),
+      makeActivity({
+        id: "bash-detached",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "tool.completed",
+        summary: "Command run",
+        turnId: "turn-1",
+        payload: { ...bashPayload, status: "completed" },
+      }),
+    ];
+
+    const [live] = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-1"), {
+      activeTurnId: TurnId.makeUnsafe("turn-1"),
+    });
+    expect(live?.toolStatus).toBe("running");
+    expect(live?.liveActivity).toMatchObject({
+      state: "waiting",
+      background: true,
+      startedAt: "2026-02-23T00:00:01.000Z",
+      lastActivityAt: "2026-02-23T00:00:02.000Z",
+    });
+
+    const [settled] = deriveWorkLogEntries(
+      [
+        ...activities,
+        makeActivity({
+          id: "bash-task-done",
+          createdAt: "2026-02-23T00:05:00.000Z",
+          kind: "task.completed",
+          summary: "Task completed",
+          tone: "info",
+          turnId: "turn-1",
+          payload: { taskId: "bg-1", status: "completed", detail: "Tests passed" },
+        }),
+      ],
+      TurnId.makeUnsafe("turn-1"),
+      { activeTurnId: TurnId.makeUnsafe("turn-1") },
+    );
+    expect(settled?.toolStatus).toBe("completed");
+    expect(settled?.liveActivity).toMatchObject({
+      state: "completed",
+      background: true,
+      lastActivityAt: "2026-02-23T00:05:00.000Z",
+      detail: "Tests passed",
+    });
+
+    const [stopped] = deriveWorkLogEntries(
+      [
+        ...activities,
+        makeActivity({
+          id: "bash-task-stopped",
+          createdAt: "2026-02-23T00:05:00.000Z",
+          kind: "task.completed",
+          summary: "Task stopped",
+          tone: "info",
+          turnId: "turn-1",
+          payload: { taskId: "bg-1", status: "stopped" },
+        }),
+      ],
+      TurnId.makeUnsafe("turn-1"),
+      { activeTurnId: TurnId.makeUnsafe("turn-1") },
+    );
+    expect(stopped?.toolStatus).toBe("cancelled");
+  });
+
+  it("leaves foreground tool rows alone when a subagent task shares the turn", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "task-tool-done",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.completed",
+        summary: "Agent task",
+        turnId: "turn-1",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          title: "Agent task",
+          data: { toolCallId: "toolu_task", toolName: "Task", input: {} },
+          status: "completed",
+        },
+      }),
+      makeActivity({
+        id: "subagent-task-started",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "task.started",
+        summary: "Task started",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { taskId: "agent-1", subagentType: "reviewer", toolUseId: "toolu_task" },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-1"), {
+      activeTurnId: TurnId.makeUnsafe("turn-1"),
+    });
+    expect(entry?.toolStatus).toBe("completed");
+    expect(entry?.liveActivity?.background).toBeUndefined();
+  });
+
   it("collapses task-list snapshots into one progressing row per turn", () => {
     const taskListActivity = (
       id: string,

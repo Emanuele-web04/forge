@@ -66,9 +66,22 @@ export interface ActiveTaskListState {
   }>;
 }
 
+// One still-running background task for the active turn: a backgrounded shell
+// command (Claude's `local_bash`), a Task-tool subagent, a workflow run, or a
+// provider-native task. Carries enough identity for the UI to name it and stop it.
+export interface ActiveBackgroundTask {
+  taskId: string;
+  taskType?: string | undefined;
+  subagentType?: string | undefined;
+  description?: string | undefined;
+  toolUseId?: string | undefined;
+  startedAt: string;
+}
+
 export interface ActiveBackgroundTasksState {
   activeCount: number;
   taskIds: string[];
+  tasks: ActiveBackgroundTask[];
 }
 
 export interface LatestProposedPlanState {
@@ -278,7 +291,7 @@ export function deriveActiveBackgroundTasksState(
   latestTurnId: TurnId | undefined,
 ): ActiveBackgroundTasksState | null {
   const ordered = orderedActivities(activities);
-  const activeTasks = new Map<string, { taskType?: string | undefined }>();
+  const activeTasks = new Map<string, ActiveBackgroundTask>();
 
   for (const activity of ordered) {
     if (
@@ -330,18 +343,35 @@ export function deriveActiveBackgroundTasksState(
     }
 
     const previous = activeTasks.get(taskId);
-    const taskType = payload && typeof payload.taskType === "string" ? payload.taskType : undefined;
+    const taskType = payloadString(payload, "taskType") ?? previous?.taskType;
+    const subagentType = payloadString(payload, "subagentType") ?? previous?.subagentType;
+    // The server projects task.started's description into `detail`; progress rows
+    // carry their own summaries there, so only the start row may name the task.
+    const description =
+      previous?.description ??
+      (activity.kind === "task.started"
+        ? (payloadString(payload, "detail") ?? payloadString(payload, "description"))
+        : undefined);
+    const toolUseId = payloadString(payload, "toolUseId") ?? previous?.toolUseId;
     activeTasks.set(taskId, {
-      taskType: taskType ?? previous?.taskType,
+      taskId,
+      startedAt: previous?.startedAt ?? activity.createdAt,
+      ...(taskType !== undefined ? { taskType } : {}),
+      ...(subagentType !== undefined ? { subagentType } : {}),
+      ...(description !== undefined ? { description } : {}),
+      ...(toolUseId !== undefined ? { toolUseId } : {}),
     });
   }
 
-  const activeTaskIds = [...activeTasks.entries()]
-    .filter(([, task]) => task.taskType !== "plan")
-    .map(([taskId]) => taskId);
-  return activeTaskIds.length > 0
-    ? { activeCount: activeTaskIds.length, taskIds: activeTaskIds }
+  const tasks = [...activeTasks.values()].filter((task) => task.taskType !== "plan");
+  return tasks.length > 0
+    ? { activeCount: tasks.length, taskIds: tasks.map((task) => task.taskId), tasks }
     : null;
+}
+
+function payloadString(payload: Record<string, unknown> | null, key: string): string | undefined {
+  const value = payload?.[key];
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
 // Keeps the UI "working" while the provider still has visible assistant text or

@@ -57,14 +57,20 @@ export function isLiveActivityInProgress(activity: WorkLogLiveActivity): boolean
   );
 }
 
-export function useLiveActivityNow(activity: WorkLogLiveActivity | undefined): number {
-  const inProgress = activity ? isLiveActivityInProgress(activity) : false;
+// Shared one-second clock for anything that counts up while work is in flight
+// (tool rows, background task rows). Idle subscribers cost nothing: the interval
+// only runs while at least one active subscriber exists.
+export function useLiveClockNow(active: boolean): number {
   const nowMs = useSyncExternalStore(
-    inProgress ? subscribeLiveActivityClock : subscribeInactiveLiveActivityClock,
+    active ? subscribeLiveActivityClock : subscribeInactiveLiveActivityClock,
     getLiveActivityClockSnapshot,
     getLiveActivityClockSnapshot,
   );
-  return inProgress ? nowMs : Date.now();
+  return active ? nowMs : Date.now();
+}
+
+export function useLiveActivityNow(activity: WorkLogLiveActivity | undefined): number {
+  return useLiveClockNow(activity ? isLiveActivityInProgress(activity) : false);
 }
 
 function parseTimestamp(value: string | undefined): number | null {
@@ -148,7 +154,10 @@ export function formatLiveActivityMeta(
   const lastActivityAtMs = parseTimestamp(activity.lastActivityAt);
 
   if (isLiveActivityInProgress(activity)) {
-    if (lastActivityAtMs !== null) {
+    // Detached work stays silent until it settles; its idle time says nothing.
+    if (activity.background) {
+      parts.push("Running in background");
+    } else if (lastActivityAtMs !== null) {
       const idleMs = Math.max(0, nowMs - lastActivityAtMs);
       parts.push(
         idleMs >= NO_ACTIVITY_THRESHOLD_MS

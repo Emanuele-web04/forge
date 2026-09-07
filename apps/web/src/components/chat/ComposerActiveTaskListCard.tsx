@@ -11,7 +11,6 @@ import { ComposerStackedPanel } from "./ComposerStackedPanel";
 
 interface ComposerActiveTaskListCardProps {
   activeTaskList: ActiveTaskListState;
-  backgroundTaskCount: number;
   compact: boolean;
   onCompactChange: (compact: boolean) => void;
   onOpenSidebar: () => void;
@@ -20,7 +19,6 @@ interface ComposerActiveTaskListCardProps {
 
 export function ComposerActiveTaskListCard({
   activeTaskList,
-  backgroundTaskCount,
   compact,
   onCompactChange,
   onOpenSidebar,
@@ -35,7 +33,6 @@ export function ComposerActiveTaskListCard({
     >
       <ActiveTaskListCard
         activeTaskList={activeTaskList}
-        backgroundTaskCount={backgroundTaskCount}
         compact={compact}
         onCompactChange={onCompactChange}
         onOpenSidebar={onOpenSidebar}

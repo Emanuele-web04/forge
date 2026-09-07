@@ -246,6 +246,74 @@ describe("deriveActiveBackgroundTasksState", () => {
     expect(deriveActiveBackgroundTasksState(activities, TurnId.makeUnsafe("turn-1"))).toEqual({
       activeCount: 1,
       taskIds: ["task-subagent-1"],
+      tasks: [
+        {
+          taskId: "task-subagent-1",
+          taskType: "subagent",
+          startedAt: "2026-02-23T00:00:02.000Z",
+        },
+      ],
+    });
+  });
+
+  it("carries each background task's description, tool use, and start time", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "bash-start",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "task.started",
+        summary: "local_bash task started",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          taskId: "bash-1",
+          taskType: "local_bash",
+          toolUseId: "toolu_1",
+          isBackgrounded: true,
+          detail: "Wait for fork CI to complete",
+        },
+      }),
+      makeActivity({
+        id: "bash-progress",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "task.progress",
+        summary: "Reasoning update",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { taskId: "bash-1", detail: "still polling" },
+      }),
+      makeActivity({
+        id: "bash-2-start",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "task.started",
+        summary: "local_bash task started",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { taskId: "bash-2", taskType: "local_bash", toolUseId: "toolu_2" },
+      }),
+      makeActivity({
+        id: "bash-2-done",
+        createdAt: "2026-02-23T00:00:04.000Z",
+        kind: "task.completed",
+        summary: "Task completed",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { taskId: "bash-2", status: "completed" },
+      }),
+    ];
+
+    expect(deriveActiveBackgroundTasksState(activities, TurnId.makeUnsafe("turn-1"))).toEqual({
+      activeCount: 1,
+      taskIds: ["bash-1"],
+      tasks: [
+        {
+          taskId: "bash-1",
+          taskType: "local_bash",
+          description: "Wait for fork CI to complete",
+          toolUseId: "toolu_1",
+          startedAt: "2026-02-23T00:00:01.000Z",
+        },
+      ],
     });
   });
 
