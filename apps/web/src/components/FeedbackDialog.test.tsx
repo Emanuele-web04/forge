@@ -59,6 +59,23 @@ describe("FeedbackDialogForm", () => {
     expect(withoutDraftProp).not.toContain("Draft a GitHub issue with your agent");
   });
 
+  it("keeps the GitHub issue draft action disabled while the report is empty", () => {
+    const markup = renderToStaticMarkup(
+      <FeedbackDialogForm
+        initialCategory="bug"
+        isSending={false}
+        onSubmit={noopSubmit}
+        onDraftGithubIssue={noopDraft}
+      />,
+    );
+
+    const draftButton = actionButtons(markup).find((button) =>
+      button.includes(">Draft a GitHub issue"),
+    );
+    expect(draftButton).toBeDefined();
+    expect(draftButton).toContain("disabled");
+  });
+
   it.each([
     { isSending: true, label: "Sending…" },
     { isDraftingIssue: true, label: "Opening thread" },

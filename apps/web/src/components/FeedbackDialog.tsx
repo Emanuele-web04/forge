@@ -87,7 +87,10 @@ export function FeedbackDialog({
     <Dialog
       open={open}
       onOpenChange={(nextOpen) => {
-        if (!disabled) onOpenChange(nextOpen);
+        // Read the ref, not state: isBusyRef flips in the same tick as the
+        // submit/draft call, so a same-tick Esc or backdrop close is caught
+        // before the disabled re-render lands.
+        if (!isBusyRef.current) onOpenChange(nextOpen);
       }}
     >
       <DialogPopup className="max-w-xl" showCloseButton={!disabled}>
@@ -142,6 +145,8 @@ export function FeedbackDialogForm({
 
   const disabled = isSending || isDraftingIssue;
   const canSubmit = details.trim().length > 0 && !disabled;
+  // Drafting mints a real thread, so an empty report must not start one.
+  const canDraft = canSubmit;
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
@@ -149,7 +154,7 @@ export function FeedbackDialogForm({
   };
 
   const handleDraftIssue = async () => {
-    if (!onDraftGithubIssue) return;
+    if (!canDraft || !onDraftGithubIssue) return;
     await onDraftGithubIssue(details);
   };
 
@@ -221,7 +226,7 @@ export function FeedbackDialogForm({
             type="button"
             variant="outline"
             className="w-full"
-            disabled={disabled}
+            disabled={!canDraft}
             onClick={() => void handleDraftIssue()}
           >
             {isDraftingIssue ? (
