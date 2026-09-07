@@ -2484,6 +2484,26 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("drops a ref-tracked path recreated untracked with identical contents", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        yield* writeTextFile(path.join(tmp, "x.txt"), "one\n");
+        yield* git(tmp, ["add", "x.txt"]);
+        yield* git(tmp, ["commit", "-m", "add x"]);
+        const baseSha = yield* git(tmp, ["rev-parse", "HEAD"]);
+        yield* git(tmp, ["rm", "-q", "x.txt"]);
+        yield* writeTextFile(path.join(tmp, "x.txt"), "one\n");
+
+        const refPatch = (yield* core.readRefPatch(tmp, baseSha)).patch;
+        expect(refPatch).not.toContain("x.txt");
+
+        const stats = yield* core.readDiffStats(tmp, "ref", baseSha);
+        expect(stats).toEqual({ additions: 0, deletions: 0, fileCount: 0 });
+      }),
+    );
+
     it.effect("reads a patch against a branch name", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();

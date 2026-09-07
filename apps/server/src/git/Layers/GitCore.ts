@@ -40,7 +40,11 @@ import { decodeJsonResult } from "@synara/shared/schemaJson";
 
 import { GitCheckoutDirtyWorktreeError, GitCommandError } from "../Errors.ts";
 import { parseGitBlamePorcelain } from "../gitBlameParsing.ts";
-import { buildRecreatedFileDiff, removePatchSegmentsForPaths } from "../gitPatchCoalescing.ts";
+import {
+  buildRecreatedFileDiff,
+  removePatchSegmentsForPaths,
+  type RecreatedFileDiff,
+} from "../gitPatchCoalescing.ts";
 import {
   countTextFileLines,
   normalizeConfiguredMergeBranch,
@@ -120,6 +124,11 @@ export function makeStatusUpstreamRefreshCacheTimeToLive() {
 const DEFAULT_BASE_BRANCH_CANDIDATES = ["main", "master"] as const;
 const EMPTY_TREE_OBJECT_ID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const RECENT_COMMIT_FIELD_SEPARATOR = "\u001f";
+// Pathspecs per `ls-tree` probe when checking which untracked paths a ref knows.
+const REF_TREE_PROBE_BATCH_SIZE = 200;
+// A recreated file identical to the ref is net-clean: neither the tracked
+// deletion nor the synthesized addition should be shown or counted.
+const IDENTICAL_RECREATED_FILE_DIFF: RecreatedFileDiff = { patch: "", insertions: 0, deletions: 0 };
 const UNCOMMITTED_BLAME_RESULT: GitBlameLineResult = {
   sha: "0".repeat(40),
   shortSha: "",
@@ -2019,17 +2028,23 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         if (untrackedFiles.length === 0) {
           return new Map<string, ReturnType<typeof buildRecreatedFileDiff>>();
         }
-        const refPaths = new Set(
-          (yield* runGitStdout(`${operationPrefix}.refTree`, cwd, [
+        // Probe only the untracked candidates: listing the whole ref tree would
+        // exceed the output cap on large repositories.
+        const refPaths = new Set<string>();
+        for (let start = 0; start < untrackedFiles.length; start += REF_TREE_PROBE_BATCH_SIZE) {
+          const listed = yield* runGitStdout(`${operationPrefix}.refTree`, cwd, [
             "ls-tree",
             "-r",
             "--name-only",
             "-z",
             resolvedRef,
-          ]))
-            .split("\0")
-            .filter((entry) => entry.length > 0),
-        );
+            "--",
+            ...untrackedFiles.slice(start, start + REF_TREE_PROBE_BATCH_SIZE),
+          ]);
+          for (const entry of listed.split("\0")) {
+            if (entry.length > 0) refPaths.add(entry);
+          }
+        }
         const recreated = untrackedFiles.filter((filePath) => refPaths.has(filePath));
         const diffs = yield* Effect.forEach(
           recreated,
@@ -2062,7 +2077,11 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                   ],
                   { allowNonZeroExit: true, timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS },
                 );
-                return [filePath, buildRecreatedFileDiff(result.stdout, filePath)] as const;
+                const diff =
+                  result.code === 0 && result.stdout.length === 0
+                    ? IDENTICAL_RECREATED_FILE_DIFF
+                    : buildRecreatedFileDiff(result.stdout, filePath);
+                return [filePath, diff] as const;
               }),
             ),
           { concurrency: MAX_UNTRACKED_DIFF_CONCURRENCY },
@@ -2217,7 +2236,8 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         return {
           additions,
           deletions,
-          fileCount: files.length + recreated.size,
+          fileCount:
+            files.length + [...recreated.values()].filter((diff) => diff?.patch.length).length,
         };
       });
 
