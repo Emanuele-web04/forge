@@ -63,6 +63,7 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
           truncated: false,
           encoding: "utf8",
           lineEnding: "lf",
+          symlink: false,
         });
         expect(result.version).toMatch(/^sha256:[0-9a-f]{64}$/);
       }),
@@ -87,6 +88,7 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
           version: null,
           encoding: null,
           lineEnding: null,
+          symlink: false,
         });
       }),
     );
@@ -268,6 +270,7 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
 
         expect(result.contents).toBe("export const value = 1;\n");
         expect(result.truncated).toBe(false);
+        expect(result.symlink).toBe(true);
       }),
     );
   });

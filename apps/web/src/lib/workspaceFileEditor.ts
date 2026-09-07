@@ -13,6 +13,8 @@ export interface WorkspaceFileEditorSource {
   version: string | null;
   encoding: ProjectFileEncoding | null;
   lineEnding: ProjectFileLineEnding | null;
+  /** The path is a symbolic link; a write would replace its target, not the link. */
+  symlink?: boolean | undefined;
 }
 
 export interface WorkspaceFileEditorState {
@@ -58,6 +60,9 @@ export function resolveWorkspaceFileEditorReadOnlyReason(
   if (source.truncated) {
     return "Large files are read-only.";
   }
+  if (source.symlink) {
+    return "Symbolic links are read-only; edit the file they point to instead.";
+  }
   if (source.lineEnding === "mixed") {
     return "Files with mixed line endings are read-only to preserve their exact format.";
   }
@@ -72,6 +77,7 @@ export function resolveWorkspaceFileEditorFormat(
 ): WorkspaceFileEditorFormat | null {
   if (
     source.truncated ||
+    source.symlink ||
     source.version === null ||
     source.encoding === null ||
     source.lineEnding === null ||

@@ -59,6 +59,18 @@ describe("resolveWorkspaceFileEditorReadOnlyReason", () => {
     expect(resolveWorkspaceFileEditorFormat(mixed)).toBeNull();
   });
 
+  it("keeps symbolic links read-only so a save cannot replace their target", () => {
+    const link = {
+      truncated: false,
+      version: "sha256:x",
+      encoding: "utf8",
+      lineEnding: "lf",
+      symlink: true,
+    } as const;
+    expect(resolveWorkspaceFileEditorReadOnlyReason(link)).toMatch(/Symbolic links/);
+    expect(resolveWorkspaceFileEditorFormat(link)).toBeNull();
+  });
+
   it("keeps truncated and unversioned reads read-only", () => {
     const truncated = { truncated: true, version: null, encoding: null, lineEnding: null };
     expect(resolveWorkspaceFileEditorReadOnlyReason(truncated)).toMatch(/Large files/);

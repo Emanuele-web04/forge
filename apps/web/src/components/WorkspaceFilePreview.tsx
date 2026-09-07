@@ -619,7 +619,8 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     fileQuery.data.version !== null &&
     fileQuery.data.encoding !== null &&
     fileQuery.data.lineEnding !== null &&
-    fileQuery.data.lineEnding !== "mixed"
+    fileQuery.data.lineEnding !== "mixed" &&
+    !fileQuery.data.symlink
       ? {
           key: `${workspaceRoot}\0${fileQuery.data.relativePath}`,
           relativePath: fileQuery.data.relativePath,
@@ -928,8 +929,16 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     fileQuery.data.lineEnding !== "mixed" &&
     !editBufferDirty;
   const { onEditFile } = props;
+  // The editor writes the path back in place, so it is offered only for
+  // sources the shared editor rules consider writable (symlinks included).
   const editFile =
-    onEditFile && canToggleTasks && !fileIsImage && !fileIsPdf && filePath !== null
+    onEditFile &&
+    canToggleTasks &&
+    !fileIsImage &&
+    !fileIsPdf &&
+    filePath !== null &&
+    fileQuery.data !== undefined &&
+    resolveWorkspaceFileEditorReadOnlyReason(fileQuery.data) === null
       ? () => onEditFile(filePath)
       : undefined;
 

@@ -384,6 +384,15 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
         realPath = resolution.realPath;
       }
 
+      // The requested path (not its resolved target) decides whether the file
+      // is a symlink, so editors can refuse to write through the link.
+      const symlink = yield* Effect.promise(() =>
+        NodeFs.lstat(target.absolutePath).then(
+          (stat) => stat.isSymbolicLink(),
+          () => false,
+        ),
+      );
+
       // Stat through the open handle so the size and the bytes come from the
       // same file even if the path is swapped between the two calls.
       const { bytes, fileSize } = yield* Effect.tryPromise({
@@ -432,6 +441,7 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
           version: null,
           encoding: null,
           lineEnding: null,
+          symlink,
         };
       }
 
@@ -458,6 +468,7 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
         version: fileVersion(bytes),
         encoding: hasUtf8Bom ? "utf8-bom" : "utf8",
         lineEnding,
+        symlink,
       };
     },
   );
