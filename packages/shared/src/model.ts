@@ -86,8 +86,7 @@ const MODEL_TOKEN_DISPLAY_NAMES: Readonly<Record<string, string>> = {
 
 function humanizeModelToken(token: string): string {
   return (
-    MODEL_TOKEN_DISPLAY_NAMES[token.toLowerCase()] ??
-    token.charAt(0).toUpperCase() + token.slice(1)
+    MODEL_TOKEN_DISPLAY_NAMES[token.toLowerCase()] ?? token.charAt(0).toUpperCase() + token.slice(1)
   );
 }
 

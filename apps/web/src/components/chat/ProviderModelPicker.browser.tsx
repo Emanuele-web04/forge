@@ -5,10 +5,7 @@ import { page } from "vitest/browser";
 import { render } from "vitest-browser-react";
 
 import { ProviderModelPicker } from "./ProviderModelPicker";
-import {
-  mergeDynamicModelOptions,
-  type ProviderModelOption,
-} from "../../providerModelOptions";
+import { mergeDynamicModelOptions, type ProviderModelOption } from "../../providerModelOptions";
 import { FAVORITE_MODEL_STORAGE_KEYS } from "../../lib/modelFavorites";
 
 const MODEL_OPTIONS_BY_PROVIDER = {

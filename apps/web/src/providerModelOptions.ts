@@ -46,10 +46,13 @@ export interface ProviderModelOptionGroup {
   options: ProviderModelOption[];
 }
 
-// Catalog names that differ from their model id only by separators or casing
-// are still id-derived labels rather than intentional presentation metadata.
-function modelDisplayIdentity(value: string): string {
-  return value.trim().toLowerCase().replace(/[-_\s]+/gu, "");
+// Normalize only known families, keeping the provider's variant wording and casing.
+function normalizeCatalogModelName(name: string): string {
+  return name.replace(
+    /^(glm|deepseek)([-_\s]+)([^()]*)/iu,
+    (_, family: string, _separator: string, suffix: string) =>
+      `${family.toLowerCase() === "glm" ? "GLM" : "DeepSeek"} ${suffix.replace(/[-_]+/gu, " ")}`,
+  );
 }
 
 /**
@@ -151,7 +154,10 @@ export function mergeDynamicModelOptions(input: {
     upstreamProviderName?: string | null | undefined;
   }>;
 }): ReadonlyArray<ProviderModelOption & { isCustom?: boolean }> {
-  const staticNameBySlug = new Map(input.staticOptions.map((model) => [model.slug, model.name]));
+  // Custom and selected-model placeholders have generated names, not curated metadata.
+  const staticNameBySlug = new Map(
+    input.staticOptions.filter((model) => !model.isCustom).map((model) => [model.slug, model.name]),
+  );
   const dynamicNormalizedSlugs = new Set<string>();
   const normalizedDynamicOptions: ProviderModelOption[] = [];
 
@@ -167,12 +173,7 @@ export function mergeDynamicModelOptions(input: {
     }
 
     const normalizedSlug = normalizeDynamicModelSlug(input.provider, dynamicModel.slug);
-    const rawSlug = dynamicModel.slug.trim().toLowerCase();
-    const modelIdentifier = normalizedSlug.includes("/")
-      ? normalizedSlug.slice(normalizedSlug.lastIndexOf("/") + 1)
-      : normalizedSlug;
-    const rawNameIsIdentifier =
-      rawName.length > 0 && modelDisplayIdentity(rawName) === modelDisplayIdentity(modelIdentifier);
+    const modelIdentifier = normalizedSlug.slice(normalizedSlug.lastIndexOf("/") + 1);
     const displayNameFallback = formatProviderModelOptionName({
       provider: input.provider,
       slug: normalizedSlug,
@@ -186,10 +187,10 @@ export function mergeDynamicModelOptions(input: {
       name:
         staticNameBySlug.get(normalizedSlug) ??
         (rawName.length > 0 &&
-        rawName.toLowerCase() !== rawSlug &&
-        rawName.toLowerCase() !== normalizedSlug.toLowerCase() &&
-        !rawNameIsIdentifier
-          ? rawName
+        rawName !== dynamicModel.slug.trim() &&
+        rawName !== normalizedSlug &&
+        rawName !== modelIdentifier
+          ? normalizeCatalogModelName(rawName)
           : displayNameFallback),
       ...(dynamicModel.description?.trim() ? { description: dynamicModel.description.trim() } : {}),
       ...(dynamicModel.upstreamProviderId?.trim()

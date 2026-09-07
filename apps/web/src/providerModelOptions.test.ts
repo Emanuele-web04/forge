@@ -4,6 +4,7 @@
 // Depends on: providerModelOptions shared formatting helpers.
 
 import { describe, expect, it } from "vitest";
+import { getAppModelOptions } from "./appSettings";
 
 import {
   buildModelSelection,
@@ -90,6 +91,38 @@ describe("formatProviderModelOptionName", () => {
 });
 
 describe("mergeDynamicModelOptions", () => {
+  it.each(["pi", "opencode"] as const)(
+    "preserves %s discovery names when selection adds a placeholder",
+    (provider) => {
+      const dynamicModels = [
+        { slug: "zai/glm-5.3-flash", name: "GLM-5.3-Flash", expected: "GLM 5.3 Flash" },
+        { slug: "zai/glm-5.3-fast", name: "GLM-5.3 Highspeed", expected: "GLM 5.3 Highspeed" },
+        {
+          slug: "deepseek/deepseek-v4-flash",
+          name: "DeepSeek V4 Flash",
+          expected: "DeepSeek V4 Flash",
+        },
+        {
+          slug: "opencode/minimax-m2.5-free",
+          name: "MiniMax M2.5 Free",
+          expected: "MiniMax M2.5 Free",
+        },
+        { slug: "kimi-for-coding/k2p6", name: "K2P6", expected: "K2P6" },
+        { slug: "custom/MyModel", name: "MyModel", expected: "MyModel" },
+      ];
+      for (const model of dynamicModels) {
+        for (const selected of [undefined, model.slug]) {
+          const options = mergeDynamicModelOptions({
+            provider,
+            staticOptions: getAppModelOptions(provider, [], selected),
+            dynamicModels,
+          });
+          expect(options.find((option) => option.slug === model.slug)?.name).toBe(model.expected);
+        }
+      }
+    },
+  );
+
   it("normalizes slug-shaped Pi display names", () => {
     expect(
       mergeDynamicModelOptions({
