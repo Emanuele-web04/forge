@@ -29,8 +29,10 @@ The deployed relay is the `relay` service in the Railway project that also
 hosts the account API. It auto-deploys from the same branch as the API, serves
 `https://relay.synara.vrbty.dev`, and is configured with
 `API_BASE_URL=https://api.synara.vrbty.dev`,
-`API_ISSUER=https://api.synara.vrbty.dev/api/v1`, `RELAY_PORT=8789`, a
-`/healthz` healthcheck, and the `RELAY_SERVICE_TOKEN` shared with the API
+`API_ISSUER=https://api.synara.vrbty.dev/api/v1`, `RELAY_PORT=8789` and
+`PORT=8789` (Railway probes the port named by `PORT`; without it the
+healthcheck never reaches the listener and the deploy fails), a `/healthz`
+healthcheck, and the `RELAY_SERVICE_TOKEN` shared with the API
 service. The relay fetches JWKS before it listens, so it restarts until the
 API is reachable; deploy or repair the API first.
 
