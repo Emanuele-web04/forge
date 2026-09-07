@@ -1,3 +1,4 @@
+import { remarkWikiLinks } from "../lib/remarkWikiLinks";
 // FILE: ChatMarkdown.tsx
 // Purpose: Renders assistant and plan markdown with syntax highlighting and local file links.
 // Layer: Web chat presentation component
@@ -119,6 +120,7 @@ class CodeHighlightErrorBoundary extends React.Component<
 interface ChatMarkdownProps {
   text: string;
   cwd: string | undefined;
+  wikiLinkRoot?: string | undefined;
   isStreaming?: boolean;
   className?: string | undefined;
   style?: CSSProperties | undefined;
@@ -1485,6 +1487,7 @@ const MARKDOWN_COMPONENTS: Components = {
 function ChatMarkdown({
   text,
   cwd,
+  wikiLinkRoot,
   isStreaming: isStreamingProp,
   className: classNameProp,
   style,
@@ -1576,8 +1579,12 @@ function ChatMarkdown({
         rangeDecorationRemarkPlugin,
       ];
     }
-    return [...MARKDOWN_REMARK_PLUGINS, rangeDecorationRemarkPlugin];
-  }, [composerChipsRemarkPlugin, rangeDecorationRemarkPlugin]);
+    return [
+      ...MARKDOWN_REMARK_PLUGINS,
+      [remarkWikiLinks, { root: wikiLinkRoot ?? cwd }],
+      rangeDecorationRemarkPlugin,
+    ];
+  }, [composerChipsRemarkPlugin, rangeDecorationRemarkPlugin, wikiLinkRoot, cwd]);
   const rehypePlugins = isUserVariant ? USER_MARKDOWN_REHYPE_PLUGINS : MARKDOWN_REHYPE_PLUGINS;
   const rootRef = useRef<HTMLDivElement | null>(null);
   useLayoutEffect(() => {

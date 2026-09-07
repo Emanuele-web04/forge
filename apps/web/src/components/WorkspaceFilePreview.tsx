@@ -1057,6 +1057,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
               <ChatMarkdown
                 text={displayedFileContents}
                 cwd={markdownPreviewCwd(props.workspaceRoot, filePath)}
+                wikiLinkRoot={props.workspaceRoot ?? undefined}
                 isStreaming={false}
                 className="editor-markdown-preview__body text-sm leading-relaxed"
                 {...(canToggleTasks ? { onTaskToggle: handleTaskToggle } : {})}

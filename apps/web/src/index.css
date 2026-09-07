@@ -2977,3 +2977,8 @@ diffs-container {
   -webkit-background-clip: text;
   animation: ultrathink-rainbow 10s linear infinite;
 }
+
+/* Expanded document panes retain a readable line length while using more space. */
+[data-dock-maximized="true"] .editor-markdown-preview__body {
+  max-width: 1120px;
+}
