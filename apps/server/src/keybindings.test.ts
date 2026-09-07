@@ -73,14 +73,22 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }),
   );
 
-  it.effect("defaults chat.find to mod+F outside terminal focus", () =>
+  it.effect("defaults chat.find to mod+F outside terminal and file-preview focus", () =>
     Effect.sync(() => {
       assert.deepEqual(
         DEFAULT_KEYBINDINGS.find((rule) => rule.command === "chat.find"),
         {
           key: "mod+f",
           command: "chat.find",
-          when: "!terminalFocus",
+          when: "!terminalFocus && !filePreviewFocus",
+        },
+      );
+      assert.deepEqual(
+        DEFAULT_KEYBINDINGS.find((rule) => rule.command === "file.find"),
+        {
+          key: "mod+f",
+          command: "file.find",
+          when: "filePreviewFocus",
         },
       );
     }),

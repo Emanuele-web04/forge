@@ -26,6 +26,7 @@ export interface ShortcutEventLike {
 export interface ShortcutMatchContext {
   terminalFocus: boolean;
   terminalOpen: boolean;
+  filePreviewFocus: boolean;
   [key: string]: boolean;
 }
 
@@ -70,6 +71,11 @@ function whenOr(left: KeybindingWhenNode, right: KeybindingWhenNode): Keybinding
 }
 
 const whenNotTerminalFocus = whenNot(whenIdentifier("terminalFocus"));
+const whenFilePreviewFocus = whenIdentifier("filePreviewFocus");
+const whenChatFindAvailable = whenAnd(
+  whenNotTerminalFocus,
+  whenNot(whenIdentifier("filePreviewFocus")),
+);
 // Cmd+1…9 is app navigation on macOS, including from a focused/full-width terminal.
 // On Linux/Windows `mod` is Ctrl, so keep yielding the chord to the shell and to the
 // terminal workspace's Ctrl+1/Ctrl+2 tabs while that surface is open.
@@ -184,7 +190,12 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
   {
     command: "chat.find",
     shortcut: commandShortcut("f"),
-    whenAst: whenNotTerminalFocus,
+    whenAst: whenChatFindAvailable,
+  },
+  {
+    command: "file.find",
+    shortcut: commandShortcut("f"),
+    whenAst: whenFilePreviewFocus,
   },
   {
     command: "settings.usage",
@@ -383,6 +394,7 @@ function resolveContext(options: ShortcutMatchOptions | undefined): ShortcutMatc
   return {
     terminalFocus: false,
     terminalOpen: false,
+    filePreviewFocus: false,
     isMac: isMacPlatform(resolvePlatform(options)),
     ...options?.context,
   };

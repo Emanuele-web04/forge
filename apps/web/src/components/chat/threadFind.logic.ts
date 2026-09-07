@@ -505,11 +505,13 @@ export function shouldCaptureChatFindShortcut(input: {
   shouldRenderChatPaneContent: boolean;
   terminalWorkspaceTerminalTabActive: boolean;
   inAppBrowserFocused: boolean;
+  filePreviewFocused?: boolean;
 }): boolean {
   return (
     input.shouldRenderChatPaneContent &&
     !input.terminalWorkspaceTerminalTabActive &&
-    !input.inAppBrowserFocused
+    !input.inAppBrowserFocused &&
+    !input.filePreviewFocused
   );
 }
 
