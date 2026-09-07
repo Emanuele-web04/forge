@@ -68,13 +68,22 @@ const SECRET_PATTERNS = [
   /(?<![A-Za-z0-9])sk-proj-[A-Za-z0-9_-]{20,}/gu,
   /(?<![A-Za-z0-9])sk-ant-[A-Za-z0-9_-]{20,}/gu,
   /(?<![A-Za-z0-9])sk-[A-Za-z0-9]{20,}/gu,
-  /(?<![A-Za-z0-9])AKIA[0-9A-Z]{16}/gu,
-  /(?<![A-Za-z0-9])ASIA[0-9A-Z]{16}/gu,
-  /xoxb-[A-Za-z0-9-]{10,}/gu,
+  /(?<![A-Za-z0-9])(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}/gu,
+  /(?<![A-Za-z0-9])A(?:KIA|SIA|BIA|CCA)[0-9A-Z]{16}/gu,
+  /xox[a-z]-[A-Za-z0-9-]{10,}/gu,
+  /(?<![A-Za-z0-9])glpat-[A-Za-z0-9_-]{15,}/gu,
+  /(?<![A-Za-z0-9])npm_[A-Za-z0-9]{20,}/gu,
+  /(?<![A-Za-z0-9])ya29\.[A-Za-z0-9_-]{20,}/gu,
   /AIza[A-Za-z0-9_-]{35}/gu,
   /\beyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+={0,2}(?![A-Za-z0-9_=-])/gu,
-  /bearer\s+[A-Za-z0-9._~+/-]{16,}={0,2}(?![A-Za-z0-9_=-])/giu,
+  /(?<![A-Za-z0-9])bearer\s+[A-Za-z0-9._~+/-]{16,}={0,2}(?![A-Za-z0-9_=-])/giu,
   /-----BEGIN\s+(?:RSA\s+|OPENSSH\s+|EC\s+|DSA\s+|PGP\s+)?PRIVATE\s+KEY-----[\s\S]*?-----END\s+(?:RSA\s+|OPENSSH\s+|EC\s+|DSA\s+|PGP\s+)?PRIVATE\s+KEY-----/gu,
+  // Credentials embedded in a URL: keep the scheme and host, drop user:pass.
+  /(?<=:\/\/)[^/\s:@]+:[^@\s/]+(?=@)/gu,
+  // Generic key=value secrets: .env lines and pasted config. The key side is
+  // intentionally boundary-free and allows a suffix so `AWS_SECRET_ACCESS_KEY=`
+  // and `MY_API_TOKEN=` still match.
+  /(?:password|passwd|secret|api[_-]?key|apikey|token)[A-Za-z0-9_]*\s*[:=]\s*["']?[^\s"'`;,)}]+/giu,
 ] as const;
 
 // Usernames may contain dots and other punctuation (john.doe), so the segment

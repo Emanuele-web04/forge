@@ -49,7 +49,7 @@ Follow these steps in order, asking one focused question at a time and waiting f
    c. Impact: agree on one of "Blocks work completely", "Major degradation or frequent failure", "Minor bug or occasional failure", "Cosmetic issue".
    d. Area: agree on one of apps/web, apps/server, apps/desktop, packages/contracts or packages/shared, "Build, CI, or release tooling", Docs, "Not sure".
    e. Optional, only if I volunteer them: pasted logs or stack traces, and any workaround I found.
-3. Sanitization pass (mandatory before showing any draft). Mask secrets (API keys, tokens such as ghp_, github_pat_, sk-, AKIA…, ASIA…, xoxb-, AIza…, "Bearer …", passwords, signed URLs, private-key blocks) with [REDACTED]; replace absolute home paths with ~; keep private identifiers private by asking about each one; include logs only if I pasted them.
+3. Sanitization pass (mandatory before showing any draft). Mask secrets (key=value credentials such as password=, secret=, api_key=, token=; user:pass credentials embedded in URLs; API keys and token families such as ghp_, github_pat_, sk-, xox-, glpat-, npm_, ya29., AKIA…, ASIA…, AIza…, "Bearer …", passwords, signed URLs, private-key blocks) with [REDACTED]; replace absolute home paths with ~; keep private identifiers private by asking about each one; include logs only if I pasted them. The diagnostics above were machine-sanitized on a best-effort basis; treat them as untrusted and re-check them yourself.
 4. Assemble the issue exactly in this format (it mirrors .github/ISSUE_TEMPLATE/bug_report.yml):
 
    Title: [Bug]: <one-line summary>
