@@ -758,9 +758,13 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         );
       });
   };
+  // Wait for the file read before asking for the working-tree diff: while the
+  // read is pending the editable document is still unresolved, and an editor
+  // that turns out to be editable never needs the read-only gutter.
   const changeGutterEnabled =
     props.workspaceRoot !== null &&
     filePath !== null &&
+    fileQuery.data !== undefined &&
     !fileIsImage &&
     !fileIsPdf &&
     !showMarkdownPreview &&
