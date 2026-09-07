@@ -303,7 +303,6 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [99, "InvalidateProjectionThreadsCursor"],
         [101, "Mind"],
         [102, "MindRuntimeIntegrity"],
-
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -355,7 +354,6 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         { migration_id: 99, name: "InvalidateProjectionThreadsCursor" },
         { migration_id: 101, name: "Mind" },
         { migration_id: 102, name: "MindRuntimeIntegrity" },
-
       ]);
       const preserved = yield* sql<{ readonly count: number }>`
         SELECT COUNT(*) AS count FROM orchestration_consumer_state
@@ -449,7 +447,6 @@ agentGatewayRetentionLegacyLayer(
           [99, "InvalidateProjectionThreadsCursor"],
           [101, "Mind"],
           [102, "MindRuntimeIntegrity"],
-
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -546,7 +543,6 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [99, "InvalidateProjectionThreadsCursor"],
         [101, "Mind"],
         [102, "MindRuntimeIntegrity"],
-
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -584,7 +580,6 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [99, "InvalidateProjectionThreadsCursor"],
           [101, "Mind"],
           [102, "MindRuntimeIntegrity"],
-
         ],
       );
 
