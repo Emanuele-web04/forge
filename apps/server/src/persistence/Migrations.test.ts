@@ -909,14 +909,14 @@ mindRuntimeIntegrityLayer("Mind runtime integrity migration", (it) => {
     () =>
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
-        yield* runMigrations({ toMigrationInclusive: 99 });
+        yield* runMigrations({ toMigrationInclusive: 101 });
         yield* sql`INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json, created_at, updated_at) VALUES ('p1', 'One', '/one', '{}', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')`;
         yield* sql`INSERT INTO mind_memories (id, project_id, text, type, text_hash, peak_weight, created_at, last_accessed_at, source_thread_id, source_provider) VALUES ('agent', 'p1', 'agent memory', 'semantic', 'agent-hash', 0.5, '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z', 'thread-1', 'codex')`;
         yield* sql`INSERT INTO mind_memories (id, project_id, text, type, text_hash, peak_weight, created_at, last_accessed_at, source_thread_id) VALUES ('partial', 'p1', 'partial memory', 'semantic', 'partial-hash', 0.5, '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z', 'thread-2')`;
         yield* sql`INSERT INTO mind_memories (id, project_id, text, type, text_hash, peak_weight, created_at, last_accessed_at) VALUES ('user', 'p1', 'user memory', 'semantic', 'user-hash', 0.5, '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')`;
 
         const executed = yield* runMigrations();
-        assert.deepStrictEqual(executed, [[100, "MindRuntimeIntegrity"]]);
+        assert.deepStrictEqual(executed, [[102, "MindRuntimeIntegrity"]]);
         const rows = yield* sql<{
           readonly id: string;
           readonly provenanceKind: string;
