@@ -237,6 +237,11 @@ export async function startRealHost(input: {
     const sessionHandlers = makeHostsRpcHandlers({
       accountSession: {} as HostsAccountSession,
       remoteSessions,
+      hostConnections: {
+        connect: () => Promise.reject(new Error("not wired in the compact e2e host")),
+        disconnect: () => Promise.resolve(),
+        list: () => Promise.resolve({ connections: [] }),
+      },
     });
     // The relay dial is asynchronous: startHostConnectivity returns before the
     // control socket has connected and sent `ready`. A client that grants and

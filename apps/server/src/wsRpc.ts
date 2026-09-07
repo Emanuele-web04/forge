@@ -143,6 +143,8 @@ import {
 import { makeAccountRpcHandlers } from "./wsAccountRpc";
 import { makeHostsRpcHandlers } from "./wsHostsRpc";
 import { RemoteSessionRegistryService } from "./remoteSessions/sessionRegistry";
+import { HostConnectionRegistryService } from "./hostConnections/registry";
+import { makeHostConnectionsPort } from "./hostConnections/port";
 import { isOwnerRole, requireOwnerRole } from "./wsOwnerOnly";
 import {
   negotiateWsCompatibility,
@@ -848,7 +850,16 @@ const makeWsRpcHandlersLayer = () =>
         accountSession,
         openBrowser: (url) => open.openBrowser(url),
       });
-      const hostsRpcHandlers = makeHostsRpcHandlers({ accountSession, remoteSessions });
+      const hostConnectionRegistry = yield* HostConnectionRegistryService;
+      const hostsRpcHandlers = makeHostsRpcHandlers({
+        accountSession,
+        remoteSessions,
+        hostConnections: makeHostConnectionsPort({
+          accountSession,
+          registry: hostConnectionRegistry,
+          relayUrl: config.relayUrl?.toString(),
+        }),
+      });
 
       const toProjectProvisionRpcError = (cause: unknown) =>
         cause instanceof GitHubProjectProvisioningError

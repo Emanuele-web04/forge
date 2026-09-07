@@ -705,6 +705,8 @@ describe("wsNativeApi", () => {
       ],
       ["receiveSyncKey", WS_METHODS.hostsReceiveSyncKey, undefined],
       ["confirmSyncKey", WS_METHODS.hostsConfirmSyncKey, { verificationCode: "ABC234" }],
+      ["disconnect", WS_METHODS.hostsDisconnect, { hostId: "host_1" }],
+      ["listConnections", WS_METHODS.hostsListConnections, undefined],
     ] as const;
 
     for (const [method, wsMethod, input] of calls) {
@@ -714,6 +716,13 @@ describe("wsNativeApi", () => {
         ...(input === undefined ? [] : [input]),
       );
     }
+    // Connect carries its own deadline: a transport race plus a handshake.
+    await api.hosts.connect?.({ hostId: "host_1" });
+    expect(requestMock).toHaveBeenLastCalledWith(
+      WS_METHODS.hostsConnect,
+      { hostId: "host_1" },
+      { timeoutMs: 30_000 },
+    );
     expect(api.hosts).not.toHaveProperty("checkReachability");
   });
 

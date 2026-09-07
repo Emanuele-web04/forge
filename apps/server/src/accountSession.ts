@@ -70,6 +70,7 @@ import {
   ensureAccountDeviceRegistration,
   type RegisteredAccountDeviceIdentity,
 } from "./accountDeviceRegistration";
+import { deviceIdentityPath, loadOrCreateDeviceIdentity } from "./deviceIdentity";
 import {
   createPkcePair,
   createSsoState,
@@ -214,6 +215,18 @@ export interface HostsAccountSession {
   offerSyncKey(input: SyncKeyPairingRequest): Promise<SyncKeyPairingCode>;
   receiveSyncKey(): Promise<SyncKeyPairingCode>;
   confirmSyncKey(input: ConfirmSyncKeyPairingRequest): Promise<void>;
+  /**
+   * What an outbound session to another host is signed with: the signed-in
+   * user and this shell's registered device key. The key never leaves the
+   * process; callers get a signing handle, not key material.
+   */
+  dialIdentity(): Promise<{
+    readonly userId: string;
+    readonly accountUrl: string;
+    readonly key: CryptoKey;
+    readonly publicJwk: import("@synara/contracts").Es256PublicKeyJwk;
+    readonly jkt: string;
+  }>;
 }
 
 /**
@@ -852,6 +865,26 @@ export function createAccountSession(
 
     async receiveSyncKey() {
       return (await currentHostSecretsCoordinator()).receiveSyncKey();
+    },
+
+    async dialIdentity() {
+      const registration = await ensureShellDevice();
+      const stored = await readAccountCredentials(baseDir);
+      if (!stored?.userId) throw new SessionExpiredError();
+      const { secretsDir } = await Effect.runPromise(
+        deriveServerPaths(baseDir, options.devUrl).pipe(Effect.provide(EffectPath.layer)),
+      );
+      const identity = await loadOrCreateDeviceIdentity(deviceIdentityPath(secretsDir));
+      if (identity.jkt !== registration.jkt) {
+        throw new Error("This shell's device key does not match its registered device");
+      }
+      return {
+        userId: stored.userId,
+        accountUrl: stored.accountUrl,
+        key: identity.key,
+        publicJwk: identity.publicJwk,
+        jkt: identity.jkt,
+      };
     },
 
     async confirmSyncKey(input) {

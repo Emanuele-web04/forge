@@ -39,6 +39,9 @@ const SAMPLE_INPUTS: Record<string, unknown> = {
   },
   [WS_METHODS.hostsReceiveSyncKey]: undefined,
   [WS_METHODS.hostsConfirmSyncKey]: { verificationCode: "ABC234" },
+  [WS_METHODS.hostsConnect]: { hostId: "host_1" },
+  [WS_METHODS.hostsDisconnect]: { hostId: "host_1" },
+  [WS_METHODS.hostsListConnections]: undefined,
 };
 
 function spySession(): { session: HostsAccountSession; calls: () => string[] } {
@@ -85,12 +88,34 @@ function spySession(): { session: HostsAccountSession; calls: () => string[] } {
     offerSyncKey: record("offerSyncKey", { verificationCode: "ABC234" }),
     receiveSyncKey: record("receiveSyncKey", { verificationCode: "ABC234" }),
     confirmSyncKey: record("confirmSyncKey", undefined),
+    dialIdentity: record("dialIdentity", {
+      userId: "user_1",
+      accountUrl: "https://accounts.example.test",
+      key: {} as CryptoKey,
+      publicJwk: { kty: "EC" as const, crv: "P-256" as const, x: "eA", y: "eQ" },
+      jkt: "jkt",
+    }),
   };
   return { session, calls: () => calls };
 }
 
 function remoteSessionsStub() {
   return { list: vi.fn(() => []), end: vi.fn(() => false) };
+}
+
+function hostConnectionsStub() {
+  return {
+    connect: vi.fn(async () => ({
+      hostId: "host_1",
+      hostName: "Ada's Mac",
+      transport: "relay" as const,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      credentialExpiresAt: "2026-01-01T01:00:00.000Z",
+      wsPath: "/ws/remote/host_1",
+    })),
+    disconnect: vi.fn(async () => undefined),
+    list: vi.fn(async () => ({ connections: [] })),
+  };
 }
 
 const CLIENT_SESSION = {
@@ -124,6 +149,7 @@ describe("hosts RPC owner boundary", () => {
     makeHostsRpcHandlers({
       accountSession: spySession().session,
       remoteSessions: remoteSessionsStub(),
+      hostConnections: hostConnectionsStub(),
     }),
   );
 
@@ -148,9 +174,11 @@ describe("hosts RPC owner boundary", () => {
     async (method) => {
       const { session, calls } = spySession();
       const remoteSessions = remoteSessionsStub();
+      const hostConnections = hostConnectionsStub();
       const handlers = makeHostsRpcHandlers({
         accountSession: session,
         remoteSessions,
+        hostConnections,
       }) as unknown as Record<
         string,
         (input?: unknown) => Effect.Effect<unknown, { message: string }>
@@ -169,15 +197,20 @@ describe("hosts RPC owner boundary", () => {
       expect(calls()).toEqual([]);
       expect(remoteSessions.list).not.toHaveBeenCalled();
       expect(remoteSessions.end).not.toHaveBeenCalled();
+      expect(hostConnections.connect).not.toHaveBeenCalled();
+      expect(hostConnections.disconnect).not.toHaveBeenCalled();
+      expect(hostConnections.list).not.toHaveBeenCalled();
     },
   );
 
   it.each(methodNames)("admits an owner-role session on %s", async (method) => {
     const { session, calls } = spySession();
     const remoteSessions = remoteSessionsStub();
+    const hostConnections = hostConnectionsStub();
     const handlers = makeHostsRpcHandlers({
       accountSession: session,
       remoteSessions,
+      hostConnections,
     }) as unknown as Record<string, (input?: unknown) => Effect.Effect<unknown, unknown>>;
     const handler = handlers[method];
     if (!handler) throw new Error(`no handler for ${method}`);
@@ -191,6 +224,15 @@ describe("hosts RPC owner boundary", () => {
       expect(calls()).toEqual([]);
     } else if (method === WS_METHODS.hostsEndSession) {
       expect(remoteSessions.end).toHaveBeenCalledOnce();
+      expect(calls()).toEqual([]);
+    } else if (method === WS_METHODS.hostsConnect) {
+      expect(hostConnections.connect).toHaveBeenCalledOnce();
+      expect(calls()).toEqual([]);
+    } else if (method === WS_METHODS.hostsDisconnect) {
+      expect(hostConnections.disconnect).toHaveBeenCalledOnce();
+      expect(calls()).toEqual([]);
+    } else if (method === WS_METHODS.hostsListConnections) {
+      expect(hostConnections.list).toHaveBeenCalledOnce();
       expect(calls()).toEqual([]);
     } else {
       expect(calls()).toHaveLength(1);
@@ -326,6 +368,7 @@ describe("hosts enrollment", () => {
     const handler = makeHostsRpcHandlers({
       accountSession,
       remoteSessions: remoteSessionsStub(),
+      hostConnections: hostConnectionsStub(),
     })[WS_METHODS.hostsEnrollment];
 
     const enrollment = await Effect.runPromise(
@@ -382,6 +425,7 @@ describe("device-bound grants", () => {
     const handler = makeHostsRpcHandlers({
       accountSession,
       remoteSessions: remoteSessionsStub(),
+      hostConnections: hostConnectionsStub(),
     })[WS_METHODS.hostsRequestGrant];
 
     const result = await Effect.runPromise(
@@ -454,6 +498,7 @@ describe("device-bound grants", () => {
     const handler = makeHostsRpcHandlers({
       accountSession,
       remoteSessions: remoteSessionsStub(),
+      hostConnections: hostConnectionsStub(),
     })[WS_METHODS.hostsRequestGrant];
     const request = () =>
       Effect.runPromise(provideWsConnectionSession(handler({ hostId: "host_1" }), OWNER_SESSION));

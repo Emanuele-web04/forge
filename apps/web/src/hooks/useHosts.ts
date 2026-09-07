@@ -8,6 +8,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { canManageHost, ensureHostsApi } from "~/lib/hosts/api";
 import {
+  connectionsQueryOptions,
+  invalidateHostConnections,
   invalidateRemoteDevices,
   invalidateRemoteHosts,
   devicesQueryOptions,
@@ -143,5 +145,33 @@ export function useHostSessions(input: { enabled: boolean }) {
     sessionsQuery,
     sessions: sessionsQuery.data ?? [],
     endSession,
+  } as const;
+}
+
+/**
+ * Outbound sessions this shell holds to other hosts, and the two things you
+ * do with them. `connect` is idempotent on the server: a second call for an
+ * open host returns the existing session rather than dialing again.
+ */
+export function useHostConnections(input: { enabled: boolean }) {
+  const queryClient = useQueryClient();
+  const connectionsQuery = useQuery(connectionsQueryOptions({ enabled: input.enabled }));
+  const connect = useMutation({
+    mutationFn: async (variables: { hostId: string }) =>
+      ensureHostsApi().connect({ hostId: variables.hostId }),
+    onSettled: () => invalidateHostConnections(queryClient),
+  });
+  const disconnect = useMutation({
+    mutationFn: async (variables: { hostId: string }) => {
+      await ensureHostsApi().disconnect({ hostId: variables.hostId });
+    },
+    onSettled: () => invalidateHostConnections(queryClient),
+  });
+
+  return {
+    connectionsQuery,
+    connections: connectionsQuery.data ?? [],
+    connect,
+    disconnect,
   } as const;
 }

@@ -57,6 +57,7 @@ import { PullRequestServiceLive } from "./pullRequests/Layers/PullRequestService
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { makeServerProviderLayer } from "./provider/runtimeLayer";
 import { RemoteSessionRegistryLive } from "./remoteSessions/sessionRegistry";
+import { HostConnectionRegistryLive } from "./hostConnections/registry";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
 
@@ -255,6 +256,7 @@ export function makeServerRuntimeServicesLayer(
     WorkspaceLayerLive,
     ProjectFaviconResolverLive,
     RemoteSessionRegistryLive,
+    HostConnectionRegistryLive,
   ).pipe(Layer.provideMerge(NodeServices.layer));
 }
 

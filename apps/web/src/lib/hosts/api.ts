@@ -8,6 +8,7 @@ import type {
   AccountDevice,
   AccountHost,
   AccountHostPlatform,
+  HostConnection,
   HostSession,
   ConfirmSyncKeyPairingRequest,
   SyncKeyPairingCode,
@@ -77,6 +78,14 @@ export interface HostsApi {
   receiveSyncKey: () => Promise<SyncKeyPairingCode>;
   confirmSyncKey: (input: ConfirmSyncKeyPairingRequest) => Promise<void>;
   /**
+   * Opens (or returns the already-open) outbound session to a host. The shell
+   * does the grant, transport race, mint and DPoP; what comes back is a local
+   * upgrade path this renderer connects to. Owner-only.
+   */
+  connect: (input: { readonly hostId: string }) => Promise<HostConnection>;
+  disconnect: (input: { readonly hostId: string }) => Promise<void>;
+  listConnections: () => Promise<{ readonly connections: readonly HostConnection[] }>;
+  /**
    * Runs the transport race against one host and answers what it found.
    *
    * Optional, and the only optional member: probing needs the shell to open
@@ -116,6 +125,9 @@ function readHostsNamespace(api: unknown): HostsApi | null {
     "offerSyncKey",
     "receiveSyncKey",
     "confirmSyncKey",
+    "connect",
+    "disconnect",
+    "listConnections",
   ];
   const namespace = candidate as Record<string, unknown>;
   for (const method of required) {

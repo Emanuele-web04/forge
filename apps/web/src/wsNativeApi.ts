@@ -844,6 +844,11 @@ export function createWsNativeApi(): NativeApi {
       offerSyncKey: (input) => transport.request(WS_METHODS.hostsOfferSyncKey, input),
       receiveSyncKey: () => transport.request(WS_METHODS.hostsReceiveSyncKey),
       confirmSyncKey: (input) => transport.request(WS_METHODS.hostsConfirmSyncKey, input),
+      // Dialing races several transports with a 3s deadline and then does a
+      // two-round-trip handshake; the default RPC deadline is too tight.
+      connect: (input) => transport.request(WS_METHODS.hostsConnect, input, { timeoutMs: 30_000 }),
+      disconnect: (input) => transport.request(WS_METHODS.hostsDisconnect, input),
+      listConnections: () => transport.request(WS_METHODS.hostsListConnections),
     },
     automation: {
       list: (input) => transport.request(WS_METHODS.automationList, input),

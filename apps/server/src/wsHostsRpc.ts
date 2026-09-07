@@ -20,10 +20,12 @@ import {
 import type { HostsAccountSession } from "./accountSession";
 import { requireOwnerRole } from "./wsOwnerOnly";
 import type { RemoteSessionRegistry } from "./remoteSessions/sessionRegistry";
+import type { HostConnectionsPort } from "./hostConnections/port";
 
 export interface HostsRpcHandlerDeps {
   readonly accountSession: HostsAccountSession;
   readonly remoteSessions: Pick<RemoteSessionRegistry, "list" | "end">;
+  readonly hostConnections: HostConnectionsPort;
 }
 
 const ownerHostsRpc = <A, E, R>(make: () => Effect.Effect<A, E, R>, fallbackMessage: string) =>
@@ -43,7 +45,11 @@ const ownerSensitiveHostsRpc = <A, E, R>(
     ),
   );
 
-export function makeHostsRpcHandlers({ accountSession, remoteSessions }: HostsRpcHandlerDeps) {
+export function makeHostsRpcHandlers({
+  accountSession,
+  remoteSessions,
+  hostConnections,
+}: HostsRpcHandlerDeps) {
   return {
     [WS_METHODS.hostsList]: () =>
       ownerHostsRpc(
@@ -118,6 +124,25 @@ export function makeHostsRpcHandlers({ accountSession, remoteSessions }: HostsRp
       ownerHostsRpc(
         () => Effect.tryPromise(() => accountSession.receiveSyncKey()),
         "Failed to receive the Sync Key",
+      ),
+    // Outbound sessions are a full-privilege bridge onto another machine, so
+    // they are owner-only like every other hosts method. The grant is
+    // short-lived and the error path may carry a relay close reason; neither
+    // is sensitive, so the ordinary error mapping applies.
+    [WS_METHODS.hostsConnect]: (input: { readonly hostId: string }) =>
+      ownerHostsRpc(
+        () => Effect.tryPromise(() => hostConnections.connect(input)),
+        "Failed to connect to the host",
+      ),
+    [WS_METHODS.hostsDisconnect]: (input: { readonly hostId: string }) =>
+      ownerHostsRpc(
+        () => Effect.tryPromise(() => hostConnections.disconnect(input)),
+        "Failed to disconnect from the host",
+      ),
+    [WS_METHODS.hostsListConnections]: () =>
+      ownerHostsRpc(
+        () => Effect.tryPromise(() => hostConnections.list()),
+        "Failed to list host connections",
       ),
     [WS_METHODS.hostsConfirmSyncKey]: (
       input: Parameters<HostsAccountSession["confirmSyncKey"]>[0],

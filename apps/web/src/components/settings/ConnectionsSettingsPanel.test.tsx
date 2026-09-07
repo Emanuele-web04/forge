@@ -50,14 +50,20 @@ function renderHostRow(input: {
   host: AccountHost;
   reachability?: HostReachability;
   busy?: boolean;
+  connection?: ConnectionsSettingsPanelModule.HostRowConnection;
 }): string {
   return renderToStaticMarkup(
     <HostRow
       host={input.host}
       reachability={input.reachability ?? { state: "unknown" }}
       busy={input.busy ?? false}
+      {...(input.connection ? { connection: input.connection } : {})}
       onProbe={vi.fn()}
       onToggleDiscoverable={vi.fn()}
+      onConnect={vi.fn()}
+      onDisconnect={vi.fn()}
+      onActivate={vi.fn()}
+      onDeactivate={vi.fn()}
     />,
   );
 }
@@ -245,5 +251,44 @@ describe("SessionRow", () => {
     expect(html).toContain("Started");
     expect(html).toContain("End session");
     expect(html).toContain("destructive");
+  });
+});
+
+describe("HostRow connection state", () => {
+  it("offers Connect on a linked host this window is not on", () => {
+    const html = renderHostRow({ host: makeHost() });
+    expect(html).toContain(">Connect<");
+    expect(html).not.toContain("Disconnect");
+  });
+
+  it("disables Connect until the host has finished its key exchange", () => {
+    const html = renderHostRow({ host: makeHost({ linked: false }) });
+    expect(html).toMatch(/<button[^>]*disabled[^>]*>Connect</);
+  });
+
+  it("shows no session controls for this machine", () => {
+    const html = renderHostRow({ host: makeHost(), connection: { kind: "this-machine" } });
+    expect(html).not.toContain(">Connect<");
+    expect(html).not.toContain("Disconnect");
+  });
+
+  it("offers Open and Disconnect on a connected host, naming the transport", () => {
+    const html = renderHostRow({
+      host: makeHost(),
+      connection: { kind: "connected", transport: "relay", active: false, busy: false },
+    });
+    expect(html).toContain(">Open<");
+    expect(html).toContain("Disconnect");
+    expect(html).toContain("Connected over relay");
+  });
+
+  it("offers the way back when this window is working on the host", () => {
+    const html = renderHostRow({
+      host: makeHost(),
+      connection: { kind: "connected", transport: "lan", active: true, busy: false },
+    });
+    expect(html).toContain("Back to this machine");
+    expect(html).toContain("Working on this host over local network");
+    expect(html).not.toContain(">Open<");
   });
 });

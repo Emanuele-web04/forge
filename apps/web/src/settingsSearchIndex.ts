@@ -432,6 +432,14 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     target: null,
   },
   {
+    id: "connections:connect",
+    section: "connections",
+    title: "Connect to a host",
+    keywords:
+      "Work on another machine from this window. connect open remote relay switch host back to this machine disconnect",
+    target: null,
+  },
+  {
     id: "connections:this-machine",
     section: "connections",
     title: "This machine",

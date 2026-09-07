@@ -122,6 +122,9 @@ describe("query options", () => {
         beginSyncKeyPairing: vi.fn(),
         offerSyncKey: vi.fn(),
         receiveSyncKey: vi.fn(),
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        listConnections: vi.fn(),
         confirmSyncKey: vi.fn(),
       },
     };

@@ -49,6 +49,7 @@ import { websocketRpcRouteLayer } from "./wsRpc";
 import { recoverGitHandoffOperations } from "./gitHandoffOperations";
 import { externalMcpRouteLayer } from "./externalMcp/httpRoute";
 import { hostRemoteWebSocketRouteLayer } from "./remoteSessions";
+import { hostConnectionRouteLayer } from "./hostConnections/httpRoute";
 import { ExternalMcpGateway } from "./externalMcp/Services/ExternalMcpGateway";
 import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
 
@@ -171,6 +172,7 @@ export const createEffectServer = Effect.fn(function* (
     agentGatewayRouteLayer,
     externalMcpRouteLayer,
     hostRemoteWebSocketRouteLayer,
+    hostConnectionRouteLayer,
   );
   const httpApp = yield* HttpRouter.toHttpEffect(routesLayer);
   yield* httpServer

@@ -4,7 +4,7 @@
 // Layer: Settings UI components
 // Exports: ConnectionsSettingsPanel
 
-import type { AccountDevice, AccountHost, HostSession } from "@synara/contracts";
+import type { AccountDevice, AccountHost, HostConnection, HostSession } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useState } from "react";
 
@@ -13,7 +13,7 @@ import { Button } from "~/components/ui/button";
 import { Switch } from "~/components/ui/switch";
 import { toastManager } from "~/components/ui/toast";
 import { useAccount } from "~/hooks/useAccount";
-import { useDevices, useHosts, useHostSessions } from "~/hooks/useHosts";
+import { useDevices, useHostConnections, useHosts, useHostSessions } from "~/hooks/useHosts";
 import { accountErrorMessage } from "~/lib/accountLogic";
 import {
   canManageHost,
@@ -24,8 +24,10 @@ import {
 import {
   reachabilityLabel,
   reachabilityToneClassName,
+  TRANSPORT_LABELS,
   type HostReachability,
 } from "~/lib/hosts/reachability";
+import { activateHost, deactivateHost, readActiveHost } from "~/lib/hosts/activeHost";
 import { HostsUnsupportedError } from "~/lib/hosts/queries";
 import { ensureNativeApi, readNativeApi } from "~/nativeApi";
 import { cn } from "~/lib/utils";
@@ -58,6 +60,8 @@ export function ConnectionsSettingsPanel({ active }: { active: boolean }) {
   const remote = useHosts({ enabled: active && signedIn });
   const devices = useDevices({ enabled: active && signedIn });
   const sessions = useHostSessions({ enabled: active && signedIn });
+  const connections = useHostConnections({ enabled: active && signedIn });
+  const activeHost = readActiveHost();
   const navigate = useNavigate();
   // Reachability is attempt-based (ADR 0010): the map holds what the LAST
   // probe said, per host, and a host nobody probed simply is not in it.
@@ -156,6 +160,48 @@ export function ConnectionsSettingsPanel({ active }: { active: boolean }) {
     }
   }, [remote.unlinkLocalHost]);
 
+  /**
+   * Open a session to the host (the shell dials, races transports, mints) and
+   * move this window onto it. The reload is the whole point — see activeHost.ts.
+   */
+  const connectToHost = useCallback(
+    async (host: AccountHost) => {
+      try {
+        const connection = await connections.connect.mutateAsync({ hostId: host.id });
+        activateHost({
+          hostId: connection.hostId,
+          hostName: connection.hostName,
+          wsPath: connection.wsPath,
+        });
+      } catch (cause) {
+        toastManager.add({
+          type: "error",
+          title: `Could not connect to ${host.name}`,
+          description: accountErrorMessage(cause, "Check that the host is online and try again."),
+        });
+      }
+    },
+    [connections.connect],
+  );
+
+  const disconnectFromHost = useCallback(
+    async (hostId: string) => {
+      const wasActive = readActiveHost()?.hostId === hostId;
+      try {
+        await connections.disconnect.mutateAsync({ hostId });
+      } catch (cause) {
+        toastManager.add({
+          type: "error",
+          title: "Could not disconnect",
+          description: accountErrorMessage(cause, "Try again in a moment."),
+        });
+        return;
+      }
+      if (wasActive) deactivateHost();
+    },
+    [connections.disconnect],
+  );
+
   const endSession = useCallback(
     async (session: HostSession) => {
       const api = readNativeApi() ?? ensureNativeApi();
@@ -225,16 +271,43 @@ export function ConnectionsSettingsPanel({ active }: { active: boolean }) {
             </SettingsEmptyState>
           </div>
         ) : (
-          remote.hosts.map((host) => (
-            <HostRow
-              key={host.id}
-              host={host}
-              reachability={reachability[host.id] ?? { state: "unknown" }}
-              busy={remote.setDiscoverable.isPending}
-              onProbe={() => void probeHost(host)}
-              onToggleDiscoverable={(next) => void toggleDiscoverable(host, next)}
-            />
-          ))
+          remote.hosts.map((host) => {
+            const connection = connections.connections.find((c) => c.hostId === host.id) ?? null;
+            const isLocal = remote.enrollment?.host?.id === host.id;
+            return (
+              <HostRow
+                key={host.id}
+                host={host}
+                reachability={reachability[host.id] ?? { state: "unknown" }}
+                busy={remote.setDiscoverable.isPending}
+                connection={
+                  isLocal
+                    ? { kind: "this-machine" }
+                    : connection
+                      ? {
+                          kind: "connected",
+                          transport: connection.transport,
+                          active: activeHost?.hostId === host.id,
+                          busy: connections.disconnect.isPending,
+                        }
+                      : { kind: "disconnected", busy: connections.connect.isPending }
+                }
+                onProbe={() => void probeHost(host)}
+                onToggleDiscoverable={(next) => void toggleDiscoverable(host, next)}
+                onConnect={() => void connectToHost(host)}
+                onDisconnect={() => void disconnectFromHost(host.id)}
+                onActivate={() =>
+                  connection &&
+                  activateHost({
+                    hostId: connection.hostId,
+                    hostName: connection.hostName,
+                    wsPath: connection.wsPath,
+                  })
+                }
+                onDeactivate={() => deactivateHost()}
+              />
+            );
+          })
         )}
       </SettingsSection>
 
@@ -348,18 +421,40 @@ export function ConnectionsSettingsPanel({ active }: { active: boolean }) {
   );
 }
 
+/** Where this window stands with respect to one host row. */
+export type HostRowConnection =
+  | { readonly kind: "this-machine" }
+  | { readonly kind: "disconnected"; readonly busy: boolean }
+  | {
+      readonly kind: "connected";
+      readonly transport: HostConnection["transport"];
+      /** This window is currently working on that host. */
+      readonly active: boolean;
+      readonly busy: boolean;
+    };
+
 export function HostRow({
   host,
   reachability,
   busy,
+  connection = { kind: "disconnected", busy: false },
   onProbe,
   onToggleDiscoverable,
+  onConnect,
+  onDisconnect,
+  onActivate,
+  onDeactivate,
 }: {
   host: AccountHost;
   reachability: HostReachability;
   busy: boolean;
+  connection?: HostRowConnection;
   onProbe: () => void;
   onToggleDiscoverable: (discoverable: boolean) => void;
+  onConnect?: () => void;
+  onDisconnect?: () => void;
+  onActivate?: () => void;
+  onDeactivate?: () => void;
 }) {
   const owned = canManageHost(host);
   return (
@@ -388,10 +483,36 @@ export function HostRow({
               Not linked — this machine has not completed its key exchange.
             </span>
           ) : null}
+          {connection.kind === "connected" ? (
+            <span>
+              {connection.active ? "Working on this host" : "Connected"} over{" "}
+              {TRANSPORT_LABELS[connection.transport]}
+            </span>
+          ) : null}
         </span>
       }
       actions={
         <>
+          {connection.kind === "this-machine" ? null : connection.kind === "connected" ? (
+            <>
+              {connection.active ? (
+                <Button size="xs" variant="outline" onClick={onDeactivate}>
+                  Back to this machine
+                </Button>
+              ) : (
+                <Button size="xs" onClick={onActivate}>
+                  Open
+                </Button>
+              )}
+              <Button size="xs" variant="outline" disabled={connection.busy} onClick={onDisconnect}>
+                Disconnect
+              </Button>
+            </>
+          ) : (
+            <Button size="xs" disabled={!host.linked || connection.busy} onClick={onConnect}>
+              {connection.busy ? "Connecting..." : "Connect"}
+            </Button>
+          )}
           <Button
             size="xs"
             variant="outline"
