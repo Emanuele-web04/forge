@@ -37,7 +37,13 @@ import {
 import { showFileReferenceContextMenu } from "~/lib/fileReferenceContextMenu";
 import type { ChatFileReference } from "~/lib/chatReferences";
 import type { DiffEditBaseRev } from "~/lib/diffEditBaseRev";
-import { editorCenterModeFamily, type EditorCenterMode } from "~/lib/editorCenterMode";
+import {
+  editorActivityBarSelectionLeavesEditor,
+  isEditorActivityBarItemActive,
+  type EditorActivityBarItem,
+  editorCenterModeFamily,
+  type EditorCenterMode,
+} from "~/lib/editorCenterMode";
 import type { FileCommentSelection } from "~/lib/fileComments";
 import { cn } from "~/lib/utils";
 import { useTheme } from "~/hooks/useTheme";
@@ -65,8 +71,6 @@ import { WorkspaceFileEditorDiscardDialog } from "./chat/WorkspaceFileEditorChro
 import { EditorDirtyRouteGuard } from "./EditorDirtyRouteGuard";
 import { WorkspaceFileEditorPane } from "./chat/WorkspaceFileEditorPane";
 import { WorkspaceFilePreview } from "./WorkspaceFilePreview";
-
-type EditorActivityBarItem = "file" | "diff" | "search";
 
 const EDITOR_CHAT_PANE_STORAGE_KEY = "synara.editor.chatPaneWidth";
 const EDITOR_SIDEBAR_VISIBLE_STORAGE_KEY = "synara.editor.sidebarVisible";
@@ -417,11 +421,14 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
     }
     run();
   };
+  const activityBarSelection = (item: EditorActivityBarItem) => ({
+    item,
+    sidebarVisible,
+    searchPaneActive,
+    centerFamily,
+  });
   const handleActivityBarSelectItem = (item: EditorActivityBarItem) => {
-    const itemActive =
-      sidebarVisible &&
-      (item === "search" ? searchPaneActive : !searchPaneActive && centerFamily === item);
-    if (itemActive) {
+    if (isEditorActivityBarItemActive(activityBarSelection(item))) {
       setSidebarVisible(false);
       storeEditorVisibility(EDITOR_SIDEBAR_VISIBLE_STORAGE_KEY, false);
       return;
@@ -629,7 +636,11 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
           centerMode={props.centerMode}
           searchActive={searchPaneActive}
           sidebarVisible={sidebarVisible}
-          onSelectItem={(item) => guardLeavingEdit(() => handleActivityBarSelectItem(item))}
+          onSelectItem={(item) =>
+            editorActivityBarSelectionLeavesEditor(activityBarSelection(item))
+              ? guardLeavingEdit(() => handleActivityBarSelectItem(item))
+              : handleActivityBarSelectItem(item)
+          }
         />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:flex-row">
           {!sidebarVisible ? null : searchPaneActive ? (

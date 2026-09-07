@@ -1,6 +1,6 @@
 import type { ResolvedKeybindingsConfig } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type RefObject } from "react";
 
 import { isEditorFileSaveShortcut } from "../keybindings";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
@@ -18,9 +18,16 @@ function isBrowserSaveChord(event: globalThis.KeyboardEvent): boolean {
 
 export function useWorkspaceFileEditorSaveShortcut({
   enabled,
+  surfaceRef,
   onSave,
 }: {
   enabled: boolean;
+  /**
+   * The editor pane the shortcut belongs to. The browser save chord is
+   * suppressed everywhere while the editor is mounted, but the save command
+   * only fires for keystrokes that originate inside this pane.
+   */
+  surfaceRef: RefObject<HTMLElement | null>;
   onSave: () => void;
 }): void {
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
@@ -36,7 +43,13 @@ export function useWorkspaceFileEditorSaveShortcut({
       if (isBrowserSaveChord(event)) {
         event.preventDefault();
       }
-      if (!isEditorFileSaveShortcut(event, keybindings)) {
+      const surface = surfaceRef.current;
+      if (
+        !surface ||
+        !(event.target instanceof Node) ||
+        !surface.contains(event.target) ||
+        !isEditorFileSaveShortcut(event, keybindings)
+      ) {
         return;
       }
       event.preventDefault();
@@ -45,5 +58,5 @@ export function useWorkspaceFileEditorSaveShortcut({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [enabled, keybindings]);
+  }, [enabled, keybindings, surfaceRef]);
 }

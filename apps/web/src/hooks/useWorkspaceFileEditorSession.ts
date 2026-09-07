@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 
 import {
   useWorkspaceFileEditor,
@@ -20,17 +20,18 @@ export function useWorkspaceFileEditorSession(input: {
   cwd: string | null;
   filePath: string | null;
   enabled: boolean;
+  surfaceRef: RefObject<HTMLElement | null>;
   onClose: () => void;
   onDirtyChange?: ((dirty: boolean) => void) | undefined;
 }): WorkspaceFileEditorSession {
-  const { cwd, enabled, filePath, onClose, onDirtyChange } = input;
+  const { cwd, enabled, filePath, onClose, onDirtyChange, surfaceRef } = input;
   const controller = useWorkspaceFileEditor({ cwd, filePath, enabled });
   const [pendingDiscard, setPendingDiscard] = useState<WorkspaceFileEditorDiscardIntent | null>(
     null,
   );
   const { dirty, reloadFromDisk, save } = controller;
 
-  useWorkspaceFileEditorSaveShortcut({ enabled, onSave: save });
+  useWorkspaceFileEditorSaveShortcut({ enabled, surfaceRef, onSave: save });
 
   const onDirtyChangeRef = useRef(onDirtyChange);
   onDirtyChangeRef.current = onDirtyChange;

@@ -33,11 +33,13 @@ export interface WorkspaceFileDiffEditorPaneProps {
 export function WorkspaceFileDiffEditorPane(props: WorkspaceFileDiffEditorPaneProps) {
   const [renderSideBySide, setRenderSideBySide] = useState(true);
   const historyControlsRef = useRef<CodeEditHistoryControls | null>(null);
+  const paneRef = useRef<HTMLDivElement | null>(null);
   const [history, setHistory] = useState(INITIAL_CODE_EDIT_HISTORY_STATE);
   const session = useWorkspaceFileEditorSession({
     cwd: props.workspaceRoot,
     filePath: props.filePath,
     enabled: true,
+    surfaceRef: paneRef,
     onClose: props.onClose,
     onDirtyChange: props.onDirtyChange,
   });
@@ -66,7 +68,10 @@ export function WorkspaceFileDiffEditorPane(props: WorkspaceFileDiffEditorPanePr
   const editable = session.canEdit && !originalTruncated;
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-background-surface)]">
+    <div
+      ref={paneRef}
+      className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-background-surface)]"
+    >
       <WorkspaceFileEditorHeader
         workspaceRoot={props.workspaceRoot}
         filePath={props.filePath}
