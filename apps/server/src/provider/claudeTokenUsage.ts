@@ -29,8 +29,6 @@ function claudeContextWindowTokensForOption(value: string | null): number | unde
 const CLAUDE_DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
 const CLAUDE_CONTEXT_WARNING_RATIO = 0.8;
 const CLAUDE_UNCACHED_INGESTION_WARNING_TOKENS = 50_000;
-const CLAUDE_LOW_CACHE_RATIO_MIN_PROMPT_TOKENS = 20_000;
-const CLAUDE_LOW_CACHE_READ_RATIO = 0.2;
 
 export type ClaudeContextUsageWarningKey = "uncached-ingestion" | "near-window" | "large-prompt";
 
@@ -267,18 +265,17 @@ export function decideClaudeContextUsageWarnings(
     cachedReadTokens > 0
       ? ` (${formatApproxTokens(cachedReadTokens)} cached reads, ${formatApproxTokens(uncachedTokens)} new/cache-write)`
       : "";
-  const cacheReadRatio = cachedReadTokens / promptTokens;
+  const cacheWriteTokens = finiteClaudeTokenCountOrZero(rawUsage.cache_creation_input_tokens);
+  const freshInputTokens = Math.max(0, finiteClaudeTokenCountOrZero(rawUsage.input_tokens));
   let first: ClaudeContextUsageWarning | undefined;
 
   if (
-    (uncachedTokens > CLAUDE_UNCACHED_INGESTION_WARNING_TOKENS ||
-      (promptTokens > CLAUDE_LOW_CACHE_RATIO_MIN_PROMPT_TOKENS &&
-        cacheReadRatio < CLAUDE_LOW_CACHE_READ_RATIO)) &&
+    freshInputTokens > CLAUDE_UNCACHED_INGESTION_WARNING_TOKENS &&
     !emittedWarnings.has("uncached-ingestion")
   ) {
     first = {
       key: "uncached-ingestion",
-      message: `Claude ingested ${formatApproxTokens(uncachedTokens)} uncached prompt tokens in one request (${Math.round(cacheReadRatio * 100)}% cache reads). This usually means a fresh session, a session restart replaying history via resume, or a first turn over a large context; uncached input consumes usage limits fastest.`,
+      message: `Claude reported ${formatApproxTokens(freshInputTokens)} input tokens outside cache in one request, plus ${formatApproxTokens(cacheWriteTokens)} cache writes and ${formatApproxTokens(cachedReadTokens)} cache reads. Input includes instructions, tool definitions, history and the current message; it is not a system-prompt measurement.`,
     };
   }
 

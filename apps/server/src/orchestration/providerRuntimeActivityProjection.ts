@@ -392,7 +392,15 @@ function buildContextWindowActivityPayload(
   // Stamp the emitting provider so token stats can attribute usage to the
   // provider that actually processed the turn, not the thread's persisted
   // model selection (which can drift, e.g. across future per-turn providers).
-  return toActivityPayload({ ...usage, provider: event.provider });
+  return toActivityPayload({
+    ...usage,
+    provider: event.provider,
+    ...(event.providerRefs?.providerThreadId
+      ? {
+          usageSessionId: `${event.providerRefs.providerThreadId}${event.lifecycleGeneration ? `:${event.lifecycleGeneration}` : ""}`,
+        }
+      : {}),
+  });
 }
 
 function asPositiveFiniteNumber(value: unknown): number | undefined {
@@ -400,6 +408,8 @@ function asPositiveFiniteNumber(value: unknown): number | undefined {
 }
 
 interface CompactModelUsage {
+  readonly cacheReadInputTokens?: number;
+  readonly cacheCreationInputTokens?: number;
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly totalTokens: number;
@@ -430,7 +440,24 @@ function compactTurnModelUsage(
     if (totalTokens <= 0) {
       continue;
     }
-    compact[model] = { inputTokens, outputTokens, totalTokens };
+    // Preserve reported zeroes; missing cache counters must remain unknown.
+    const cacheReadInputTokens = usage.cacheReadInputTokens;
+    const cacheCreationInputTokens = usage.cacheCreationInputTokens;
+    compact[model] = {
+      inputTokens,
+      outputTokens,
+      totalTokens,
+      ...(typeof cacheReadInputTokens === "number" &&
+      Number.isFinite(cacheReadInputTokens) &&
+      cacheReadInputTokens >= 0
+        ? { cacheReadInputTokens }
+        : {}),
+      ...(typeof cacheCreationInputTokens === "number" &&
+      Number.isFinite(cacheCreationInputTokens) &&
+      cacheCreationInputTokens >= 0
+        ? { cacheCreationInputTokens }
+        : {}),
+    };
   }
   return Object.keys(compact).length > 0 ? compact : undefined;
 }
@@ -1062,6 +1089,9 @@ export function projectProviderRuntimeActivities(
           payload: toActivityPayload({
             state,
             ...(modelUsage ? { modelUsage } : {}),
+            ...(event.provider === "antigravity" && event.payload.usage
+              ? { usage: event.payload.usage, provider: event.provider }
+              : {}),
             ...(typeof event.payload.totalCostUsd === "number"
               ? { totalCostUsd: event.payload.totalCostUsd }
               : {}),

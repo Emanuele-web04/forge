@@ -1,3 +1,4 @@
+import { usageActivityIds } from "@synara/shared/usageActivityRetention";
 // FILE: storeNormalization.ts
 // Purpose: Normalizes orchestration projects, threads, messages, and activities with stable identity.
 // Exports: Pure normalization and equality helpers consumed by projection and event reduction.
@@ -1307,7 +1308,10 @@ export function capThreadActivities<TActivity extends Thread["activities"][numbe
     activities,
     activities.length - MAX_THREAD_ACTIVITIES,
   );
-  const retainedIds = new Set(activities.slice(dropCount).map((activity) => activity.id));
+  const retainedIds = new Set([
+    ...usageActivityIds(activities),
+    ...activities.slice(dropCount).map((activity) => activity.id),
+  ]);
   const pendingRequestIds = pendingInteractionRequestIds(activities);
   for (const activity of activities) {
     const requestId = activityRequestId(activity);

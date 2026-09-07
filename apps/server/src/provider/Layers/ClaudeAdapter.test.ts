@@ -8279,7 +8279,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
-  it.effect("warns once when a turn ingests a large uncached prompt", () => {
+  it.effect("does not warn about uncached ingestion when most input is cache creation", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -8301,7 +8301,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         attachments: [],
       });
 
-      // Synthetic low-cache-ratio result: ~60k of 61k prompt tokens uncached.
+      // Cache writes are separate from ordinary uncached input.
       const uncachedUsage = {
         input_tokens: 5_000,
         cache_creation_input_tokens: 55_000,
@@ -8334,10 +8334,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       const warningMessages = runtimeEvents.flatMap((event) =>
         event.type === "runtime.warning" ? [event.payload.message] : [],
       );
-      // Emitted once per session even though two responses crossed the bar.
-      assert.equal(warningMessages.length, 1);
-      assert.ok(warningMessages[0]?.includes("uncached prompt tokens"));
-      assert.ok(warningMessages[0]?.includes("resume"));
+      assert.equal(warningMessages.length, 0);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

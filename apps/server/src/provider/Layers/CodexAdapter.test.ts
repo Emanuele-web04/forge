@@ -1514,6 +1514,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
             total: {
               inputTokens: 11_833,
               cachedInputTokens: 3456,
+              cacheWriteInputTokens: 500,
               outputTokens: 6,
               reasoningOutputTokens: 0,
               totalTokens: 11_839,
@@ -1542,6 +1543,12 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
 
       assert.deepEqual(firstEvent.value.payload.usage, {
         usedTokens: 126,
+        cumulativeUsage: {
+          inputTokens: 11_833,
+          outputTokens: 6,
+          cachedInputTokens: 3456,
+          cacheCreationInputTokens: 500,
+        },
         totalProcessedTokens: 11_839,
         maxTokens: 258_400,
         inputTokens: 120,

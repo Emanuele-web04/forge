@@ -1150,7 +1150,29 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           tone,
           kind,
           summary,
-          payload_json AS "payload",
+          COALESCE((
+            SELECT CASE WHEN json_type(totals, '$.inputTokens') = 'integer'
+              AND json_type(totals, '$.outputTokens') = 'integer'
+              THEN json_patch(ranked.payload_json, json_object(
+                'cumulativeUsage', json_object(
+                  'inputTokens', json_extract(totals, '$.inputTokens'),
+                  'outputTokens', json_extract(totals, '$.outputTokens'),
+                  'cachedInputTokens', json_extract(totals, '$.cachedInputTokens'),
+                  'cacheCreationInputTokens', json_extract(totals, '$.cacheWriteInputTokens')
+                ),
+                'usageSessionId', session_id
+              )) END
+            FROM (
+              SELECT json_extract(event_json, '$.raw.payload.tokenUsage.total') AS totals,
+                json_extract(event_json, '$.providerRefs.providerThreadId') ||
+                CASE WHEN json_type(event_json, '$.lifecycleGeneration') = 'text'
+                  THEN ':' || json_extract(event_json, '$.lifecycleGeneration') ELSE '' END AS session_id
+              FROM provider_runtime_events
+              WHERE event_id = ranked.activity_id AND thread_id = ranked.thread_id
+                AND ranked.kind = 'context-window.updated'
+                AND json_extract(event_json, '$.provider') = 'codex'
+            )
+          ), ranked.payload_json) AS "payload",
           sequence,
           created_at AS "createdAt"
         FROM (
@@ -1163,11 +1185,17 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 sequence DESC,
                 created_at DESC,
                 activity_id DESC
-            ) AS activity_rank
+            ) AS activity_rank,
+            ROW_NUMBER() OVER (
+              PARTITION BY thread_id, turn_id, kind
+              ORDER BY CASE WHEN sequence IS NULL THEN 0 ELSE 1 END DESC,
+                sequence DESC, created_at DESC, activity_id DESC
+            ) AS usage_rank
           FROM projection_thread_activities
           WHERE ${liveThreadScope}
         ) AS ranked
         WHERE activity_rank <= ${MAX_SNAPSHOT_THREAD_ACTIVITIES}
+          OR (kind IN ('turn.completed', 'context-window.updated') AND usage_rank = 1)
           OR (
             kind IN ('approval.requested', 'user-input.requested')
             AND json_extract(payload_json, '$.requestId') IS NOT NULL
@@ -1261,7 +1289,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 sequence DESC,
                 created_at DESC,
                 activity_id DESC
-            ) AS activity_rank
+            ) AS activity_rank,
+            ROW_NUMBER() OVER (
+              PARTITION BY thread_id, turn_id, kind
+              ORDER BY CASE WHEN sequence IS NULL THEN 0 ELSE 1 END DESC,
+                sequence DESC, created_at DESC, activity_id DESC
+            ) AS usage_rank
           FROM projection_thread_activities
           WHERE kind IN (
             'checkpoint.revert.started',
@@ -1710,7 +1743,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 sequence DESC,
                 created_at DESC,
                 activity_id DESC
-            ) AS activity_rank
+            ) AS activity_rank,
+            ROW_NUMBER() OVER (
+              PARTITION BY thread_id, turn_id, kind
+              ORDER BY CASE WHEN sequence IS NULL THEN 0 ELSE 1 END DESC,
+                sequence DESC, created_at DESC, activity_id DESC
+            ) AS usage_rank
           FROM projection_thread_activities
           WHERE thread_id = ${threadId}
         ),
@@ -1743,7 +1781,29 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           tone,
           kind,
           summary,
-          payload_json AS "payload",
+          COALESCE((
+            SELECT CASE WHEN json_type(totals, '$.inputTokens') = 'integer'
+              AND json_type(totals, '$.outputTokens') = 'integer'
+              THEN json_patch(ranked.payload_json, json_object(
+                'cumulativeUsage', json_object(
+                  'inputTokens', json_extract(totals, '$.inputTokens'),
+                  'outputTokens', json_extract(totals, '$.outputTokens'),
+                  'cachedInputTokens', json_extract(totals, '$.cachedInputTokens'),
+                  'cacheCreationInputTokens', json_extract(totals, '$.cacheWriteInputTokens')
+                ),
+                'usageSessionId', session_id
+              )) END
+            FROM (
+              SELECT json_extract(event_json, '$.raw.payload.tokenUsage.total') AS totals,
+                json_extract(event_json, '$.providerRefs.providerThreadId') ||
+                CASE WHEN json_type(event_json, '$.lifecycleGeneration') = 'text'
+                  THEN ':' || json_extract(event_json, '$.lifecycleGeneration') ELSE '' END AS session_id
+              FROM provider_runtime_events
+              WHERE event_id = ranked.activity_id AND thread_id = ranked.thread_id
+                AND ranked.kind = 'context-window.updated'
+                AND json_extract(event_json, '$.provider') = 'codex'
+            )
+          ), ranked.payload_json) AS "payload",
           sequence,
           created_at AS "createdAt"
         FROM ranked
@@ -1763,6 +1823,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 AND (SELECT has_newer_turn FROM cutoff_turn_state)
               )
             )
+            OR (kind IN ('turn.completed', 'context-window.updated') AND usage_rank = 1)
             OR (
               kind IN ('approval.requested', 'user-input.requested')
               AND json_extract(payload_json, '$.requestId') IS NOT NULL
