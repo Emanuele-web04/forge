@@ -88,11 +88,31 @@ export const SkillsServerSettings = Schema.Struct({
 });
 export type SkillsServerSettings = typeof SkillsServerSettings.Type;
 
+/** Default idle-stop window for live provider runtimes (minutes). 0 disables. */
+export const DEFAULT_PROVIDER_RUNTIME_IDLE_STOP_MINUTES = 10;
+/** Upper bound for the Settings control; one day is enough for any practical use. */
+export const MAX_PROVIDER_RUNTIME_IDLE_STOP_MINUTES = 24 * 60;
+
+export const ProviderRuntimeIdleStopMinutes = Schema.Int.check(
+  Schema.isGreaterThanOrEqualTo(0),
+).check(Schema.isLessThanOrEqualTo(MAX_PROVIDER_RUNTIME_IDLE_STOP_MINUTES));
+export type ProviderRuntimeIdleStopMinutes = typeof ProviderRuntimeIdleStopMinutes.Type;
+
+/** Convert the Settings minute value into the server timer duration. 0 stays 0 (never). */
+export function providerRuntimeIdleStopMsFromMinutes(minutes: number): number {
+  return Math.max(0, minutes) * 60_000;
+}
+
 export const ServerSettings = Schema.Struct({
   enableAssistantStreaming: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   defaultThreadEnvMode: ThreadEnvironmentMode.pipe(Schema.withDecodingDefault(() => "local")),
   addProjectBaseDirectory: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
+  // How long an idle provider CLI may linger before Synara stops it. 0 = never.
+  // Replaces the need to set SYNARA_PROVIDER_RUNTIME_IDLE_STOP_MS for Dock apps.
+  providerRuntimeIdleStopMinutes: ProviderRuntimeIdleStopMinutes.pipe(
+    Schema.withDecodingDefault(() => DEFAULT_PROVIDER_RUNTIME_IDLE_STOP_MINUTES),
+  ),
   textGenerationModelSelection: ModelSelection.pipe(
     Schema.withDecodingDefault(() => ({
       provider: "codex" as const,
@@ -142,6 +162,7 @@ export const ServerSettingsPatch = Schema.Struct({
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvironmentMode),
   addProjectBaseDirectory: Schema.optionalKey(StringSetting),
+  providerRuntimeIdleStopMinutes: Schema.optionalKey(ProviderRuntimeIdleStopMinutes),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
   providers: Schema.optionalKey(
     Schema.Struct({

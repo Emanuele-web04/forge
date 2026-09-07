@@ -55,6 +55,7 @@ const EXPENSIVE_READ_METHODS = new Set<string>([
   WS_METHODS.statsGetProfileStats,
   WS_METHODS.statsGetProfileTokenStats,
   WS_METHODS.providerCompactThread,
+  WS_METHODS.providerStopIdleRuntimeSession,
   WS_METHODS.providerListCommands,
   WS_METHODS.providerListSkills,
   WS_METHODS.providerListSkillsCatalog,

@@ -478,11 +478,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const runtimeIdleStopsInFlight = new Map<ThreadId, Promise<void>>();
     const providerInterruptionFences = new Map<ThreadId, ProviderInterruptionFence>();
     const targetedChildInterruptTombstones = new Map<string, TargetedChildInterruptTombstone>();
-    const runtimeIdleStopMs = Math.max(
+    let runtimeIdleStopMs = Math.max(
       0,
       options?.runtimeIdleStopMs ?? PROVIDER_RUNTIME_IDLE_STOP_MS,
     );
-    let stopIdleRuntimeSession: ((threadId: ThreadId, generation: symbol) => void) | null = null;
+    let fireIdleRuntimeStop: ((threadId: ThreadId, generation: symbol) => void) | null = null;
 
     const invalidateRuntimeIdleGeneration = (threadId: ThreadId): symbol => {
       const generation = Symbol(String(threadId));
@@ -525,10 +525,16 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       const generation = invalidateRuntimeIdleGeneration(threadId);
       const timer = setTimeout(() => {
         runtimeIdleTimers.delete(threadId);
-        stopIdleRuntimeSession?.(threadId, generation);
+        fireIdleRuntimeStop?.(threadId, generation);
       }, runtimeIdleStopMs);
       timer.unref();
       runtimeIdleTimers.set(threadId, timer);
+    };
+
+    const configureRuntimeIdleStopMs: NonNullable<
+      ProviderServiceShape["configureRuntimeIdleStopMs"]
+    > = (nextRuntimeIdleStopMs) => {
+      runtimeIdleStopMs = Math.max(0, nextRuntimeIdleStopMs);
     };
 
     const markRuntimeTaskLive = (threadId: ThreadId, taskId: string): void => {
@@ -2747,7 +2753,64 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const hasLiveRuntimeTasks: NonNullable<ProviderServiceShape["hasLiveRuntimeTasks"]> = (input) =>
       Effect.sync(() => (liveRuntimeTaskIds.get(input.threadId)?.size ?? 0) > 0);
 
-    stopIdleRuntimeSession = (threadId, generation) => {
+    type IdleRuntimeStopAdmission =
+      | { readonly kind: "skip"; readonly reason: string }
+      | { readonly kind: "admit" };
+
+    const evaluateIdleRuntimeStopAdmission = (input: {
+      readonly threadId: ThreadId;
+      readonly binding: Pick<ProviderRuntimeBinding, "status" | "resumeCursor" | "runtimePayload">;
+      readonly session:
+        | {
+            readonly status: string;
+            readonly activeTurnId?: string | undefined;
+            readonly resumeCursor?: unknown;
+          }
+        | undefined;
+    }): IdleRuntimeStopAdmission => {
+      const bindingRuntimePayload = runtimePayloadRecord(input.binding.runtimePayload);
+      if (
+        bindingRuntimePayload.activeTurnId !== null &&
+        bindingRuntimePayload.activeTurnId !== undefined
+      ) {
+        return { kind: "skip", reason: "A turn is still in progress for this thread." };
+      }
+      const isIdleReadySession =
+        input.session?.status === "ready" ||
+        (input.session?.status === "running" &&
+          input.binding.status === "stopped" &&
+          (bindingRuntimePayload.lastRuntimeEvent === "thread.state.changed" ||
+            bindingRuntimePayload.lastRuntimeEvent === "provider.compactThread"));
+      if (!input.session) {
+        return { kind: "skip", reason: "No live agent process is running for this thread." };
+      }
+      if (!isIdleReadySession) {
+        return { kind: "skip", reason: "The agent process is not idle yet." };
+      }
+      if (input.session.activeTurnId !== undefined) {
+        return { kind: "skip", reason: "A turn is still in progress for this thread." };
+      }
+      if ((liveRuntimeTaskIds.get(input.threadId)?.size ?? 0) > 0) {
+        return {
+          kind: "skip",
+          reason: "Background agent tasks are still running for this thread.",
+        };
+      }
+      // Live adapter snapshots can temporarily omit cursors even though the
+      // directory already persisted one from an earlier runtime event.
+      if (
+        !hasResumeCursor(input.session.resumeCursor) &&
+        !hasResumeCursor(input.binding.resumeCursor)
+      ) {
+        return {
+          kind: "skip",
+          reason: "The agent process has no resume cursor to preserve.",
+        };
+      }
+      return { kind: "admit" };
+    };
+
+    fireIdleRuntimeStop = (threadId, generation) => {
       const stopEffect = Effect.gen(function* () {
         const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
         if (!binding) {
@@ -2758,32 +2821,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         const adapter = yield* registry.getByProvider(binding.provider);
         const sessions = yield* adapter.listSessions();
         const session = sessions.find((entry) => entry.threadId === threadId);
-        const bindingRuntimePayload = runtimePayloadRecord(binding.runtimePayload);
-        if (
-          bindingRuntimePayload.activeTurnId !== null &&
-          bindingRuntimePayload.activeTurnId !== undefined
-        ) {
-          retireRuntimeIdleGeneration(threadId, generation);
-          return;
-        }
-        const isIdleReadySession =
-          session?.status === "ready" ||
-          (session?.status === "running" &&
-            binding.status === "stopped" &&
-            (bindingRuntimePayload.lastRuntimeEvent === "thread.state.changed" ||
-              bindingRuntimePayload.lastRuntimeEvent === "provider.compactThread"));
-        if (
-          !session ||
-          !isIdleReadySession ||
-          session.activeTurnId !== undefined ||
-          (liveRuntimeTaskIds.get(threadId)?.size ?? 0) > 0
-        ) {
-          retireRuntimeIdleGeneration(threadId, generation);
-          return;
-        }
-        // Live adapter snapshots can temporarily omit cursors even though the
-        // directory already persisted one from an earlier runtime event.
-        if (!hasResumeCursor(session.resumeCursor) && !hasResumeCursor(binding.resumeCursor)) {
+        const admission = evaluateIdleRuntimeStopAdmission({ threadId, binding, session });
+        if (admission.kind === "skip") {
           retireRuntimeIdleGeneration(threadId, generation);
           return;
         }
@@ -2807,6 +2846,47 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       });
       runtimeIdleStopsInFlight.set(threadId, stopPromise);
     };
+
+    const stopIdleRuntimeSession: NonNullable<ProviderServiceShape["stopIdleRuntimeSession"]> = (
+      rawInput,
+    ) =>
+      Effect.gen(function* () {
+        const input = yield* decodeInputOrValidationError({
+          operation: "ProviderService.stopIdleRuntimeSession",
+          schema: ProviderStopSessionInput,
+          payload: rawInput,
+        });
+        yield* waitForRuntimeIdleStop(input.threadId);
+        clearRuntimeIdleTimer(input.threadId);
+
+        const binding = Option.getOrUndefined(yield* directory.getBinding(input.threadId));
+        if (!binding) {
+          return;
+        }
+        const adapter = yield* registry.getByProvider(binding.provider);
+        const sessions = yield* adapter.listSessions();
+        const session = sessions.find((entry) => entry.threadId === input.threadId);
+        const admission = evaluateIdleRuntimeStopAdmission({
+          threadId: input.threadId,
+          binding,
+          session,
+        });
+        if (admission.kind === "skip") {
+          // No live process is a successful no-op for the UI action; every other
+          // skip reason is a hard refusal so mid-flight work is never killed.
+          if (admission.reason === "No live agent process is running for this thread.") {
+            return;
+          }
+          return yield* Effect.fail(
+            new ProviderValidationError({
+              operation: "ProviderService.stopIdleRuntimeSession",
+              issue: admission.reason,
+            }),
+          );
+        }
+
+        yield* stopRuntimeSessionInternal({ threadId: input.threadId });
+      });
 
     const clearSessionResumeCursor: NonNullable<
       ProviderServiceShape["clearSessionResumeCursor"]
@@ -3095,7 +3175,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           }
           runtimeIdleGenerations.clear();
           runtimeIdleStopsInFlight.clear();
-          stopIdleRuntimeSession = null;
+          fireIdleRuntimeStop = null;
         }).pipe(
           Effect.andThen(
             runStopAll().pipe(
@@ -3136,6 +3216,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       respondToUserInput,
       stopSession,
       stopRuntimeSession,
+      stopIdleRuntimeSession,
+      configureRuntimeIdleStopMs,
       hasLiveRuntimeTasks,
       clearSessionResumeCursor,
       listSessions,

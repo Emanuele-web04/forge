@@ -10,11 +10,14 @@ import {
   type AssistantDeliveryMode,
   DesktopAppIcon,
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
+  DEFAULT_PROVIDER_RUNTIME_IDLE_STOP_MINUTES,
   DEFAULT_SERVER_SETTINGS,
   DEFAULT_SERVER_SETTINGS_VIEW,
   GIT_TEXT_GENERATION_PROVIDERS,
+  MAX_PROVIDER_RUNTIME_IDLE_STOP_MINUTES,
   TrimmedNonEmptyString,
   ProviderKind,
+  ProviderRuntimeIdleStopMinutes,
   type GitTextGenerationProvider,
   type ProviderStartOptions,
   type ServerSettingsView,
@@ -324,6 +327,11 @@ export const AppSettingsSchema = Schema.Struct({
   showEnvironmentNotepad: Schema.Boolean.pipe(withDefaults(() => false)),
   followUpBehavior: FollowUpBehavior.pipe(withDefaults(() => DEFAULT_FOLLOW_UP_BEHAVIOR)),
   enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Server-backed: how long idle agent CLIs may linger before Synara stops them.
+  // 0 = never auto-stop. Default matches ProviderService's 10-minute idle window.
+  providerRuntimeIdleStopMinutes: ProviderRuntimeIdleStopMinutes.pipe(
+    withDefaults(() => DEFAULT_PROVIDER_RUNTIME_IDLE_STOP_MINUTES),
+  ),
   autoOpenDevicePane: Schema.Boolean.pipe(withDefaults(() => true)),
   enableProviderUpdateChecks: Schema.Boolean.pipe(withDefaults(() => true)),
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),
@@ -540,6 +548,16 @@ export function normalizeChatFontSizePx(value: number | null | undefined): numbe
   return Math.min(MAX_CHAT_FONT_SIZE_PX, Math.max(MIN_CHAT_FONT_SIZE_PX, Math.round(value)));
 }
 
+export function normalizeProviderRuntimeIdleStopMinutes(value: number | null | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_PROVIDER_RUNTIME_IDLE_STOP_MINUTES;
+  }
+
+  return Math.min(MAX_PROVIDER_RUNTIME_IDLE_STOP_MINUTES, Math.max(0, Math.round(value)));
+}
+
+export { DEFAULT_PROVIDER_RUNTIME_IDLE_STOP_MINUTES, MAX_PROVIDER_RUNTIME_IDLE_STOP_MINUTES };
+
 export function normalizeTerminalFontSizePx(value: number | null | undefined): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return DEFAULT_TERMINAL_FONT_SIZE_PX;
@@ -678,6 +696,7 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     devinBinaryPath: settings.providers.devin.binaryPath,
     defaultThreadEnvMode: settings.defaultThreadEnvMode,
     enableAssistantStreaming: settings.enableAssistantStreaming,
+    providerRuntimeIdleStopMinutes: settings.providerRuntimeIdleStopMinutes,
     enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
     antigravityBinaryPath: settings.providers.antigravity.binaryPath,
     grokBinaryPath: settings.providers.grok.binaryPath,
@@ -774,6 +793,12 @@ export function appSettingsPatchToServerSettingsPatch(
   }
   if (hasOwn(patch, "enableProviderUpdateChecks")) {
     serverPatch.enableProviderUpdateChecks = Boolean(patch.enableProviderUpdateChecks);
+  }
+  if (hasOwn(patch, "providerRuntimeIdleStopMinutes")) {
+    const minutes = Number(patch.providerRuntimeIdleStopMinutes);
+    if (Number.isFinite(minutes)) {
+      serverPatch.providerRuntimeIdleStopMinutes = normalizeProviderRuntimeIdleStopMinutes(minutes);
+    }
   }
   if (patch.defaultThreadEnvMode === "local" || patch.defaultThreadEnvMode === "worktree") {
     serverPatch.defaultThreadEnvMode = patch.defaultThreadEnvMode;
@@ -931,6 +956,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "cursorBinaryPath",
     "defaultThreadEnvMode",
     "enableAssistantStreaming",
+    "providerRuntimeIdleStopMinutes",
     "enableProviderUpdateChecks",
     "devinBinaryPath",
     "antigravityBinaryPath",

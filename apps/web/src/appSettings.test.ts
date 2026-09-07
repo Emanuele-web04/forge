@@ -136,6 +136,14 @@ describe("server-backed provider enablement", () => {
     expect(patch.providers).toBeUndefined();
   });
 
+  it("persists the idle agent stop timeout as a server settings patch", () => {
+    const patch = appSettingsPatchToServerSettingsPatch({
+      providerRuntimeIdleStopMinutes: 2,
+    });
+
+    expect(patch.providerRuntimeIdleStopMinutes).toBe(2);
+  });
+
   it("invalidates discovery for initial and changed streamed provider settings", () => {
     const disabledOpenCode = {
       ...DEFAULT_SERVER_SETTINGS_VIEW,
