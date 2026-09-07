@@ -4,23 +4,24 @@
 
 import "../../index.css";
 
-import { TurnId } from "@synara/contracts";
+import { MessageId, TurnId } from "@synara/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { WorkspaceFileOpenerContext } from "../../lib/workspaceFileOpener";
 import { formatTimestamp } from "../../timestampFormat";
+import { deriveTimelineEntries, type TimelineEntry } from "../../workLog";
 import { MessagesTimeline } from "./MessagesTimeline";
 import { TimelineWorkEntryRow } from "./TimelineWorkEntryRow";
 
-function ToolDetailsTimeline() {
+function ToolDetailsTimeline({ entries }: { entries?: TimelineEntry[] }) {
   return (
     <MessagesTimeline
       hasMessages
-      isWorking={false}
-      activeTurnInProgress={false}
+      isWorking={entries !== undefined}
+      activeTurnInProgress={entries !== undefined}
       activeTurnStartedAt={null}
-      timelineEntries={[
+      timelineEntries={entries ?? [
         {
           id: "entry-command-details",
           kind: "work",
@@ -108,6 +109,42 @@ async function settleLayout(): Promise<void> {
 describe("MessagesTimeline tool details", () => {
   afterEach(() => {
     document.body.innerHTML = "";
+  });
+
+  it("keeps historical tool disclosures above the next request after late updates", async () => {
+    const oldTurn = TurnId.makeUnsafe("old-tools");
+    const newTurn = TurnId.makeUnsafe("current-tools");
+    const entries = (late: boolean) => deriveTimelineEntries([
+      { id: MessageId.makeUnsafe("old-user"), role: "user", text: "Earlier request", createdAt: "2026-09-07T00:00:00Z", streaming: false },
+      { id: MessageId.makeUnsafe("old-answer"), role: "assistant", turnId: oldTurn, text: "Earlier answer", createdAt: "2026-09-07T00:01:00Z", streaming: false },
+      { id: MessageId.makeUnsafe("current-user"), role: "user", text: "Current request", createdAt: "2026-09-07T00:02:00Z", streaming: false },
+      { id: MessageId.makeUnsafe("current-answer"), role: "assistant", turnId: newTurn, text: "Current answer", createdAt: "2026-09-07T00:02:01Z", streaming: true },
+    ], [], [
+      ...Array.from({ length: 79 }, (_, index) => ({
+        id: `earlier-tool-${index}`, turnId: oldTurn, tone: "tool" as const,
+        label: "Earlier tool", createdAt: late ? "2026-09-07T00:03:00Z" : "2026-09-07T00:00:30Z",
+      })),
+      { id: "current-tool", turnId: newTurn, tone: "tool", label: "Current tool", createdAt: "2026-09-07T00:02:02Z" },
+    ]);
+    const host = createTimelineHost();
+    const screen = await render(<ToolDetailsTimeline entries={entries(false)} />, { container: host });
+    try {
+      await screen.rerender(<ToolDetailsTimeline entries={entries(true)} />);
+      await settleLayout();
+      const boundary = host.querySelector('[data-message-id="current-user"]')!;
+      expect(boundary).not.toBeNull();
+      const rows = [...host.querySelectorAll('[data-timeline-row-kind]')];
+      const currentRows = rows.filter(row => Boolean(boundary.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING));
+      const currentText = currentRows.map(row => row.textContent).join(" ");
+      expect(currentText).toContain("Current tool");
+      expect(currentText).not.toMatch(/Earlier tool|Show .* more/);
+      const earlierRows = rows.filter(row => Boolean(boundary.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_PRECEDING));
+      expect(earlierRows.length).toBeGreaterThan(0);
+      expect(earlierRows.some(row => row.textContent?.includes("Earlier answer"))).toBe(true);
+    } finally {
+      await screen.unmount();
+      host.remove();
+    }
   });
 
   it("opens and closes command details with the shared disclosure motion", async () => {
