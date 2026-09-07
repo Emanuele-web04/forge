@@ -1,3 +1,4 @@
+import { resolveUsageLocalProxy } from "./localProxy";
 // FILE: providerUsage/http.ts
 // Purpose: Bounded JSON helper for provider usage, backed by the pinned outbound authority.
 
@@ -30,7 +31,9 @@ export async function fetchJson(input: {
       : input.bodyFormat === "form"
         ? new URLSearchParams(input.body as Record<string, string>).toString()
         : JSON.stringify(input.body);
+  const localProxyUrl = await resolveUsageLocalProxy();
   const response = await outboundHttp.request({
+    ...(localProxyUrl ? { localProxyUrl } : {}),
     policy: {
       service: input.service,
       allowedOrigins: input.allowedOrigins,

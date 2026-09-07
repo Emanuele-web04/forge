@@ -368,7 +368,7 @@ export function parseCodexUsage(input: {
       return;
     }
     limits.push({
-      window: label,
+      window: windowDurationMins === 10080 ? "Weekly" : windowDurationMins === 300 ? "5h" : label,
       ...(usedPercent !== undefined ? { usedPercent } : {}),
       ...(resetsAt ? { resetsAt } : {}),
       windowDurationMins,

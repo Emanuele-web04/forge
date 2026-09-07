@@ -11,7 +11,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ProviderRateLimit } from "~/lib/rateLimits";
 import { openUsageProviderSnapshotQueryOptions } from "~/lib/openUsageReactQuery";
 import { serverQueryKeys } from "~/lib/serverReactQuery";
-import { useProviderUsageSummary } from "./useProviderUsageSummary";
+import { resolveProviderUsageSummary, useProviderUsageSummary } from "./useProviderUsageSummary";
 
 vi.mock("~/lib/openUsageReactQuery", async (importOriginal) => {
   const actual = await importOriginal<typeof import("~/lib/openUsageReactQuery")>();
@@ -94,6 +94,54 @@ function createQueryClient() {
 }
 
 describe("useProviderUsageSummary", () => {
+  it("keeps the live weekly-only account at 15% left despite newer historical 100% windows", () => {
+    const live = snapshot({
+      provider: "codex",
+      status: "ok",
+      limits: [{ window: "Weekly", usedPercent: 85, windowDurationMins: 10080 }],
+    });
+    const historical = {
+      provider: "codex" as const,
+      updatedAt: "2099-01-01T00:00:00Z",
+      limits: [
+        { window: "5h", usedPercent: 0 },
+        { window: "Weekly", usedPercent: 0 },
+      ],
+    };
+    const summary = resolveProviderUsageSummary({
+      provider: "codex",
+      authoritativeLiveSnapshot: live,
+      accountRateLimits: [historical],
+      localUsageSnapshot: snapshot({ ...historical }),
+    });
+    expect(summary.rateLimits).toHaveLength(1);
+    expect(summary.rateLimits[0]?.limits).toEqual(live.limits);
+  });
+
+  it("does not manufacture windows when a live account has none", () => {
+    const summary = resolveProviderUsageSummary({
+      provider: "codex",
+      authoritativeLiveSnapshot: snapshot({ provider: "codex", status: "ok" }),
+      accountRateLimits: [
+        {
+          provider: "codex",
+          updatedAt: "2099-01-01T00:00:00Z",
+          limits: [{ window: "5h", usedPercent: 0 }],
+        },
+      ],
+    });
+    expect(summary.rateLimits).toEqual([]);
+  });
+
+  it("prefers the explicit surface snapshot over an existing query cache entry", () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
+      snapshot({ limits: [{ window: "5h", usedPercent: 0 }] }),
+    ]);
+    const live = snapshot({ status: "ok", limits: [{ window: "Weekly", usedPercent: 85 }] });
+    const summary = readProviderUsageSummary({ queryClient, providerSnapshot: live });
+    expect(summary.rateLimits[0]?.limits).toEqual(live.limits);
+  });
   it("can keep OpenUsage polling disabled while using the server batch query", () => {
     const queryClient = createQueryClient();
 

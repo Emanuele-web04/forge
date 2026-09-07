@@ -8,6 +8,7 @@ import nodePath from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { outboundHttp } from "@synara/shared/outboundHttp";
+import * as credentials from "../credentials";
 
 import { antigravityUsageFetcher, parseAntigravityQuota } from "./antigravity";
 
@@ -64,23 +65,25 @@ describe("parseAntigravityQuota", () => {
         cloudaicompanionProject: "gen-lang-client-1",
       },
       quota: {
-        buckets: [
-          {
-            modelId: "gemini-2.5-pro",
-            remainingFraction: 0.4,
-            resetTime: "2026-09-01T00:00:00Z",
-          },
-          {
-            modelId: "gemini-2.5-pro-preview",
-            remainingFraction: 0.1,
-            resetTime: "2026-09-01T00:00:00Z",
-          },
-          {
-            modelId: "gemini-2.5-flash",
-            remainingFraction: 0.8,
-            resetTime: "2026-08-20T12:00:00Z",
-          },
-        ],
+        models: Object.fromEntries(
+          [
+            {
+              modelId: "gemini-2.5-pro",
+              remainingFraction: 0.4,
+              resetTime: "2026-09-01T00:00:00Z",
+            },
+            {
+              modelId: "gemini-2.5-pro-preview",
+              remainingFraction: 0.1,
+              resetTime: "2026-09-01T00:00:00Z",
+            },
+            {
+              modelId: "gemini-2.5-flash",
+              remainingFraction: 0.8,
+              resetTime: "2026-08-20T12:00:00Z",
+            },
+          ].map(({ modelId, ...quotaInfo }) => [modelId, { quotaInfo }]),
+        ),
       },
       nowMs: NOW_MS,
     });
@@ -92,6 +95,88 @@ describe("parseAntigravityQuota", () => {
 });
 
 describe("antigravityUsageFetcher", () => {
+  it("does not reuse a Gemini CLI login as an Antigravity account", async () => {
+    const { homeDir } = makeGeminiHome(".gemini/oauth_creds.json", {
+      access_token: "unrelated-gemini-token",
+    });
+    const snapshot = await antigravityUsageFetcher.fetch({
+      homeDir,
+      env: {},
+      platform: "linux",
+      nowMs: NOW_MS,
+    });
+    expect(snapshot.status).toBe("needs-auth");
+  });
+
+  it("reads the agy keychain account before fallback files, including Go keyring encoding", async () => {
+    const { homeDir } = makeGeminiHome(".gemini/antigravity-cli/antigravity-oauth-token", {
+      access_token: "old-file",
+    });
+    const record = {
+      auth_method: "consumer",
+      token: { access_token: "keychain-token", expiry: new Date(NOW_MS + 3600000).toISOString() },
+    };
+    const keychain = vi
+      .spyOn(credentials, "readKeychainPassword")
+      .mockResolvedValue(
+        "go-keyring-base64:" + Buffer.from(JSON.stringify(record)).toString("base64"),
+      );
+    stubOutboundFetch(async (_url, init) => {
+      expect((init?.headers as Record<string, string> | undefined)?.Authorization).toBe(
+        "Bearer keychain-token",
+      );
+      return jsonResponse({
+        models: {
+          "claude-sonnet": { quotaInfo: { remainingFraction: 0.6 } },
+          tab_flash: { quotaInfo: { remainingFraction: 0 } },
+        },
+      });
+    });
+    const snapshot = await antigravityUsageFetcher.fetch({
+      homeDir,
+      env: {},
+      platform: "darwin",
+      nowMs: NOW_MS,
+    });
+    expect(keychain).toHaveBeenCalledWith({
+      service: "gemini",
+      account: "antigravity",
+      platform: "darwin",
+    });
+    expect(snapshot.limits).toEqual([{ window: "Claude", usedPercent: 40 }]);
+  });
+
+  it("refreshes keychain tokens in memory without writing credentials back", async () => {
+    const { homeDir } = makeGeminiHome(".gemini/oauth_creds.json", { access_token: "unrelated" });
+    vi.spyOn(credentials, "readKeychainPassword").mockResolvedValue(
+      JSON.stringify({
+        auth_method: "consumer",
+        token: {
+          access_token: "expired-keychain",
+          refresh_token: "keychain-refresh",
+          expiry: new Date(NOW_MS - 1000).toISOString(),
+        },
+      }),
+    );
+    const write = vi.spyOn(credentials, "writeJsonFileAtomic");
+    let refreshCount = 0;
+    stubOutboundFetch(async (url, init) => {
+      if (String(url).includes("oauth2.googleapis.com")) {
+        refreshCount++;
+        expect(new URLSearchParams(String(init?.body)).get("client_id")).toMatch(/^1071006060591-/);
+        return jsonResponse({ access_token: "refreshed-keychain", expires_in: 3600 });
+      }
+      expect((init?.headers as Record<string, string> | undefined)?.Authorization).toBe(
+        "Bearer refreshed-keychain",
+      );
+      return jsonResponse({ models: { "gemini-pro": { quotaInfo: { remainingFraction: 1 } } } });
+    });
+    const ctx = { homeDir, env: {}, platform: "darwin" as const, nowMs: Date.now() };
+    expect((await antigravityUsageFetcher.fetch(ctx)).status).toBe("ok");
+    expect((await antigravityUsageFetcher.fetch(ctx)).status).toBe("ok");
+    expect(refreshCount).toBe(1);
+    expect(write).not.toHaveBeenCalled();
+  });
   it("returns needs-auth when no Gemini/agy credential is present", async () => {
     const homeDir = mkdtempSync(nodePath.join(os.tmpdir(), "synara-agy-empty-"));
     tempDirs.push(homeDir);
@@ -117,16 +202,17 @@ describe("antigravityUsageFetcher", () => {
       const target = String(url);
       const headers = init?.headers as Record<string, string>;
       expect(headers.Authorization).toBe("Bearer ya29-access");
+      expect(headers["User-Agent"]).toMatch(/^antigravity\//);
       if (target.includes("loadCodeAssist")) {
         return jsonResponse({
           currentTier: { id: "standard-tier", name: "Paid" },
           cloudaicompanionProject: "gen-lang-client-9",
         });
       }
-      if (target.includes("retrieveUserQuota")) {
+      if (target.includes("fetchAvailableModels")) {
         expect(String(init?.body)).toContain("gen-lang-client-9");
         return jsonResponse({
-          buckets: [{ modelId: "gemini-2.5-pro", remainingFraction: 0.75 }],
+          models: { "gemini-2.5-pro": { quotaInfo: { remainingFraction: 0.75 } } },
         });
       }
       throw new Error(`unexpected url ${target}`);
@@ -164,6 +250,7 @@ describe("antigravityUsageFetcher", () => {
         const body = new URLSearchParams(String(init?.body));
         expect(body.get("grant_type")).toBe("refresh_token");
         expect(body.get("refresh_token")).toBe("1//old-refresh");
+        expect(body.get("client_id")).toMatch(/^1071006060591-/);
         expect(body.get("client_secret")).toBeTruthy();
         return jsonResponse({
           access_token: "ya29-new",
@@ -176,8 +263,8 @@ describe("antigravityUsageFetcher", () => {
       if (target.includes("loadCodeAssist")) {
         return jsonResponse({ currentTier: { id: "free-tier" } });
       }
-      if (target.includes("retrieveUserQuota")) {
-        return jsonResponse({ buckets: [] });
+      if (target.includes("fetchAvailableModels")) {
+        return jsonResponse({ models: {} });
       }
       throw new Error(`unexpected url ${target}`);
     });

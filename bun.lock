@@ -198,6 +198,7 @@
       "dependencies": {
         "@synara/contracts": "workspace:*",
         "effect": "catalog:",
+        "https-proxy-agent": "7.0.6",
       },
       "devDependencies": {
         "@effect/language-service": "catalog:",

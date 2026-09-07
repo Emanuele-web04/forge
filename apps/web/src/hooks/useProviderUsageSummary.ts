@@ -62,16 +62,23 @@ export function resolveProviderUsageSummary(input: {
   const liveUsageRateLimit = normalizeServerProviderUsageRateLimit(input.authoritativeLiveSnapshot);
   const localUsageRateLimit = normalizeServerProviderUsageRateLimit(input.localUsageSnapshot);
   const openUsageRateLimit = normalizeOpenUsageSnapshot(input.openUsageSnapshot, input.provider);
-  const rateLimits = mergeProviderRateLimits(
-    derivedRateLimits,
-    mergeProviderRateLimits(
-      liveUsageRateLimit ? [liveUsageRateLimit] : [],
-      mergeProviderRateLimits(
-        localUsageRateLimit ? [localUsageRateLimit] : [],
-        openUsageRateLimit ? [openUsageRateLimit] : [],
-      ),
-    ),
-  );
+  // A live account response owns the complete window set. Thread/archive events
+  // may belong to an old account or carry replay timestamps; never merge them
+  // into an authoritative snapshot, even when they appear newer.
+  const rateLimits = input.authoritativeLiveSnapshot
+    ? liveUsageRateLimit
+      ? [liveUsageRateLimit]
+      : []
+    : mergeProviderRateLimits(
+        derivedRateLimits,
+        mergeProviderRateLimits(
+          liveUsageRateLimit ? [liveUsageRateLimit] : [],
+          mergeProviderRateLimits(
+            localUsageRateLimit ? [localUsageRateLimit] : [],
+            openUsageRateLimit ? [openUsageRateLimit] : [],
+          ),
+        ),
+      );
 
   const liveUsageLines = normalizeServerProviderUsageLines(input.authoritativeLiveSnapshot);
   const localUsageLines = normalizeServerProviderUsageLines(input.localUsageSnapshot);
@@ -123,7 +130,7 @@ export function useProviderUsageSummary(input: {
   const liveProviderSnapshot = (allProviderUsageQuery.data ?? []).find(
     (snapshot) => snapshot.provider === provider,
   );
-  const authoritativeLiveSnapshot = liveProviderSnapshot ?? input.providerSnapshot ?? null;
+  const authoritativeLiveSnapshot = input.providerSnapshot ?? liveProviderSnapshot ?? null;
   const accountRateLimits = input.threadRateLimits ?? deriveAccountRateLimits(input.threads ?? []);
   const summary = resolveProviderUsageSummary({
     provider,
