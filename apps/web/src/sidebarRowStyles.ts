@@ -11,6 +11,13 @@ export const SIDEBAR_ROW_RADIUS_CLASS_NAME = "rounded-md";
 
 export const SIDEBAR_ROW_PADDING_CLASS_NAME = "px-2 py-[var(--app-density-row-padding-y,0.125rem)]";
 
+/**
+ * Pixel twins of the row paddings (`px-2` / `pl-8`) for geometry that must be
+ * computed, e.g. the hierarchy thread line that runs under a row's leading icon.
+ */
+export const SIDEBAR_ROW_PADDING_X_PX = 8;
+export const SIDEBAR_THREAD_ROW_NESTED_PADDING_LEFT_PX = 32;
+
 export const SIDEBAR_ROW_GAP_CLASS_NAME = "gap-[var(--app-density-row-gap,0.5rem)]";
 
 export const SIDEBAR_ROW_TEXT_CLASS_NAME = "text-[length:var(--app-font-size-ui,12px)] font-normal";

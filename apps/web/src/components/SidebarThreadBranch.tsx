@@ -1,62 +1,41 @@
 // FILE: SidebarThreadBranch.tsx
 // Purpose: Shared orchestrator → subagent/batch branch wrapper used by both sidebars.
-// Exports: SidebarThreadHierarchyBranch, hierarchy helpers, and flat-list nesting.
-// Depends on: DisclosureRegion/Chevron + disclosureMotion only (220ms ease-out, reduced-motion safe).
+// Exports: SidebarThreadHierarchyBranch, thread-line geometry helpers, and flat-list nesting.
+// Depends on: DisclosureRegion + disclosureMotion only (220ms ease-out, reduced-motion safe).
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type { ThreadId } from "@synara/contracts";
 
 import { DISCLOSURE_CLEANUP_BUFFER_MS, DISCLOSURE_TRANSITION_MS } from "../lib/disclosureMotion";
+import { cn } from "../lib/utils";
 import type { HiddenBranchSummary } from "./sidebarThreadHierarchyPresentation";
 import { DisclosureRegion } from "./ui/DisclosureRegion";
-import { SidebarThreadBranchControl } from "./SidebarThreadBranchControl";
+import {
+  SidebarThreadBranchControl,
+  SidebarThreadBranchSlot,
+  type SidebarBranchSlotLayout,
+} from "./SidebarThreadBranchControl";
 
-/** Common 12px indent per level, capped at 24px. Logical depth is kept above the cap. */
-export const SIDEBAR_HIERARCHY_INDENT_PX = 12;
-export const SIDEBAR_HIERARCHY_MAX_INDENT_PX = 24;
-
-export function hierarchyIndentPx(depth: number): number {
-  const level = Number.isFinite(depth) ? Math.max(0, Math.floor(depth)) : 0;
-  return Math.min(level * SIDEBAR_HIERARCHY_INDENT_PX, SIDEBAR_HIERARCHY_MAX_INDENT_PX);
-}
-
-const NARROW_VIEWPORT_QUERY = "(max-width: 639px)";
-
-function useNarrowViewport(): boolean {
-  const [narrow, setNarrow] = useState<boolean>(() =>
-    typeof window !== "undefined" && typeof window.matchMedia === "function"
-      ? window.matchMedia(NARROW_VIEWPORT_QUERY).matches
-      : false,
-  );
-  useEffect(() => {
-    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-      return;
-    }
-    const list = window.matchMedia(NARROW_VIEWPORT_QUERY);
-    const onChange = (event: MediaQueryListEvent) => setNarrow(event.matches);
-    setNarrow(list.matches);
-    list.addEventListener("change", onChange);
-    return () => list.removeEventListener("change", onChange);
-  }, []);
-  return narrow;
-}
+/** Every thread row leads with a 12px provider icon (`size-3`). */
+export const SIDEBAR_ROW_LEADING_ICON_PX = 12;
 
 /**
- * Visual indentation for one branch row. Desktop caps at 24px; below 640px
- * every non-root uses a flat 12px regardless of logical depth. Roots stay 0.
+ * Left offset of a branch's vertical thread line so it runs under the centre of
+ * the parent row's provider icon: the parent's left padding plus half the icon.
+ * Nested branches compute it from the child row's own padding, so each level
+ * draws its own line under its own icon.
  */
-export function useBranchIndentPx(depth: number): number {
-  const narrow = useNarrowViewport();
-  const level = Number.isFinite(depth) ? Math.max(0, Math.floor(depth)) : 0;
-  if (level <= 0) {
-    return 0;
-  }
-  if (narrow) {
-    return SIDEBAR_HIERARCHY_INDENT_PX;
-  }
-  return hierarchyIndentPx(level);
+export function hierarchyThreadLineOffsetPx(rowPaddingLeftPx: number): number {
+  const padding = Number.isFinite(rowPaddingLeftPx) ? Math.max(0, rowPaddingLeftPx) : 0;
+  return padding + SIDEBAR_ROW_LEADING_ICON_PX / 2;
 }
+
+/** Gap between the thread line and the child rows (12px classic, 10px Activity). */
+const CHILD_LIST_PADDING_CLASS: Record<SidebarBranchSlotLayout, string> = {
+  classic: "pl-3",
+  activity: "pl-2.5",
+};
 
 export function branchControlsId(threadId: ThreadId, surface = "sidebar"): string {
   return `sidebar-branch-${surface}-${threadId}`;
@@ -105,7 +84,11 @@ export function nestSidebarEntriesByDepth<T extends { depth: number }>(
 }
 
 export interface SidebarThreadHierarchyBranchRenderSlot {
-  /** Shared numeric toggle; non-null exactly when directChildCount > 0. */
+  /**
+   * Fixed-width subagent slot, always present: the numeric toggle when
+   * directChildCount > 0, otherwise an empty spacer of the same width so
+   * every title truncates at the same boundary.
+   */
   branchControl: ReactNode;
   /** True for every row with logical depth greater than zero. */
   isHierarchyChild: boolean;
@@ -119,6 +102,10 @@ export function SidebarThreadHierarchyBranch(props: {
   expanded: boolean;
   onToggle: (threadId: ThreadId) => void;
   renderRow: (slot: SidebarThreadHierarchyBranchRenderSlot) => ReactNode;
+  /** Slot widths and child-list padding for the hosting surface. */
+  layout: SidebarBranchSlotLayout;
+  /** See hierarchyThreadLineOffsetPx: margin-left of the children list. */
+  threadLineOffsetPx: number;
   hiddenSummary?: HiddenBranchSummary | undefined;
   children?: ReactNode;
   childPaging?: ReactNode;
@@ -136,15 +123,16 @@ export function SidebarThreadHierarchyBranch(props: {
     directChildCount,
     expanded,
     hiddenSummary,
+    layout,
     onToggle,
     renderRow,
     surface = "sidebar",
     threadId,
+    threadLineOffsetPx,
     title,
   } = props;
   const hasChildren = directChildCount > 0;
   const controlsId = branchControlsId(threadId, surface);
-  const indentPx = useBranchIndentPx(depth);
   const branchRef = useRef<HTMLLIElement | null>(null);
   const toggleRef = useRef<HTMLButtonElement | null>(null);
   const wasOpenRef = useRef(expanded);
@@ -218,25 +206,31 @@ export function SidebarThreadHierarchyBranch(props: {
       directChildCount={directChildCount}
       expanded={expanded}
       controlsId={controlsId}
+      layout={layout}
       hiddenSummary={hiddenSummary}
       onToggle={onToggle}
       buttonRef={toggleRef}
     />
-  ) : null;
+  ) : (
+    <SidebarThreadBranchSlot layout={layout} />
+  );
   const renderedChildren = expanded ? children : (retained?.children ?? null);
   const renderedPaging = expanded ? childPaging : (retained?.paging ?? null);
 
   return (
     <li ref={branchRef} data-thread-branch={threadId} className="w-full min-w-0">
-      <div className="w-full min-w-0" style={{ paddingLeft: `${indentPx}px` }}>
-        {renderRow({ branchControl, isHierarchyChild: depth > 0 })}
-      </div>
+      {renderRow({ branchControl, isHierarchyChild: depth > 0 })}
       {hasChildren ? (
         <DisclosureRegion open={expanded}>
           <ul
             id={controlsId}
             aria-label={`Subagents of ${title}`}
-            className="m-0 w-full min-w-0 p-0"
+            data-thread-branch-children
+            className={cn(
+              "m-0 min-w-0 border-l border-sidebar-border p-0",
+              CHILD_LIST_PADDING_CLASS[layout],
+            )}
+            style={{ marginLeft: `${threadLineOffsetPx}px` }}
           >
             {renderedChildren}
             {renderedPaging ? <li>{renderedPaging}</li> : null}

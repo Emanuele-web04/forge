@@ -593,7 +593,7 @@ describe("SidebarActivityView compact hierarchy", () => {
     return { root, children, nowThread };
   }
 
-  it("renders compact descendants with a numeric toggle and five-child paging", async () => {
+  it("renders descendants as full activity rows with a numeric toggle and five-child paging", async () => {
     const { root, children, nowThread } = makeFamily(900, 20);
     children[0] = nowThread(90001, 1000, {
       parentThreadId: root.id,
@@ -631,23 +631,33 @@ describe("SidebarActivityView compact hierarchy", () => {
     expect(document.body.textContent).not.toContain("batch");
     await page.getByRole("button", { name: "Show 15 more" }).click();
 
-    // A03/A04: single-line compact rows with one shared connector each.
+    // Children are full two-line activity rows: provider icon + title on the
+    // first line, project · slot · branch · time on the second — identical to
+    // the root row, only indented under the thread line.
+    const rootRow = page
+      .getByTestId(`activity-thread-${root.id}`)
+      .element()
+      .closest("[data-thread-item]")!;
     for (const title of ["Activity thread 90003", "Activity thread 90004"]) {
       const nav = page.getByRole("button", { name: title, exact: true }).element();
       const row = nav.closest("[data-thread-item]")!;
-      expect(row.getBoundingClientRect().height).toBeLessThanOrEqual(32);
-      expect(row.querySelectorAll('[class*="bg-border"]').length).toBe(2);
-      // No provider avatar inside the navigation button (actions keep theirs).
-      expect(nav.querySelector("svg")).toBeNull();
+      expect(
+        Math.abs(row.getBoundingClientRect().height - rootRow.getBoundingClientRect().height),
+      ).toBeLessThanOrEqual(1);
+      expect(nav.querySelector("svg, [data-slot=central-icon]")).not.toBeNull();
+      expect(row.querySelectorAll('[class*="bg-border"]')).toHaveLength(0);
+      expect(row.querySelector(`[aria-label="${title} in Project A"]`)).not.toBeNull();
+      expect(row.querySelector("[data-thread-branch-slot]")).not.toBeNull();
     }
-    // Coarse-pointer minimums ride on dedicated utility classes.
-    const rowClass =
-      page
-        .getByRole("button", { name: "Activity thread 90003", exact: true })
-        .element()
-        .closest("[data-thread-item]")
-        ?.getAttribute("class") ?? "";
-    expect(rowClass).toContain("pointer-coarse:min-h-11");
+    // Children sit inside the parent's thread line, to the right of the root.
+    const childList = rootRow.parentElement!.querySelector<HTMLElement>(
+      "[data-thread-branch-children]",
+    )!;
+    expect(window.getComputedStyle(childList).borderLeftWidth).toBe("1px");
+    expect(window.getComputedStyle(childList).marginLeft).toBe("16px");
+    expect(childList.getBoundingClientRect().left).toBeGreaterThan(
+      rootRow.getBoundingClientRect().left,
+    );
 
     // A06/A19: full reveal reports exactly the mounted rows in order.
     await expect.element(page.getByText("Activity thread 90020")).toBeVisible();
@@ -817,14 +827,18 @@ describe("SidebarActivityView compact hierarchy", () => {
   });
 
   it("keeps root titles full-width with the toggle on the metadata line", async () => {
-    const plain = makeThread(950, { title: "Same width root title here" });
-    const parent = makeThread(951, { title: "Same width root title here" });
-    const child = makeThread(952, {
-      title: "Nested child",
-      parentThreadId: parent.id,
+    const {
+      root: parent,
+      children,
+      nowThread,
+    } = makeFamily(951, 1, {
+      title: "Same width root title here",
     });
+    const plain = nowThread(950, 0, { title: parent.title });
     const mounted = await render(
-      <div style={{ width: "280px" }}>{renderActivity({ threads: [plain, parent, child] })}</div>,
+      <div style={{ width: "280px" }}>
+        {renderActivity({ threads: [plain, parent, ...children] })}
+      </div>,
     );
 
     // A01: no control, gutter, or new line on the childless root.
@@ -832,8 +846,39 @@ describe("SidebarActivityView compact hierarchy", () => {
       page.getByTestId(`activity-thread-${id}`).element().querySelector("span.truncate")!;
     const plainRect = titleOf(plain.id).getBoundingClientRect();
     const parentRect = titleOf(parent.id).getBoundingClientRect();
+    await expect.element(page.getByTestId(`activity-thread-${plain.id}`)).toBeVisible();
+    expect(plainRect.width).toBeGreaterThan(0);
     expect(Math.abs(plainRect.left - parentRect.left)).toBeLessThanOrEqual(1);
     expect(Math.abs(plainRect.width - parentRect.width)).toBeLessThanOrEqual(1);
+    const plainTitleLine = titleOf(plain.id).parentElement!;
+    // Action space is already reserved before pointer or keyboard interaction.
+    expect(parseFloat(getComputedStyle(plainTitleLine).paddingRight)).toBeGreaterThanOrEqual(68);
+    await page.getByTestId(`activity-thread-${plain.id}`).hover();
+    expect(titleOf(plain.id).getBoundingClientRect().width).toBeCloseTo(plainRect.width, 0);
+    page.getByTestId(`activity-thread-${plain.id}`).element().focus();
+    expect(titleOf(plain.id).getBoundingClientRect().width).toBeCloseTo(plainRect.width, 0);
+    // The meta line reserves the same 40px slot on both rows, so the branch and
+    // time columns align whether or not the row has children.
+    const slotOf = (id: ThreadId) =>
+      page
+        .getByTestId(`activity-thread-${id}`)
+        .element()
+        .closest("[data-thread-item]")!
+        .querySelector<HTMLElement>("[data-thread-branch-slot]")!
+        .getBoundingClientRect();
+    const plainSlot = slotOf(plain.id);
+    const parentSlot = slotOf(parent.id);
+    expect(plainSlot.width).toBeCloseTo(40, 0);
+    expect(parentSlot.width).toBeCloseTo(40, 0);
+    expect(Math.abs(plainSlot.left - parentSlot.left)).toBeLessThanOrEqual(1);
+    const timeOf = (id: ThreadId) =>
+      page
+        .getByTestId(`activity-thread-${id}`)
+        .element()
+        .closest("[data-thread-item]")!
+        .querySelector<HTMLElement>("[data-activity-branch-column]")!
+        .getBoundingClientRect();
+    expect(Math.abs(timeOf(plain.id).left - timeOf(parent.id).left)).toBeLessThanOrEqual(1);
     await mounted.unmount();
   });
 

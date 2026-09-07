@@ -45,7 +45,7 @@ export function SidebarThreadBranchPaging(props: {
           onKeyDown={stopPagingPropagation}
           onDoubleClick={stopPagingPropagation}
           onContextMenu={stopPagingPropagation}
-          className="h-6 min-h-6 flex-1 cursor-pointer truncate rounded-md pl-8 text-left text-[length:var(--app-font-size-ui,11px)] text-muted-foreground/79 tabular-nums hover:bg-transparent hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 active:bg-transparent active:text-foreground pointer-coarse:min-h-11"
+          className="h-6 min-h-6 flex-1 cursor-pointer truncate rounded-md pl-7 text-left text-[length:var(--app-font-size-ui,11px)] text-muted-foreground/79 tabular-nums hover:bg-transparent hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 active:bg-transparent active:text-foreground pointer-coarse:min-h-11"
         >
           Show {total} more
         </button>
@@ -61,7 +61,7 @@ export function SidebarThreadBranchPaging(props: {
           onContextMenu={stopPagingPropagation}
           className={cn(
             "h-6 min-h-6 cursor-pointer rounded-md text-left text-[length:var(--app-font-size-ui,11px)] text-muted-foreground/79 hover:bg-transparent hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 active:bg-transparent active:text-foreground pointer-coarse:min-h-11",
-            total > 0 ? "flex-none px-2" : "flex-1 truncate pl-8",
+            total > 0 ? "flex-none px-2" : "flex-1 truncate pl-7",
           )}
         >
           Show less

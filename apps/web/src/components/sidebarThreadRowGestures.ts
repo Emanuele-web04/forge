@@ -3,14 +3,29 @@
 //          double-click (plus touch double-tap) rename and right-click context menu —
 //          so the classic list, the pinned list, and the activity feed behave alike.
 // Layer: Sidebar UI helper
-// Exports: createSidebarThreadRowGestures, SidebarRowContextMenuPosition,
-//          SidebarThreadRowGestureProps
+// Exports: createSidebarThreadRowGestures, isSiblingControlTarget,
+//          SidebarRowContextMenuPosition, SidebarThreadRowGestureProps
 
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
 
 import type { ThreadId } from "@synara/contracts";
 
 export type SidebarRowContextMenuPosition = { x: number; y: number };
+
+/**
+ * True when the gesture originated on a sibling control (branch toggle, hover
+ * action) rather than the row's own navigation button, so wrapper gestures such
+ * as rename-on-pointer-up do not fire for it.
+ */
+export function isSiblingControlTarget(
+  target: EventTarget | null,
+  navSelector = "[data-thread-nav]",
+): boolean {
+  if (!(target instanceof Element)) {
+    return false;
+  }
+  return target.closest("button") !== null && target.closest(navSelector) === null;
+}
 
 export type SidebarThreadRowGestureProps = {
   onDoubleClick: (event: ReactMouseEvent<HTMLElement>) => void;

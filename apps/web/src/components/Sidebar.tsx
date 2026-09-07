@@ -89,6 +89,7 @@ import {
   type ServerKeepAwakeState,
   type DesktopUpdateState,
   type OrchestrationShellSnapshot,
+  type OrchestrationThreadPullRequest,
   PROVIDER_DISPLAY_NAMES,
   ProjectId,
   SpaceId,
@@ -237,13 +238,14 @@ import {
   type SidebarThreadTerminalStatus,
 } from "./SidebarThreadRowContent";
 import {
+  hierarchyThreadLineOffsetPx,
   nestSidebarEntriesByDepth,
   SidebarThreadHierarchyBranch,
   type NestedSidebarEntry,
   type SidebarThreadHierarchyBranchRenderSlot,
 } from "./SidebarThreadBranch";
 import { SidebarThreadBranchPaging } from "./SidebarThreadBranchPaging";
-import { isSiblingControlTarget, SidebarCompactChildRow } from "./SidebarCompactChildRow";
+import { isSiblingControlTarget } from "./sidebarThreadRowGestures";
 import {
   buildThreadHierarchyIndex,
   resolveBranchPagingState,
@@ -386,8 +388,6 @@ import {
   resolveThreadHoverCardMetadata,
   resolveThreadProjectLabel,
   resolveThreadRowClassName,
-  resolveJumpHintReserveClass,
-  resolveThreadRowTrailingReserveClass,
   resolveThreadStatusPill,
   resolveThreadStatusTrailingIndicator,
   type ThreadStatusPill,
@@ -430,7 +430,9 @@ import {
   SIDEBAR_ROW_HOVER_CLASS_NAME,
   SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
   SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
+  SIDEBAR_ROW_PADDING_X_PX,
   SIDEBAR_SECTION_LABEL_CLASS_NAME,
+  SIDEBAR_THREAD_ROW_NESTED_PADDING_LEFT_PX,
 } from "../sidebarRowStyles";
 import { SettingsSidebarNav } from "./SettingsSidebarNav";
 import {
@@ -683,6 +685,13 @@ const THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME = cn(
   "flex shrink-0 items-center",
   sidebarHoverRevealHideClassName("thread-row"),
 );
+
+// In-flow trailing cluster: meta chips, ⌘N hint and status glyph take their
+// natural width with room reserved for the two action buttons (2 × 20px + 8px
+// gap). Hover actions overlay the cluster without changing the title width or
+// the fixed subagent slot position.
+const THREAD_ROW_TRAILING_CLUSTER_CLASS_NAME =
+  "relative flex min-w-12 shrink-0 items-center justify-end gap-[3px]";
 
 /** Status glyph slot; matches the 15px meta-chip column so trailing icons stay compact. */
 function threadRowStatusSlotClassName(isSubagentThread: boolean, toneClassName?: string): string {
@@ -5357,7 +5366,7 @@ export default function Sidebar() {
     return (
       <SidebarRowHoverActions
         testId={`thread-hover-actions-${input.threadId}`}
-        className={input.className}
+        className={cn(compact && COMPACT_CHILD_HOVER_ACTIONS_CLASS_NAME, input.className)}
       >
         <div className="pointer-events-auto inline-flex items-center gap-2">
           {includePinToggle ? (
@@ -5396,7 +5405,7 @@ export default function Sidebar() {
       slotOccupied: Boolean(input.threadJumpLabel),
     });
     return (
-      <div className="relative flex shrink-0 items-center justify-end gap-[3px]">
+      <div className={THREAD_ROW_TRAILING_CLUSTER_CLASS_NAME}>
         {input.rightMetaChips.length > 0 ? (
           <div className={THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME}>
             <SidebarMetaChipStack chips={input.rightMetaChips} />
@@ -5481,6 +5490,42 @@ export default function Sidebar() {
     );
   }
 
+  /**
+   * PR badge shown at the row's leading edge. Hierarchy children never carry
+   * it (their identity is the provider icon; PR state lives in the hover card),
+   * nor do native subagents or forks even at the root.
+   */
+  function resolveThreadRowLeadingPr(
+    thread: SidebarThreadSummary,
+    isHierarchyChild: boolean,
+  ): OrchestrationThreadPullRequest | null {
+    if (isHierarchyChild || thread.parentThreadId || thread.forkSourceThreadId) {
+      return null;
+    }
+    return prByThreadId.get(thread.id) ?? null;
+  }
+
+  /**
+   * Left padding of a classic thread row in px: project-nested roots (and any
+   * root with a leading PR badge) use `pl-8`; flush rows (Pinned, Chats,
+   * Studio) and every hierarchy child use `px-2`, since descendants take their
+   * indent from the branch list. The thread line is derived from this value.
+   */
+  function resolveClassicThreadRowPaddingLeftPx(
+    thread: SidebarThreadSummary,
+    depth: number,
+    surface: string,
+  ): number {
+    const isHierarchyChild = depth > 0;
+    if (isHierarchyChild) {
+      return SIDEBAR_ROW_PADDING_X_PX;
+    }
+    if (resolveThreadRowLeadingPr(thread, isHierarchyChild) || surface === "project") {
+      return SIDEBAR_THREAD_ROW_NESTED_PADDING_LEFT_PX;
+    }
+    return SIDEBAR_ROW_PADDING_X_PX;
+  }
+
   function renderNestedHierarchyNode(
     node: NestedSidebarEntry<HierarchyListEntry>,
     renderRow: (
@@ -5502,6 +5547,10 @@ export default function Sidebar() {
         depth={entry.depth}
         directChildCount={totalChildCount}
         expanded={isOpen}
+        layout="classic"
+        threadLineOffsetPx={hierarchyThreadLineOffsetPx(
+          resolveClassicThreadRowPaddingLeftPx(entry.thread, entry.depth, surface),
+        )}
         onToggle={(id) => toggleHierarchyBranch(id, isOpen)}
         renderRow={(branchSlot) => renderRow(entry.thread, entry.depth, branchSlot)}
         hiddenSummary={classicHiddenBranchSummaryByThreadId.get(threadId)}
@@ -5571,6 +5620,15 @@ export default function Sidebar() {
       status: resolveThreadStatusForSidebar(thread),
       isActive,
     });
+    // Native subagents name their orchestrator. The sidebar tree index holds
+    // every parent that has a visible family; a parent filtered out of the
+    // current surface is still resolvable from the store snapshot.
+    const parentThreadId = thread.parentThreadId ?? null;
+    const parentTitle = parentThreadId
+      ? (sidebarHierarchyIndex.nodesById.get(parentThreadId)?.title ??
+        getThreadFromState(useStore.getState(), parentThreadId)?.title ??
+        null)
+      : null;
     return (
       <TooltipPopup
         {...SIDEBAR_HOVER_CARD_POPUP_PROPS}
@@ -5583,6 +5641,7 @@ export default function Sidebar() {
       >
         <ThreadHoverCardContent
           title={thread.title}
+          parentTitle={parentTitle}
           timeLabel={formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
           projectName={hoverMetadata.projectName}
           projectCwd={hoverMetadata.projectCwd}
@@ -5623,7 +5682,7 @@ export default function Sidebar() {
 
   function renderPinnedThreadRow(
     thread: SidebarThreadSummary,
-    slot?: SidebarThreadHierarchyBranchRenderSlot,
+    slot: SidebarThreadHierarchyBranchRenderSlot,
   ) {
     const threadTerminalState = selectThreadTerminalState(terminalStateByThreadId, thread.id);
     const threadEntryPoint = threadTerminalState.entryPoint;
@@ -5633,70 +5692,33 @@ export default function Sidebar() {
     });
     const terminalCount = threadTerminalState.terminalIds.length;
     const isActive = visualActiveSidebarThreadId === thread.id;
-    const projectLabel = resolvePinnedThreadProjectLabel(thread.projectId);
-    const rightMetaChips = resolveThreadRowMetaChips({
-      thread,
-      includeHandoffBadge: true,
-      handoffShownInAvatar:
-        threadEntryPoint !== "terminal" &&
-        !isGenericChatThreadTitle(thread.title) &&
-        Boolean(thread.handoff?.sourceProvider),
-      threadAutomations: automationsByThreadId.get(thread.id),
-    });
+    const isHierarchyChild = slot.isHierarchyChild;
+    const isSelected = isHierarchyChild && selectedThreadIds.has(thread.id);
+    // Descendants keep the row chrome (icon, title, status, actions) but drop
+    // the project label and meta badges: their context is the parent row.
+    const projectLabel = isHierarchyChild
+      ? null
+      : resolvePinnedThreadProjectLabel(thread.projectId);
+    const rightMetaChips = isHierarchyChild
+      ? []
+      : resolveThreadRowMetaChips({
+          thread,
+          includeHandoffBadge: true,
+          handoffShownInAvatar:
+            threadEntryPoint !== "terminal" &&
+            !isGenericChatThreadTitle(thread.title) &&
+            Boolean(thread.handoff?.sourceProvider),
+          threadAutomations: automationsByThreadId.get(thread.id),
+        });
     const threadStatus = resolveThreadStatusForSidebar(thread);
-    const isSubagentThread = Boolean(thread.parentThreadId);
-    const pr = prByThreadId.get(thread.id) ?? null;
-    const leadingPr = isSubagentThread || thread.forkSourceThreadId ? null : pr;
+    const leadingPr = resolveThreadRowLeadingPr(thread, isHierarchyChild);
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
     const threadJumpLabelParts =
       visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
-    // The trailing cluster (meta chips + status glyph) is absolutely positioned; it
-    // only grows past the reserve when a live glyph (spinner/check/dot or jump label)
-    // occupies the status slot. In that state the right-aligned project label needs a
-    // hair of clearance so it stops kissing the worktree chip — see the margin below.
-    const hasTrailingStatusGlyph = Boolean(threadStatus) || Boolean(threadJumpLabel);
     const hoverAnchorId = createSidebarThreadHoverAnchorId({
       scope: "pinned",
       threadId: thread.id,
     });
-    if (slot?.isHierarchyChild === true) {
-      const isSelected = selectedThreadIds.has(thread.id);
-      return (
-        <SidebarCompactChildRow
-          thread={thread}
-          surface="pinned"
-          isActive={isActive}
-          isSelected={isSelected}
-          status={threadStatus}
-          branchControl={slot.branchControl}
-          threadJumpLabel={threadJumpLabel}
-          onActivate={() => activateSidebarHierarchyThread(thread.id)}
-          onPrime={(event) => primeThreadActivation(event, thread.id)}
-          onRename={openRenameThreadDialog}
-          onRenamePointerUp={handleThreadRenamePointerUp}
-          onContextMenu={(threadId, position) => {
-            void handleThreadContextMenu(threadId, position);
-          }}
-          renderHoverCard={(anchorId) => renderThreadHoverCardPopup(thread, anchorId, isActive)}
-          actions={renderThreadHoverActions({
-            threadId: thread.id,
-            toneClassName: "text-muted-foreground/42",
-            isPinned: true,
-            compact: true,
-            className: COMPACT_CHILD_HOVER_ACTIONS_CLASS_NAME,
-          })}
-          dragProps={
-            thread.parentThreadId !== null && thread.parentThreadId !== undefined
-              ? {
-                  draggable: true,
-                  onDragStart: (event) => beginSidebarThreadDrag(event, thread),
-                  onDragEnd: clearSidebarThreadDrag,
-                }
-              : undefined
-          }
-        />
-      );
-    }
     return (
       <Tooltip key={thread.id}>
         <TooltipTrigger
@@ -5719,24 +5741,19 @@ export default function Sidebar() {
             data-thread-item
             className={cn(
               SIDEBAR_HEADER_ROW_CLASS_NAME,
-              // Match the normal thread row: a flex row whose title claims all free
-              // space, with a trailing reserve that grows only for the badges actually
-              // present — instead of a rigid grid that permanently fenced off a
-              // timestamp-era column and squeezed the title/project even when wide.
-              // The branch toggle is a sibling of the navigation button (never
-              // nested in it) and its width is paid once in flow; the absolute
-              // cluster keeps overlaying the trailing reserve.
+              // Match the normal thread row: title (flex-1) · in-flow trailing
+              // cluster · fixed subagent slot. Everything trailing takes its
+              // natural width, so the slot sits at the same x on every row and
+              // hover only swaps the cluster contents.
               "relative flex items-center gap-1.5 transition-colors",
               leadingPr && "pl-8",
-              resolveThreadRowTrailingReserveClass({
-                metaChipCount: rightMetaChips.length,
-                hasTrailingGlyph: hasTrailingStatusGlyph,
-                jumpLabelPartCount: threadJumpLabelParts.length,
-              }),
-              isActive
+              isActive || isSelected
                 ? SIDEBAR_ROW_ACTIVE_CLASS_NAME
                 : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME),
             )}
+            draggable={isHierarchyChild && Boolean(thread.parentThreadId)}
+            onDragStart={(event) => beginSidebarThreadDrag(event, thread)}
+            onDragEnd={clearSidebarThreadDrag}
             onDoubleClick={(event) => {
               event.preventDefault();
               event.stopPropagation();
@@ -5759,6 +5776,7 @@ export default function Sidebar() {
             <button
               type="button"
               data-thread-nav
+              aria-current={isActive ? "page" : undefined}
               onPointerDown={(event) => primeThreadActivation(event, thread.id)}
               onClick={() => activateSidebarHierarchyThread(thread.id)}
               className={cn(
@@ -5780,40 +5798,29 @@ export default function Sidebar() {
                   projectLabel ? (
                     // Right-aligned project context for the flattened pinned list. The title
                     // (flex-1) pushes it to the content edge, so it shows in full when the row
-                    // has room and only truncates under real pressure, shifting left as the
-                    // trailing reserve grows on hover/status. When a live status glyph occupies
-                    // the trailing slot (e.g. the running spinner), the absolute cluster reaches
-                    // a few px past the reserve — a small margin keeps the folder name from
-                    // touching the worktree chip. It costs no space when the row is idle.
-                    <span
-                      className={cn(
-                        "max-w-[40%] shrink-0 truncate text-right text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/38 transition-[margin] duration-150 ease-out",
-                        hasTrailingStatusGlyph && "mr-2",
-                      )}
-                    >
+                    // has room and only truncates under real pressure.
+                    <span className="max-w-[40%] shrink-0 truncate text-right text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/38">
                       {projectLabel}
                     </span>
                   ) : null
                 }
               />
             </button>
-            {slot?.branchControl}
-            <div className="absolute top-1/2 right-1.5 flex -translate-y-1/2 items-center">
-              {renderThreadRowTrailingCluster({
-                isSubagentThread,
-                threadJumpLabel,
-                threadJumpLabelParts,
-                rightMetaChips,
-                threadStatus,
-                timestampToneClassName: "text-muted-foreground/38",
-                hoverActions: renderThreadHoverActions({
-                  threadId: thread.id,
-                  toneClassName: "text-muted-foreground/42",
-                  isPinned: true,
-                  compact: isSubagentThread,
-                }),
-              })}
-            </div>
+            {renderThreadRowTrailingCluster({
+              isSubagentThread: isHierarchyChild,
+              threadJumpLabel,
+              threadJumpLabelParts,
+              rightMetaChips,
+              threadStatus,
+              timestampToneClassName: "text-muted-foreground/38",
+              hoverActions: renderThreadHoverActions({
+                threadId: thread.id,
+                toneClassName: "text-muted-foreground/42",
+                isPinned: true,
+                compact: isHierarchyChild,
+              }),
+            })}
+            {slot.branchControl}
           </div>
         </TooltipTrigger>
         {renderThreadHoverCardPopup(thread, hoverAnchorId, isActive)}
@@ -5854,13 +5861,12 @@ export default function Sidebar() {
   function renderThreadRow(
     thread: SidebarThreadSummary,
     orderedProjectThreadIds: readonly ThreadId[],
-    depth = 0,
     // Chat rows sit directly under the "Chats" header (no project nesting), so
     // their top-level rows align flush like pinned rows instead of the indented
     // column used for project-nested threads.
-    topLevel = false,
-    surface: string = "project",
-    slot?: SidebarThreadHierarchyBranchRenderSlot,
+    topLevel: boolean,
+    surface: string,
+    slot: SidebarThreadHierarchyBranchRenderSlot,
   ) {
     const threadTerminalState = selectThreadTerminalState(terminalStateByThreadId, thread.id);
     const threadEntryPoint = threadTerminalState.entryPoint;
@@ -5869,7 +5875,6 @@ export default function Sidebar() {
     const isSelected = selectedThreadIds.has(thread.id);
     const isHighlighted = isActive || isSelected;
     const threadStatus = resolveThreadStatusForSidebar(thread);
-    const pr = prByThreadId.get(thread.id) ?? null;
     const terminalStatus = terminalStatusFromThreadState({
       runningTerminalIds: threadTerminalState.runningTerminalIds,
       terminalAttentionStatesById: threadTerminalState.terminalAttentionStatesById,
@@ -5881,22 +5886,23 @@ export default function Sidebar() {
     const secondaryMetaClass = isHighlighted
       ? "text-foreground/54 dark:text-foreground/64"
       : "text-muted-foreground/34";
-    const rightMetaChips = resolveThreadRowMetaChips({
-      thread,
-      includeHandoffBadge: !isTemporaryThread,
-      handoffShownInAvatar:
-        threadEntryPoint !== "terminal" &&
-        !isGenericChatThreadTitle(thread.title) &&
-        Boolean(thread.handoff?.sourceProvider),
-      threadAutomations: automationsByThreadId.get(thread.id),
-    });
-    const isSubagentThread = Boolean(thread.parentThreadId);
-    const leadingPr = isSubagentThread || thread.forkSourceThreadId ? null : pr;
-    // Hierarchy indent lives in SidebarThreadHierarchyBranch (12px/level, max
-    // 24px); the row keeps only its connector glyph without extra margin.
-    const subagentIndentPx = 0;
-    const showCompactMeta = !isSubagentThread;
-    const showTemporaryThreadIcon = showCompactMeta && isTemporaryThread;
+    // Descendants (native subagents and batch/source children alike) keep the
+    // row chrome — provider icon, title, status glyph, hover actions — and drop
+    // the meta badges; their indent comes from the branch list, not the row.
+    const isHierarchyChild = slot.isHierarchyChild;
+    const rightMetaChips = isHierarchyChild
+      ? []
+      : resolveThreadRowMetaChips({
+          thread,
+          includeHandoffBadge: !isTemporaryThread,
+          handoffShownInAvatar:
+            threadEntryPoint !== "terminal" &&
+            !isGenericChatThreadTitle(thread.title) &&
+            Boolean(thread.handoff?.sourceProvider),
+          threadAutomations: automationsByThreadId.get(thread.id),
+        });
+    const leadingPr = resolveThreadRowLeadingPr(thread, isHierarchyChild);
+    const showTemporaryThreadIcon = !isHierarchyChild && isTemporaryThread;
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
     const threadJumpLabelParts =
       visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
@@ -5914,50 +5920,6 @@ export default function Sidebar() {
       scope: topLevel ? "chat" : "project",
       threadId: thread.id,
     });
-    if (slot?.isHierarchyChild === true) {
-      return (
-        <SidebarCompactChildRow
-          thread={thread}
-          surface={surface}
-          isActive={isActive}
-          isSelected={isSelected}
-          status={threadStatus}
-          branchControl={slot.branchControl}
-          threadJumpLabel={threadJumpLabel}
-          onActivate={(event) => handleThreadClick(event, thread.id, orderedProjectThreadIds)}
-          onPrime={(event) => primeThreadActivation(event, thread.id)}
-          onRename={openRenameThreadDialog}
-          onRenamePointerUp={handleThreadRenamePointerUp}
-          onContextMenu={(threadId, position) => {
-            if (selectedThreadIds.size > 0 && selectedThreadIds.has(threadId)) {
-              void handleMultiSelectContextMenu(position);
-              return;
-            }
-            if (selectedThreadIds.size > 0) {
-              clearSelection();
-            }
-            void handleThreadContextMenu(threadId, position);
-          }}
-          renderHoverCard={(anchorId) => renderThreadHoverCardPopup(thread, anchorId, isActive)}
-          actions={renderThreadHoverActions({
-            threadId: thread.id,
-            toneClassName: secondaryMetaClass,
-            isPinned,
-            compact: true,
-            className: COMPACT_CHILD_HOVER_ACTIONS_CLASS_NAME,
-          })}
-          dragProps={
-            thread.parentThreadId !== null && thread.parentThreadId !== undefined
-              ? {
-                  draggable: true,
-                  onDragStart: (event) => beginSidebarThreadDrag(event, thread),
-                  onDragEnd: clearSidebarThreadDrag,
-                }
-              : undefined
-          }
-        />
-      );
-    }
 
     return (
       // The hierarchy branch already provides this row's <li>; a nested list
@@ -5991,20 +5953,12 @@ export default function Sidebar() {
                     isActive,
                     isSelected,
                   }),
-                  // The branch toggle is a sibling of the navigation button
-                  // (never nested in it) and its width is paid once in flow;
-                  // the absolute cluster keeps overlaying the trailing reserve.
+                  // Title (flex-1) · in-flow trailing cluster · fixed subagent
+                  // slot. The toggle is a sibling of the navigation button, never
+                  // nested in it, and sits at the same x on every row.
+                  // Left padding must agree with resolveClassicThreadRowPaddingLeftPx.
                   "relative flex min-w-0 items-center gap-1",
-                  leadingPr ? "pl-8" : topLevel && !isSubagentThread ? "pl-2" : null,
-                  isSubagentThread
-                    ? threadJumpLabelParts.length > 0
-                      ? resolveJumpHintReserveClass(0, threadJumpLabelParts.length)
-                      : "pr-7.5"
-                    : resolveThreadRowTrailingReserveClass({
-                        metaChipCount: showCompactMeta ? rightMetaChips.length : 0,
-                        hasTrailingGlyph: Boolean(threadStatus) || Boolean(threadJumpLabel),
-                        jumpLabelPartCount: threadJumpLabelParts.length,
-                      }),
+                  isHierarchyChild || (topLevel && !leadingPr) ? "pl-2" : "pl-8",
                 )}
                 draggable
                 onDragStart={(event) => beginSidebarThreadDrag(event, thread)}
@@ -6045,6 +5999,7 @@ export default function Sidebar() {
             <button
               type="button"
               data-thread-nav
+              aria-current={isActive ? "page" : undefined}
               onPointerDown={(event) => primeThreadActivation(event, thread.id)}
               onClick={(event) => {
                 handleThreadClick(event, thread.id, orderedProjectThreadIds);
@@ -6061,7 +6016,6 @@ export default function Sidebar() {
                 terminalCount={terminalCount}
                 isActive={isActive}
                 variant="standard"
-                subagentIndentPx={subagentIndentPx}
                 pendingStatusColorClass={
                   threadStatus?.label === "Pending Approval" ? threadStatus.colorClass : null
                 }
@@ -6091,27 +6045,25 @@ export default function Sidebar() {
                 }
               />
             </button>
-            {slot?.branchControl}
-            <div className={cn("absolute top-1/2 flex -translate-y-1/2 items-center", "right-1.5")}>
-              {renderThreadRowTrailingCluster({
-                isSubagentThread,
-                threadJumpLabel,
-                threadJumpLabelParts,
-                rightMetaChips: showCompactMeta ? rightMetaChips : [],
-                threadStatus,
-                timestampToneClassName: isSubagentThread
-                  ? isHighlighted
-                    ? "text-foreground/38 dark:text-foreground/46"
-                    : "text-muted-foreground/24"
-                  : secondaryMetaClass,
-                hoverActions: renderThreadHoverActions({
-                  threadId: thread.id,
-                  toneClassName: secondaryMetaClass,
-                  isPinned,
-                  compact: isSubagentThread,
-                }),
-              })}
-            </div>
+            {renderThreadRowTrailingCluster({
+              isSubagentThread: isHierarchyChild,
+              threadJumpLabel,
+              threadJumpLabelParts,
+              rightMetaChips,
+              threadStatus,
+              timestampToneClassName: isHierarchyChild
+                ? isHighlighted
+                  ? "text-foreground/38 dark:text-foreground/46"
+                  : "text-muted-foreground/24"
+                : secondaryMetaClass,
+              hoverActions: renderThreadHoverActions({
+                threadId: thread.id,
+                toneClassName: secondaryMetaClass,
+                isPinned,
+                compact: isHierarchyChild,
+              }),
+            })}
+            {slot.branchControl}
           </TooltipTrigger>
           {renderThreadHoverCardPopup(thread, hoverAnchorId, isActive)}
         </Tooltip>
@@ -6223,8 +6175,8 @@ export default function Sidebar() {
             <ul className={cn("pl-5", disclosureContentClassName(open))}>
               {renderNestedHierarchyList(
                 entries,
-                (thread, depth, slot) =>
-                  renderThreadRow(thread, orderedProjectThreadIds, depth, false, "project", slot),
+                (thread, _depth, slot) =>
+                  renderThreadRow(thread, orderedProjectThreadIds, false, "project", slot),
                 "project",
               )}
             </ul>
@@ -6550,15 +6502,8 @@ export default function Sidebar() {
               {rootVisibleEntries.length > 0
                 ? renderNestedHierarchyList(
                     rootVisibleEntries,
-                    (thread, depth, slot) =>
-                      renderThreadRow(
-                        thread,
-                        orderedProjectThreadIds,
-                        depth,
-                        false,
-                        "project",
-                        slot,
-                      ),
+                    (thread, _depth, slot) =>
+                      renderThreadRow(thread, orderedProjectThreadIds, false, "project", slot),
                     "project",
                   )
                 : null}
@@ -7594,8 +7539,8 @@ export default function Sidebar() {
                     {studioChatThreadRows.length > 0 ? (
                       renderNestedHierarchyList(
                         studioChatThreadRows,
-                        (thread, depth, slot) =>
-                          renderThreadRow(thread, studioChatThreadIds, depth, true, "studio", slot),
+                        (thread, _depth, slot) =>
+                          renderThreadRow(thread, studioChatThreadIds, true, "studio", slot),
                         "studio",
                       )
                     ) : (
@@ -7846,8 +7791,8 @@ export default function Sidebar() {
                           directChildCount: entry.row.directChildCount,
                           edgeKind: entry.row.edgeKind,
                         })),
-                        (thread, depth, slot) =>
-                          renderThreadRow(thread, visibleChatThreadIds, depth, true, "chat", slot),
+                        (thread, _depth, slot) =>
+                          renderThreadRow(thread, visibleChatThreadIds, true, "chat", slot),
                         "chat",
                       )
                     ) : (

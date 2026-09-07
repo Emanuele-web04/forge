@@ -1,7 +1,10 @@
 // FILE: SidebarThreadBranchControl.tsx
-// Purpose: Numeric inline branch toggle shared by every sidebar surface.
+// Purpose: Fixed-width subagent slot shared by every sidebar surface: the numeric
+//          branch toggle when a row has children, an empty spacer of the same width
+//          when it has none, so titles truncate at one boundary and nothing moves on hover.
 // Layer: Sidebar UI primitive
-// Exports: SidebarThreadBranchControl, formatSubagentCounter, formatBranchCount
+// Exports: SidebarThreadBranchControl, SidebarThreadBranchSlot, SidebarBranchSlotLayout,
+//          formatSubagentCounter, formatBranchCount
 // Depends on: DisclosureChevron + disclosureMotion only for the chevron.
 
 import type {
@@ -22,6 +25,29 @@ import { SidebarUnreadCompletionGlyph } from "./SidebarStatusTrailingGlyph";
 import { ThreadRunningSpinner } from "./ThreadRunningSpinner";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
 
+/**
+ * Classic one-line rows (Projects, Chats, Studio, Pinned) reserve 44px; the
+ * Activity meta line reserves 40px with an 11px chevron. Both are `min-w` so the
+ * slot only grows when the hidden-attention aggregate (icon + count) is present;
+ * the chevron and count stay right-aligned and never move.
+ */
+export type SidebarBranchSlotLayout = "classic" | "activity";
+
+// The coarse-pointer height applies to classic rows only: the Activity meta line
+// is a text line and must not grow to a touch target.
+const SLOT_LAYOUT_CLASS: Record<SidebarBranchSlotLayout, string> = {
+  classic: "min-w-11 pointer-coarse:min-h-11",
+  activity: "min-w-10",
+};
+
+const SLOT_CHEVRON_CLASS: Record<SidebarBranchSlotLayout, string> = {
+  classic: "size-3",
+  activity: "size-[11px]",
+};
+
+const SLOT_BASE_CLASS =
+  "inline-flex shrink-0 items-center justify-end gap-1 self-stretch tabular-nums";
+
 export function formatSubagentCounter(count: number): string {
   const total = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
   return `${total} ${pluralize(total, "subagent", "subagents")}`;
@@ -33,12 +59,19 @@ export function formatBranchCount(count: number): string {
   return total > 99 ? "99+" : String(total);
 }
 
-function formatCount99(count: number): string {
-  return count > 99 ? "99+" : String(Math.max(0, Math.floor(count)));
-}
-
 function stopBranchControlPropagation(event: SyntheticEvent): void {
   event.stopPropagation();
+}
+
+/** Empty reserved slot for rows without children; same width as the control. */
+export function SidebarThreadBranchSlot(props: { layout: SidebarBranchSlotLayout }) {
+  return (
+    <span
+      aria-hidden="true"
+      data-thread-branch-slot="empty"
+      className={cn(SLOT_BASE_CLASS, SLOT_LAYOUT_CLASS[props.layout])}
+    />
+  );
 }
 
 export function SidebarThreadBranchControl(props: {
@@ -47,6 +80,7 @@ export function SidebarThreadBranchControl(props: {
   directChildCount: number;
   expanded: boolean;
   controlsId: string;
+  layout?: SidebarBranchSlotLayout | undefined;
   hiddenSummary?: HiddenBranchSummary | undefined;
   onToggle: (threadId: ThreadId) => void;
   buttonRef?: Ref<HTMLButtonElement> | undefined;
@@ -57,6 +91,7 @@ export function SidebarThreadBranchControl(props: {
     directChildCount,
     expanded,
     hiddenSummary,
+    layout = "classic",
     onToggle,
     threadId,
     title,
@@ -64,7 +99,8 @@ export function SidebarThreadBranchControl(props: {
   const total = Number.isFinite(directChildCount) ? Math.max(0, Math.floor(directChildCount)) : 0;
 
   // The label lists every hidden status count; the visible aggregate keeps a
-  // single glyph by priority (attention > running > unread).
+  // single glyph by priority (attention > running > unread), placed before the
+  // chevron so the right-aligned chevron + count never shift.
   const hiddenParts: string[] = [];
   let aggregate: ReactNode = null;
   if (hiddenSummary && hiddenSummary.hiddenCount > 0) {
@@ -81,17 +117,17 @@ export function SidebarThreadBranchControl(props: {
     }
     if (hiddenSummary.attentionCount > 0) {
       aggregate = (
-        <span className="inline-flex shrink-0 items-center gap-0.5 text-amber-600 tabular-nums dark:text-amber-300/90">
-          <TriangleAlertIcon aria-hidden="true" className="size-3" />
+        <span className="inline-flex shrink-0 items-center gap-0.5 text-amber-600 dark:text-amber-300/90">
+          <TriangleAlertIcon aria-hidden="true" className={SLOT_CHEVRON_CLASS[layout]} />
           <span className="text-[length:var(--app-font-size-ui,11px)] leading-none">
-            {formatCount99(hiddenSummary.attentionCount)}
+            {formatBranchCount(hiddenSummary.attentionCount)}
           </span>
         </span>
       );
     } else if (hiddenSummary.runningCount > 0) {
       aggregate = (
         <span className="inline-flex shrink-0 items-center" aria-hidden="true">
-          <ThreadRunningSpinner className="size-3" />
+          <ThreadRunningSpinner className={SLOT_CHEVRON_CLASS[layout]} />
         </span>
       );
     } else if (hiddenSummary.unreadCount > 0) {
@@ -121,6 +157,7 @@ export function SidebarThreadBranchControl(props: {
       aria-label={accessibleLabel}
       title={accessibleLabel}
       data-thread-selection-safe
+      data-thread-branch-slot="control"
       onPointerDown={stopBranchControlPropagation}
       onClick={handleClick}
       onKeyDown={(event: ReactKeyboardEvent<HTMLButtonElement>) => {
@@ -131,16 +168,17 @@ export function SidebarThreadBranchControl(props: {
       onDoubleClick={stopBranchControlPropagation}
       onContextMenu={stopBranchControlPropagation}
       className={cn(
-        "inline-flex max-w-full min-h-6 min-w-6 shrink-0 cursor-pointer items-center gap-1 rounded-md px-1 text-[length:var(--app-font-size-ui,11px)] tabular-nums hover:bg-transparent focus-visible:outline-2 focus-visible:outline-offset-1 active:bg-transparent",
-        "pointer-coarse:min-h-11 pointer-coarse:min-w-11",
+        SLOT_BASE_CLASS,
+        SLOT_LAYOUT_CLASS[layout],
+        "cursor-pointer rounded-md text-[length:var(--app-font-size-ui,11px)] hover:bg-transparent focus-visible:outline-2 focus-visible:-outline-offset-2 active:bg-transparent",
         hiddenSummary?.containsActiveThread === true
           ? "text-[var(--color-text-accent)] hover:text-[var(--color-text-accent)] active:text-[var(--color-text-accent)]"
           : "text-muted-foreground/79 hover:text-foreground active:text-foreground",
       )}
     >
-      <DisclosureChevron open={expanded} className="size-3" />
-      <span className="truncate">{formatBranchCount(total)}</span>
       {aggregate}
+      <DisclosureChevron open={expanded} className={SLOT_CHEVRON_CLASS[layout]} />
+      <span className="min-w-3 shrink-0 text-right">{formatBranchCount(total)}</span>
     </button>
   );
 }

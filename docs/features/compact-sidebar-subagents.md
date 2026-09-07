@@ -1,24 +1,60 @@
 # Compact sidebar subagents
 
 Orchestrator threads that spawn subagents (native `parentThreadId` links or batch/source
-children with `parentThreadId === null`) render their descendants as compact one-line rows
-under the family root in every sidebar surface: Projects, Chats, Studio, Pinned, and Activity
-(including Activity → Pinned).
+children with `parentThreadId === null`) render their descendants as nested rows under the
+family root in every sidebar surface: Projects, Chats, Studio, Pinned, and Activity (including
+Activity → Pinned). A child row is the same row as its parent — same icon, title, status glyph,
+hover actions and hover card — only indented under a vertical thread line.
 
-## Numeric branch control
+## Fixed subagent slot
 
-- The root row shows one small toggle with the direct child count only (`1`, `5`, `20`, `99+`).
-  Above 99 the visible text is `99+`; the accessible label and tooltip keep the exact number.
-- In Activity the toggle sits on the second line after the project label, so the title line keeps
-  its full width. Classic roots place the same toggle in the trailing area after the title.
-- Roots without children render no control, gutter, or spacer.
+- Every thread row ends with a fixed-width subagent slot: 44px on classic one-line rows
+  (`SidebarThreadBranchSlot`/`SidebarThreadBranchControl`, `layout="classic"`) and 40px on the
+  Activity meta line (`layout="activity"`). Rows without children render the slot empty, so
+  every title truncates at the same boundary and the toggle sits at the same x on every row.
+- With children the slot is the toggle: a rotating `DisclosureChevron` (12px classic, 11px
+  Activity) plus the direct child count (`1`, `5`, `20`, `99+`) in a right-aligned tabular-nums
+  span. The whole slot is the hit area, not just the chevron. Above 99 the visible text is
+  `99+`; the accessible label and tooltip keep the exact number.
+- Hover changes only the row background. Classic rows keep their meta chips, ⌘N hint and
+  status glyph in an in-flow trailing cluster between the title and the slot; the hover actions
+  overlay that cluster, so nothing to the right of them moves.
 - The toggle only expands or collapses its branch. It never navigates, renames, selects, or opens a
   context menu. Enter, Space, click, and double-click all count as one toggle.
-- Next to the counter, one aggregate glyph summarises descendants that are not currently visible:
+- Before the chevron, one aggregate glyph summarises descendants that are not currently visible:
   attention (approval, awaiting input, plan ready) with its count, otherwise running, otherwise an
-  unread completion. Each hidden descendant is counted once, on its nearest visible ancestor.
+  unread completion. Each hidden descendant is counted once, on its nearest visible ancestor. The
+  attention aggregate is the only content allowed to widen the slot; it grows leftwards so the
+  chevron and count never shift.
 - When the active conversation is hidden inside a closed branch, the toggle is highlighted and its
   label says so. The parent row itself is not marked as current.
+
+## Thread line and indentation
+
+- The children list (`SidebarThreadHierarchyBranch`'s `<ul>`) carries a 1px `border-sidebar-border`
+  left edge with `margin-left` equal to the parent row's left padding plus half of the 12px
+  provider icon (`hierarchyThreadLineOffsetPx`), so the line runs under the centre of the parent's
+  icon: 38px for project-nested roots (`pl-8`), 14px for flush rows and every child (`px-2`), 16px
+  for Activity rows (`px-2.5`). Child rows sit 12px (classic) or 10px (Activity) right of the line.
+- Nested branches draw their own line from their own row; there is no per-depth indent table
+  and no per-row connector.
+- Expand/collapse uses the shared `DisclosureRegion` motion (220ms ease-out, reduced-motion safe);
+  the last open subtree is retained for the exit animation.
+
+## Child rows
+
+- Classic children reuse the normal thread row: provider icon of the child's own model, the
+  nickname/role label (accent colour from `subagentPresentation`) or the plain title for batch
+  children, the status glyph and compact hover actions, then the fixed slot. They drop project,
+  time, branch, PR and origin badges — those live in the hover card. Height and padding are the
+  app's row tokens (`--app-density-row-height`, `px-2`).
+- Activity children are full `ActivityThreadRow`s. The meta line is a fixed grid on every row:
+  project (flex) · subagent slot (40px) · branch (up to 150px, PR chip leading the branch name) ·
+  status glyph (12px) · time (34px, right-aligned tabular-nums). Project and branch split spare
+  width evenly on narrow sidebars; the other columns are rigid, so rows align regardless of
+  content.
+- The hover card names the orchestrator ("Subagent of · <parent title>") for native subagents,
+  keeps model + effort, and colours the status label with the status pill's own tone.
 
 ## Fixed initial prefix and paging
 
@@ -40,16 +76,8 @@ under the family root in every sidebar surface: Projects, Chats, Studio, Pinned,
   updates. Only a new explicit navigation reveals it again.
 - On reload, expanded IDs are restored, visible limits reset to five, and the restored active path is
   revealed once.
-
-## Compact child rows
-
-- One line, 28px minimum on desktop, 44px minimum on coarse pointers. Title, nickname/role, status
-  glyph, and the row's own numeric toggle when it has children. No project, time, branch, PR, or
-  origin badges.
-- Indentation is 12px per level, capped at 24px (12px for every level below 640px wide). The child
-  row owns its connector line.
 - Only mounted thread rows take part in navigation and shortcuts. Closed branches are `inert`, and
   focus moves to the toggle before a collapsing region disappears.
 
-Technical details, interfaces, and the acceptance matrix live in the
+Technical details, interfaces, and the acceptance matrix of the first iteration live in the
 [implementation plan](../superpowers/plans/2026-09-07-compact-sidebar-subagents.md).

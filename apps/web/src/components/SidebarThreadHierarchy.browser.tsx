@@ -8,13 +8,12 @@ import { ThreadId } from "@synara/contracts";
 import { userEvent } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 import {
-  hierarchyIndentPx,
+  hierarchyThreadLineOffsetPx,
   nestSidebarEntriesByDepth,
   SidebarThreadHierarchyBranch,
-  useBranchIndentPx,
 } from "./SidebarThreadBranch";
 import {
   formatBranchCount,
@@ -29,6 +28,11 @@ type HarnessEntry = {
   directChildCount?: number | undefined;
 };
 
+/** Project-nested classic row: `pl-8` (32px) + half of the 12px provider icon. */
+const CLASSIC_ROOT_LINE_OFFSET_PX = hierarchyThreadLineOffsetPx(32);
+/** Every child row uses `px-2` (8px), so nested lines sit 14px in. */
+const CLASSIC_CHILD_LINE_OFFSET_PX = hierarchyThreadLineOffsetPx(8);
+
 function makeEntry(
   id: string,
   title: string,
@@ -42,9 +46,30 @@ function makeEntry(
   };
 }
 
-function IndentProbe({ depth }: { depth: number }) {
-  const indentPx = useBranchIndentPx(depth);
-  return <span data-testid={`indent-${depth}`}>{indentPx}</span>;
+/**
+ * Minimal classic-style row: 12px icon, flex-1 title, then the fixed slot.
+ * `nested` mirrors a project-nested root (`pl-8`); children use `px-2`.
+ */
+function HarnessRow({
+  testId,
+  title,
+  branchControl,
+  nested = false,
+}: {
+  testId: string;
+  title: string;
+  branchControl: ReactNode;
+  nested?: boolean;
+}) {
+  return (
+    <span className={`flex h-7 min-w-0 items-center gap-1 pr-2 ${nested ? "pl-8" : "pl-2"}`}>
+      <span aria-hidden="true" className="size-3 shrink-0 rounded-full bg-current" />
+      <span data-testid={testId} className="min-w-0 flex-1 truncate">
+        {title}
+      </span>
+      {branchControl}
+    </span>
+  );
 }
 
 /**
@@ -87,13 +112,15 @@ function DualPresentationHarness() {
           expanded={expanded.has(node.entry.thread.id)}
           onToggle={toggle}
           surface={variant}
+          layout="classic"
+          threadLineOffsetPx={CLASSIC_ROOT_LINE_OFFSET_PX}
           renderRow={({ branchControl }) => (
-            <span className="flex min-w-0 items-center gap-1">
-              <span data-testid={`${variant}-row-${node.entry.thread.id}`}>
-                {node.entry.thread.title}
-              </span>
-              {branchControl}
-            </span>
+            <HarnessRow
+              testId={`${variant}-row-${node.entry.thread.id}`}
+              title={node.entry.thread.title}
+              branchControl={branchControl}
+              nested
+            />
           )}
         >
           {node.children.map((child) => (
@@ -106,13 +133,14 @@ function DualPresentationHarness() {
               expanded={expanded.has(child.entry.thread.id)}
               onToggle={toggle}
               surface={variant}
+              layout="classic"
+              threadLineOffsetPx={CLASSIC_CHILD_LINE_OFFSET_PX}
               renderRow={({ branchControl }) => (
-                <span className="flex min-w-0 items-center gap-1">
-                  <span data-testid={`${variant}-row-${child.entry.thread.id}`}>
-                    {child.entry.thread.title}
-                  </span>
-                  {branchControl}
-                </span>
+                <HarnessRow
+                  testId={`${variant}-row-${child.entry.thread.id}`}
+                  title={child.entry.thread.title}
+                  branchControl={branchControl}
+                />
               )}
             >
               {child.children.map((grandchild) => (
@@ -143,11 +171,11 @@ describe("SidebarThreadHierarchy", () => {
     vi.restoreAllMocks();
   });
 
-  it("shares helpers: indent 12px/level capped at 24px and numeric counters", () => {
-    expect(hierarchyIndentPx(0)).toBe(0);
-    expect(hierarchyIndentPx(1)).toBe(12);
-    expect(hierarchyIndentPx(2)).toBe(24);
-    expect(hierarchyIndentPx(9)).toBe(24);
+  it("shares helpers: thread-line offset from row padding and numeric counters", () => {
+    expect(hierarchyThreadLineOffsetPx(32)).toBe(38);
+    expect(hierarchyThreadLineOffsetPx(8)).toBe(14);
+    expect(hierarchyThreadLineOffsetPx(10)).toBe(16);
+    expect(hierarchyThreadLineOffsetPx(Number.NaN)).toBe(6);
     expect(formatSubagentCounter(1)).toBe("1 subagent");
     expect(formatSubagentCounter(4)).toBe("4 subagents");
     expect(formatBranchCount(1)).toBe("1");
@@ -155,28 +183,88 @@ describe("SidebarThreadHierarchy", () => {
     expect(formatBranchCount(150)).toBe("99+");
   });
 
-  it("caps visual indentation at 12px below 640px", async () => {
-    const addEventListener = vi.fn();
-    const removeEventListener = vi.fn();
-    vi.spyOn(window, "matchMedia").mockImplementation(
-      (query: string) =>
-        ({
-          matches: true,
-          media: query,
-          addEventListener,
-          removeEventListener,
-        }) as unknown as MediaQueryList,
-    );
+  it("reserves the same 44px slot on rows with and without children", async () => {
     const screen = await render(
-      <div>
-        <IndentProbe depth={0} />
-        <IndentProbe depth={1} />
-        <IndentProbe depth={9} />
+      <div style={{ width: "280px" }}>
+        <ul>
+          <SidebarThreadHierarchyBranch
+            threadId={ThreadId.makeUnsafe("plain")}
+            title="Plain root with a long title that will need to truncate"
+            depth={0}
+            directChildCount={0}
+            expanded={false}
+            onToggle={() => {}}
+            layout="classic"
+            threadLineOffsetPx={CLASSIC_ROOT_LINE_OFFSET_PX}
+            renderRow={({ branchControl }) => (
+              <HarnessRow
+                testId="plain-title"
+                title="Plain root with a long title that will need to truncate"
+                branchControl={branchControl}
+              />
+            )}
+          />
+          <SidebarThreadHierarchyBranch
+            threadId={ThreadId.makeUnsafe("parent")}
+            title="Parent root with a long title that will need to truncate"
+            depth={0}
+            directChildCount={2}
+            expanded={false}
+            onToggle={() => {}}
+            layout="classic"
+            threadLineOffsetPx={CLASSIC_ROOT_LINE_OFFSET_PX}
+            renderRow={({ branchControl }) => (
+              <HarnessRow
+                testId="parent-title"
+                title="Parent root with a long title that will need to truncate"
+                branchControl={branchControl}
+              />
+            )}
+          >
+            <li>child</li>
+          </SidebarThreadHierarchyBranch>
+        </ul>
       </div>,
     );
-    expect(screen.getByTestId("indent-0").element().textContent).toBe("0");
-    expect(screen.getByTestId("indent-1").element().textContent).toBe("12");
-    expect(screen.getByTestId("indent-9").element().textContent).toBe("12");
+    const slots = document.querySelectorAll<HTMLElement>("[data-thread-branch-slot]");
+    expect(slots).toHaveLength(2);
+    const [emptySlot, controlSlot] = Array.from(slots).map((slot) => slot.getBoundingClientRect());
+    expect(emptySlot!.width).toBeCloseTo(44, 0);
+    expect(controlSlot!.width).toBeCloseTo(44, 0);
+    expect(Math.abs(emptySlot!.left - controlSlot!.left)).toBeLessThanOrEqual(1);
+    // Titles truncate at the same boundary whether or not the row has children.
+    const plain = screen.getByTestId("plain-title").element().getBoundingClientRect();
+    const parent = screen.getByTestId("parent-title").element().getBoundingClientRect();
+    expect(Math.abs(plain.left - parent.left)).toBeLessThanOrEqual(1);
+    expect(Math.abs(plain.right - parent.right)).toBeLessThanOrEqual(1);
+    // The whole slot is the toggle's hit area, not just the chevron.
+    const toggle = screen.getByRole("button", { name: /Expand 2 subagents/ }).element();
+    expect(toggle.getBoundingClientRect().width).toBeCloseTo(44, 0);
+    expect(toggle.getBoundingClientRect().height).toBeGreaterThanOrEqual(24);
+  });
+
+  it("draws one vertical thread line per open branch under the parent icon", async () => {
+    await render(<DualPresentationHarness />);
+    const list = document.querySelector<HTMLUListElement>(
+      '[aria-label="standard"] [data-thread-branch-children]',
+    );
+    expect(list).not.toBeNull();
+    const style = window.getComputedStyle(list!);
+    expect(style.marginLeft).toBe(`${CLASSIC_ROOT_LINE_OFFSET_PX}px`);
+    expect(style.borderLeftWidth).toBe("1px");
+    expect(style.borderLeftStyle).toBe("solid");
+    expect(style.paddingLeft).toBe("12px");
+    // The line runs under the centre of the parent row's 12px icon.
+    const parentRow = document.querySelector<HTMLElement>(
+      '[data-testid="standard-row-html-gastos"]',
+    )!;
+    const icon = parentRow.previousElementSibling as HTMLElement;
+    const iconRect = icon.getBoundingClientRect();
+    const iconCenter = iconRect.left + iconRect.width / 2;
+    const lineX = list!.getBoundingClientRect().left + 0.5;
+    expect(Math.abs(lineX - iconCenter)).toBeLessThanOrEqual(1);
+    // No per-row connectors remain anywhere in the tree.
+    expect(document.querySelectorAll('[class*="bg-border"]')).toHaveLength(0);
   });
 
   it("toggles with mouse without navigating and keeps both presentations in sync", async () => {
@@ -217,7 +305,11 @@ describe("SidebarThreadHierarchy", () => {
           directChildCount={1}
           expanded={false}
           onToggle={() => {}}
-          renderRow={({ branchControl }) => <span>One child {branchControl}</span>}
+          layout="classic"
+          threadLineOffsetPx={CLASSIC_ROOT_LINE_OFFSET_PX}
+          renderRow={({ branchControl }) => (
+            <HarnessRow testId="one" title="One child" branchControl={branchControl} />
+          )}
         />
         <SidebarThreadHierarchyBranch
           threadId={ThreadId.makeUnsafe("twenty")}
@@ -226,7 +318,11 @@ describe("SidebarThreadHierarchy", () => {
           directChildCount={20}
           expanded={false}
           onToggle={() => {}}
-          renderRow={({ branchControl }) => <span>Twenty children {branchControl}</span>}
+          layout="classic"
+          threadLineOffsetPx={CLASSIC_ROOT_LINE_OFFSET_PX}
+          renderRow={({ branchControl }) => (
+            <HarnessRow testId="twenty" title="Twenty children" branchControl={branchControl} />
+          )}
         />
       </ul>,
     );
@@ -236,50 +332,15 @@ describe("SidebarThreadHierarchy", () => {
     await expect.element(twenty).toBeVisible();
     expect(one.element().tagName).toBe("BUTTON");
     expect(twenty.element().tagName).toBe("BUTTON");
-    // Native button semantics with identical compact sizing.
+    // Native button semantics with identical fixed sizing.
     expect(one.element().getAttribute("type")).toBe("button");
     await expect.element(screen.getByText("1")).toBeVisible();
     await expect.element(screen.getByText("20")).toBeVisible();
     const oneRect = one.element().getBoundingClientRect();
     const twentyRect = twenty.element().getBoundingClientRect();
     expect(Math.abs(oneRect.height - twentyRect.height)).toBeLessThanOrEqual(1);
-  });
-
-  it("adds zero root-row horizontal displacement for the branch shell", async () => {
-    const screen = await render(
-      <div style={{ width: "280px" }}>
-        <ul>
-          <SidebarThreadHierarchyBranch
-            threadId={ThreadId.makeUnsafe("plain")}
-            title="Plain root"
-            depth={0}
-            directChildCount={0}
-            expanded={false}
-            onToggle={() => {}}
-            renderRow={() => <span data-testid="plain-title">Plain root</span>}
-          />
-          <SidebarThreadHierarchyBranch
-            threadId={ThreadId.makeUnsafe("parent")}
-            title="Parent root"
-            depth={0}
-            directChildCount={1}
-            expanded={false}
-            onToggle={() => {}}
-            renderRow={({ branchControl }) => (
-              <span className="flex min-w-0 items-center gap-1">
-                <span data-testid="parent-title">Parent root</span>
-                {branchControl}
-              </span>
-            )}
-          >
-            <li>child</li>
-          </SidebarThreadHierarchyBranch>
-        </ul>
-      </div>,
-    );
-    const plain = screen.getByTestId("plain-title").element().getBoundingClientRect();
-    const parent = screen.getByTestId("parent-title").element().getBoundingClientRect();
-    expect(Math.abs(plain.left - parent.left)).toBeLessThanOrEqual(1);
+    expect(Math.abs(oneRect.width - twentyRect.width)).toBeLessThanOrEqual(1);
+    expect(Math.abs(oneRect.right - twentyRect.right)).toBeLessThanOrEqual(1);
   });
 
   it("toggles with Enter/Space and exposes aria-expanded/controls", async () => {
@@ -293,6 +354,8 @@ describe("SidebarThreadHierarchy", () => {
           directChildCount={1}
           expanded={false}
           onToggle={onToggle}
+          layout="classic"
+          threadLineOffsetPx={CLASSIC_ROOT_LINE_OFFSET_PX}
           renderRow={({ branchControl }) => <span>HTML gastos {branchControl}</span>}
         >
           <li>child</li>
@@ -330,6 +393,8 @@ describe("SidebarThreadHierarchy", () => {
             directChildCount={1}
             expanded={open}
             onToggle={() => setOpen(false)}
+            layout="classic"
+            threadLineOffsetPx={CLASSIC_ROOT_LINE_OFFSET_PX}
             renderRow={({ branchControl }) => <span>HTML gastos {branchControl}</span>}
           >
             <li>
@@ -361,6 +426,8 @@ describe("SidebarThreadHierarchy", () => {
             directChildCount={1}
             expanded={open}
             onToggle={() => setOpen((current) => !current)}
+            layout="classic"
+            threadLineOffsetPx={CLASSIC_ROOT_LINE_OFFSET_PX}
             renderRow={({ branchControl }) => <span>HTML gastos {branchControl}</span>}
           >
             <li>
@@ -404,6 +471,8 @@ describe("SidebarThreadHierarchy", () => {
           directChildCount={25}
           expanded
           onToggle={() => {}}
+          layout="classic"
+          threadLineOffsetPx={CLASSIC_CHILD_LINE_OFFSET_PX}
           renderRow={({ branchControl }) => <span>Implement: gastos-app v1 {branchControl}</span>}
           childPaging={
             <SidebarThreadBranchPaging
@@ -446,14 +515,14 @@ describe("SidebarThreadHierarchy", () => {
             directChildCount={1}
             expanded
             onToggle={() => {}}
+            layout="classic"
+            threadLineOffsetPx={CLASSIC_CHILD_LINE_OFFSET_PX}
             renderRow={({ branchControl }) => (
-              <span className="flex min-w-0 items-center gap-1">
-                <span className="block truncate">
-                  HTML gastos with a very long title that must truncate instead of overflowing the
-                  sidebar
-                </span>
-                {branchControl}
-              </span>
+              <HarnessRow
+                testId="long"
+                title="HTML gastos with a very long title that must truncate instead of overflowing the sidebar"
+                branchControl={branchControl}
+              />
             )}
           >
             <li>
@@ -493,5 +562,8 @@ describe("SidebarThreadHierarchy", () => {
       name: "Expand 150 subagents for HTML gastos, 2 hidden need attention, 1 hidden running, contains the current conversation",
     });
     await expect.element(toggle).toBeVisible();
+    // The attention aggregate is the one case allowed to widen the slot; it
+    // extends leftwards so the chevron + count stay put.
+    expect(toggle.element().getBoundingClientRect().width).toBeGreaterThanOrEqual(44);
   });
 });

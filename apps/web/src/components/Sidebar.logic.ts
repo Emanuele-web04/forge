@@ -550,58 +550,10 @@ export function pruneProjectThreadListExtraPagesById(input: {
   return changed ? nextThreadListExtraPagesByProjectId : threadListExtraPagesByProjectId;
 }
 
-/**
- * Trailing padding that protects the title from the absolutely-positioned
- * trailing cluster, sized to what the slot ACTUALLY shows so the title runs as
- * far right as the on-screen content allows:
- *
- * - The relative time now lives in the row hover card, so an idle row with no
- *   status/jump glyph and no meta chips reserves almost nothing — the title runs
- *   to the row edge instead of truncating against permanently reserved space.
- * - A status/loader (or keyboard-jump) glyph occupies a ~2.25rem slot, and each
- *   fork/worktree/handoff meta chip adds width; the reserve grows only for the
- *   badges that are present.
- * - The wider reserve that clears the hover pin/archive actions is applied only
- *   on hover/focus (mirroring the project header row), so the title gives up that
- *   width exactly when those actions appear and not a moment sooner.
- *
- * Literal class strings are required so Tailwind's JIT scanner emits them.
- */
-export function resolveThreadRowTrailingReserveClass(input: {
-  metaChipCount: number;
-  hasTrailingGlyph: boolean;
-  /** Keys in the visible ⌘N jump hint (0 when hidden). Each `Kbd` is ≥20px, far wider than a status dot. */
-  jumpLabelPartCount?: number;
-}): string {
-  // Hover/focus reveals the pin/archive actions; the meta chips + glyph fade out
-  // at the same time, so the hover reserve is constant regardless of rest content.
-  const hoverReserve =
-    "transition-[padding] duration-150 ease-out group-hover/thread-row:pr-[4.75rem] group-focus-within/thread-row:pr-[4.75rem]";
-  const { metaChipCount, hasTrailingGlyph } = input;
-  const jumpLabelPartCount = input.jumpLabelPartCount ?? 0;
-  if (jumpLabelPartCount > 0) {
-    // The jump hint replaces the status glyph in the trailing slot, so the title
-    // must give up the room the kbd group actually takes instead of the glyph's.
-    return cn(resolveJumpHintReserveClass(metaChipCount, jumpLabelPartCount), hoverReserve);
-  }
-  if (metaChipCount <= 0) {
-    return cn(hasTrailingGlyph ? "pr-[1.75rem]" : "pr-2", hoverReserve);
-  }
-  if (metaChipCount === 1) {
-    return cn(hasTrailingGlyph ? "pr-[3rem]" : "pr-[1.75rem]", hoverReserve);
-  }
-  if (metaChipCount === 2) {
-    return cn(hasTrailingGlyph ? "pr-[4rem]" : "pr-[3rem]", hoverReserve);
-  }
-  if (metaChipCount === 3) {
-    return cn(hasTrailingGlyph ? "pr-[4.75rem]" : "pr-[3.75rem]", hoverReserve);
-  }
-  return cn(hasTrailingGlyph ? "pr-[5.75rem]" : "pr-[4.5rem]", hoverReserve);
-}
-
 // Tailwind only emits classes it can see, so the reserve is a static table:
 // rows = kbd count (≤2 covers "⌘1"; 3 covers "⇧⌘1" / "Ctrl+Shift+1"), columns =
 // meta chips (18px each). Widths include the 6px right offset of the cluster.
+// Used by the Activity title line, whose ⌘N hint is still absolutely positioned.
 const JUMP_HINT_RESERVE_CLASS_BY_PART_COUNT: Record<
   number,
   readonly [string, string, string, string]
@@ -624,8 +576,7 @@ export function resolveThreadRowClassName(input: {
   isActive: boolean;
   isSelected: boolean;
 }): string {
-  // Trailing reserve for the absolute cluster is applied separately by callers
-  // via resolveThreadRowTrailingReserveClass so it can flex with the chip count.
+  // The caller lays out trailing metadata and branch controls in flow.
   const baseClassName = SIDEBAR_THREAD_ROW_BASE_CLASS_NAME;
 
   if (input.isSelected && input.isActive) {

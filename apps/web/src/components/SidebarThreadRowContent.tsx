@@ -143,7 +143,8 @@ function renderSubagentLabel(input: {
   );
 }
 
-function SidebarSubagentLabel({
+/** Nickname (accent colour) + role/title label for native subagent rows. */
+export function SidebarSubagentLabel({
   thread,
   roleClassName,
 }: {
@@ -170,11 +171,8 @@ export function SidebarThreadRowContent({
   terminalCount,
   isActive,
   variant,
-  subagentIndentPx: subagentIndentPxProp,
   pendingStatusColorClass,
   suffix,
-  isHierarchyChild: isHierarchyChildProp,
-  showHierarchyConnector,
 }: {
   thread: SidebarThreadSummary;
   terminalEntryPoint: boolean;
@@ -182,65 +180,18 @@ export function SidebarThreadRowContent({
   terminalCount: number;
   isActive: boolean;
   variant: "pinned" | "standard";
-  subagentIndentPx?: number;
   pendingStatusColorClass?: string | null | undefined;
   suffix?: ReactNode;
-  /**
-   * Compact-layout opt-in, independent from native-subagent detection: every
-   * row with logical hierarchy depth greater than zero, including source/batch
-   * children with a null parentThreadId. Defaults to the previous native-child
-   * detection so existing callers keep their layout.
-   */
-  isHierarchyChild?: boolean | undefined;
-  /**
-   * Draw the hierarchy connector here. The shared compact child row owns its
-   * connector and passes false to avoid a duplicate. Defaults to current
-   * behavior (drawn for hierarchy children).
-   */
-  showHierarchyConnector?: boolean | undefined;
 }) {
-  const subagentIndentPx = subagentIndentPxProp ?? 0;
-  // Native-subagent identity (nickname/role presentation) stays separate from
-  // compact layout: only actual native subagents use the nickname; a
-  // source/batch child displays its thread title.
+  // Native-subagent identity (nickname/role presentation) is independent from
+  // hierarchy layout: a source/batch child displays its thread title, and every
+  // row — root or descendant — leads with its own provider icon.
   const isNativeSubagent = Boolean(thread.parentThreadId);
-  const isHierarchyChild = isHierarchyChildProp ?? isNativeSubagent;
-  const showConnector =
-    variant === "standard" && isHierarchyChild && showHierarchyConnector !== false;
-  const subagentPresentation =
-    variant === "standard" && isNativeSubagent
-      ? resolveSubagentPresentationForThread({
-          thread: {
-            id: thread.id,
-            parentThreadId: thread.parentThreadId,
-            subagentAgentId: thread.subagentAgentId,
-            subagentNickname: thread.subagentNickname,
-            subagentRole: thread.subagentRole,
-            title: thread.title,
-          },
-        })
-      : null;
-  // Hierarchy children (explicit prop, or any native subagent when the caller
-  // does not say) show no provider avatar: the compact row owns a subtle
-  // connector instead, and detail surfaces keep the full identity.
-  const showThreadProviderAvatar = !isGenericChatThreadTitle(thread.title) && !isHierarchyChild;
+  const showThreadProviderAvatar = !isGenericChatThreadTitle(thread.title);
 
   return (
     <>
-      {showConnector ? (
-        <span
-          aria-hidden="true"
-          className="relative inline-flex h-3.5 w-[18px] shrink-0 items-center"
-          style={{ marginLeft: `${subagentIndentPx}px` }}
-        >
-          <span className="absolute left-1.5 top-0 bottom-0 w-px rounded-full bg-border/35" />
-          <span className="absolute left-1.5 top-1/2 h-px w-2.5 -translate-y-1/2 bg-border/35" />
-          <span
-            className="absolute left-1.5 top-1/2 size-[5px] -translate-x-1/2 -translate-y-1/2 rounded-full"
-            style={{ backgroundColor: subagentPresentation?.accentColor }}
-          />
-        </span>
-      ) : terminalEntryPoint ? (
+      {terminalEntryPoint ? (
         <SidebarGlyph icon={TerminalIcon} variant="chrome" />
       ) : showThreadProviderAvatar ? (
         <ProviderAvatarWithTerminal

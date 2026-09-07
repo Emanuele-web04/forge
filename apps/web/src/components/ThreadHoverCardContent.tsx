@@ -1,8 +1,8 @@
 // FILE: ThreadHoverCardContent.tsx
 // Purpose: Rich hover-card body shown when hovering a sidebar thread/chat row —
-//          the title with a relative time on the header line, then project,
-//          source folder, git branch, worktree identity, and the chat's current
-//          model rows when available.
+//          the title with a relative time on the header line, then status,
+//          orchestrator (for subagents), project, source folder, git branch,
+//          worktree identity, and the chat's current model rows when available.
 // Layer: Sidebar UI component
 // Exports: ThreadHoverCardContent
 // Why: Shared by both the pinned and the nested thread-row tooltips so the two
@@ -10,8 +10,9 @@
 
 import type { ReactNode } from "react";
 
-import { FastModeIcon, GitBranchIcon, WorktreeIcon } from "~/lib/icons";
+import { FastModeIcon, GitBranchIcon, WorkflowIcon, WorktreeIcon } from "~/lib/icons";
 import type { ThreadModelSummary } from "~/lib/threadModelSummary";
+import { cn } from "~/lib/utils";
 import { FolderClosed } from "./FolderClosed";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ProviderIcon } from "./ProviderIcon";
@@ -24,6 +25,8 @@ import {
 
 export type ThreadHoverCardContentProps = {
   title: string;
+  /** Title of the orchestrator thread for native subagents; null for roots. */
+  parentTitle?: string | null | undefined;
   /** Pre-formatted relative time (e.g. "2h"); omitted when unavailable. */
   timeLabel: string | null;
   projectName: string | null;
@@ -43,9 +46,17 @@ export type ThreadHoverCardContentProps = {
 const META_ROW_CLASS_NAME = `${SIDEBAR_HOVER_CARD_ROW_CLASS_NAME} text-foreground/80`;
 const META_ICON_CLASS_NAME = "size-3.5 shrink-0 text-muted-foreground/75";
 
-function MetaRow({ icon, children }: { icon: ReactNode; children: string }) {
+function MetaRow({
+  icon,
+  children,
+  className,
+}: {
+  icon: ReactNode;
+  children: string;
+  className?: string | undefined;
+}) {
   return (
-    <span className={META_ROW_CLASS_NAME}>
+    <span className={cn(META_ROW_CLASS_NAME, className)}>
       {icon}
       <span className="min-w-0 truncate">{children}</span>
     </span>
@@ -71,6 +82,7 @@ function ModelRow({ model }: { model: ThreadModelSummary }) {
 
 export function ThreadHoverCardContent({
   title,
+  parentTitle,
   timeLabel,
   projectName,
   projectCwd,
@@ -81,6 +93,7 @@ export function ThreadHoverCardContent({
   status,
 }: ThreadHoverCardContentProps) {
   const hasMeta =
+    Boolean(parentTitle) ||
     Boolean(projectName) ||
     Boolean(sourceProjectName) ||
     Boolean(branch) ||
@@ -105,7 +118,11 @@ export function ThreadHoverCardContent({
       {hasMeta ? (
         <div className="flex flex-col gap-0">
           {status ? (
+            // The label carries the pill's own tone (sky while working, emerald
+            // once completed, amber/indigo/violet for attention) so the card
+            // reads the state without needing the tiny row glyph.
             <MetaRow
+              className={status.colorClass}
               icon={
                 <span
                   aria-hidden="true"
@@ -116,6 +133,11 @@ export function ThreadHoverCardContent({
               }
             >
               {status.label}
+            </MetaRow>
+          ) : null}
+          {parentTitle ? (
+            <MetaRow icon={<WorkflowIcon className={META_ICON_CLASS_NAME} aria-hidden />}>
+              {`Subagent of · ${parentTitle}`}
             </MetaRow>
           ) : null}
           {projectName ? (

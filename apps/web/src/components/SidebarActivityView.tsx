@@ -85,13 +85,14 @@ import {
 } from "../appSettings";
 import { useStableValue } from "../hooks/useStableValue";
 import {
+  hierarchyThreadLineOffsetPx,
   nestSidebarEntriesByDepth,
   SidebarThreadHierarchyBranch,
   type NestedSidebarEntry,
   type SidebarThreadHierarchyBranchRenderSlot,
 } from "./SidebarThreadBranch";
 import { SidebarThreadBranchPaging } from "./SidebarThreadBranchPaging";
-import { SidebarCompactChildRow } from "./SidebarCompactChildRow";
+import { SidebarSubagentLabel } from "./SidebarThreadRowContent";
 import { SIDEBAR_TRAILING_ICON_CLASS, sidebarGlyphClass } from "./sidebarGlyphs";
 import { SIDEBAR_HOVER_CARD_TRIGGER_PROPS } from "./sidebarHoverCardStyles";
 import {
@@ -120,6 +121,25 @@ import { Tooltip, TooltipTrigger } from "./ui/tooltip";
 const ACTIVITY_LIST_BASE_LIMIT = 20;
 const ACTIVITY_LIST_PAGE_SIZE = 20;
 const ACTIVITY_ACTION_TONE_CLASS_NAME = "text-muted-foreground/42";
+/** Pixel twin of the row's `px-2.5`; the hierarchy thread line is derived from it. */
+const ACTIVITY_ROW_PADDING_X_PX = 10;
+/**
+ * Meta line columns. Every row — root or descendant — lays out the same fixed
+ * columns so the slot, branch, status and time align down the list:
+ * project (flex 1) · subagent slot (40px) · branch (150px) · status (12px) · time (34px).
+ * Slot, status and time are rigid. Project and branch both grow from a zero
+ * basis, so on a narrow sidebar they split the remaining width evenly and the
+ * branch column stops at 150px once the row is wide enough — the column edges
+ * depend only on the row width, never on a row's own content, so rows align.
+ */
+const ACTIVITY_META_PROJECT_COLUMN_CLASS_NAME = "flex min-w-0 flex-1 items-center gap-1.5";
+const ACTIVITY_META_BRANCH_COLUMN_CLASS_NAME =
+  "flex min-w-0 max-w-[150px] flex-1 items-center gap-1";
+const ACTIVITY_META_STATUS_COLUMN_CLASS_NAME = "flex w-3 shrink-0 items-center justify-center";
+const ACTIVITY_META_TIME_COLUMN_CLASS_NAME =
+  "min-w-[34px] shrink-0 text-right whitespace-nowrap text-[length:var(--app-font-size-ui-sm,11px)] tabular-nums text-muted-foreground/60";
+const ACTIVITY_META_TEXT_CLASS_NAME =
+  "min-w-0 truncate text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/70";
 const EMPTY_PROJECT_GROUPS: ActivityProjectGroup[] = [];
 const EMPTY_EXPANDED_THREAD_IDS: ReadonlySet<ThreadId> = new Set();
 const EMPTY_COLLAPSED_THREAD_IDS: ReadonlySet<ThreadId> = new Set();
@@ -205,10 +225,11 @@ function ActivityThreadRow({
   onRenamePointerUp: (event: ReactPointerEvent<HTMLElement>, threadId: ThreadId) => void;
   onContextMenu: (threadId: ThreadId, position: SidebarRowContextMenuPosition) => void;
   renderHoverCard: (anchorId: string) => ReactNode;
-  /** Shared numeric branch toggle; non-null exactly when the family has children. */
-  branchControl?: ReactNode;
+  /** Fixed-width subagent slot: the numeric toggle, or an empty spacer of the same width. */
+  branchControl: ReactNode;
 }) {
   const provider = thread.session?.provider ?? thread.modelSelection.provider;
+  const isNativeSubagent = Boolean(thread.parentThreadId);
   const branch = resolveThreadDisplayBranch(thread);
   const isWorktree =
     resolveThreadEnvironmentMode({
@@ -263,6 +284,7 @@ function ActivityThreadRow({
           onClick={onOpen}
           data-testid={`activity-thread-${thread.id}`}
           aria-label={thread.title}
+          aria-current={isActive ? "page" : undefined}
           className={cn(
             "flex w-full min-w-0 cursor-pointer flex-col gap-1 rounded-lg px-2.5 pt-2 pb-1 text-left select-none",
             SIDEBAR_ROW_FOCUS_CLASS_NAME,
@@ -270,11 +292,11 @@ function ActivityThreadRow({
         >
           <span
             className={cn(
-              "flex min-w-0 items-center gap-1.5 overflow-hidden pr-5 transition-[padding] duration-150 ease-out",
-              threadJumpLabelParts.length > 0 &&
-                resolveJumpHintReserveClass(0, threadJumpLabelParts.length),
-              // Yield the title row to the hover action cluster (pin + archive + done).
-              "group-hover/activity-row:pr-[4.25rem] group-focus-within/activity-row:pr-[4.25rem]",
+              "flex min-w-0 items-center gap-1.5 overflow-hidden",
+              // Reserve actions at rest too; longer shortcuts require more room.
+              threadJumpLabelParts.length > 2
+                ? resolveJumpHintReserveClass(0, threadJumpLabelParts.length)
+                : "pr-[4.25rem]",
             )}
           >
             <ProviderIcon
@@ -290,17 +312,19 @@ function ActivityThreadRow({
                 isActive ? "text-foreground" : SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
               )}
             >
-              {thread.title}
+              {isNativeSubagent ? <SidebarSubagentLabel thread={thread} /> : thread.title}
             </span>
           </span>
         </button>
-        <span className="flex min-w-0 items-center gap-1.5 px-2.5 pb-2">
+        {/* Meta line starts under the title text (icon + gap), as fixed columns. */}
+        <span className="flex min-w-0 items-center gap-2 pr-2.5 pb-2 pl-7">
           <button
             type="button"
             onClick={onOpen}
             aria-label={`${thread.title} in ${resolveThreadProjectLabel(project)}`}
             className={cn(
-              "flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-left select-none",
+              ACTIVITY_META_PROJECT_COLUMN_CLASS_NAME,
+              "cursor-pointer text-left select-none",
               SIDEBAR_ROW_FOCUS_CLASS_NAME,
             )}
           >
@@ -308,24 +332,29 @@ function ActivityThreadRow({
               className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
               aria-hidden
             />
-            <span className="min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/80">
+            <span className={cn(ACTIVITY_META_TEXT_CLASS_NAME, "flex-1 text-muted-foreground/80")}>
               {resolveThreadProjectLabel(project)}
             </span>
           </button>
           {branchControl}
-          <span className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
+          {/* The PR chip belongs to the branch it was opened from, so it leads
+              the branch column instead of breaking the grid with its own. */}
+          <span className={ACTIVITY_META_BRANCH_COLUMN_CLASS_NAME} data-activity-branch-column>
             {pr ? <PrStateChip pr={pr} className="[&_svg]:size-2.5" /> : null}
             {branch ? (
-              <span className="flex min-w-0 items-center gap-1 text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/70">
-                <GitBranchIcon className={sidebarGlyphClass("meta")} aria-hidden />
-                <span className="max-w-36 truncate">{branch}</span>
-              </span>
+              <>
+                <GitBranchIcon
+                  className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
+                  aria-hidden
+                />
+                <span className={ACTIVITY_META_TEXT_CLASS_NAME}>{branch}</span>
+              </>
             ) : null}
-            {trailingStatus ? <SidebarStatusTrailingGlyph status={trailingStatus} /> : null}
-            <span className="shrink-0 text-[length:var(--app-font-size-ui-sm,11px)] tabular-nums text-muted-foreground/60">
-              {rowTime}
-            </span>
           </span>
+          <span className={ACTIVITY_META_STATUS_COLUMN_CLASS_NAME}>
+            {trailingStatus ? <SidebarStatusTrailingGlyph status={trailingStatus} /> : null}
+          </span>
+          <span className={ACTIVITY_META_TIME_COLUMN_CLASS_NAME}>{rowTime}</span>
         </span>
         {threadJumpLabel ? (
           <KbdGroup
@@ -947,78 +976,14 @@ export function SidebarActivityView({
     }
   };
 
-  const renderActivityCompactActions = (
-    thread: SidebarThreadSummary,
-    isPinnedRow: boolean,
-    isSettledRow: boolean,
-  ) => (
-    <span
-      className="inline-flex items-center gap-1 opacity-0 transition-opacity group-hover/activity-row:opacity-100 group-focus-within/activity-row:opacity-100 pointer-coarse:opacity-100 pointer-coarse:pointer-events-auto"
-      onDoubleClick={stopRowActivation}
-      onPointerUp={(event) => event.stopPropagation()}
-    >
-      <ThreadPinToggleButton
-        pinned={isPinnedRow}
-        presentation="inline"
-        toneClassName={ACTIVITY_ACTION_TONE_CLASS_NAME}
-        onToggle={(event) => {
-          stopRowActivation(event);
-          onToggleThreadPinned(thread.id);
-        }}
-      />
-      <ThreadArchiveActionButton
-        threadId={thread.id}
-        toneClassName={ACTIVITY_ACTION_TONE_CLASS_NAME}
-        onArchive={() => onArchiveThread(thread.id)}
-      />
-      <SidebarIconButton
-        icon={isSettledRow ? Undo2Icon : CircleCheckIcon}
-        label={isSettledRow ? "Undo" : "Done"}
-        title={isSettledRow ? "Undo" : "Done"}
-        iconClassName={SIDEBAR_TRAILING_ICON_CLASS}
-        className={cn("hover:text-foreground/89", ACTIVITY_ACTION_TONE_CLASS_NAME)}
-        onMouseDown={stopRowActivation}
-        onClick={(event) => {
-          stopRowActivation(event);
-          const nextSettled = !isSettledRow;
-          if (nextSettled) {
-            onMarkThreadRead(thread.id, thread.latestTurn?.completedAt ?? undefined);
-          }
-          onSetThreadSettled(thread.id, nextSettled);
-        }}
-      />
-    </span>
-  );
-
+  // Descendants are ordinary activity rows (icon + title, project · slot ·
+  // branch · status · time); only the branch list indents them under the
+  // parent's thread line.
   const renderRow = (
     thread: SidebarThreadSummary,
     isSettled: boolean,
     slot: SidebarThreadHierarchyBranchRenderSlot,
   ) => {
-    if (slot.isHierarchyChild) {
-      return (
-        <SidebarCompactChildRow
-          thread={thread}
-          surface="activity"
-          isActive={activeThreadId === thread.id}
-          isSelected={false}
-          status={resolveThreadStatus(thread)}
-          branchControl={slot.branchControl}
-          threadJumpLabel={threadJumpLabelByThreadId.get(thread.id) ?? null}
-          onActivate={() => onOpenThread(thread.id)}
-          onPrime={() => {}}
-          onRename={onRenameThread}
-          onRenamePointerUp={onThreadRenamePointerUp}
-          onContextMenu={onThreadContextMenu}
-          renderHoverCard={(anchorId) => renderThreadHoverCard(thread, anchorId)}
-          actions={renderActivityCompactActions(
-            thread,
-            pinnedThreadIdSet.has(thread.id),
-            isSettled,
-          )}
-        />
-      );
-    }
     return (
       <ActivityThreadRow
         key={thread.id}
@@ -1095,6 +1060,8 @@ export function SidebarActivityView({
         depth={entry.depth}
         directChildCount={totalChildCount}
         expanded={isOpen}
+        layout="activity"
+        threadLineOffsetPx={hierarchyThreadLineOffsetPx(ACTIVITY_ROW_PADDING_X_PX)}
         onToggle={(id) => onToggleBranch?.(id, isOpen)}
         renderRow={(branchSlot) => renderRow(entry.thread, isSettledRow(entry.thread), branchSlot)}
         hiddenSummary={activityHiddenSummaryByThreadId.get(threadId)}

@@ -10,6 +10,7 @@ import { render } from "vitest-browser-react";
 
 import { DEFAULT_INTERACTION_MODE, type SidebarThreadSummary } from "../types";
 import { SidebarThreadRowContent } from "./SidebarThreadRowContent";
+import { isSiblingControlTarget } from "./sidebarThreadRowGestures";
 
 function makeThread(overrides: Partial<SidebarThreadSummary> = {}): SidebarThreadSummary {
   return {
@@ -33,6 +34,28 @@ function makeThread(overrides: Partial<SidebarThreadSummary> = {}): SidebarThrea
 }
 
 describe("SidebarThreadRowContent", () => {
+  it("isolates gestures on action icons while preserving navigation icon gestures", async () => {
+    const screen = await render(
+      <div>
+        <button type="button" aria-label="Toggle branch">
+          <svg>
+            <path d="M0 0" />
+          </svg>
+        </button>
+        <button type="button" data-thread-nav aria-label="Open thread">
+          <svg>
+            <path d="M0 0" />
+          </svg>
+        </button>
+      </div>,
+    );
+    const actionIcon = screen.container.querySelector('[aria-label="Toggle branch"] path');
+    const navigationIcon = screen.container.querySelector('[aria-label="Open thread"] path');
+    expect(actionIcon).not.toBeNull();
+    expect(navigationIcon).not.toBeNull();
+    expect(isSiblingControlTarget(actionIcon)).toBe(true);
+    expect(isSiblingControlTarget(navigationIcon)).toBe(false);
+  });
   afterEach(() => {
     document.body.innerHTML = "";
   });
@@ -74,15 +97,18 @@ describe("SidebarThreadRowContent", () => {
         terminalCount={0}
         isActive={false}
         variant="standard"
-        subagentIndentPx={10}
       />,
     );
 
     await expect.element(screen.getByText("Scout")).toBeVisible();
     await expect.element(screen.getByText("(reviewer)")).toBeVisible();
+    // Subagent rows lead with their own provider icon like any other row; no
+    // connector or accent dot stands in for it.
+    expect(screen.container.querySelector("svg")).not.toBeNull();
+    expect(screen.container.querySelectorAll('[class*="bg-border"]')).toHaveLength(0);
   });
 
-  it("renders a batch hierarchy child without connector, avatar, or batch role", async () => {
+  it("renders a batch child with its provider icon and full title, without a batch role", async () => {
     const screen = await render(
       <SidebarThreadRowContent
         thread={makeThread({
@@ -95,13 +121,11 @@ describe("SidebarThreadRowContent", () => {
         terminalCount={0}
         isActive={false}
         variant="standard"
-        isHierarchyChild
-        showHierarchyConnector={false}
       />,
     );
 
     await expect.element(screen.getByText("Batch child full title")).toBeVisible();
     expect(document.body.textContent).not.toContain("batch");
-    expect(screen.container.querySelector("svg")).toBeNull();
+    expect(screen.container.querySelector("svg")).not.toBeNull();
   });
 });
