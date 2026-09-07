@@ -40,6 +40,7 @@ import { newCommandId, newThreadId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { useFocusedChatContext } from "../focusedChatContext";
 import { useStore } from "../store";
+import { getThreadFromState } from "../threadDerivation";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 
@@ -215,8 +216,7 @@ export function useHandleNewThread() {
         ? (composerState.draftsByThreadId[focusedThreadId] ?? null)
         : null,
       focusedThreadModelSelection: focusedThreadId
-        ? (useStore.getState().threads.find((thread) => thread.id === focusedThreadId)
-            ?.modelSelection ?? null)
+        ? (getThreadFromState(useStore.getState(), focusedThreadId)?.modelSelection ?? null)
         : null,
       stickyActiveProvider: composerState.stickyActiveProvider,
       stickyModelSelectionByProvider: composerState.stickyModelSelectionByProvider,
@@ -234,8 +234,7 @@ export function useHandleNewThread() {
         findProviderStatus(providerStatuses, preferredInitialModelSelection.provider),
       )
         ? resolveAvailableProviderPreference({
-            preferredProvider:
-              projectDefaultModelSelection?.provider ?? settings.defaultProvider,
+            preferredProvider: projectDefaultModelSelection?.provider ?? settings.defaultProvider,
             statuses: providerStatuses,
             providerOrder: settings.providerOrder,
             hiddenProviders: settings.hiddenProviders,
