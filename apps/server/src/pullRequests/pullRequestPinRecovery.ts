@@ -45,6 +45,17 @@ export type PullRequestPinRecoveryContext = {
 };
 
 type PullRequestListError = PullRequestsListResult["errors"][number];
+type ReviewMatchEntry = readonly [
+  string,
+  ProviderReviewRequestsResult & { readonly error: PullRequestProviderError | null },
+];
+type ExactLookupEntry = readonly [
+  string,
+  {
+    readonly result: ProviderExactSummaryResult | null;
+    readonly error: PullRequestProviderError | null;
+  },
+];
 
 function recoveryKey(provider: "github" | "bitbucket", repository: string): string {
   return pullRequestPinRepositoryKey(provider, repository);
@@ -92,7 +103,7 @@ export function recoverPinnedPullRequests(input: {
       input.batchEntries.map((entry) =>
         projectPullRequestIdentityKey({
           projectId: entry.projectId,
-          provider: entry.provider,
+          provider: entry.provider ?? "github",
           repository: entry.repository,
           number: entry.number,
         }),
@@ -158,13 +169,13 @@ export function recoverPinnedPullRequests(input: {
     >(
       yield* Effect.forEach(
         reviewMatchInputs,
-        ([key, recovery]) => {
+        ([key, recovery]): Effect.Effect<ReviewMatchEntry, PullRequestProviderError> => {
           const reviewRequests = recovery.adapter.reviewRequests;
           if (!reviewRequests) {
-            return Effect.succeed([
+            return Effect.succeed<ReviewMatchEntry>([
               key,
               { numbers: new Set<number>(), incomplete: true, error: null },
-            ] as const);
+            ]);
           }
           return reviewRequests({
             cwd: recovery.cwd,
@@ -172,19 +183,19 @@ export function recoverPinnedPullRequests(input: {
             viewer: recovery.viewer,
             forceRefresh: input.forceRefresh,
           }).pipe(
-            Effect.map((matches) => [key, { ...matches, error: null }] as const),
+            Effect.map((matches): ReviewMatchEntry => [key, { ...matches, error: null }]),
             Effect.catch((error) =>
               input.isRequirementError?.(error)
-                ? Effect.succeed([
+                ? Effect.succeed<ReviewMatchEntry>([
                     key,
                     { numbers: new Set<number>(), incomplete: false, error: null },
-                  ] as const)
+                  ])
                 : input.isGlobalError(error)
-                ? Effect.fail(error)
-                : Effect.succeed([
-                    key,
-                    { numbers: new Set<number>(), incomplete: false, error },
-                  ] as const),
+                  ? Effect.fail(error)
+                  : Effect.succeed<ReviewMatchEntry>([
+                      key,
+                      { numbers: new Set<number>(), incomplete: false, error },
+                    ]),
             ),
           );
         },
@@ -250,7 +261,7 @@ export function recoverPinnedPullRequests(input: {
     >(
       yield* Effect.forEach(
         lookupInputs,
-        ([key, lookup]) =>
+        ([key, lookup]): Effect.Effect<ExactLookupEntry, PullRequestProviderError> =>
           lookup.context.adapter
             .exactSummary({
               cwd: lookup.cwd,
@@ -261,13 +272,13 @@ export function recoverPinnedPullRequests(input: {
               forceRefresh: input.forceRefresh,
             })
             .pipe(
-              Effect.map((result) => [key, { result, error: null }] as const),
+              Effect.map((result): ExactLookupEntry => [key, { result, error: null }]),
               Effect.catch((error) =>
                 input.isRequirementError?.(error)
-                  ? Effect.succeed([key, { result: null, error: null }] as const)
+                  ? Effect.succeed<ExactLookupEntry>([key, { result: null, error: null }])
                   : input.isGlobalError(error)
-                  ? Effect.fail(error)
-                  : Effect.succeed([key, { result: null, error }] as const),
+                    ? Effect.fail(error)
+                    : Effect.succeed<ExactLookupEntry>([key, { result: null, error }]),
               ),
             ),
         { concurrency: 3 },

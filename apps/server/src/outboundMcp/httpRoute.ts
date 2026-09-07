@@ -105,11 +105,11 @@ const oauthCallback = HttpRouter.add(
 
     const request = yield* HttpServerRequest.HttpServerRequest;
     const authorities = requestHostAuthorities(request);
-    if (authorities.length !== 1 || !isOutboundMcpCallbackAuthority(authorities[0], callbackUrl)) {
+    if (authorities.length !== 1 || !isOutboundMcpCallbackAuthority(authorities[0]!, callbackUrl)) {
       return disabledResponse();
     }
     const url = HttpServerRequest.toURL(request);
-    const callback = url === null ? null : readCallback(url);
+    const callback = url === undefined ? null : readCallback(url);
     if (callback === null) return callbackResponse(false);
 
     const service = yield* McpConnectionService;

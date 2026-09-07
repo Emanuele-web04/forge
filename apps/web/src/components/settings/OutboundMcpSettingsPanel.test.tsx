@@ -137,15 +137,20 @@ describe("OutboundMcpSettingsPanel", () => {
 describe("outbound MCP React Query helpers", () => {
   it("polls only while an outbound MCP service is authorizing", () => {
     const options = outboundMcpConnectionsQueryOptions();
+    const refetchInterval = options.refetchInterval;
 
     expect(options.queryKey).toEqual(["outbound-mcp", "connections"]);
+    expect(typeof refetchInterval).toBe("function");
+    if (typeof refetchInterval !== "function") {
+      throw new TypeError("Expected outbound MCP refetchInterval to be a function");
+    }
     expect(
-      options.refetchInterval?.({
+      refetchInterval({
         state: { data: { connections: [connection({ status: "authorizing" })] } },
       } as never),
     ).toBe(1_000);
     expect(
-      options.refetchInterval?.({
+      refetchInterval({
         state: { data: { connections: [connection({ status: "connected" })] } },
       } as never),
     ).toBe(false);

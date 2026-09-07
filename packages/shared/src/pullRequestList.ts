@@ -29,9 +29,7 @@ export function normalizePullRequestProvider(
 
 /** Remote identity for a pull request. A PR belongs to a provider repository, not to each local
  * project or worktree that happens to have that repository checked out. */
-export function pullRequestListRepositoryIdentity(
-  entry: ProviderAwarePullRequestIdentity,
-): string {
+export function pullRequestListRepositoryIdentity(entry: ProviderAwarePullRequestIdentity): string {
   return [
     normalizePullRequestProvider(entry.provider),
     entry.repository.trim().toLowerCase(),

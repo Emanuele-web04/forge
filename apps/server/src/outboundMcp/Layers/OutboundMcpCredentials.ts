@@ -12,10 +12,7 @@ import { Effect, FileSystem, Layer } from "effect";
 
 import { writeFileStringAtomically } from "../../atomicWrite.ts";
 import { ServerConfig } from "../../config.ts";
-import {
-  ensurePrivateDirectorySync,
-  PRIVATE_FILE_MODE,
-} from "../../privatePathPermissions.ts";
+import { ensurePrivateDirectorySync, PRIVATE_FILE_MODE } from "../../privatePathPermissions.ts";
 import {
   OutboundMcpCredentials,
   OutboundMcpCredentialsError,

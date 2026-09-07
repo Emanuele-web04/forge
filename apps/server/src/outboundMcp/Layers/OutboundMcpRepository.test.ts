@@ -7,9 +7,7 @@ import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { OutboundMcpRepository } from "../Services/OutboundMcpRepository.ts";
 import { OutboundMcpRepositoryLive } from "./OutboundMcpRepository.ts";
 
-const layer = it.layer(
-  OutboundMcpRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
-);
+const layer = it.layer(OutboundMcpRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)));
 
 const paratyMetadata = {
   connectionId: "paraty",

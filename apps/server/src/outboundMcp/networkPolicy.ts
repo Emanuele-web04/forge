@@ -147,7 +147,7 @@ function cancelBody(body: ReadableStream<Uint8Array> | null): void {
   if (body !== null) void body.cancel().catch(() => undefined);
 }
 
-function requestBodySize(body: BodyInit | null | undefined): number {
+function requestBodySize(body: RequestInit["body"]): number {
   if (body === undefined || body === null) return 0;
   if (typeof body === "string") return new TextEncoder().encode(body).byteLength;
   if (body instanceof URLSearchParams) {
@@ -160,7 +160,7 @@ function requestBodySize(body: BodyInit | null | undefined): number {
 }
 
 async function sharedRequestBody(
-  body: BodyInit | null | undefined,
+  body: RequestInit["body"],
 ): Promise<string | Uint8Array | undefined> {
   if (body === undefined || body === null) return undefined;
   if (typeof body === "string") return body;
@@ -197,6 +197,7 @@ function makeSharedOutboundFetch(input: {
       throw policyError("invalid-method", url);
     }
     try {
+      const body = await sharedRequestBody(init.body);
       const result = await outboundHttp.request({
         policy: {
           service: "outbound-mcp",
@@ -212,7 +213,7 @@ function makeSharedOutboundFetch(input: {
         url,
         method: method as "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE",
         headers: init.headers,
-        body: await sharedRequestBody(init.body),
+        ...(body === undefined ? {} : { body }),
         ...(init.signal === undefined || init.signal === null ? {} : { signal: init.signal }),
       });
       return new Response(result.body, {
@@ -329,7 +330,7 @@ async function boundedResponse(
     return response;
   }
 
-  let reader: ReadableStreamDefaultReader<Uint8Array>;
+  let reader;
   try {
     reader = response.body.getReader();
   } catch {
@@ -519,7 +520,7 @@ function responseFromBuffer(buffered: BufferedResponse): Response {
   return new Response(buffered.body.slice(), {
     status: buffered.status,
     statusText: buffered.statusText,
-    headers: buffered.headers,
+    headers: buffered.headers.map(([name, value]) => [name, value]),
   });
 }
 

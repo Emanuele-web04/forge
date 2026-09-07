@@ -65,7 +65,7 @@ it.effect("denies all outbound MCP lifecycle management to the default client ro
     const handlers = makeOutboundMcpLifecycleRpcHandlers(observed.service, requireTestMcpOwner);
 
     const errors = yield* Effect.all([
-      handlers[WS_METHODS.serverListOutboundMcpConnections]({}).pipe(Effect.flip),
+      handlers[WS_METHODS.serverListOutboundMcpConnections]().pipe(Effect.flip),
       handlers[WS_METHODS.serverBeginOutboundMcpAuthorization]({ presetId: "paraty" }).pipe(
         Effect.flip,
       ),
@@ -90,7 +90,7 @@ it.effect("allows an owner role to use all outbound MCP lifecycle management", (
     const handlers = makeOutboundMcpLifecycleRpcHandlers(observed.service, requireTestMcpOwner);
 
     yield* Effect.gen(function* () {
-      yield* handlers[WS_METHODS.serverListOutboundMcpConnections]({});
+      yield* handlers[WS_METHODS.serverListOutboundMcpConnections]();
       yield* handlers[WS_METHODS.serverBeginOutboundMcpAuthorization]({ presetId: "paraty" });
       yield* handlers[WS_METHODS.serverDisconnectOutboundMcpConnection]({
         connectionId: "paraty",
@@ -251,7 +251,7 @@ it.effect("registers contract-shaped outbound MCP lifecycle handlers", () =>
     } satisfies McpConnectionServiceShape;
     const handlers = makeOutboundMcpLifecycleRpcHandlers(service, Effect.void);
 
-    const list = yield* handlers[WS_METHODS.serverListOutboundMcpConnections]({});
+    const list = yield* handlers[WS_METHODS.serverListOutboundMcpConnections]();
     const begin = yield* handlers[WS_METHODS.serverBeginOutboundMcpAuthorization]({
       presetId: "paraty",
     });

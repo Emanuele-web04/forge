@@ -18,6 +18,7 @@ function makePane(
     diffFilePath: null,
     filePath: null,
     pullRequestProjectId: null,
+    pullRequestProvider: "github",
     pullRequestRepository: null,
     pullRequestNumber: null,
     pullRequestInitialTab: null,

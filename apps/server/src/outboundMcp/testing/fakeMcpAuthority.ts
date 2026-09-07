@@ -5,7 +5,7 @@ import * as https from "node:https";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Socket } from "node:net";
+import type { Duplex } from "node:stream";
 import { promisify } from "node:util";
 
 import { Server as McpServer } from "@modelcontextprotocol/sdk/server/index.js";
@@ -17,7 +17,7 @@ import {
   ListToolsRequestSchema,
   type CallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
-import { Data, Effect } from "effect";
+import { Data, Effect, Scope } from "effect";
 
 import type { OutboundMcpCredentialRecord } from "../Services/OutboundMcpCredentials.ts";
 
@@ -230,7 +230,8 @@ async function trustedHttpsFetch(
   init: RequestInit | undefined,
   certificate: string,
 ): Promise<Response> {
-  const request = new Request(input, init);
+  const request =
+    input instanceof Request ? new Request(input, init) : new Request(input.toString(), init);
   const body =
     request.method === "GET" || request.method === "HEAD"
       ? null
@@ -265,7 +266,9 @@ async function trustedHttpsFetch(
           resolve(
             new Response(new Uint8Array(Buffer.concat(chunks)), {
               status: incoming.statusCode ?? 500,
-              statusText: incoming.statusMessage,
+              ...(incoming.statusMessage === undefined
+                ? {}
+                : { statusText: incoming.statusMessage }),
               headers,
             }),
           );
@@ -316,7 +319,7 @@ async function startFakeMcpAuthority(options: FakeMcpAuthorityOptions): Promise<
   const accessTokens = new Map<string, AccessTokenRecord>();
   const refreshTokens = new Map<string, RefreshTokenRecord>();
   const sessions = new Map<string, McpSession>();
-  const sockets = new Set<Socket>();
+  const sockets = new Set<Duplex>();
   const inFlightRequests = new Set<Promise<void>>();
   let callback: { readonly state: string; readonly code: string } | null = null;
   let fakeNow = 0;
@@ -482,7 +485,7 @@ async function startFakeMcpAuthority(options: FakeMcpAuthorityOptions): Promise<
       transport.onclose = () => {
         if (assignedSessionId !== "") sessions.delete(assignedSessionId);
       };
-      await server.connect(transport);
+      await server.connect(transport as Parameters<McpServer["connect"]>[0]);
       await transport.handleRequest(request, response, body);
       if (assignedSessionId !== "") sessions.set(assignedSessionId, { server, transport });
       return;
@@ -884,7 +887,7 @@ async function startFakeMcpAuthority(options: FakeMcpAuthorityOptions): Promise<
 
 export function makeFakeMcpAuthority(
   options: FakeMcpAuthorityOptions,
-): Effect.Effect<FakeMcpAuthority, FakeMcpAuthorityError, never> {
+): Effect.Effect<FakeMcpAuthority, FakeMcpAuthorityError, Scope.Scope> {
   return Effect.acquireRelease(
     Effect.tryPromise({
       try: () => startFakeMcpAuthority(options),

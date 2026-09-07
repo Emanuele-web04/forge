@@ -90,10 +90,19 @@ function mcpResult(value: unknown) {
 }
 
 function listSummary() {
-  return { id: 42, title: "Read MCP 42", state: "OPEN", draft: false,
-    author: "Ada Lovelace", author_uuid: "{ada}", source_branch: "feature/mcp-42",
-    destination_branch: "main", created_on: now, updated_on: now,
-    url: "https://bitbucket.org/paraty/payment-seeker/pull-requests/42" };
+  return {
+    id: 42,
+    title: "Read MCP 42",
+    state: "OPEN",
+    draft: false,
+    author: "Ada Lovelace",
+    author_uuid: "{ada}",
+    source_branch: "feature/mcp-42",
+    destination_branch: "main",
+    created_on: now,
+    updated_on: now,
+    url: "https://bitbucket.org/paraty/payment-seeker/pull-requests/42",
+  };
 }
 
 async function decode(operation: "list" | "detail" | "diff" | "comments", value: unknown) {
@@ -153,7 +162,17 @@ describe("Paraty Bitbucket MCP binding", () => {
 
   it("prefers structured content, accepts one JSON text item, and rejects ambiguous text", async () => {
     await expect(
-      decode("list", mcpResult({ pagelen: 50, page: 1, total_count: 1, has_more: false, skipped_count: 0, pull_requests: [listSummary()] })),
+      decode(
+        "list",
+        mcpResult({
+          pagelen: 50,
+          page: 1,
+          total_count: 1,
+          has_more: false,
+          skipped_count: 0,
+          pull_requests: [listSummary()],
+        }),
+      ),
     ).resolves.toMatchObject({ values: [{ id: 42 }], malformedCount: 0 });
     await expect(
       decode("detail", { content: [{ type: "text", text: JSON.stringify(rawPullRequest()) }] }),
@@ -171,7 +190,14 @@ describe("Paraty Bitbucket MCP binding", () => {
   it("keeps valid list siblings and marks a malformed entry observable", async () => {
     const result = await decode(
       "list",
-      mcpResult({ pagelen: 50, page: 1, total_count: 2, has_more: false, skipped_count: 0, pull_requests: [listSummary(), { id: "bad" }] }),
+      mcpResult({
+        pagelen: 50,
+        page: 1,
+        total_count: 2,
+        has_more: false,
+        skipped_count: 0,
+        pull_requests: [listSummary(), { id: "bad" }],
+      }),
     );
     expect(result).toMatchObject({ values: [{ id: 42 }], malformedCount: 1 });
     await expect(decode("detail", mcpResult({ id: "bad" }))).rejects.toBeInstanceOf(
@@ -539,8 +565,7 @@ describe("ParatyBitbucketPullRequestProvider", () => {
           const provider = yield* makeParatyBitbucketPullRequestProvider({
             mcp: {
               ...fake.service,
-              invoke: () =>
-                Effect.fail(new McpConnectionServiceError({ category: "cancelled" })),
+              invoke: () => Effect.fail(new McpConnectionServiceError({ category: "cancelled" })),
             },
           });
           return yield* provider.list({

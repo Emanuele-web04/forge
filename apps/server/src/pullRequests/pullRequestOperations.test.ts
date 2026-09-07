@@ -1,8 +1,4 @@
-import {
-  ProjectId,
-  type OrchestrationProject,
-  type PullRequestProvider,
-} from "@synara/contracts";
+import { ProjectId, type OrchestrationProject, type PullRequestProvider } from "@synara/contracts";
 import type { RemoteRepositoryRef } from "@synara/shared/remoteRepository";
 import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
@@ -63,7 +59,7 @@ function makeOperations(input: {
   readonly pins: ProjectPullRequestPinsShape;
   readonly resolveProjectRepository: (
     provider: PullRequestProvider,
-  ) => Effect.Effect<RemoteRepositoryRef>;
+  ) => Effect.Effect<RemoteRepositoryRef, unknown>;
   readonly providers?: ReadonlyArray<PullRequestProviderShape>;
 }) {
   return makePullRequestOperations({
@@ -177,7 +173,9 @@ describe("makePullRequestOperations", () => {
         provider: "bitbucket",
         capability,
       });
-      expect(error.message).toBe("This pull request provider does not support that operation.");
+      expect((error as Error).message).toBe(
+        "This pull request provider does not support that operation.",
+      );
       expect(remoteAction).not.toHaveBeenCalled();
     },
   );
@@ -222,14 +220,14 @@ describe("makePullRequestOperations", () => {
     const routedProviders: PullRequestProvider[] = [];
     const detail = vi.fn(() => Effect.succeed({ route: "bitbucket-detail" } as never));
     const diff = vi.fn(() => Effect.succeed({ patch: "bitbucket-diff", truncated: false }));
+    const { action: _action, ...readOnlyProvider } = githubProvider();
     const bitbucket: PullRequestProviderShape = {
-      ...githubProvider(),
+      ...readOnlyProvider,
       provider: "bitbucket",
       host: "bitbucket.org",
       supports: (repository) => repository.identityKey === bitbucketRepository.identityKey,
       detail,
       diff,
-      action: undefined,
     };
     const operations = makeOperations({
       pins: {
@@ -268,13 +266,13 @@ describe("makePullRequestOperations", () => {
 
   it("rejects a fabricated Bitbucket identity before provider dispatch", async () => {
     const detail = vi.fn(() => Effect.die("Provider must not receive a fabricated repository"));
+    const { action: _action, ...readOnlyProvider } = githubProvider();
     const bitbucket: PullRequestProviderShape = {
-      ...githubProvider(),
+      ...readOnlyProvider,
       provider: "bitbucket",
       host: "bitbucket.org",
       supports: () => true,
       detail,
-      action: undefined,
     };
     const operations = makeOperations({
       pins: {
@@ -297,7 +295,7 @@ describe("makePullRequestOperations", () => {
       ),
     );
 
-    expect(error.message).toContain("does not belong");
+    expect((error as Error).message).toContain("does not belong");
     expect(detail).not.toHaveBeenCalled();
   });
 });

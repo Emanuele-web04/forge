@@ -8,6 +8,7 @@ import { useFocusedChatContext, type FocusedChatContext } from "./focusedChatCon
 import { initialState, type AppState } from "./storeState";
 import { makeProject, makeThread } from "./storeTestFixtures";
 import type { SplitView } from "./splitViewStore";
+import type { Project, Thread } from "./types";
 
 const PROJECT_ID = ProjectId.makeUnsafe("project-1");
 const THREAD_A = ThreadId.makeUnsafe("thread-a");

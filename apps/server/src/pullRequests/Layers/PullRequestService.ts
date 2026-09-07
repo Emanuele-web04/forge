@@ -33,6 +33,10 @@ import {
   makePullRequestProviderRegistry,
   type PullRequestProviderShape,
 } from "../Services/PullRequestProvider";
+import type {
+  ProviderListResult,
+  ProviderReviewRequestCountResult,
+} from "../Services/PullRequestProvider";
 import { PullRequestService, type PullRequestServiceShape } from "../Services/PullRequestService";
 import {
   GitHubPullRequestProvider,
@@ -55,9 +59,7 @@ const REMOTE_REPOSITORY_CACHE_MAX_ENTRIES = 256;
 
 type PullRequestListError = PullRequestsListResult["errors"][number];
 
-const BITBUCKET_REQUIREMENT_REASONS: ReadonlyArray<
-  PullRequestProviderRequirement["status"]
-> = [
+const BITBUCKET_REQUIREMENT_REASONS: ReadonlyArray<PullRequestProviderRequirement["status"]> = [
   "not-connected",
   "authorizing",
   "reconnect-required",
@@ -193,7 +195,10 @@ export const makePullRequestService = (
         projects: OrchestrationProject[];
       }>,
       forceRefresh: boolean,
-    ) => {
+    ): Effect.Effect<{
+      readonly viewers: Map<PullRequestProviderShape, string | null>;
+      readonly errors: Map<PullRequestProviderShape, PullRequestProviderError>;
+    }> => {
       const unique = new Map<PullRequestProviderShape, OrchestrationProject>();
       for (const repository of repositories) {
         if (!unique.has(repository.adapter)) {
@@ -202,17 +207,17 @@ export const makePullRequestService = (
       }
       return Effect.forEach(
         unique,
-        ([adapter, project]) =>
+        ([adapter, project]): Effect.Effect<{
+          readonly adapter: PullRequestProviderShape;
+          readonly viewer: string | null;
+          readonly error: PullRequestProviderError | null;
+        }> =>
           adapter.viewer
-            ? adapter
-                .viewer({ cwd: project.workspaceRoot, forceRefresh })
-                .pipe(
-                  Effect.map((viewer) => ({ adapter, viewer, error: null } as const)),
-                  Effect.catch((error) =>
-                    Effect.succeed({ adapter, viewer: null, error } as const),
-                  ),
-                )
-            : Effect.succeed({ adapter, viewer: null, error: null } as const),
+            ? adapter.viewer({ cwd: project.workspaceRoot, forceRefresh }).pipe(
+                Effect.map((viewer) => ({ adapter, viewer, error: null })),
+                Effect.catch((error) => Effect.succeed({ adapter, viewer: null, error })),
+              )
+            : Effect.succeed({ adapter, viewer: null, error: null }),
         { concurrency: "unbounded" },
       ).pipe(
         Effect.map((results) => ({
@@ -313,78 +318,80 @@ export const makePullRequestService = (
 
         const batches = yield* Effect.forEach(
           eligibleProviderRepositories,
-          ({ adapter, projects: repositoryProjects, repository }) =>
-            (viewerErrors.has(adapter)
-              ? Effect.fail(viewerErrors.get(adapter)!)
-              : adapter.list({
-                  cwd: repositoryProjects[0]!.workspaceRoot,
-                  repository,
-                  state: input.state,
-                  involvement,
-                  viewer: viewers.get(adapter) ?? null,
-                  forceRefresh,
-                }))
-              .pipe(
-                Effect.map((result) => ({
-                  entries: repositoryProjects.flatMap((project) =>
-                    result.entries.map(
-                      (summary): PullRequestListEntry =>
-                        buildPullRequestListEntry({
-                          project,
-                          pullRequest: summary,
-                          isPinned: pinnedKeys.has(
-                            projectPullRequestIdentityKey({
-                              projectId: project.id,
-                              provider: summary.provider,
-                              repository: summary.repository,
-                              number: summary.number,
-                            }),
-                          ),
-                        }),
-                    ),
-                  ),
-                  repositoryBatches: repositoryProjects.slice(0, 1).map((project) => ({
-                    projectId: project.id,
-                    projectTitle: project.title,
-                    provider: repository.provider,
-                    repository: repository.displayName,
-                    truncated: result.truncated,
-                  })),
-                  errors: [] as PullRequestListError[],
-                  globalError: null as PullRequestProviderError | null,
-                  recovery: {
+          ({ adapter, projects: repositoryProjects, repository }) => {
+            const providerList: Effect.Effect<ProviderListResult, PullRequestProviderError> =
+              viewerErrors.has(adapter)
+                ? Effect.fail(viewerErrors.get(adapter)!)
+                : adapter.list({
                     cwd: repositoryProjects[0]!.workspaceRoot,
                     repository,
-                    adapter,
+                    state: input.state,
+                    involvement,
                     viewer: viewers.get(adapter) ?? null,
-                    projects: repositoryProjects,
-                    truncated: result.truncated,
-                    reviewingNumbers: result.reviewingNumbers,
-                    reviewingTruncated: result.reviewingTruncated,
-                  },
-                })),
-                Effect.catch((error) => {
-                  const requirement = bitbucketProviderRequirement(error);
-                  if (requirement) {
-                    recordProviderRequirement(error);
-                  }
-                  return Effect.succeed({
-                    entries: [] as PullRequestListEntry[],
-                    repositoryBatches: [],
-                    errors: requirement
-                      ? []
-                      : repositoryProjects.map((project) => ({
-                          projectId: project.id,
-                          projectTitle: project.title,
-                          provider: repository.provider,
-                          repository: repository.displayName,
-                          message: error.message,
-                        })),
-                    globalError: isGlobalPullRequestProviderError(error) ? error : null,
-                    recovery: null,
+                    forceRefresh,
                   });
-                }),
-              ),
+            return providerList.pipe(
+              Effect.map((result) => ({
+                entries: repositoryProjects.flatMap((project) =>
+                  result.entries.map(
+                    (summary): PullRequestListEntry =>
+                      buildPullRequestListEntry({
+                        project,
+                        pullRequest: summary,
+                        isPinned: pinnedKeys.has(
+                          projectPullRequestIdentityKey({
+                            projectId: project.id,
+                            provider: summary.provider ?? "github",
+                            repository: summary.repository,
+                            number: summary.number,
+                          }),
+                        ),
+                      }),
+                  ),
+                ),
+                repositoryBatches: repositoryProjects.slice(0, 1).map((project) => ({
+                  projectId: project.id,
+                  projectTitle: project.title,
+                  provider: repository.provider,
+                  repository: repository.displayName,
+                  truncated: result.truncated,
+                })),
+                errors: [] as PullRequestListError[],
+                globalError: null as PullRequestProviderError | null,
+                recovery: {
+                  cwd: repositoryProjects[0]!.workspaceRoot,
+                  repository,
+                  adapter,
+                  viewer: viewers.get(adapter) ?? null,
+                  projects: repositoryProjects,
+                  truncated: result.truncated,
+                  reviewingNumbers: result.reviewingNumbers,
+                  reviewingTruncated: result.reviewingTruncated,
+                },
+              })),
+              Effect.catch((error) => {
+                const requirement = bitbucketProviderRequirement(error);
+                if (requirement) {
+                  recordProviderRequirement(error);
+                }
+                return Effect.succeed({
+                  entries: [] as PullRequestListEntry[],
+                  repositoryBatches: [],
+                  errors: requirement
+                    ? []
+                    : repositoryProjects.map((project) => ({
+                        projectId: project.id,
+                        projectTitle: project.title,
+                        provider: repository.provider,
+                        repository: repository.displayName,
+                        message: error.message,
+                      })),
+                  globalError: isGlobalPullRequestProviderError(error) ? error : null,
+                  recovery: null,
+                });
+              }),
+            );
+          },
           { concurrency: 6 },
         );
         const legacyGitHubUnavailable = batches.find(
@@ -464,14 +471,18 @@ export const makePullRequestService = (
           countProviders,
           ({ adapter, projects: repositoryProjects, repository }) => {
             const count = adapter.reviewRequestCount!;
-            return (viewerErrors.has(adapter)
+            const providerCount: Effect.Effect<
+              ProviderReviewRequestCountResult,
+              PullRequestProviderError
+            > = viewerErrors.has(adapter)
               ? Effect.fail(viewerErrors.get(adapter)!)
               : count({
                   cwd: repositoryProjects[0]!.workspaceRoot,
                   repository,
                   viewer: viewers.get(adapter) ?? null,
                   forceRefresh: false,
-                })).pipe(
+                });
+            return providerCount.pipe(
               Effect.catch((error) =>
                 isGlobalPullRequestProviderError(error) && error.provider === "github"
                   ? Effect.fail(error)

@@ -1,4 +1,7 @@
-import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
+import type {
+  OAuthClientProvider,
+  OAuthServerInfo,
+} from "@modelcontextprotocol/sdk/client/auth.js";
 import { Effect, Fiber } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
@@ -7,6 +10,7 @@ import {
   OutboundMcpDecodeError,
   OutboundMcpInputError,
   type McpConsumerBinding,
+  type McpConsumerOperation,
 } from "../consumerBinding.ts";
 import { McpToolClientError, type McpToolClientShape } from "../Services/McpToolClient.ts";
 import {
@@ -139,17 +143,27 @@ function makeFakeOAuth(
           authorizationServerUrl: "https://auth.example.test/",
         });
         return new URL(`https://auth.example.test/authorize?state=${attempt.state}`);
-      }),
+      }).pipe(
+        Effect.mapError(
+          () => new McpConnectionOAuthError({ category: "credential-persistence-failed" }),
+        ),
+      ),
     finish: ({ attempt }) =>
-      credentials.write(attempt.connectionId, {
-        clientInformation: { client_id: "registered-client" },
-        tokens: {
-          access_token: "synthetic-access-token",
-          refresh_token: "synthetic-refresh-token",
-          token_type: "Bearer",
-        },
-        authorizationServerUrl: "https://auth.example.test/",
-      }),
+      credentials
+        .write(attempt.connectionId, {
+          clientInformation: { client_id: "registered-client" },
+          tokens: {
+            access_token: "synthetic-access-token",
+            refresh_token: "synthetic-refresh-token",
+            token_type: "Bearer",
+          },
+          authorizationServerUrl: "https://auth.example.test/",
+        })
+        .pipe(
+          Effect.mapError(
+            () => new McpConnectionOAuthError({ category: "credential-persistence-failed" }),
+          ),
+        ),
     revoke: () =>
       oauth.failRevocation
         ? Effect.fail(new McpConnectionOAuthError({ category: "revocation-failed" }))
@@ -205,7 +219,7 @@ function makeFakeToolClient(): McpToolClientShape & {
       if (client.blockCalls) return Effect.never;
       if (client.callFailure !== null) return Effect.fail(client.callFailure);
       liveConnections.add("paraty");
-      const operation = Object.values(binding.operations).find(
+      const operation = Object.values<McpConsumerOperation>(binding.operations).find(
         (candidate) => candidate.tool === tool,
       );
       return operation === undefined
@@ -1182,7 +1196,7 @@ describe("McpConnectionService", () => {
     const { state } = await authorize(fixture);
     await Effect.runPromise(fixture.service.completeAuthorization({ state, code: "code-1" }));
     fixture.toolClient.liveConnections.add("paraty");
-    fixture.oauth.failRevocation = true;
+    (fixture.oauth as ReturnType<typeof makeFakeOAuth>).failRevocation = true;
 
     await expect(
       Effect.runPromise(fixture.service.disconnect({ connectionId: "paraty" })),
@@ -1378,7 +1392,7 @@ describe("SDK OAuth lifecycle", () => {
           response_types_supported: ["code"],
         },
       },
-    ] as const;
+    ] satisfies OAuthServerInfo[];
     let discoveryIndex = 0;
     let tokenExchanges = 0;
     const oauth = makeSdkMcpConnectionOAuthLifecycle({
@@ -1509,7 +1523,7 @@ describe("SDK OAuth lifecycle", () => {
           response_types_supported: ["code"],
         },
       },
-    ] as const;
+    ] satisfies OAuthServerInfo[];
     let discoveryIndex = 0;
     let tokenExchanges = 0;
     const oauth = makeSdkMcpConnectionOAuthLifecycle({

@@ -56,9 +56,7 @@ describe("pullRequestSetPinnedMutationOptions", () => {
     await vi.waitFor(() => expect(calls).toEqual(["github:42:true"]));
     const secondGithubPromise = secondGithub.execute(githubUnpinInput);
     const bitbucketPromise = bitbucket.execute(bitbucketInput);
-    await vi.waitFor(() =>
-      expect(calls).toEqual(["github:42:true", "bitbucket:42:true"]),
-    );
+    await vi.waitFor(() => expect(calls).toEqual(["github:42:true", "bitbucket:42:true"]));
 
     bitbucketGate.resolve(bitbucketInput);
     await bitbucketPromise;

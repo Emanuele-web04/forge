@@ -56,7 +56,9 @@ export function validateOutboundMcpOAuthDiscoveryState(input: {
     if (typeof endpoint !== "string") throw metadataError("invalid-metadata");
     if (httpsUrl(endpoint).origin !== issuer.origin) throw metadataError("endpoint-origin");
   }
-  for (const endpoint of [metadata.registration_endpoint, metadata.revocation_endpoint]) {
+  const revocationEndpoint =
+    "revocation_endpoint" in metadata ? metadata.revocation_endpoint : undefined;
+  for (const endpoint of [metadata.registration_endpoint, revocationEndpoint]) {
     if (endpoint === undefined) continue;
     if (typeof endpoint !== "string") throw metadataError("invalid-metadata");
     if (httpsUrl(endpoint).origin !== issuer.origin) throw metadataError("endpoint-origin");

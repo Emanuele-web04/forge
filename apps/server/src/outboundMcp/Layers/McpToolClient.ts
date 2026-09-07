@@ -399,7 +399,7 @@ export function makeMcpToolClient<Connection extends McpResolvedConnection>(
   const closeAll: McpToolClientShape["closeAll"] = () =>
     Effect.promise(async () => {
       const connectionIds = new Set([...sessions.keys(), ...connectionFlights.keys()]);
-      await Promise.all([...connectionIds].map(disposeConnection));
+      await Promise.all([...connectionIds].map((connectionId) => disposeConnection(connectionId)));
     }).pipe(Effect.orDie);
 
   return { validate, call, invalidate, closeAll };
@@ -587,7 +587,7 @@ async function createLiveSession(
 
   try {
     await requestFetch.run(signal, () =>
-      client.connect(transport, {
+      client.connect(transport as Parameters<Client["connect"]>[0], {
         signal,
         timeout: OUTBOUND_MCP_REQUEST_TIMEOUT_MS,
         maxTotalTimeout: OUTBOUND_MCP_REQUEST_TIMEOUT_MS,
@@ -625,7 +625,13 @@ async function createLiveSession(
           }
           throw error;
         }
-        tools.push(...result.tools);
+        tools.push(
+          ...result.tools.map((tool) => ({
+            name: tool.name,
+            inputSchema: tool.inputSchema,
+            ...(tool.outputSchema === undefined ? {} : { outputSchema: tool.outputSchema }),
+          })),
+        );
         if (tools.length > OUTBOUND_MCP_MAX_CATALOG_TOOLS) {
           throw new Error("Outbound MCP tool catalog exceeds the bounded tool count.");
         }

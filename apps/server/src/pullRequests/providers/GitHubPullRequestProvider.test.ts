@@ -250,17 +250,17 @@ describe("GitHubPullRequestProvider list and recovery", () => {
       ),
     );
 
-    expect(results[0].entries.map((entry) => [entry.number, entry.viewerInvolvement])).toEqual([
+    expect(results[0]!.entries.map((entry) => [entry.number, entry.viewerInvolvement])).toEqual([
       [1, "author"],
       [2, "review-requested"],
     ]);
-    expect(results[1].entries[0]).toMatchObject({
+    expect(results[1]!.entries[0]).toMatchObject({
       provider: "github",
       repository: "acme/widgets",
       capabilities: LEGACY_GITHUB_PULL_REQUEST_CAPABILITIES,
       viewerInvolvement: "review-requested",
     });
-    expect(results[2].entries[0]?.viewerInvolvement).toBe("author");
+    expect(results[2]!.entries[0]?.viewerInvolvement).toBe("author");
     expect(calls.filter((involvement) => involvement === "reviewing")).toHaveLength(1);
   });
 
