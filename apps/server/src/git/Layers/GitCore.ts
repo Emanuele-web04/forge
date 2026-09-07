@@ -41,11 +41,6 @@ import { decodeJsonResult } from "@synara/shared/schemaJson";
 import { GitCheckoutDirtyWorktreeError, GitCommandError } from "../Errors.ts";
 import { parseGitBlamePorcelain } from "../gitBlameParsing.ts";
 import {
-  buildRecreatedFileDiff,
-  removePatchSegmentsForPaths,
-  type RecreatedFileDiff,
-} from "../gitPatchCoalescing.ts";
-import {
   countTextFileLines,
   normalizeConfiguredMergeBranch,
   parseGitStatusPorcelain,
@@ -124,11 +119,6 @@ export function makeStatusUpstreamRefreshCacheTimeToLive() {
 const DEFAULT_BASE_BRANCH_CANDIDATES = ["main", "master"] as const;
 const EMPTY_TREE_OBJECT_ID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const RECENT_COMMIT_FIELD_SEPARATOR = "\u001f";
-// Pathspecs per `ls-tree` probe when checking which untracked paths a ref knows.
-const REF_TREE_PROBE_BATCH_SIZE = 200;
-// A recreated file identical to the ref is net-clean: neither the tracked
-// deletion nor the synthesized addition should be shown or counted.
-const IDENTICAL_RECREATED_FILE_DIFF: RecreatedFileDiff = { patch: "", insertions: 0, deletions: 0 };
 const UNCOMMITTED_BLAME_RESULT: GitBlameLineResult = {
   sha: "0".repeat(40),
   shortSha: "",
@@ -1661,13 +1651,13 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         };
       });
 
-    const listUntrackedFiles = (cwd: string, operationPrefix: string) =>
-      runGitStdout(
+    const listUntrackedFiles = (cwd: string, operationPrefix: string, env?: NodeJS.ProcessEnv) =>
+      executeGit(
         `${operationPrefix}.untrackedFiles`,
         cwd,
         ["ls-files", "--others", "--exclude-standard", "-z"],
-        true,
-      ).pipe(Effect.map((stdout) => stdout.split("\0").filter((entry) => entry.length > 0)));
+        { allowNonZeroExit: true, ...(env ? { env } : {}) },
+      ).pipe(Effect.map((result) => result.stdout.split("\0").filter((entry) => entry.length > 0)));
 
     const readUntrackedPatches = (
       cwd: string,
@@ -1971,9 +1961,11 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         // would otherwise be parsed as a blame flag rather than a revision.
         const requestedRev = input.rev?.trim() ?? "";
         const resolvedRev =
-          requestedRev.length === 0
-            ? null
-            : yield* resolveCommitObjectId(input.cwd, requestedRev, "GitCore.blameLine.revParse");
+          input.base === "branch"
+            ? yield* resolveBranchMergeBase(input.cwd)
+            : requestedRev.length === 0
+              ? null
+              : yield* resolveCommitObjectId(input.cwd, requestedRev, "GitCore.blameLine.revParse");
         const args = [
           "blame",
           "--porcelain",
@@ -2014,81 +2006,41 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         return parsed;
       });
 
-    // `git diff <ref>` only visits index-tracked paths, so a path the ref has,
-    // the index dropped, and the working tree recreated untracked would show up
-    // twice: as a tracked deletion and a synthesized addition. Diff the ref's
-    // blob against the working file instead so the path appears once.
-    const readRecreatedFileDiffs = (
+    // `git diff <ref>` only visits paths the index tracks, so a path the ref
+    // has, the index dropped, and the working tree recreated would show up
+    // twice: as a tracked deletion plus a synthesized untracked addition. A
+    // temporary index populated from the ref makes git itself diff every ref
+    // path against the working tree (with its own path quoting, mode, and
+    // size handling), and `ls-files --others` against that index yields
+    // exactly the working tree files the ref does not have.
+    const withRefIndex = <A>(
       cwd: string,
       resolvedRef: string,
-      untrackedFiles: ReadonlyArray<string>,
       operationPrefix: string,
-    ) =>
-      Effect.gen(function* () {
-        if (untrackedFiles.length === 0) {
-          return new Map<string, ReturnType<typeof buildRecreatedFileDiff>>();
-        }
-        // Probe only the untracked candidates: listing the whole ref tree would
-        // exceed the output cap on large repositories.
-        const refPaths = new Set<string>();
-        for (let start = 0; start < untrackedFiles.length; start += REF_TREE_PROBE_BATCH_SIZE) {
-          const listed = yield* runGitStdout(`${operationPrefix}.refTree`, cwd, [
-            "ls-tree",
-            "-r",
-            "--name-only",
-            "-z",
-            resolvedRef,
-            "--",
-            ...untrackedFiles.slice(start, start + REF_TREE_PROBE_BATCH_SIZE),
-          ]);
-          for (const entry of listed.split("\0")) {
-            if (entry.length > 0) refPaths.add(entry);
-          }
-        }
-        const recreated = untrackedFiles.filter((filePath) => refPaths.has(filePath));
-        const diffs = yield* Effect.forEach(
-          recreated,
-          (filePath) =>
-            Effect.scoped(
-              Effect.gen(function* () {
-                const blob = yield* runGitStdout(`${operationPrefix}.refBlob`, cwd, [
-                  "cat-file",
-                  "blob",
-                  `${resolvedRef}:${filePath}`,
-                ]);
-                const tempDir = yield* fileSystem
-                  .makeTempDirectoryScoped({ prefix: "synara-ref-blob-" })
-                  .pipe(Effect.orDie);
-                const baseCopy = path.join(tempDir, "base");
-                yield* fileSystem.writeFileString(baseCopy, blob).pipe(Effect.orDie);
-                const result = yield* executeGit(
-                  `${operationPrefix}.recreatedPatch`,
+      use: (env: NodeJS.ProcessEnv) => Effect.Effect<A, GitCommandError>,
+    ): Effect.Effect<A, GitCommandError> =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const tempIndexDir = yield* fileSystem
+            .makeTempDirectoryScoped({ prefix: `synara-ref-index-${process.pid}-` })
+            .pipe(
+              Effect.mapError((cause) =>
+                createGitCommandError(
+                  `${operationPrefix}.readTree`,
                   cwd,
-                  [
-                    "diff",
-                    "--no-index",
-                    "--patch",
-                    "--no-color",
-                    "--src-prefix=a/",
-                    "--dst-prefix=b/",
-                    "--",
-                    baseCopy,
-                    filePath,
-                  ],
-                  { allowNonZeroExit: true, timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS },
-                );
-                const diff =
-                  result.code === 0 && result.stdout.length === 0
-                    ? IDENTICAL_RECREATED_FILE_DIFF
-                    : buildRecreatedFileDiff(result.stdout, filePath);
-                return [filePath, diff] as const;
-              }),
-            ),
-          { concurrency: MAX_UNTRACKED_DIFF_CONCURRENCY },
-        );
-        // A binary recreation keeps git's own deletion + addition pair.
-        return new Map(diffs.filter(([, diff]) => diff !== null));
-      });
+                  ["read-tree", resolvedRef],
+                  cause.message,
+                ),
+              ),
+            );
+          const env = { GIT_INDEX_FILE: nodePath.join(tempIndexDir, "index") };
+          yield* executeGit(`${operationPrefix}.readTree`, cwd, ["read-tree", resolvedRef], {
+            env,
+            fallbackErrorMessage: "git read-tree failed",
+          });
+          return yield* use(env);
+        }),
+      );
 
     const readRefPatch: GitCoreShape["readRefPatch"] = (cwd, ref) =>
       Effect.gen(function* () {
@@ -2108,42 +2060,33 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           );
         }
 
-        const trackedPatch = yield* executeGit(
-          "GitCore.readRefPatch.trackedPatch",
-          cwd,
-          ["diff", "--patch", "--no-color", "--no-ext-diff", resolvedRef],
-          {
-            timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
-            maxOutputBytes: 10_000_000,
-          },
-        ).pipe(Effect.map((result) => result.stdout));
-        const untrackedFiles = yield* listUntrackedFiles(cwd, "GitCore.readRefPatch");
-        const recreated = yield* readRecreatedFileDiffs(
-          cwd,
-          resolvedRef,
-          untrackedFiles,
-          "GitCore.readRefPatch",
+        return yield* withRefIndex(cwd, resolvedRef, "GitCore.readRefPatch", (env) =>
+          Effect.gen(function* () {
+            const trackedPatch = yield* executeGit(
+              "GitCore.readRefPatch.trackedPatch",
+              cwd,
+              ["diff", "--patch", "--no-color", "--no-ext-diff", resolvedRef],
+              {
+                env,
+                timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
+                maxOutputBytes: 10_000_000,
+              },
+            ).pipe(Effect.map((result) => result.stdout));
+            const untrackedFiles = yield* listUntrackedFiles(cwd, "GitCore.readRefPatch", env);
+            const untrackedPatches = yield* readUntrackedPatches(
+              cwd,
+              "GitCore.readRefPatch",
+              untrackedFiles,
+            );
+            return { patch: joinPatchSegments([trackedPatch, ...untrackedPatches]) };
+          }),
         );
-        const untrackedPatches = yield* readUntrackedPatches(
-          cwd,
-          "GitCore.readRefPatch",
-          untrackedFiles.filter((filePath) => !recreated.has(filePath)),
-        );
-
-        return {
-          patch: joinPatchSegments([
-            removePatchSegmentsForPaths(trackedPatch, new Set(recreated.keys())),
-            ...untrackedPatches,
-            ...[...recreated.values()].map((diff) => diff?.patch ?? ""),
-          ]),
-        };
       });
 
     const readDiffStats: GitCoreShape["readDiffStats"] = (cwd, scope, ref) =>
       Effect.gen(function* () {
         let trackedArgs: ReadonlyArray<string>;
         let includeUntracked = false;
-        let coalesceRecreatedAgainst: string | null = null;
         switch (scope) {
           case "staged":
             trackedArgs = ["diff", "--cached", "--numstat", "-z", "--no-ext-diff"];
@@ -2175,10 +2118,27 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                 `Cannot resolve "${compareRef}" to a commit in this repository.`,
               );
             }
-            trackedArgs = ["diff", "--numstat", "-z", "--no-ext-diff", resolvedRef];
-            includeUntracked = true;
-            coalesceRecreatedAgainst = resolvedRef;
-            break;
+            return yield* withRefIndex(cwd, resolvedRef, "GitCore.readDiffStats", (env) =>
+              Effect.gen(function* () {
+                const tracked = yield* executeGit(
+                  "GitCore.readDiffStats.tracked",
+                  cwd,
+                  ["diff", "--numstat", "-z", "--no-ext-diff", resolvedRef],
+                  { env, timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS, maxOutputBytes: 10_000_000 },
+                ).pipe(Effect.map((result) => result.stdout));
+                const untracked = yield* readUntrackedNumstats(
+                  cwd,
+                  "GitCore.readDiffStats",
+                  yield* listUntrackedFiles(cwd, "GitCore.readDiffStats", env),
+                );
+                const totals = summarizeGitNumstatOutputs([tracked, ...untracked]);
+                return {
+                  additions: totals.insertions,
+                  deletions: totals.deletions,
+                  fileCount: totals.files.length,
+                };
+              }),
+            );
           }
           case "workingTree":
           default: {
@@ -2203,41 +2163,14 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
           maxOutputBytes: 10_000_000,
         }).pipe(Effect.map((result) => result.stdout));
-        const untrackedFiles = includeUntracked
-          ? yield* listUntrackedFiles(cwd, "GitCore.readDiffStats")
-          : [];
-        const recreated = coalesceRecreatedAgainst
-          ? yield* readRecreatedFileDiffs(
-              cwd,
-              coalesceRecreatedAgainst,
-              untrackedFiles,
-              "GitCore.readDiffStats",
-            )
-          : new Map<string, ReturnType<typeof buildRecreatedFileDiff>>();
         const untracked = includeUntracked
-          ? yield* readUntrackedNumstats(
-              cwd,
-              "GitCore.readDiffStats",
-              untrackedFiles.filter((filePath) => !recreated.has(filePath)),
-            )
+          ? yield* readUntrackedNumstats(cwd, "GitCore.readDiffStats")
           : [];
         const totals = summarizeGitNumstatOutputs([tracked, ...untracked]);
-        const files = totals.files.filter((file) => !recreated.has(file.path));
-        let additions = 0;
-        let deletions = 0;
-        for (const file of files) {
-          additions += file.insertions;
-          deletions += file.deletions;
-        }
-        for (const diff of recreated.values()) {
-          additions += diff?.insertions ?? 0;
-          deletions += diff?.deletions ?? 0;
-        }
         return {
-          additions,
-          deletions,
-          fileCount:
-            files.length + [...recreated.values()].filter((diff) => diff?.patch.length).length,
+          additions: totals.insertions,
+          deletions: totals.deletions,
+          fileCount: totals.files.length,
         };
       });
 

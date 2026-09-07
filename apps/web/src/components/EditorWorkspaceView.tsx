@@ -10,7 +10,10 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
+  type RefObject,
+  useCallback,
   useEffect,
+  useImperativeHandle,
   useRef,
   useState,
 } from "react";
@@ -104,6 +107,11 @@ interface EditorWorkspaceViewProps {
   onEditFile: (filePath: string) => void;
   onCloseEdit: () => void;
   onExitEditorView: () => void;
+  /**
+   * Lets the owner route its own editor-replacing actions (chat file links,
+   * diff toggles) through the same dirty/saving guard as in-view exits.
+   */
+  leaveGuardRef?: RefObject<EditorLeaveGuard | null> | undefined;
   onReferenceInChat?: (reference: ChatFileReference) => void;
   onAskWhyInChat?: (reference: ChatFileReference) => void;
   onCommentInChat?: (comment: FileCommentSelection) => void;
@@ -373,6 +381,10 @@ function EditorActivityBar(props: {
   );
 }
 
+export interface EditorLeaveGuard {
+  guardLeavingEdit: (run: () => void) => void;
+}
+
 export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
   // The editor header sits flush against the window's left edge whenever the
   // global sidebar is collapsed, so it has to clear the macOS traffic lights the
@@ -429,17 +441,21 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
     }
     leaveAfterSave.run();
   }, [editDirty, editSaving, leaveAfterSave]);
-  const guardLeavingEdit = (run: () => void) => {
-    if (inEditMode && editSaving) {
-      setLeaveAfterSave({ run });
-      return;
-    }
-    if (inEditMode && editDirty) {
-      setPendingLeaveEdit({ run });
-      return;
-    }
-    run();
-  };
+  const guardLeavingEdit = useCallback(
+    (run: () => void) => {
+      if (inEditMode && editSaving) {
+        setLeaveAfterSave({ run });
+        return;
+      }
+      if (inEditMode && editDirty) {
+        setPendingLeaveEdit({ run });
+        return;
+      }
+      run();
+    },
+    [editDirty, editSaving, inEditMode],
+  );
+  useImperativeHandle(props.leaveGuardRef, () => ({ guardLeavingEdit }), [guardLeavingEdit]);
   const activityBarSelection = (item: EditorActivityBarItem) => ({
     item,
     sidebarVisible,

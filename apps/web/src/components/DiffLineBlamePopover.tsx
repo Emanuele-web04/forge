@@ -9,6 +9,7 @@ import { ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME } from "~/surfaceStyles";
 import { formatShortDateTimestamp } from "~/timestampFormat";
 import { resolveTranscriptSelectionActionLayout } from "./chat/chatSelectionActions";
 import type { DiffLineClickProps } from "./chat/FileDiffView";
+import type { DiffEditBaseRev } from "~/lib/diffEditBaseRev";
 
 const BLAME_POPOVER_WIDTH_PX = 288;
 const BLAME_POPOVER_HEIGHT_PX = 116;
@@ -16,9 +17,18 @@ const BLAME_POPOVER_HEIGHT_PX = 116;
 export interface DiffLineBlameTarget {
   filePath: string;
   line: number;
-  rev: string | null;
+  /** Deleted lines live in the diff's base tree; everything else is the working tree. */
+  side: "base" | "workingTree";
   left: number;
   top: number;
+}
+
+function resolveBlameBaseInput(base: DiffEditBaseRev): { rev: string } | { base: "branch" } | {} {
+  if ("rev" in base) {
+    return { rev: base.rev };
+  }
+  // Blame cannot read the index; index-backed scopes never enable it.
+  return base.base === "branch" ? { base: "branch" } : {};
 }
 
 function hasActiveTextSelection(): boolean {
@@ -45,7 +55,7 @@ export function resolveDiffLineBlameTarget(
   return {
     filePath,
     line: line.lineNumber,
-    rev: line.lineType === "change-deletion" ? "HEAD" : null,
+    side: line.lineType === "change-deletion" ? "base" : "workingTree",
     left: layout.left,
     top: layout.top,
   };
@@ -70,6 +80,8 @@ function BlameActionButton(props: { label: string; icon: ReactNode; onClick: () 
 export function DiffLineBlamePopover(props: {
   target: DiffLineBlameTarget;
   cwd: string | null;
+  /** The diff's base revision, used to blame deleted lines where they still exist. */
+  base: DiffEditBaseRev;
   timestampFormat: TimestampFormat;
   onReferenceInChat: ((target: DiffLineBlameTarget) => void) | undefined;
   onClose: () => void;
@@ -81,7 +93,7 @@ export function DiffLineBlamePopover(props: {
       cwd: props.cwd,
       filePath: props.target.filePath,
       line: props.target.line,
-      ...(props.target.rev !== null ? { rev: props.target.rev } : {}),
+      ...(props.target.side === "base" ? resolveBlameBaseInput(props.base) : {}),
     }),
   );
 

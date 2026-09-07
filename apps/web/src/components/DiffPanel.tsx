@@ -1526,6 +1526,7 @@ export default function DiffPanel({
               <DiffLineBlamePopover
                 target={blameTarget}
                 cwd={activeCwd ?? null}
+                base={resolveDiffEditBaseRev(repoDiffScope, repoDiffCompareRef)}
                 timestampFormat={settings.timestampFormat}
                 onReferenceInChat={referenceBlameLineInChat}
                 onClose={closeLineBlame}

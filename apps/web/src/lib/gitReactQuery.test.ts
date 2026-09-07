@@ -372,7 +372,7 @@ describe("git query invalidation", () => {
     };
     const unsubscribes = [
       observe(gitQueryKeys.status(cwd), "status"),
-      observe(gitQueryKeys.blameLine(cwd, "src/a.ts", 3, null), "blame"),
+      observe(gitQueryKeys.blameLine(cwd, "src/a.ts", 3, null, null), "blame"),
       observe(gitQueryKeys.fileAtRev(cwd, "src/a.ts", "HEAD", null), "file-at-rev"),
     ];
 

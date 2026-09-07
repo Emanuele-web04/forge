@@ -204,6 +204,29 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("blames a deleted line at the branch diff's merge base", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(tmp);
+        const baseSha = yield* git(tmp, ["rev-parse", "HEAD"]);
+        yield* git(tmp, ["checkout", "-b", "feature"]);
+        yield* git(tmp, ["branch", `--set-upstream-to=${initialBranch}`]);
+        yield* writeTextFile(path.join(tmp, "README.md"), "# rewritten\n");
+        yield* git(tmp, ["add", "README.md"]);
+        yield* git(tmp, ["commit", "-m", "rewrite readme"]);
+
+        const result = yield* core.blameLine({
+          cwd: tmp,
+          filePath: "README.md",
+          line: 1,
+          base: "branch",
+        });
+
+        expect(result.sha).toBe(baseSha);
+      }),
+    );
+
     it.effect("rejects an option-like revision before invoking blame", () =>
       Effect.gen(function* () {
         const core = yield* GitCore;

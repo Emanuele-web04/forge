@@ -59,7 +59,8 @@ export const gitQueryKeys = {
     filePath: string | null,
     line: number | null,
     rev: string | null,
-  ) => ["git", "blame-line", cwd, filePath, line, rev] as const,
+    base: "branch" | null,
+  ) => ["git", "blame-line", cwd, filePath, line, rev, base] as const,
   fileAtRev: (
     cwd: string | null,
     filePath: string | null,
@@ -612,11 +613,13 @@ export function gitBlameLineQueryOptions(input: {
   filePath: string | null;
   line: number | null;
   rev?: string | undefined;
+  base?: "branch" | undefined;
   enabled?: boolean;
 }) {
   const rev = input.rev ?? null;
+  const base = input.base ?? null;
   return queryOptions({
-    queryKey: gitQueryKeys.blameLine(input.cwd, input.filePath, input.line, rev),
+    queryKey: gitQueryKeys.blameLine(input.cwd, input.filePath, input.line, rev, base),
     queryFn: async () => {
       const api = ensureNativeApi();
       if (!input.cwd || !input.filePath || input.line === null) {
@@ -627,6 +630,7 @@ export function gitBlameLineQueryOptions(input: {
         filePath: input.filePath,
         line: input.line,
         ...(rev !== null ? { rev } : {}),
+        ...(base !== null ? { base } : {}),
       });
     },
     enabled:

@@ -165,6 +165,8 @@ export const GitBlameLineInput = Schema.Struct({
   filePath: TrimmedNonEmptyStringSchema,
   line: PositiveInt,
   rev: Schema.optional(GitRevisionArgumentSchema),
+  /** Blame at the branch diff's base (upstream or fallback merge base) instead of `rev`. */
+  base: Schema.optional(Schema.Literal("branch")),
 });
 export type GitBlameLineInput = typeof GitBlameLineInput.Type;
 
