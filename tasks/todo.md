@@ -7,8 +7,20 @@
   `Sidebar.logic.ts` / `Sidebar.tsx` / `SidebarThreadRowContent.tsx`).
 - `bun typecheck` verde en todo el monorepo (se arreglaron los 24 errores preexistentes de `apps/web`
   y los 7 de `apps/server`/`packages` que quedaban ocultos tras el grafo de turbo).
+- Subagentes compactos en el sidebar (plan `docs/superpowers/plans/2026-09-07-compact-sidebar-subagents.md`,
+  doc `docs/features/compact-sidebar-subagents.md`): fila compacta única, toggle numérico, prefijo de cinco,
+  reveal por navegación persistido en `expandedThreadIds`, agregado de descendientes ocultos.
+  Casos A10, A25 y A29 solo verificados manualmente (no hay test de navegador que monte `Sidebar.tsx`).
 
 ## Tech Debt
+
+- `SidebarActivityView` no compila con React Compiler (`Date.now()` en render, `react-hooks-js/purity`):
+  todos los `useMemo` manuales son necesarios y los splits de familias se rehacen en cada render.
+  Mover `nowMs` a un hook/tick memoizado.
+- `SidebarThreadBranchPaging`: «Show less» sigue visible cuando el prefijo lo agrandó solo la navegación
+  (el reset devuelve el mismo valor y el clic no hace nada). Ocultarlo cuando `resetTo === requested`.
+- `packages/shared/src/pullRequestList.test.ts` rompe `bun typecheck` en `nacho/integration` (e5dbab115);
+  hay un fix sin commitear en el checkout principal de otra sesión.
 
 - 8 ficheros de test fallan en `main` por un mock de storage roto: `TypeError: getStorage(...).setItem is
 not a function` en `apps/web/src/lib/storage.ts:116`. Afecta a `chatHotPath.compiler.test.ts`,

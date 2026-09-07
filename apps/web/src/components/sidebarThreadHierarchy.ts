@@ -13,12 +13,40 @@ export interface ThreadHierarchyNode {
   readonly sourceThreadId?: string | null | undefined;
   readonly gatewayOperationId?: string | null | undefined;
   readonly projectId?: string | null | undefined;
+  readonly createdAt?: string | undefined;
+}
+
+function parseHierarchyCreationMs(value: string | undefined): number {
+  if (typeof value !== "string" || value.length === 0) {
+    return 0;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function compareHierarchyChildIds(
+  leftId: string,
+  rightId: string,
+  creationMsByKey: ReadonlyMap<string, number>,
+): number {
+  const leftMs = creationMsByKey.get(leftId) ?? 0;
+  const rightMs = creationMsByKey.get(rightId) ?? 0;
+  if (leftMs !== rightMs) {
+    return leftMs - rightMs;
+  }
+  if (leftId < rightId) {
+    return -1;
+  }
+  if (leftId > rightId) {
+    return 1;
+  }
+  return 0;
 }
 
 export interface ThreadHierarchyIndex<T extends ThreadHierarchyNode> {
   /** First input occurrence wins; keyed by thread id. */
   readonly nodesById: ReadonlyMap<T["id"], T>;
-  /** Direct children in stable input order; structurally valid links only. */
+  /** Direct children in creation order (createdAt asc, id asc); structurally valid links only. */
   readonly childIdsByParentId: ReadonlyMap<T["id"], readonly T["id"][]>;
   /** Root ids in stable input order. */
   readonly rootIds: readonly T["id"][];
@@ -90,13 +118,16 @@ export function buildThreadHierarchyIndex<T extends ThreadHierarchyNode>(
 
   // Declared parent key per node (null = root candidate). Self-references and
   // missing parents are resolved during the visibility walk below.
+  // Creation times are parsed once so sibling sorting never re-parses dates.
   const declaredParentKey = new Map<string, string | null>();
   const declaredEdgeKind = new Map<string, ThreadHierarchyEdgeKind>();
+  const creationMsByKey = new Map<string, number>();
   for (const id of orderedIds) {
     const thread = nodesById.get(id);
     if (!thread) {
       continue;
     }
+    creationMsByKey.set(thread.id as string, parseHierarchyCreationMs(thread.createdAt));
     const link = readParentLink(thread);
     declaredParentKey.set(thread.id as string, link?.parentId ?? null);
     if (link) {
@@ -147,7 +178,11 @@ export function buildThreadHierarchyIndex<T extends ThreadHierarchyNode>(
       }
       const childProjectId = thread.projectId ?? null;
       const parentProjectId = parent.projectId ?? null;
-      if (childProjectId !== null && parentProjectId !== null && childProjectId !== parentProjectId) {
+      if (
+        childProjectId !== null &&
+        parentProjectId !== null &&
+        childProjectId !== parentProjectId
+      ) {
         // Kinship is valid only within the same project.
         result = false;
         break;
@@ -196,6 +231,13 @@ export function buildThreadHierarchyIndex<T extends ThreadHierarchyNode>(
   // Breadth-first propagation of root ids and depths from the roots. The
   // forest is a DAG of valid links, but the visited guard keeps this
   // iterative walk bounded even if the input was adversarial.
+  // Direct siblings sort by creation time ascending, then id ascending with
+  // code-unit comparison. Root order always follows stable input order.
+  for (const childIds of childIdsByParentId.values()) {
+    childIds.sort((left, right) =>
+      compareHierarchyChildIds(left as string, right as string, creationMsByKey),
+    );
+  }
   const visitedKeys = new Set<string>();
   const queue: T["id"][] = [];
   for (const rootId of rootIds) {
@@ -233,7 +275,7 @@ export function buildThreadHierarchyIndex<T extends ThreadHierarchyNode>(
   };
 }
 
-/** Direct children of a parent in stable input order (empty when unknown). */
+/** Direct children of a parent in creation order (empty when unknown). */
 export function getChildThreadIds<T extends ThreadHierarchyNode>(
   index: ThreadHierarchyIndex<T>,
   parentId: T["id"],
@@ -334,14 +376,33 @@ export function collectRevealThreadIds<T extends ThreadHierarchyNode>(
   return revealed;
 }
 
-// Each open branch shows this many direct children first, then pages forward
-// in steps of the same size. The counter always shows the total.
-export const SIDEBAR_THREAD_HIERARCHY_CHILD_PAGE_SIZE = 20;
+// Each open branch shows this many direct children first. "Show more" reveals
+// all remaining direct children at once; the counter always shows the total.
+export const SIDEBAR_THREAD_HIERARCHY_INITIAL_CHILD_COUNT = 5;
+
+function normalizeHierarchyTotalCount(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.floor(value));
+}
+
+function normalizeHierarchyMinimumCount(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.floor(value));
+}
+
+function normalizeHierarchyRequestedCount(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return SIDEBAR_THREAD_HIERARCHY_INITIAL_CHILD_COUNT;
+  }
+  return Math.max(SIDEBAR_THREAD_HIERARCHY_INITIAL_CHILD_COUNT, Math.floor(value));
+}
 
 export interface ThreadChildPage {
-  /** Requested extra pages clamped to what the child count can consume. */
-  effectiveExtraPages: number;
-  /** Children rendered: initial page plus extra pages. */
+  /** Children rendered: initial prefix, explicit request, or reveal minimum. */
   visibleCount: number;
   hasMoreChildren: boolean;
   hasLessChildren: boolean;
@@ -349,27 +410,25 @@ export interface ThreadChildPage {
 
 export function resolveThreadChildPage(input: {
   totalChildCount: number;
-  requestedExtraPages: number;
+  requestedVisibleCount?: number | undefined;
+  minimumVisibleCount?: number | undefined;
 }): ThreadChildPage {
-  const totalChildCount = Math.max(0, Math.floor(input.totalChildCount));
-  const requestedExtraPages = Number.isFinite(input.requestedExtraPages)
-    ? Math.max(0, Math.floor(input.requestedExtraPages))
-    : 0;
-  const hiddenBeyondInitial = Math.max(0, totalChildCount - SIDEBAR_THREAD_HIERARCHY_CHILD_PAGE_SIZE);
-  const maxExtraPages =
-    SIDEBAR_THREAD_HIERARCHY_CHILD_PAGE_SIZE > 0
-      ? Math.ceil(hiddenBeyondInitial / SIDEBAR_THREAD_HIERARCHY_CHILD_PAGE_SIZE)
-      : 0;
-  const effectiveExtraPages = Math.min(requestedExtraPages, maxExtraPages);
-  const visibleCount =
-    SIDEBAR_THREAD_HIERARCHY_CHILD_PAGE_SIZE +
-    effectiveExtraPages * SIDEBAR_THREAD_HIERARCHY_CHILD_PAGE_SIZE;
+  const totalChildCount = normalizeHierarchyTotalCount(input.totalChildCount);
+  const requestedCount = normalizeHierarchyRequestedCount(input.requestedVisibleCount);
+  const requiredCount = normalizeHierarchyMinimumCount(input.minimumVisibleCount);
+  const visibleCount = Math.min(totalChildCount, Math.max(requestedCount, requiredCount));
+  const hasMoreChildren = totalChildCount > visibleCount;
+  const hasLessChildren =
+    visibleCount >
+    Math.min(
+      totalChildCount,
+      Math.max(SIDEBAR_THREAD_HIERARCHY_INITIAL_CHILD_COUNT, requiredCount),
+    );
 
   return {
-    effectiveExtraPages,
     visibleCount,
-    hasMoreChildren: totalChildCount > visibleCount,
-    hasLessChildren: effectiveExtraPages > 0,
+    hasMoreChildren,
+    hasLessChildren,
   };
 }
 
@@ -379,43 +438,69 @@ export interface VisibleThreadChildren<T extends ThreadHierarchyNode> {
   totalChildCount: number;
   hasMoreChildren: boolean;
   hasLessChildren: boolean;
-  effectiveExtraPages: number;
+  visibleCount: number;
 }
 
 /**
- * Which direct children of a parent render: the current page slice plus any
- * revealed ids (the active-descendant path) even when they fall outside the
- * page. Order always follows the stable input order; remaining ids are
- * computed from actually hidden children so "Show more" never repeats rows.
+ * Which direct children of a parent render: the visible prefix 1..N where N
+ * covers the explicit request and any revealed active-descendant position.
+ * Explicit navigation to child 17 renders the prefix 1–17, never 1–5 plus 17.
+ * Order always follows creation order; remaining ids are the actual hidden
+ * suffix so "Show more" never repeats rows.
  */
 export function resolveVisibleChildThreadIds<T extends ThreadHierarchyNode>(input: {
   index: ThreadHierarchyIndex<T>;
   parentId: T["id"];
-  requestedExtraPages?: number | undefined;
+  requestedVisibleCount?: number | undefined;
+  minimumVisibleCount?: number | undefined;
   revealedThreadIds?: ReadonlySet<T["id"]> | undefined;
 }): VisibleThreadChildren<T> {
   const childIds = getChildThreadIds(input.index, input.parentId);
-  const page = resolveThreadChildPage({
-    totalChildCount: childIds.length,
-    requestedExtraPages: input.requestedExtraPages ?? 0,
-  });
-  const pageIds = new Set(childIds.slice(0, page.visibleCount));
-  if (input.revealedThreadIds) {
-    for (const childId of childIds) {
-      if (input.revealedThreadIds.has(childId)) {
-        pageIds.add(childId);
-      }
+  let requiredCount = normalizeHierarchyMinimumCount(input.minimumVisibleCount);
+  for (let position = 0; position < childIds.length; position += 1) {
+    const childId = childIds[position];
+    if (childId !== undefined && input.revealedThreadIds?.has(childId)) {
+      requiredCount = Math.max(requiredCount, position + 1);
     }
   }
-  const visibleChildIds = childIds.filter((childId) => pageIds.has(childId));
-  const hiddenChildIds = childIds.filter((childId) => !pageIds.has(childId));
+  const page = resolveThreadChildPage({
+    totalChildCount: childIds.length,
+    requestedVisibleCount: input.requestedVisibleCount,
+    minimumVisibleCount: requiredCount,
+  });
 
   return {
-    visibleChildIds,
-    hiddenChildIds,
+    visibleChildIds: childIds.slice(0, page.visibleCount),
+    hiddenChildIds: childIds.slice(page.visibleCount),
     totalChildCount: childIds.length,
-    hasMoreChildren: hiddenChildIds.length > 0,
+    hasMoreChildren: page.hasMoreChildren,
     hasLessChildren: page.hasLessChildren,
-    effectiveExtraPages: page.effectiveExtraPages,
+    visibleCount: page.visibleCount,
   };
+}
+
+export interface BranchPagingState {
+  hiddenCount: number;
+  canShowLess: boolean;
+}
+
+/**
+ * Paging-row state for a rendered branch, from what actually mounted. Returns
+ * null when neither "Show more" nor "Show less" applies (0–5 children at the
+ * initial prefix). Shared by every surface so the two controls cannot drift.
+ */
+export function resolveBranchPagingState(input: {
+  totalChildCount: number;
+  renderedDirectCount: number;
+  requestedVisibleCount: number | undefined;
+}): BranchPagingState | null {
+  const requestedCount = normalizeHierarchyRequestedCount(input.requestedVisibleCount);
+  const hiddenCount = Math.max(0, input.totalChildCount - input.renderedDirectCount);
+  const canShowLess =
+    requestedCount > SIDEBAR_THREAD_HIERARCHY_INITIAL_CHILD_COUNT &&
+    input.renderedDirectCount > SIDEBAR_THREAD_HIERARCHY_INITIAL_CHILD_COUNT;
+  if (hiddenCount <= 0 && !canShowLess) {
+    return null;
+  }
+  return { hiddenCount, canShowLess };
 }

@@ -45,7 +45,7 @@ const MAX_PERSISTED_THREAD_LIST_EXTRA_PAGES = 1000;
 // Expanded branches are explicit user preference shared across views; the cap
 // only guards storage against absurd/corrupted values, never trims valid opens
 // during a session. Missing threads are kept so hydration/undo restore them.
-const MAX_PERSISTED_EXPANDED_THREAD_IDS = 500;
+export const MAX_PERSISTED_EXPANDED_THREAD_IDS = 500;
 
 export function sanitizeExpandedThreadIds(value: unknown): string[] {
   if (!Array.isArray(value)) {
@@ -85,21 +85,6 @@ export function toggleExpandedThreadId(
     return next;
   }
   return next.slice(next.length - MAX_PERSISTED_EXPANDED_THREAD_IDS);
-}
-
-/** In-memory per-branch child paging shared during the Sidebar mount (not persisted). */
-export function resolveChildExtraPages(
-  childExtraPagesByParentId: ReadonlyMap<string, number> | undefined,
-  parentId: string,
-): number {
-  if (!childExtraPagesByParentId) {
-    return 0;
-  }
-  const pages = childExtraPagesByParentId.get(parentId);
-  if (typeof pages !== "number" || !Number.isFinite(pages)) {
-    return 0;
-  }
-  return Math.max(0, Math.floor(pages));
 }
 
 export function normalizeSidebarProjectThreadListCwd(cwd: string): string {

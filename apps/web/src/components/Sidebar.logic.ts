@@ -1059,28 +1059,33 @@ export interface SidebarThreadTreeRow<
   edgeKind: ThreadHierarchyEdgeKind | undefined;
 }
 
-// Build the project-local parent/child thread tree while preserving sort order from the input list.
+// Build the project-local parent/child thread tree while preserving root order from the input list.
 //
 // The forest comes from the shared sidebarThreadHierarchy index: kinship is
 // `parentThreadId` (subagent) or `sourceThreadId` (nested batch) within the
 // same project only, orphans stay hidden, and cycles/duplicates cannot loop
-// the walk. Roots always render; children render only under an expanded
-// parent. Branches start closed: expansion is explicit (`expandedThreadIds`,
-// persisted in Sidebar.uiState.ts) plus a transient reveal of the
-// `forceVisibleThreadId` ancestor path, which an explicit close
-// (`collapsedThreadIds`) can override until the active thread changes. Each
-// open branch pages its direct children 20 by 20 via
-// `childExtraPagesByParentId`; a revealed active descendant is always
-// included even outside the current page.
+// the walk. Direct siblings sort by creation time, then id. Roots always
+// render; children render only under an expanded parent. Branches start
+// closed: expansion is explicit (`expandedThreadIds`, persisted in
+// Sidebar.uiState.ts) plus a transient reveal of the `forceVisibleThreadId`
+// ancestor path, which an explicit close (`collapsedThreadIds`) can override
+// until the active thread changes. Each open branch shows an initial prefix
+// of five direct children via `childVisibleCountByParentId`; a revealed
+// active descendant enlarges the prefix through its position.
 export function buildProjectThreadTree<
   T extends Pick<SidebarThreadSummary, "id" | "parentThreadId"> &
-    Partial<Pick<SidebarThreadSummary, "projectId" | "sourceThreadId" | "gatewayOperationId">>,
+    Partial<
+      Pick<
+        SidebarThreadSummary,
+        "projectId" | "sourceThreadId" | "gatewayOperationId" | "createdAt"
+      >
+    >,
 >(input: {
   threads: readonly T[];
   forceVisibleThreadId?: T["id"] | undefined;
   expandedThreadIds?: ReadonlySet<T["id"]> | undefined;
   collapsedThreadIds?: ReadonlySet<T["id"]> | undefined;
-  childExtraPagesByParentId?: ReadonlyMap<T["id"], number> | undefined;
+  childVisibleCountByParentId?: ReadonlyMap<T["id"], number> | undefined;
 }): SidebarThreadTreeRow<T>[] {
   const { forceVisibleThreadId, threads } = input;
   const index = buildThreadHierarchyIndex(threads);
@@ -1123,7 +1128,7 @@ export function buildProjectThreadTree<
       const { visibleChildIds } = resolveVisibleChildThreadIds({
         index,
         parentId: threadId,
-        requestedExtraPages: input.childExtraPagesByParentId?.get(threadId) ?? 0,
+        requestedVisibleCount: input.childVisibleCountByParentId?.get(threadId),
         revealedThreadIds,
       });
       for (let childPosition = visibleChildIds.length - 1; childPosition >= 0; childPosition -= 1) {
@@ -1264,7 +1269,12 @@ export function orderPinnedProjectsForSidebar<T extends Pick<Project, "id">>(
 // the same project; orphans and cross-project links stay hidden as usual.
 export function getUnpinnedThreadsForSidebar<
   T extends Pick<Thread, "id"> &
-    Partial<Pick<SidebarThreadSummary, "parentThreadId" | "projectId" | "sourceThreadId" | "gatewayOperationId">>,
+    Partial<
+      Pick<
+        SidebarThreadSummary,
+        "parentThreadId" | "projectId" | "sourceThreadId" | "gatewayOperationId"
+      >
+    >,
 >(threads: readonly T[], pinnedThreadIds: readonly T["id"][]): T[] {
   if (pinnedThreadIds.length === 0) {
     return [...threads];
@@ -1307,7 +1317,12 @@ export function getUnpinnedThreadsForSidebar<
  */
 export function getPinnedFamilyRootIdsForSidebar<
   T extends Pick<Thread, "id"> &
-    Partial<Pick<SidebarThreadSummary, "parentThreadId" | "projectId" | "sourceThreadId" | "gatewayOperationId">>,
+    Partial<
+      Pick<
+        SidebarThreadSummary,
+        "parentThreadId" | "projectId" | "sourceThreadId" | "gatewayOperationId"
+      >
+    >,
 >(threads: readonly T[], pinnedThreadIds: readonly T["id"][]): T["id"][] {
   if (pinnedThreadIds.length === 0) {
     return [];
@@ -1316,9 +1331,9 @@ export function getPinnedFamilyRootIdsForSidebar<
   const seenRoots = new Set<T["id"]>();
   const rootIds: T["id"][] = [];
   for (const pinnedThreadId of pinnedThreadIds) {
-    const rootId = index.rootIdByThreadId.get(pinnedThreadId) ?? (
-      index.nodesById.has(pinnedThreadId) ? pinnedThreadId : undefined
-    );
+    const rootId =
+      index.rootIdByThreadId.get(pinnedThreadId) ??
+      (index.nodesById.has(pinnedThreadId) ? pinnedThreadId : undefined);
     if (rootId === undefined || seenRoots.has(rootId)) {
       continue;
     }
@@ -1639,7 +1654,7 @@ export function deriveSidebarProjectData(input: {
   previewPageSize: number;
   expandedThreadIds?: ReadonlySet<ThreadId> | undefined;
   collapsedThreadIds?: ReadonlySet<ThreadId> | undefined;
-  childExtraPagesByParentId?: ReadonlyMap<ThreadId, number> | undefined;
+  childVisibleCountByParentId?: ReadonlyMap<ThreadId, number> | undefined;
   resolveThreadStatus?: (
     thread: SidebarThreadSummary,
   ) => ReturnType<typeof resolveThreadStatusPill>;
@@ -1704,7 +1719,7 @@ export function deriveSidebarProjectData(input: {
       forceVisibleThreadId: input.activeSidebarThreadId,
       expandedThreadIds: input.expandedThreadIds,
       collapsedThreadIds: input.collapsedThreadIds,
-      childExtraPagesByParentId: input.childExtraPagesByParentId,
+      childVisibleCountByParentId: input.childVisibleCountByParentId,
     });
     const orderedEntries: SidebarProjectEntry[] = projectThreadTree.map(
       ({ thread, depth, rootThreadId, directChildCount, edgeKind }) => ({

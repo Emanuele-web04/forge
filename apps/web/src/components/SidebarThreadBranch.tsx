@@ -3,28 +3,59 @@
 // Exports: SidebarThreadHierarchyBranch, hierarchy helpers, and flat-list nesting.
 // Depends on: DisclosureRegion/Chevron + disclosureMotion only (220ms ease-out, reduced-motion safe).
 
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type { ThreadId } from "@synara/contracts";
-import { pluralize } from "@synara/shared/text";
 
-import type { ThreadHierarchyEdgeKind } from "./sidebarThreadHierarchy";
-import { DisclosureChevron } from "./ui/DisclosureChevron";
+import { DISCLOSURE_CLEANUP_BUFFER_MS, DISCLOSURE_TRANSITION_MS } from "../lib/disclosureMotion";
+import type { HiddenBranchSummary } from "./sidebarThreadHierarchyPresentation";
 import { DisclosureRegion } from "./ui/DisclosureRegion";
-import { cn } from "../lib/utils";
+import { SidebarThreadBranchControl } from "./SidebarThreadBranchControl";
 
-/** Common 12px indent per level, capped at 48px. Logical depth is kept above the cap. */
+/** Common 12px indent per level, capped at 24px. Logical depth is kept above the cap. */
 export const SIDEBAR_HIERARCHY_INDENT_PX = 12;
-export const SIDEBAR_HIERARCHY_MAX_INDENT_PX = 48;
+export const SIDEBAR_HIERARCHY_MAX_INDENT_PX = 24;
 
 export function hierarchyIndentPx(depth: number): number {
   const level = Number.isFinite(depth) ? Math.max(0, Math.floor(depth)) : 0;
   return Math.min(level * SIDEBAR_HIERARCHY_INDENT_PX, SIDEBAR_HIERARCHY_MAX_INDENT_PX);
 }
 
-export function formatSubagentCounter(count: number): string {
-  const total = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
-  return `${total} ${pluralize(total, "subagent", "subagents")}`;
+const NARROW_VIEWPORT_QUERY = "(max-width: 639px)";
+
+function useNarrowViewport(): boolean {
+  const [narrow, setNarrow] = useState<boolean>(() =>
+    typeof window !== "undefined" && typeof window.matchMedia === "function"
+      ? window.matchMedia(NARROW_VIEWPORT_QUERY).matches
+      : false,
+  );
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return;
+    }
+    const list = window.matchMedia(NARROW_VIEWPORT_QUERY);
+    const onChange = (event: MediaQueryListEvent) => setNarrow(event.matches);
+    setNarrow(list.matches);
+    list.addEventListener("change", onChange);
+    return () => list.removeEventListener("change", onChange);
+  }, []);
+  return narrow;
+}
+
+/**
+ * Visual indentation for one branch row. Desktop caps at 24px; below 640px
+ * every non-root uses a flat 12px regardless of logical depth. Roots stay 0.
+ */
+export function useBranchIndentPx(depth: number): number {
+  const narrow = useNarrowViewport();
+  const level = Number.isFinite(depth) ? Math.max(0, Math.floor(depth)) : 0;
+  if (level <= 0) {
+    return 0;
+  }
+  if (narrow) {
+    return SIDEBAR_HIERARCHY_INDENT_PX;
+  }
+  return hierarchyIndentPx(level);
 }
 
 export function branchControlsId(threadId: ThreadId, surface = "sidebar"): string {
@@ -73,15 +104,22 @@ export function nestSidebarEntriesByDepth<T extends { depth: number }>(
   return roots;
 }
 
+export interface SidebarThreadHierarchyBranchRenderSlot {
+  /** Shared numeric toggle; non-null exactly when directChildCount > 0. */
+  branchControl: ReactNode;
+  /** True for every row with logical depth greater than zero. */
+  isHierarchyChild: boolean;
+}
+
 export function SidebarThreadHierarchyBranch(props: {
   threadId: ThreadId;
   title: string;
   depth: number;
   directChildCount: number;
-  edgeKind?: ThreadHierarchyEdgeKind | undefined;
   expanded: boolean;
   onToggle: (threadId: ThreadId) => void;
-  row: ReactNode;
+  renderRow: (slot: SidebarThreadHierarchyBranchRenderSlot) => ReactNode;
+  hiddenSummary?: HiddenBranchSummary | undefined;
   children?: ReactNode;
   childPaging?: ReactNode;
   /**
@@ -92,87 +130,117 @@ export function SidebarThreadHierarchyBranch(props: {
   surface?: string | undefined;
 }) {
   const {
-    threadId,
-    title,
+    childPaging,
+    children,
     depth,
     directChildCount,
-    edgeKind,
     expanded,
+    hiddenSummary,
     onToggle,
-    row,
-    children,
-    childPaging,
+    renderRow,
     surface = "sidebar",
+    threadId,
+    title,
   } = props;
   const hasChildren = directChildCount > 0;
   const controlsId = branchControlsId(threadId, surface);
-  const counterText = formatSubagentCounter(directChildCount);
-  const toggleRef = useRef<HTMLButtonElement | null>(null);
+  const indentPx = useBranchIndentPx(depth);
   const branchRef = useRef<HTMLLIElement | null>(null);
+  const toggleRef = useRef<HTMLButtonElement | null>(null);
   const wasOpenRef = useRef(expanded);
-  const isBatchEdge = edgeKind === "batch";
+  const cleanupTimerRef = useRef<number | null>(null);
+  // Last committed open subtree. Tracked in a ref while open (no extra render
+  // per parent update); snapshotted into state only on the open→closed
+  // transition so it can play the 220ms closing animation, then released.
+  const lastOpenRenderRef = useRef<{ children?: ReactNode; paging?: ReactNode } | null>(null);
+  const [retained, setRetained] = useState<{
+    children?: ReactNode;
+    paging?: ReactNode;
+  } | null>(null);
 
-  // If collapsing a branch that contains focus, return focus to the toggle so
-  // keyboard users are not stranded on an inert node.
+  useEffect(() => {
+    if (expanded) {
+      lastOpenRenderRef.current = { children, paging: childPaging };
+    }
+  }, [childPaging, children, expanded]);
+
   useEffect(() => {
     const wasOpen = wasOpenRef.current;
     wasOpenRef.current = expanded;
     if (wasOpen && !expanded) {
+      setRetained(lastOpenRenderRef.current);
+      // Collapse: if focus is inside the descendant region, move it to the
+      // branch toggle before that region becomes inaccessible.
+      const toggleElement = toggleRef.current;
       const active = document.activeElement;
       const branch = branchRef.current;
-      if (active && branch && branch.contains(active) && active !== toggleRef.current) {
-        toggleRef.current?.focus();
+      if (active && branch && branch.contains(active) && active !== toggleElement) {
+        toggleElement?.focus();
       }
+      // Retain the last open subtree for the exit animation; release it once
+      // the shared motion duration plus buffer elapses.
+      if (cleanupTimerRef.current !== null) {
+        window.clearTimeout(cleanupTimerRef.current);
+      }
+      cleanupTimerRef.current = window.setTimeout(() => {
+        cleanupTimerRef.current = null;
+        setRetained(null);
+      }, DISCLOSURE_TRANSITION_MS + DISCLOSURE_CLEANUP_BUFFER_MS);
+      return () => {
+        if (cleanupTimerRef.current !== null) {
+          window.clearTimeout(cleanupTimerRef.current);
+          cleanupTimerRef.current = null;
+        }
+      };
     }
+    if (expanded && cleanupTimerRef.current !== null) {
+      // Reopening cancels a pending cleanup; the live subtree renders again.
+      window.clearTimeout(cleanupTimerRef.current);
+      cleanupTimerRef.current = null;
+    }
+    return undefined;
   }, [expanded]);
+
+  useEffect(
+    () => () => {
+      if (cleanupTimerRef.current !== null) {
+        window.clearTimeout(cleanupTimerRef.current);
+        cleanupTimerRef.current = null;
+      }
+    },
+    [],
+  );
+
+  const branchControl = hasChildren ? (
+    <SidebarThreadBranchControl
+      threadId={threadId}
+      title={title}
+      directChildCount={directChildCount}
+      expanded={expanded}
+      controlsId={controlsId}
+      hiddenSummary={hiddenSummary}
+      onToggle={onToggle}
+      buttonRef={toggleRef}
+    />
+  ) : null;
+  const renderedChildren = expanded ? children : (retained?.children ?? null);
+  const renderedPaging = expanded ? childPaging : (retained?.paging ?? null);
 
   return (
     <li ref={branchRef} data-thread-branch={threadId} className="w-full min-w-0">
-      <div
-        className="flex min-w-0 items-center gap-1"
-        style={{ paddingLeft: `${hierarchyIndentPx(depth)}px` }}
-      >
-        {hasChildren ? (
-          <button
-            ref={toggleRef}
-            type="button"
-            aria-expanded={expanded}
-            aria-controls={controlsId}
-            aria-label={`${expanded ? "Collapse" : "Expand"} ${counterText} for ${title}`}
-            data-thread-selection-safe
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              onToggle(threadId);
-            }}
-            onKeyDown={(event) => {
-              // Native button already activates on Enter/Space; stop the row
-              // from also treating the key as navigation.
-              event.stopPropagation();
-            }}
-            className="inline-flex h-5 max-w-full shrink-0 cursor-pointer items-center gap-1 rounded-md px-1 text-[length:var(--app-font-size-ui,11px)] text-muted-foreground/79 hover:bg-transparent hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 active:bg-transparent active:text-foreground"
-          >
-            <DisclosureChevron open={expanded} className="size-3" />
-            <span className="truncate tabular-nums">{counterText}</span>
-          </button>
-        ) : null}
-        {isBatchEdge && depth > 0 ? (
-          <span
-            title="Created as a batch via synara_create_threads"
-            className="inline-flex h-4 shrink-0 items-center rounded-full border border-border/50 px-1.5 text-[10px] font-medium leading-none text-muted-foreground/79"
-          >
-            batch
-          </span>
-        ) : null}
-        <div className="min-w-0 flex-1">{row}</div>
+      <div className="w-full min-w-0" style={{ paddingLeft: `${indentPx}px` }}>
+        {renderRow({ branchControl, isHierarchyChild: depth > 0 })}
       </div>
       {hasChildren ? (
         <DisclosureRegion open={expanded}>
-          <ul id={controlsId} aria-label={`Subagents of ${title}`} className="w-full min-w-0">
-            {children}
+          <ul
+            id={controlsId}
+            aria-label={`Subagents of ${title}`}
+            className="m-0 w-full min-w-0 p-0"
+          >
+            {renderedChildren}
+            {renderedPaging ? <li>{renderedPaging}</li> : null}
           </ul>
-          {childPaging}
         </DisclosureRegion>
       ) : null}
     </li>

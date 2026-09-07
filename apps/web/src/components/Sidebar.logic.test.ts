@@ -1169,13 +1169,9 @@ describe("pin helpers", () => {
 
     // Pinning the parent moves the whole family to Pinned; the ordinary list
     // keeps only unrelated roots, without duplicates.
-    expect(getUnpinnedThreadsForSidebar(threads, ["thread-1" as ThreadId])).toEqual([
-      threads[2],
-    ]);
+    expect(getUnpinnedThreadsForSidebar(threads, ["thread-1" as ThreadId])).toEqual([threads[2]]);
     // Pinning the child moves the same family: parent + child disappear together.
-    expect(getUnpinnedThreadsForSidebar(threads, ["child-1" as ThreadId])).toEqual([
-      threads[2],
-    ]);
+    expect(getUnpinnedThreadsForSidebar(threads, ["child-1" as ThreadId])).toEqual([threads[2]]);
     // Childless pinned threads are still hidden from project lists.
     expect(getUnpinnedThreadsForSidebar(threads, ["thread-2" as ThreadId])).toEqual([
       threads[0],
@@ -1773,13 +1769,14 @@ describe("buildProjectThreadTree", () => {
     ]);
   });
 
-  it("pages 20 siblings per branch without consuming root slots", () => {
+  it("shows a five-child prefix per branch without consuming root slots", () => {
     const threads = [makeThread({ id: ThreadId.makeUnsafe("root") })];
     for (let i = 1; i <= 25; i += 1) {
       threads.push(
         makeThread({
           id: ThreadId.makeUnsafe(`child-${i}`),
           parentThreadId: ThreadId.makeUnsafe("root"),
+          createdAt: new Date(Date.UTC(2026, 2, 9, 10, 0, i)).toISOString(),
         }),
       );
     }
@@ -1787,24 +1784,25 @@ describe("buildProjectThreadTree", () => {
       threads,
       expandedThreadIds: new Set([ThreadId.makeUnsafe("root")]),
     });
-    expect(firstPage.filter((row) => row.depth === 1)).toHaveLength(20);
+    expect(firstPage.filter((row) => row.depth === 1)).toHaveLength(5);
     expect(firstPage[0]?.directChildCount).toBe(25);
 
     const secondPage = buildProjectThreadTree({
       threads,
       expandedThreadIds: new Set([ThreadId.makeUnsafe("root")]),
-      childExtraPagesByParentId: new Map([[ThreadId.makeUnsafe("root"), 1]]),
+      childVisibleCountByParentId: new Map([[ThreadId.makeUnsafe("root"), 25]]),
     });
     expect(secondPage.filter((row) => row.depth === 1)).toHaveLength(25);
   });
 
-  it("reveals an active child outside both root and child pages", () => {
+  it("reveals an active child through the visible prefix", () => {
     const threads = [makeThread({ id: ThreadId.makeUnsafe("root") })];
     for (let i = 1; i <= 25; i += 1) {
       threads.push(
         makeThread({
           id: ThreadId.makeUnsafe(`child-${i}`),
           parentThreadId: ThreadId.makeUnsafe("root"),
+          createdAt: new Date(Date.UTC(2026, 2, 9, 10, 0, i)).toISOString(),
         }),
       );
     }
@@ -1814,6 +1812,7 @@ describe("buildProjectThreadTree", () => {
     });
     expect(rows.map((row) => row.thread.id)).toContain(ThreadId.makeUnsafe("child-25"));
     expect(rows[0]?.thread.id).toBe(ThreadId.makeUnsafe("root"));
+    expect(rows.filter((row) => row.depth === 1)).toHaveLength(25);
   });
 
   it("keeps explicit close of the active ancestor until the active thread changes", () => {
@@ -1827,16 +1826,13 @@ describe("buildProjectThreadTree", () => {
     const rows = buildProjectThreadTree({
       threads,
       forceVisibleThreadId: ThreadId.makeUnsafe("child"),
-      expandedThreadIds: new Set([
-        ThreadId.makeUnsafe("root"),
-        ThreadId.makeUnsafe("child"),
-      ]),
+      expandedThreadIds: new Set([ThreadId.makeUnsafe("root"), ThreadId.makeUnsafe("child")]),
       collapsedThreadIds: new Set([ThreadId.makeUnsafe("root")]),
     });
     expect(rows.map((row) => row.thread.id)).toEqual([ThreadId.makeUnsafe("root")]);
   });
 
-  it("keeps stable visible order following input order", () => {
+  it("keeps creation-ordered children with stable root order", () => {
     const rows = buildProjectThreadTree({
       threads: [
         makeThread({ id: ThreadId.makeUnsafe("root-b") }),
@@ -1855,8 +1851,8 @@ describe("buildProjectThreadTree", () => {
     expect(rows.map((row) => row.thread.id)).toEqual([
       ThreadId.makeUnsafe("root-b"),
       ThreadId.makeUnsafe("root-a"),
-      ThreadId.makeUnsafe("child-a2"),
       ThreadId.makeUnsafe("child-a1"),
+      ThreadId.makeUnsafe("child-a2"),
     ]);
   });
 });

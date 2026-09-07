@@ -30,7 +30,7 @@ export function SidebarRowHoverActions({
 }: {
   row?: SidebarRowHoverActionsRow;
   testId?: string;
-  className?: string;
+  className?: string | undefined;
   children: ReactNode;
 }) {
   const row = rowProp ?? "thread-row";

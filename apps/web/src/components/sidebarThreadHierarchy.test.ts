@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  SIDEBAR_THREAD_HIERARCHY_CHILD_PAGE_SIZE,
+  SIDEBAR_THREAD_HIERARCHY_INITIAL_CHILD_COUNT,
   buildThreadHierarchyIndex,
   collectRevealThreadIds,
   getAncestorThreadIds,
@@ -23,6 +23,7 @@ interface TestThread extends ThreadHierarchyNode {
   readonly forkSourceThreadId?: string | null | undefined;
   readonly sidechatSourceThreadId?: string | null | undefined;
   readonly gatewayOperationId?: string | null | undefined;
+  readonly createdAt?: string | undefined;
 }
 
 function makeThread(id: string, overrides: Partial<TestThread> = {}): TestThread {
@@ -41,7 +42,7 @@ describe("buildThreadHierarchyIndex", () => {
     expect(getThreadDepth(index, "missing")).toBe(0);
   });
 
-  it("builds a multilevel tree with roots, depths and stable input order", () => {
+  it("builds a multilevel tree with roots, depths and creation-ordered children", () => {
     const index = buildThreadHierarchyIndex([
       makeThread("root-b"),
       makeThread("root-a"),
@@ -51,7 +52,7 @@ describe("buildThreadHierarchyIndex", () => {
     ]);
 
     expect(index.rootIds).toEqual(["root-b", "root-a"]);
-    expect(index.childIdsByParentId.get("root-a")).toEqual(["child-a2", "child-a1"]);
+    expect(index.childIdsByParentId.get("root-a")).toEqual(["child-a1", "child-a2"]);
     expect(index.childIdsByParentId.get("child-a1")).toEqual(["grandchild"]);
     expect(getRootThreadId(index, "grandchild")).toBe("root-a");
     expect(getThreadDepth(index, "root-a")).toBe(0);
@@ -73,6 +74,22 @@ describe("buildThreadHierarchyIndex", () => {
     expect(getDirectChildThreadCount(index, "root")).toBe(2);
     expect(getDirectChildThreadCount(index, "child-1")).toBe(1);
     expect(getDirectChildThreadCount(index, "grandchild")).toBe(0);
+  });
+
+  it("drops the counter once every child leaves the snapshot (archived), keeping the root", () => {
+    const before = buildThreadHierarchyIndex([
+      makeThread("root"),
+      makeThread("child-1", { parentThreadId: "root" }),
+      makeThread("child-2", { parentThreadId: "root" }),
+    ]);
+    expect(getDirectChildThreadCount(before, "root")).toBe(2);
+
+    // Archived threads are excluded upstream; the parent is then a plain root
+    // with no control and no stale aggregate, never promoted or hidden.
+    const after = buildThreadHierarchyIndex([makeThread("root")]);
+    expect(getDirectChildThreadCount(after, "root")).toBe(0);
+    expect(after.rootIds).toEqual(["root"]);
+    expect(after.hiddenThreadIds.size).toBe(0);
   });
 
   it("nests batches via sourceThreadId with a batch edge; fork/sidechat/gateway alone stay roots", () => {
@@ -274,93 +291,265 @@ describe("collectRevealThreadIds", () => {
   });
 
   it("reveals nothing for hidden threads", () => {
-    const index = buildThreadHierarchyIndex([
-      makeThread("orphan", { parentThreadId: "absent" }),
-    ]);
+    const index = buildThreadHierarchyIndex([makeThread("orphan", { parentThreadId: "absent" })]);
     expect(collectRevealThreadIds(index, "orphan").size).toBe(0);
   });
 });
 
 describe("resolveThreadChildPage", () => {
-  it("shows the initial page and pages 20 by 20 with show less support", () => {
-    expect(SIDEBAR_THREAD_HIERARCHY_CHILD_PAGE_SIZE).toBe(20);
-    expect(resolveThreadChildPage({ totalChildCount: 0, requestedExtraPages: 0 })).toMatchObject({
-      visibleCount: 20,
+  it("shows the initial five-child prefix with no paging affordances when everything fits", () => {
+    expect(SIDEBAR_THREAD_HIERARCHY_INITIAL_CHILD_COUNT).toBe(5);
+    expect(resolveThreadChildPage({ totalChildCount: 0 })).toMatchObject({
+      visibleCount: 0,
       hasMoreChildren: false,
       hasLessChildren: false,
-      effectiveExtraPages: 0,
     });
-    expect(resolveThreadChildPage({ totalChildCount: 25, requestedExtraPages: 0 })).toMatchObject({
-      visibleCount: 20,
+    expect(resolveThreadChildPage({ totalChildCount: 1 })).toMatchObject({
+      visibleCount: 1,
+      hasMoreChildren: false,
+      hasLessChildren: false,
+    });
+    expect(resolveThreadChildPage({ totalChildCount: 5 })).toMatchObject({
+      visibleCount: 5,
+      hasMoreChildren: false,
+      hasLessChildren: false,
+    });
+  });
+
+  it("pages five first with show more/less support for twenty children", () => {
+    expect(resolveThreadChildPage({ totalChildCount: 20 })).toMatchObject({
+      visibleCount: 5,
       hasMoreChildren: true,
       hasLessChildren: false,
     });
-    expect(resolveThreadChildPage({ totalChildCount: 25, requestedExtraPages: 1 })).toMatchObject({
-      visibleCount: 40,
+    expect(
+      resolveThreadChildPage({ totalChildCount: 20, requestedVisibleCount: 20 }),
+    ).toMatchObject({
+      visibleCount: 20,
       hasMoreChildren: false,
       hasLessChildren: true,
     });
-    // Stale paging beyond the real child count clamps to the last useful page.
-    expect(resolveThreadChildPage({ totalChildCount: 25, requestedExtraPages: 7 })).toMatchObject({
-      visibleCount: 40,
-      hasMoreChildren: false,
-      hasLessChildren: true,
-      effectiveExtraPages: 1,
+  });
+
+  it("enlarges the prefix through a revealed child without reordering it", () => {
+    expect(resolveThreadChildPage({ totalChildCount: 20, minimumVisibleCount: 17 })).toMatchObject({
+      visibleCount: 17,
+      hasMoreChildren: true,
+      hasLessChildren: false,
     });
+  });
+
+  it("clamps oversized requests to the real child count", () => {
+    expect(
+      resolveThreadChildPage({ totalChildCount: 3, requestedVisibleCount: 500 }),
+    ).toMatchObject({
+      visibleCount: 3,
+      hasMoreChildren: false,
+      hasLessChildren: false,
+    });
+  });
+
+  it("normalizes malformed requests to the initial five when the total permits", () => {
+    expect(
+      resolveThreadChildPage({ totalChildCount: 20, requestedVisibleCount: Number.NaN })
+        .visibleCount,
+    ).toBe(5);
+    expect(
+      resolveThreadChildPage({ totalChildCount: 20, requestedVisibleCount: -3 }).visibleCount,
+    ).toBe(5);
+    expect(
+      resolveThreadChildPage({ totalChildCount: 20, requestedVisibleCount: 7.9 }).visibleCount,
+    ).toBe(7);
+    expect(
+      resolveThreadChildPage({ totalChildCount: 2, requestedVisibleCount: Number.NaN })
+        .visibleCount,
+    ).toBe(2);
+  });
+
+  it("normalizes malformed totals and minimums to zero", () => {
+    expect(resolveThreadChildPage({ totalChildCount: Number.NaN }).visibleCount).toBe(0);
+    expect(
+      resolveThreadChildPage({ totalChildCount: 20, minimumVisibleCount: Number.NaN }).visibleCount,
+    ).toBe(5);
   });
 });
 
 describe("resolveVisibleChildThreadIds", () => {
   function buildWideFamily(childCount: number) {
-    const threads: TestThread[] = [makeThread("root")];
+    const threads: TestThread[] = [makeThread("root", { projectId: "p" })];
     for (let position = 1; position <= childCount; position += 1) {
-      threads.push(makeThread(`child-${position}`, { parentThreadId: "root" }));
+      threads.push(
+        makeThread(`child-${String(position).padStart(2, "0")}`, {
+          projectId: "p",
+          parentThreadId: "root",
+          createdAt: new Date(Date.UTC(2026, 8, 1, 0, position)).toISOString(),
+        }),
+      );
     }
     return buildThreadHierarchyIndex(threads);
   }
 
-  it("paginates siblings without consuming root slots and keeps input order", () => {
-    const index = buildWideFamily(25);
+  it("renders 0/1/5 children fully with no paging", () => {
+    for (const count of [0, 1, 5]) {
+      const index = buildWideFamily(count);
+      const page = resolveVisibleChildThreadIds({ index, parentId: "root" });
+      expect(page.visibleChildIds).toHaveLength(count);
+      expect(page.hiddenChildIds).toHaveLength(0);
+      expect(page.hasMoreChildren).toBe(false);
+      expect(page.hasLessChildren).toBe(false);
+    }
+  });
+
+  it("shows the first five of twenty by default and all twenty on request", () => {
+    const index = buildWideFamily(20);
     const page = resolveVisibleChildThreadIds({ index, parentId: "root" });
 
-    expect(page.totalChildCount).toBe(25);
-    expect(page.visibleChildIds).toHaveLength(20);
-    expect(page.visibleChildIds[0]).toBe("child-1");
-    expect(page.visibleChildIds[19]).toBe("child-20");
-    expect(page.hiddenChildIds).toEqual([
-      "child-21",
-      "child-22",
-      "child-23",
-      "child-24",
-      "child-25",
-    ]);
+    expect(page.totalChildCount).toBe(20);
+    expect(page.visibleChildIds).toHaveLength(5);
+    expect(page.visibleChildIds[0]).toBe("child-01");
+    expect(page.visibleChildIds[4]).toBe("child-05");
+    expect(page.hiddenChildIds).toHaveLength(15);
     expect(page.hasMoreChildren).toBe(true);
+    expect(page.hasLessChildren).toBe(false);
 
-    const next = resolveVisibleChildThreadIds({ index, parentId: "root", requestedExtraPages: 1 });
-    expect(next.visibleChildIds).toHaveLength(25);
+    const next = resolveVisibleChildThreadIds({
+      index,
+      parentId: "root",
+      requestedVisibleCount: 20,
+    });
+    expect(next.visibleChildIds).toHaveLength(20);
     expect(next.hasMoreChildren).toBe(false);
     expect(next.hasLessChildren).toBe(true);
   });
 
-  it("reveals the active path even outside the current page", () => {
-    const index = buildWideFamily(25);
+  it("reveals the prefix through child 17, not 1-5 plus 17", () => {
+    const threads = [
+      { id: "root", projectId: "p", createdAt: "2026-09-01T00:00:00Z" },
+      ...Array.from({ length: 20 }, (_, index) => ({
+        id: `child-${String(index + 1).padStart(2, "0")}`,
+        projectId: "p",
+        sourceThreadId: "root",
+        createdAt: new Date(Date.UTC(2026, 8, 1, 0, index + 1)).toISOString(),
+      })),
+    ];
+    const index = buildThreadHierarchyIndex(threads);
     const page = resolveVisibleChildThreadIds({
       index,
       parentId: "root",
-      revealedThreadIds: new Set(["child-25"]),
+      revealedThreadIds: new Set(["child-17"]),
     });
+    expect(page.visibleChildIds).toEqual(threads.slice(1, 18).map((thread) => thread.id));
+    expect(page.hiddenChildIds).toEqual(["child-18", "child-19", "child-20"]);
+  });
 
-    expect(page.visibleChildIds).toHaveLength(21);
-    expect(page.visibleChildIds).toContain("child-25");
-    expect(page.hiddenChildIds).not.toContain("child-25");
-    // Remaining ids come from actually hidden children, so "Show more" repeats nothing.
-    expect(page.hiddenChildIds).toHaveLength(4);
+  it("clamps a request of 500 to exactly the available children", () => {
+    const index = buildWideFamily(3);
+    const page = resolveVisibleChildThreadIds({
+      index,
+      parentId: "root",
+      requestedVisibleCount: 500,
+    });
+    expect(page.visibleChildIds).toHaveLength(3);
+    expect(page.hiddenChildIds).toHaveLength(0);
   });
 
   it("returns empty pages for unknown parents", () => {
     const index = buildWideFamily(3);
-    expect(
-      resolveVisibleChildThreadIds({ index, parentId: "missing" }).visibleChildIds,
-    ).toEqual([]);
+    expect(resolveVisibleChildThreadIds({ index, parentId: "missing" }).visibleChildIds).toEqual(
+      [],
+    );
+  });
+});
+
+describe("hierarchy child ordering", () => {
+  it("orders direct siblings by creation time while roots follow input order", () => {
+    const index = buildThreadHierarchyIndex<TestThread>([
+      makeThread("root-b", { projectId: "p" }),
+      makeThread("root-a", { projectId: "p" }),
+      makeThread("child-a2", {
+        projectId: "p",
+        parentThreadId: "root-a",
+        createdAt: "2026-09-01T00:02:00.000Z",
+      }),
+      makeThread("child-a1", {
+        projectId: "p",
+        parentThreadId: "root-a",
+        createdAt: "2026-09-01T00:01:00.000Z",
+      }),
+    ]);
+
+    expect(index.rootIds).toEqual(["root-b", "root-a"]);
+    expect(index.childIdsByParentId.get("root-a")).toEqual(["child-a1", "child-a2"]);
+  });
+
+  it("breaks creation-time ties and invalid timestamps by id", () => {
+    const index = buildThreadHierarchyIndex<TestThread>([
+      makeThread("root", { projectId: "p" }),
+      makeThread("child-b", { projectId: "p", parentThreadId: "root", createdAt: "invalid" }),
+      makeThread("child-a", { projectId: "p", parentThreadId: "root" }),
+      makeThread("child-c", {
+        projectId: "p",
+        parentThreadId: "root",
+        createdAt: "2026-09-01T00:01:00.000Z",
+      }),
+    ]);
+
+    expect(index.childIdsByParentId.get("root")).toEqual(["child-a", "child-b", "child-c"]);
+  });
+
+  it("keeps sibling order stable across status-only changes", () => {
+    const base = [
+      makeThread("root", { projectId: "p" }),
+      makeThread("child-1", {
+        projectId: "p",
+        parentThreadId: "root",
+        createdAt: "2026-09-01T00:01:00.000Z",
+      }),
+      makeThread("child-2", {
+        projectId: "p",
+        parentThreadId: "root",
+        createdAt: "2026-09-01T00:02:00.000Z",
+      }),
+    ];
+    const first = buildThreadHierarchyIndex(base);
+    expect(first.childIdsByParentId.get("root")).toEqual(["child-1", "child-2"]);
+    const second = buildThreadHierarchyIndex([
+      { ...base[0]!, updatedAt: "2026-09-02T00:00:00Z", title: "renamed", status: "Working" },
+      { ...base[1]!, updatedAt: "2026-09-03T00:00:00Z", title: "other", status: "Completed" },
+      { ...base[2]!, updatedAt: "2026-09-01T00:00:00Z", title: "zzz", status: "Working" },
+    ]);
+    expect(second.childIdsByParentId.get("root")).toEqual(["child-1", "child-2"]);
+  });
+
+  it("reveals an active grandchild through its direct-child ancestor prefix", () => {
+    const threads = [
+      makeThread("root", { projectId: "p" }),
+      ...[1, 2, 3, 4, 5, 6].map((position) =>
+        makeThread(`child-${position}`, {
+          projectId: "p",
+          parentThreadId: "root",
+          createdAt: new Date(Date.UTC(2026, 8, 1, 0, position)).toISOString(),
+        }),
+      ),
+      makeThread("grandchild", {
+        projectId: "p",
+        parentThreadId: "child-3",
+        createdAt: "2026-09-01T01:00:00.000Z",
+      }),
+    ];
+    const index = buildThreadHierarchyIndex(threads);
+    const revealed = collectRevealThreadIds(index, "grandchild");
+    const rootPage = resolveVisibleChildThreadIds({
+      index,
+      parentId: "root",
+      revealedThreadIds: revealed,
+    });
+    expect(rootPage.visibleChildIds).toContain("child-3");
+    const nestedPage = resolveVisibleChildThreadIds({
+      index,
+      parentId: "child-3",
+      revealedThreadIds: revealed,
+    });
+    expect(nestedPage.visibleChildIds).toContain("grandchild");
   });
 });

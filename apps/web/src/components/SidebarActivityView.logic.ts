@@ -10,9 +10,9 @@ import { canSessionAnswerPendingRequests, isLatestTurnSettled } from "../session
 import { formatShortTimestamp } from "../timestampFormat";
 import type { SidebarThreadSummary } from "../types";
 import {
-  buildProjectThreadTree,
   hasUnseenCompletion,
   isThreadActivelyWorking,
+  type SidebarThreadTreeRow,
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
 import { buildThreadHierarchyIndex } from "./sidebarThreadHierarchy";
@@ -659,10 +659,8 @@ export function collectVisibleActivityThreadIds(input: {
   projectGroups: readonly (readonly ActivityFamily[])[];
   settledOpen: boolean;
   settled: readonly ActivityFamily[];
-  expandedThreadIds?: ReadonlySet<ThreadId> | undefined;
-  collapsedThreadIds?: ReadonlySet<ThreadId> | undefined;
-  childExtraPagesByParentId?: ReadonlyMap<ThreadId, number> | undefined;
-  forceVisibleThreadId?: ThreadId | undefined;
+  /** Mounted rows per family root, from the same trees the surface renders. */
+  rowsByRootId: ReadonlyMap<ThreadId, readonly SidebarThreadTreeRow<SidebarThreadSummary>[]>;
 }): ThreadId[] {
   const orderedFamilies: ActivityFamily[] = [];
   const pushFamilies = (families: readonly ActivityFamily[]) => {
@@ -683,22 +681,8 @@ export function collectVisibleActivityThreadIds(input: {
   const visible: ThreadId[] = [];
   const seen = new Set<ThreadId>();
   for (const family of orderedFamilies) {
-    const rows = buildProjectThreadTree({
-      threads: family.threads,
-      forceVisibleThreadId: input.forceVisibleThreadId,
-      expandedThreadIds: input.expandedThreadIds,
-      collapsedThreadIds: input.collapsedThreadIds,
-      childExtraPagesByParentId: input.childExtraPagesByParentId,
-    });
-    // Roots without cutting the subtree: an included family renders every
-    // visible row of its branch; closed branches contribute only the root.
-    if (rows.length === 0) {
-      if (!seen.has(family.rootId)) {
-        seen.add(family.rootId);
-        visible.push(family.rootId);
-      }
-      continue;
-    }
+    // Exactly the rows the surface mounts: a family without rows renders nothing.
+    const rows = input.rowsByRootId.get(family.rootId) ?? [];
     for (const row of rows) {
       if (!seen.has(row.thread.id)) {
         seen.add(row.thread.id);
@@ -726,13 +710,6 @@ export function formatActivityRowTime(input: {
   return formatRelativeTime(isoDate);
 }
 
-/** Threads "Mark all as read" should visit: eligible feed rows with an unseen completion. */
-export function collectUnreadActivityThreads(
-  threads: readonly SidebarThreadSummary[],
-): SidebarThreadSummary[] {
-  return threads.filter((thread) => isActivityThread(thread) && hasUnseenCompletion(thread));
-}
-
 /**
  * Unread sweep for the current scope, reaching eligible members in closed
  * branches: uses individual IDs/times so collapsing never hides work.
@@ -747,12 +724,4 @@ export function collectUnreadActivityFamilyThreads(
     }
   }
   return unread;
-}
-
-/** The open thread is already being read even if its visited timestamp update is one render late. */
-export function hasUnreadActivity(
-  threads: readonly SidebarThreadSummary[],
-  activeThreadId: ThreadId | null,
-): boolean {
-  return collectUnreadActivityThreads(threads).some((thread) => thread.id !== activeThreadId);
 }

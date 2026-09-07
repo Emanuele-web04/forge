@@ -3,16 +3,14 @@ import { describe, expect, it } from "vitest";
 import { ProjectId, ThreadId } from "@synara/contracts";
 
 import type { SidebarThreadSummary, ThreadSession } from "../types";
-import { resolveThreadProjectLabel } from "./Sidebar.logic";
+import { buildProjectThreadTree, resolveThreadProjectLabel } from "./Sidebar.logic";
 import {
   buildActivityFamilies,
   buildActivityViewModel,
   collectActivityScopeOptions,
   collectUnreadActivityFamilyThreads,
-  collectUnreadActivityThreads,
   collectVisibleActivityThreadIds,
   groupActivityThreadsByProject,
-  hasUnreadActivity,
   isActivityThread,
   resolveActivityDateBucket,
   resolveActivityScope,
@@ -873,11 +871,41 @@ describe("splitRecentActivityThreads", () => {
   });
 });
 
+type CollectVisibleInput = Omit<
+  Parameters<typeof collectVisibleActivityThreadIds>[0],
+  "rowsByRootId"
+> & { expandedThreadIds?: ReadonlySet<ThreadId> };
+
+// Builds the per-family trees the surface would mount, then reports from them.
+function collectVisible({ expandedThreadIds, ...input }: CollectVisibleInput): ThreadId[] {
+  const rowsByRootId = new Map<
+    ThreadId,
+    ReturnType<typeof buildProjectThreadTree<SidebarThreadSummary>>
+  >();
+  const families = [
+    ...input.pinned,
+    ...input.priority,
+    ...input.recent,
+    ...input.today,
+    ...input.yesterday,
+    ...input.earlier,
+    ...input.projectGroups.flat(),
+    ...input.settled,
+  ];
+  for (const family of families) {
+    rowsByRootId.set(
+      family.rootId,
+      buildProjectThreadTree({ threads: family.threads, expandedThreadIds }),
+    );
+  }
+  return collectVisibleActivityThreadIds({ ...input, rowsByRootId });
+}
+
 describe("collectVisibleActivityThreadIds", () => {
   it("uses the mounted Activity rows and respects collapsed and paged sections", () => {
     const family = (id: string) => familiesFor([eligibleThread(id)])[0]!;
     expect(
-      collectVisibleActivityThreadIds({
+      collectVisible({
         groupMode: "time",
         pinnedOpen: false,
         pinned: [family("pinned")],
@@ -897,7 +925,7 @@ describe("collectVisibleActivityThreadIds", () => {
   it("uses already-paged project groups in project mode", () => {
     const family = (id: string) => familiesFor([eligibleThread(id)])[0]!;
     expect(
-      collectVisibleActivityThreadIds({
+      collectVisible({
         groupMode: "project",
         pinnedOpen: true,
         pinned: [family("pinned")],
@@ -917,7 +945,7 @@ describe("collectVisibleActivityThreadIds", () => {
   it("deduplicates a pinned family that also appears in Recent", () => {
     const duplicated = familiesFor([eligibleThread("pinned-unread")])[0]!;
     expect(
-      collectVisibleActivityThreadIds({
+      collectVisible({
         groupMode: "time",
         pinnedOpen: true,
         pinned: [duplicated],
@@ -956,9 +984,9 @@ describe("collectVisibleActivityThreadIds", () => {
       settledOpen: false,
       settled: [],
     };
-    expect(collectVisibleActivityThreadIds(base)).toEqual(["root"]);
+    expect(collectVisible(base)).toEqual(["root"]);
     expect(
-      collectVisibleActivityThreadIds({
+      collectVisible({
         ...base,
         expandedThreadIds: new Set([family!.rootId]),
       }),
@@ -966,8 +994,8 @@ describe("collectVisibleActivityThreadIds", () => {
   });
 });
 
-describe("collectUnreadActivityThreads", () => {
-  it("collects only eligible threads with unseen completions", () => {
+describe("collectUnreadActivityFamilyThreads", () => {
+  it("collects only eligible members with unseen completions", () => {
     const unread = makeThread({
       id: "unread",
       latestTurn: completedTurn("2026-08-01T09:30:00.000Z"),
@@ -985,9 +1013,11 @@ describe("collectUnreadActivityThreads", () => {
       archivedAt: "2026-08-01T10:00:00.000Z",
     });
 
-    expect(collectUnreadActivityThreads([unread, read, archivedUnread]).map((t) => t.id)).toEqual([
-      "unread",
-    ]);
+    expect(
+      collectUnreadActivityFamilyThreads(familiesFor([unread, read, archivedUnread])).map(
+        (t) => t.id,
+      ),
+    ).toEqual(["unread"]);
   });
 
   it("reaches eligible members in closed branches", () => {
@@ -1004,22 +1034,6 @@ describe("collectUnreadActivityThreads", () => {
     });
     const families = familiesFor([root, child]);
     expect(collectUnreadActivityFamilyThreads(families).map((t) => t.id)).toEqual(["child"]);
-  });
-
-  it("does not light the bell for the thread currently being read", () => {
-    const activeUnread = makeThread({
-      id: "active-unread",
-      latestTurn: completedTurn("2026-08-01T09:30:00.000Z"),
-      lastVisitedAt: "2026-08-01T09:00:00.000Z",
-    });
-    const otherUnread = makeThread({
-      id: "other-unread",
-      latestTurn: completedTurn("2026-08-01T09:30:00.000Z"),
-      lastVisitedAt: "2026-08-01T09:00:00.000Z",
-    });
-
-    expect(hasUnreadActivity([activeUnread], activeUnread.id)).toBe(false);
-    expect(hasUnreadActivity([activeUnread, otherUnread], activeUnread.id)).toBe(true);
   });
 });
 

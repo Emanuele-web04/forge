@@ -232,12 +232,31 @@ describe("Sidebar.uiState", () => {
     expect(readSidebarUiState().expandedThreadIds).toEqual(["thread-a", "thread-b"]);
   });
 
+  it("never serializes per-branch visible counts and ignores a stray persisted one", () => {
+    persistSidebarUiState({
+      ...readSidebarUiState(),
+      expandedThreadIds: ["thread-a"],
+    });
+    const persisted = JSON.parse(window.localStorage.getItem("synara:sidebar-ui:v1") ?? "{}");
+    expect(Object.keys(persisted)).not.toContain("childVisibleCountByParentId");
+    expect(JSON.stringify(persisted)).not.toMatch(/VisibleCount/);
+
+    window.localStorage.setItem(
+      "synara:sidebar-ui:v1",
+      JSON.stringify({ ...persisted, childVisibleCountByParentId: { "thread-a": 20 } }),
+    );
+    const restored = readSidebarUiState();
+    expect(restored.expandedThreadIds).toEqual(["thread-a"]);
+    expect("childVisibleCountByParentId" in restored).toBe(false);
+  });
+
   it("sanitizes corrupt expansion values: ignores types, empties and duplicates", () => {
     expect(sanitizeExpandedThreadIds(undefined)).toEqual([]);
     expect(sanitizeExpandedThreadIds("thread-a")).toEqual([]);
-    expect(
-      sanitizeExpandedThreadIds(["thread-a", "", 42, null, "thread-a", "thread-b"]),
-    ).toEqual(["thread-a", "thread-b"]);
+    expect(sanitizeExpandedThreadIds(["thread-a", "", 42, null, "thread-a", "thread-b"])).toEqual([
+      "thread-a",
+      "thread-b",
+    ]);
 
     window.localStorage.setItem(
       "synara:sidebar-ui:v1",

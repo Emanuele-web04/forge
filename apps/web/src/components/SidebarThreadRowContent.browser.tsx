@@ -81,4 +81,27 @@ describe("SidebarThreadRowContent", () => {
     await expect.element(screen.getByText("Scout")).toBeVisible();
     await expect.element(screen.getByText("(reviewer)")).toBeVisible();
   });
+
+  it("renders a batch hierarchy child without connector, avatar, or batch role", async () => {
+    const screen = await render(
+      <SidebarThreadRowContent
+        thread={makeThread({
+          id: ThreadId.makeUnsafe("thread-batch-row"),
+          parentThreadId: null,
+          title: "Batch child full title",
+        })}
+        terminalEntryPoint={false}
+        terminalStatus={null}
+        terminalCount={0}
+        isActive={false}
+        variant="standard"
+        isHierarchyChild
+        showHierarchyConnector={false}
+      />,
+    );
+
+    await expect.element(screen.getByText("Batch child full title")).toBeVisible();
+    expect(document.body.textContent).not.toContain("batch");
+    expect(screen.container.querySelector("svg")).toBeNull();
+  });
 });
