@@ -16,6 +16,8 @@ import {
   type ProjectId,
 } from "@synara/contracts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { toPersistenceSqlError } from "../../persistence/Errors.ts";
+import type { SqlError } from "effect/unstable/sql/SqlError";
 import { Clock, Effect, Layer, Option } from "effect";
 
 import {
@@ -194,180 +196,187 @@ const makeMindService = Effect.gen(function* () {
     // The remember path is check-then-act (receipt lookup, text-hash dedupe,
     // cap count, insert). Serializing it in a transaction makes concurrent
     // retries and saves race-free: one reinforcement, one cap check, one row.
-    sqlClient.withTransaction(
-    Effect.gen(function* () {
-      const normalized = normalizeMindText(input.text);
-      if (normalized.length === 0) {
-        return yield* Effect.fail(
-          new MindInvalidTextError({
-            reason: "empty",
-            message: "Memory text is empty after trimming; save a non-empty declarative fact.",
-          }),
-        );
-      }
-      if (normalized.length > MIND_MEMORY_TEXT_MAX_CHARS) {
-        return yield* Effect.fail(
-          new MindInvalidTextError({
-            reason: "tooLong",
-            message: `Memory text is ${normalized.length} characters after trimming; keep it at ${MIND_MEMORY_TEXT_MAX_CHARS} or fewer.`,
-          }),
-        );
-      }
-      if (isMindSecret(normalized)) {
-        return yield* Effect.fail(
-          new MindSecretRejectedError({
-            message:
-              "Memory text matches a credential or secret pattern and was rejected; keep secrets in a secret store, never in project memory.",
-          }),
-        );
-      }
-
-      // The sweep runs before the mutation so pruned rows free cap slots.
-      yield* maybeSweep(input.projectId);
-      const nowMillis = yield* Clock.currentTimeMillis;
-      const nowIso = new Date(nowMillis).toISOString();
-      const textHash = hashMindText(normalized);
-      const operationId = input.turnId === null ? null : `remember:${input.turnId}:${textHash}`;
-
-      if (operationId !== null) {
-        const receipt = yield* repository.getReceipt({
-          projectId: input.projectId,
-          operationId,
-        });
-        if (Option.isSome(receipt)) {
-          const replayed = decodeRememberReceipt(receipt.value.resultJson);
-          if (replayed !== undefined) return replayed;
-        }
-      }
-
-      const existing = yield* repository.findByTextHash({
-        projectId: input.projectId,
-        textHash,
-      });
-      if (Option.isSome(existing)) {
-        const row = existing.value;
-        if (operationId !== null) {
-          const journaled = yield* repository.findJournalOp({
-            memoryId: row.memoryId,
-            op: "remember",
-            turnId: input.turnId,
-          });
-          if (Option.isSome(journaled)) {
-            // Crash-recovery replay: the receipt is missing but the journal proves
-            // this turn already remembered this text. The row was created by this
-            // turn exactly when its creation instant equals the journal instant.
-            const createdThisTurn = row.createdAt === journaled.value.createdAt;
-            return {
-              memoryId: row.memoryId,
-              created: createdThisTurn,
-              reinforced: !createdThisTurn,
-              replayed: true,
-            };
+    sqlClient
+      .withTransaction(
+        Effect.gen(function* () {
+          const normalized = normalizeMindText(input.text);
+          if (normalized.length === 0) {
+            return yield* Effect.fail(
+              new MindInvalidTextError({
+                reason: "empty",
+                message: "Memory text is empty after trimming; save a non-empty declarative fact.",
+              }),
+            );
           }
-        }
-        // Reinforce-as-confirm: same (project, text hash) never becomes a second row.
-        const updated = yield* repository.applyConfirm({
-          memoryId: row.memoryId,
-          peakWeight: confirmedWeight(row.peakWeight),
-          lastAccessedAt: nowIso,
-        });
-        if (Option.isNone(updated)) {
-          return yield* Effect.fail(
-            new MindMemoryNotFoundError({
-              memoryId: row.memoryId,
-              message: "The matching memory disappeared while reinforcing; retry the remember.",
-            }),
-          );
-        }
-        const result: MindRememberResult = {
-          memoryId: row.memoryId,
-          created: false,
-          reinforced: true,
-          replayed: false,
-        };
-        yield* repository.appendJournal({
-          projectId: input.projectId,
-          memoryId: row.memoryId,
-          op: "remember",
-          actor: input.actor,
-          threadId: input.threadId,
-          turnId: input.turnId,
-          createdAt: nowIso,
-        });
-        if (operationId !== null) {
-          yield* repository.putReceipt({
+          if (normalized.length > MIND_MEMORY_TEXT_MAX_CHARS) {
+            return yield* Effect.fail(
+              new MindInvalidTextError({
+                reason: "tooLong",
+                message: `Memory text is ${normalized.length} characters after trimming; keep it at ${MIND_MEMORY_TEXT_MAX_CHARS} or fewer.`,
+              }),
+            );
+          }
+          if (isMindSecret(normalized)) {
+            return yield* Effect.fail(
+              new MindSecretRejectedError({
+                message:
+                  "Memory text matches a credential or secret pattern and was rejected; keep secrets in a secret store, never in project memory.",
+              }),
+            );
+          }
+
+          // The sweep runs before the mutation so pruned rows free cap slots.
+          yield* maybeSweep(input.projectId);
+          const nowMillis = yield* Clock.currentTimeMillis;
+          const nowIso = new Date(nowMillis).toISOString();
+          const textHash = hashMindText(normalized);
+          const operationId = input.turnId === null ? null : `remember:${input.turnId}:${textHash}`;
+
+          if (operationId !== null) {
+            const receipt = yield* repository.getReceipt({
+              projectId: input.projectId,
+              operationId,
+            });
+            if (Option.isSome(receipt)) {
+              const replayed = decodeRememberReceipt(receipt.value.resultJson);
+              if (replayed !== undefined) return replayed;
+            }
+          }
+
+          const existing = yield* repository.findByTextHash({
             projectId: input.projectId,
-            operationId,
-            op: "remember",
-            resultJson: JSON.stringify({
-              memoryId: result.memoryId,
+            textHash,
+          });
+          if (Option.isSome(existing)) {
+            const row = existing.value;
+            if (operationId !== null) {
+              const journaled = yield* repository.findJournalOp({
+                memoryId: row.memoryId,
+                op: "remember",
+                turnId: input.turnId,
+              });
+              if (Option.isSome(journaled)) {
+                // Crash-recovery replay: the receipt is missing but the journal proves
+                // this turn already remembered this text. The row was created by this
+                // turn exactly when its creation instant equals the journal instant.
+                const createdThisTurn = row.createdAt === journaled.value.createdAt;
+                return {
+                  memoryId: row.memoryId,
+                  created: createdThisTurn,
+                  reinforced: !createdThisTurn,
+                  replayed: true,
+                };
+              }
+            }
+            // Reinforce-as-confirm: same (project, text hash) never becomes a second row.
+            const updated = yield* repository.applyConfirm({
+              memoryId: row.memoryId,
+              peakWeight: confirmedWeight(row.peakWeight),
+              lastAccessedAt: nowIso,
+            });
+            if (Option.isNone(updated)) {
+              return yield* Effect.fail(
+                new MindMemoryNotFoundError({
+                  memoryId: row.memoryId,
+                  message: "The matching memory disappeared while reinforcing; retry the remember.",
+                }),
+              );
+            }
+            const result: MindRememberResult = {
+              memoryId: row.memoryId,
               created: false,
               reinforced: true,
-            }),
-            createdAt: nowIso,
-          });
-        }
-        return result;
-      }
+              replayed: false,
+            };
+            yield* repository.appendJournal({
+              projectId: input.projectId,
+              memoryId: row.memoryId,
+              op: "remember",
+              actor: input.actor,
+              threadId: input.threadId,
+              turnId: input.turnId,
+              createdAt: nowIso,
+            });
+            if (operationId !== null) {
+              yield* repository.putReceipt({
+                projectId: input.projectId,
+                operationId,
+                op: "remember",
+                resultJson: JSON.stringify({
+                  memoryId: result.memoryId,
+                  created: false,
+                  reinforced: true,
+                }),
+                createdAt: nowIso,
+              });
+            }
+            return result;
+          }
 
-      const count = yield* repository.countByProject({ projectId: input.projectId });
-      if (count >= MIND_MEMORY_PROJECT_CAP) {
-        return yield* Effect.fail(
-          new MindProjectCapReachedError({
+          const count = yield* repository.countByProject({ projectId: input.projectId });
+          if (count >= MIND_MEMORY_PROJECT_CAP) {
+            return yield* Effect.fail(
+              new MindProjectCapReachedError({
+                projectId: input.projectId,
+                count,
+                cap: MIND_MEMORY_PROJECT_CAP,
+                message: `Project memory is at the ${MIND_MEMORY_PROJECT_CAP}-memory cap; forget or consolidate memories before adding new ones.`,
+              }),
+            );
+          }
+          const inserted = yield* repository.insert({
+            memoryId: MindMemoryId.makeUnsafe(randomUUID()),
             projectId: input.projectId,
-            count,
-            cap: MIND_MEMORY_PROJECT_CAP,
-            message: `Project memory is at the ${MIND_MEMORY_PROJECT_CAP}-memory cap; forget or consolidate memories before adding new ones.`,
-          }),
-        );
-      }
-      const inserted = yield* repository.insert({
-        memoryId: MindMemoryId.makeUnsafe(randomUUID()),
-        projectId: input.projectId,
-        text: normalized,
-        type: input.type,
-        textHash,
-        peakWeight: INITIAL_WEIGHT,
-        accessCount: 0,
-        pinned: false,
-        createdAt: nowIso,
-        lastAccessedAt: nowIso,
-        provenance:
-          input.actor.kind === "agent" && input.threadId !== null
-            ? { kind: "agent", threadId: input.threadId, provider: input.actor.provider }
-            : { kind: "user" },
-      });
-      const result: MindRememberResult = {
-        memoryId: inserted.memoryId,
-        created: true,
-        reinforced: false,
-        replayed: false,
-      };
-      yield* repository.appendJournal({
-        projectId: input.projectId,
-        memoryId: inserted.memoryId,
-        op: "remember",
-        actor: input.actor,
-        threadId: input.threadId,
-        turnId: input.turnId,
-        createdAt: nowIso,
-      });
-      if (operationId !== null) {
-        yield* repository.putReceipt({
-          projectId: input.projectId,
-          operationId,
-          op: "remember",
-          resultJson: JSON.stringify({
+            text: normalized,
+            type: input.type,
+            textHash,
+            peakWeight: INITIAL_WEIGHT,
+            accessCount: 0,
+            pinned: false,
+            createdAt: nowIso,
+            lastAccessedAt: nowIso,
+            provenance:
+              input.actor.kind === "agent" && input.threadId !== null
+                ? { kind: "agent", threadId: input.threadId, provider: input.actor.provider }
+                : { kind: "user" },
+          });
+          const result: MindRememberResult = {
             memoryId: inserted.memoryId,
             created: true,
             reinforced: false,
-          }),
-          createdAt: nowIso,
-        });
-      }
-      return result;
-    }),
-  );
+            replayed: false,
+          };
+          yield* repository.appendJournal({
+            projectId: input.projectId,
+            memoryId: inserted.memoryId,
+            op: "remember",
+            actor: input.actor,
+            threadId: input.threadId,
+            turnId: input.turnId,
+            createdAt: nowIso,
+          });
+          if (operationId !== null) {
+            yield* repository.putReceipt({
+              projectId: input.projectId,
+              operationId,
+              op: "remember",
+              resultJson: JSON.stringify({
+                memoryId: inserted.memoryId,
+                created: true,
+                reinforced: false,
+              }),
+              createdAt: nowIso,
+            });
+          }
+          return result;
+        }),
+      )
+      .pipe(
+        Effect.catchIf(
+          (error): error is SqlError => error._tag === "SqlError",
+          (error) => Effect.fail(toPersistenceSqlError("MindService.remember:transaction")(error)),
+        ),
+      );
 
   const recall = (input: MindRecallRequest): Effect.Effect<MindRecallResult, MindServiceError> =>
     Effect.gen(function* () {
