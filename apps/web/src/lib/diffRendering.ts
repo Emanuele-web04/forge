@@ -307,12 +307,13 @@ export function resolveFileDiffPrevPath(fileDiff: FileDiffMetadata): string | nu
   return raw;
 }
 
-const GIT_SYMLINK_MODE = "120000";
+// Symlinks (120000) show their target path but the workspace read/write path
+// follows the link, and gitlinks (160000, submodules) are directories in the
+// working tree: neither can be edited in place as the text the diff shows.
+const UNEDITABLE_GIT_MODES = new Set(["120000", "160000"]);
 
-// A symlink diff shows the link target, but the workspace read/write path
-// follows the link, so editing it in place would edit the target file instead.
-export function isSymlinkFileDiff(fileDiff: FileDiffMetadata): boolean {
-  return (fileDiff.mode ?? fileDiff.prevMode) === GIT_SYMLINK_MODE;
+export function hasUneditableGitMode(fileDiff: FileDiffMetadata): boolean {
+  return UNEDITABLE_GIT_MODES.has(fileDiff.mode ?? fileDiff.prevMode ?? "");
 }
 
 // Stable identity for a parsed file diff, used as a React key and selection id.

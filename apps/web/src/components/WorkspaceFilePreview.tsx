@@ -64,7 +64,7 @@ import {
   refetchFreshProjectFileQuery,
   projectResolveOutOfRootFileReferenceQueryOptions,
 } from "~/lib/projectReactQuery";
-import { gitQueryKeys } from "~/lib/gitReactQuery";
+import { gitQueryKeys, refreshGitWorkingTreeDiffsForCwd } from "~/lib/gitReactQuery";
 import {
   MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS,
   cacheSyntaxHighlightedHtml,
@@ -511,6 +511,9 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     isWorkspaceRelativePathSafe(requestedFilePath)
       ? requestedFilePath
       : null);
+  // Decided below once the file and its editability are known; the watcher
+  // callback reads the latest value through the ref.
+  const changeGutterEnabledRef = useRef(false);
   const handleWatchedFileChange = useCallback(
     (event: ProjectFileChangeEvent) => {
       if (!workspaceRoot || !watchedWorkspaceRelativePath) return;
@@ -518,10 +521,16 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         cwd: workspaceRoot,
         relativePath: requestedFilePath,
       });
-      void queryClient.invalidateQueries({
-        queryKey: gitQueryKeys.workingTreeDiffs(workspaceRoot),
-        refetchType: "none",
-      });
+      if (changeGutterEnabledRef.current) {
+        // The gutter renders from the active diff query, so refresh it now;
+        // a bare invalidation would leave the markers stale until refocus.
+        void refreshGitWorkingTreeDiffsForCwd(queryClient, workspaceRoot);
+      } else {
+        void queryClient.invalidateQueries({
+          queryKey: gitQueryKeys.workingTreeDiffs(workspaceRoot),
+          refetchType: "none",
+        });
+      }
       if (fileIsImage || fileIsPdf) {
         setBinaryPreviewReloading(true);
         setBinaryPreviewRevision((current) => current + 1);
@@ -770,6 +779,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     !fileIsPdf &&
     !showMarkdownPreview &&
     editableDocument === null;
+  changeGutterEnabledRef.current = changeGutterEnabled;
   const workingTreeDiffQuery = useQuery(
     gitWorkingTreeDiffQueryOptions({ cwd: props.workspaceRoot, enabled: changeGutterEnabled }),
   );

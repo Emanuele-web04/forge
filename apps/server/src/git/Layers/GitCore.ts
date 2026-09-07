@@ -1864,15 +1864,13 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
               ? yield* resolveBranchMergeBase(input.cwd)
               : input.rev?.trim() || "HEAD";
 
+        // `missing` is reserved for a valid revision that lacks the path; a
+        // revision that no longer resolves (a deleted compare branch) is an
+        // error, not an empty base.
         const resolvedRev =
           baseRev === null
             ? "index"
-            : (yield* executeGit(
-                "GitCore.readFileAtRev.revParse",
-                input.cwd,
-                ["rev-parse", "--verify", "--quiet", `${baseRev}^{commit}`],
-                { allowNonZeroExit: true },
-              ).pipe(Effect.map((result) => result.stdout.trim()))) || baseRev;
+            : yield* resolveCommitObjectId(input.cwd, baseRev, "GitCore.readFileAtRev.revParse");
 
         const blobRef = baseRev === null ? `:${filePath}` : `${resolvedRev}:${filePath}`;
         const sizeResult = yield* executeGit(

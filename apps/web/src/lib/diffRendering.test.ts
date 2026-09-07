@@ -10,7 +10,7 @@ import {
   compareDiffPaths,
   fileDiffStatsByPath,
   getRenderablePatch,
-  isSymlinkFileDiff,
+  hasUneditableGitMode,
   resolveDiffCopyText,
   resolveFileDiffStatByChangedPath,
   resolveFileDiffPath,
@@ -241,7 +241,7 @@ describe("resolveFileDiffPrevPath", () => {
   });
 });
 
-describe("isSymlinkFileDiff", () => {
+describe("hasUneditableGitMode", () => {
   const parseSingleFile = (patch: string) => {
     const renderable = getRenderablePatch(patch, "symlink:test");
     if (renderable?.kind !== "files" || renderable.files.length !== 1) {
@@ -265,7 +265,7 @@ describe("isSymlinkFileDiff", () => {
         "",
       ].join("\n"),
     );
-    expect(isSymlinkFileDiff(changed)).toBe(true);
+    expect(hasUneditableGitMode(changed)).toBe(true);
     const added = parseSingleFile(
       [
         "diff --git a/link b/link",
@@ -279,7 +279,23 @@ describe("isSymlinkFileDiff", () => {
         "",
       ].join("\n"),
     );
-    expect(isSymlinkFileDiff(added)).toBe(true);
+    expect(hasUneditableGitMode(added)).toBe(true);
+  });
+
+  it("recognizes submodule entries by their gitlink mode", () => {
+    const submodule = parseSingleFile(
+      [
+        "diff --git a/vendor/lib b/vendor/lib",
+        "index 1111111..2222222 160000",
+        "--- a/vendor/lib",
+        "+++ b/vendor/lib",
+        "@@ -1 +1 @@",
+        "-Subproject commit 1111111111111111111111111111111111111111",
+        "+Subproject commit 2222222222222222222222222222222222222222",
+        "",
+      ].join("\n"),
+    );
+    expect(hasUneditableGitMode(submodule)).toBe(true);
   });
 
   it("treats regular files as editable", () => {
@@ -295,7 +311,7 @@ describe("isSymlinkFileDiff", () => {
         "",
       ].join("\n"),
     );
-    expect(isSymlinkFileDiff(regular)).toBe(false);
+    expect(hasUneditableGitMode(regular)).toBe(false);
   });
 });
 

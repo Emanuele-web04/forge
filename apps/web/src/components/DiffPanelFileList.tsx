@@ -20,7 +20,7 @@ import {
 import {
   buildFileDiffRenderKey,
   resolveFileDiffPath,
-  isSymlinkFileDiff,
+  hasUneditableGitMode,
   resolveFileDiffPrevPath,
 } from "~/lib/diffRendering";
 import { FileDiffCard, FileDiffSurface, type DiffLineClickProps } from "./chat/FileDiffView";
@@ -141,12 +141,12 @@ const DiffPanelFileRow = function DiffPanelFileRow(props: {
   const fileKey = buildFileDiffRenderKey(props.fileDiff);
   const { chatActions, isCollapsed } = props;
   // A deleted file no longer exists in the working tree, binary previews
-  // (images, PDFs) are rejected by the text read, and a symlink edit would
-  // follow the link and write its target instead of the link shown here.
+  // (images, PDFs) are rejected by the text read, and symlinks or submodule
+  // entries cannot be written as the text shown here.
   const canEditFile =
     props.fileDiff.type !== "deleted" &&
     !isSupportedLocalPreviewFilePath(filePath) &&
-    !isSymlinkFileDiff(props.fileDiff);
+    !hasUneditableGitMode(props.fileDiff);
   // Renames keep the base-side content under the old path.
   const basePath = resolveFileDiffPrevPath(props.fileDiff);
   const shouldPreviewImage =

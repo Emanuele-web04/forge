@@ -333,6 +333,20 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("fails when the requested revision does not resolve", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+
+        const error = yield* core
+          .readFileAtRev({ cwd: tmp, filePath: "README.md", rev: "deleted-branch" })
+          .pipe(Effect.flip);
+
+        expect(error.message).toContain("Cannot resolve");
+      }),
+    );
+
     it.effect("reads the staged blob when the base is the index", () =>
       Effect.gen(function* () {
         const core = yield* GitCore;
