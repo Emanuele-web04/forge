@@ -2040,6 +2040,28 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         }),
       );
 
+    // Working tree files the ref lacks: the temporary index's untracked
+    // listing, plus paths the real index tracks that an ignore rule would hide
+    // from that listing (a force-added build artifact, for example).
+    const listWorkingTreeAdditionsAgainstRef = (
+      cwd: string,
+      resolvedRef: string,
+      env: NodeJS.ProcessEnv,
+      operationPrefix: string,
+    ) =>
+      Effect.gen(function* () {
+        const others = yield* listUntrackedFiles(cwd, operationPrefix, env);
+        const trackedAdditions = yield* executeGit(
+          `${operationPrefix}.trackedAdditions`,
+          cwd,
+          ["diff", "--name-only", "--diff-filter=A", "-z", "--no-ext-diff", resolvedRef],
+          { timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS },
+        ).pipe(
+          Effect.map((result) => result.stdout.split("\0").filter((entry) => entry.length > 0)),
+        );
+        return [...new Set([...others, ...trackedAdditions])];
+      });
+
     const readRefPatch: GitCoreShape["readRefPatch"] = (cwd, ref) =>
       Effect.gen(function* () {
         const verified = yield* executeGit(
@@ -2070,7 +2092,12 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                 maxOutputBytes: 10_000_000,
               },
             ).pipe(Effect.map((result) => result.stdout));
-            const untrackedFiles = yield* listUntrackedFiles(cwd, "GitCore.readRefPatch", env);
+            const untrackedFiles = yield* listWorkingTreeAdditionsAgainstRef(
+              cwd,
+              resolvedRef,
+              env,
+              "GitCore.readRefPatch",
+            );
             const untrackedPatches = yield* readUntrackedPatches(
               cwd,
               "GitCore.readRefPatch",
@@ -2127,7 +2154,12 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                 const untracked = yield* readUntrackedNumstats(
                   cwd,
                   "GitCore.readDiffStats",
-                  yield* listUntrackedFiles(cwd, "GitCore.readDiffStats", env),
+                  yield* listWorkingTreeAdditionsAgainstRef(
+                    cwd,
+                    resolvedRef,
+                    env,
+                    "GitCore.readDiffStats",
+                  ),
                 );
                 const totals = summarizeGitNumstatOutputs([tracked, ...untracked]);
                 return {

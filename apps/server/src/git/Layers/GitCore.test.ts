@@ -2554,6 +2554,26 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("keeps a tracked but ignored addition in ref diffs", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        yield* writeTextFile(path.join(tmp, ".gitignore"), "built.js\n");
+        yield* git(tmp, ["add", ".gitignore"]);
+        yield* git(tmp, ["commit", "-m", "ignore build output"]);
+        const baseSha = yield* git(tmp, ["rev-parse", "HEAD"]);
+        yield* writeTextFile(path.join(tmp, "built.js"), "built\n");
+        yield* git(tmp, ["add", "-f", "built.js"]);
+
+        const refPatch = (yield* core.readRefPatch(tmp, baseSha)).patch;
+        expect(refPatch).toContain("diff --git a/built.js b/built.js");
+
+        const stats = yield* core.readDiffStats(tmp, "ref", baseSha);
+        expect(stats).toEqual({ additions: 1, deletions: 0, fileCount: 1 });
+      }),
+    );
+
     it.effect("reads a patch against a branch name", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
