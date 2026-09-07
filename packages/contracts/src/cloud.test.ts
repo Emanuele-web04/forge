@@ -2,12 +2,15 @@ import { describe, expect, it } from "vitest";
 import { Schema } from "effect";
 
 import {
+  CloudAuthSession,
   CloudConnectedRepository,
   CloudCreateWorkspaceInput,
   CloudEvent,
   CloudMembership,
   CloudOrganization,
   CloudRunnerHeartbeat,
+  CloudSignInInput,
+  CloudSignUpInput,
   CloudTask,
   CloudTerminateWorkspaceInput,
   CloudUser,
@@ -107,6 +110,31 @@ describe("Cloud control-plane identity", () => {
         connectedAt: "2026-09-07T00:00:00.000Z",
       }).permissions,
     ).toBe("write");
+  });
+});
+
+describe("Cloud authentication contracts", () => {
+  it("accepts password sign-in and sign-up requests without exposing a session token", () => {
+    expect(
+      Schema.decodeUnknownSync(CloudSignInInput)({
+        email: "ada@example.com",
+        password: "not-a-token",
+      }),
+    ).toMatchObject({ email: "ada@example.com" });
+    expect(
+      Schema.decodeUnknownSync(CloudSignUpInput)({
+        email: "ada@example.com",
+        password: "not-a-token",
+        acceptedTermsAt: "2026-09-07T00:00:00.000Z",
+      }),
+    ).toMatchObject({ email: "ada@example.com" });
+    expect(
+      Schema.decodeUnknownSync(CloudAuthSession)({
+        user: { id: "user-1", email: "ada@example.com", emailVerified: false },
+      }),
+    ).toEqual({
+      user: { id: "user-1", email: "ada@example.com", emailVerified: false },
+    });
   });
 });
 

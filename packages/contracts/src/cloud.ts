@@ -46,6 +46,37 @@ export type CloudIsolation = typeof CloudIsolation.Type;
 export const CloudOrganizationRole = Schema.Literals(["owner", "admin", "member", "viewer"]);
 export type CloudOrganizationRole = typeof CloudOrganizationRole.Type;
 
+/** Identity providers used to sign into the cloud control plane. GitHub here
+ * identifies a person; repository authorization remains a separate GitHub App
+ * integration and must never reuse this browser credential. */
+export const CloudIdentityProvider = Schema.Literals(["password", "google", "github"]);
+export type CloudIdentityProvider = typeof CloudIdentityProvider.Type;
+
+export const CloudSignInInput = Schema.Struct({
+  email: TrimmedNonEmptyString,
+  password: TrimmedNonEmptyString,
+});
+export type CloudSignInInput = typeof CloudSignInInput.Type;
+
+export const CloudSignUpInput = Schema.Struct({
+  email: TrimmedNonEmptyString,
+  password: TrimmedNonEmptyString,
+  acceptedTermsAt: Schema.DateTimeUtcFromString,
+});
+export type CloudSignUpInput = typeof CloudSignUpInput.Type;
+
+/** Deliberately excludes a bearer token: the control plane sets an opaque,
+ * Secure, HttpOnly session cookie and keeps its raw value out of browser JS. */
+export const CloudAuthSession = Schema.Struct({
+  user: Schema.Struct({
+    id: UserId,
+    email: TrimmedNonEmptyString,
+    emailVerified: Schema.Boolean,
+  }),
+  organizationId: Schema.optional(OrganizationId),
+});
+export type CloudAuthSession = typeof CloudAuthSession.Type;
+
 export const CloudOrganization = Schema.Struct({
   id: OrganizationId,
   slug: TrimmedNonEmptyString,
