@@ -5960,10 +5960,13 @@ export default function Sidebar() {
     }
 
     return (
-      <SidebarMenuSubItem
+      // The hierarchy branch already provides this row's <li>; a nested list
+      // item here would be invalid HTML.
+      <div
         key={thread.id}
         data-thread-hover-anchor={hoverAnchorId}
-        className="group/thread-row w-full"
+        className="group/menu-sub-item group/thread-row relative w-full"
+        data-sidebar="menu-sub-item"
         data-thread-item
       >
         {leadingPr ? (
@@ -6112,7 +6115,7 @@ export default function Sidebar() {
           </TooltipTrigger>
           {renderThreadHoverCardPopup(thread, hoverAnchorId, isActive)}
         </Tooltip>
-      </SidebarMenuSubItem>
+      </div>
     );
   }
 
