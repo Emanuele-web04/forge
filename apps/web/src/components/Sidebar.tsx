@@ -319,6 +319,7 @@ import {
   recoverExistingAddProjectTarget,
   runExclusiveProjectAddition,
   runProjectProvisionWithCancellationRecovery,
+  resolveAutomationCountBadge,
   resolvePullRequestReviewBadge,
   resolveSidebarThreadListPaging,
   DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY,
@@ -1416,17 +1417,10 @@ export default function Sidebar() {
       );
     });
   }, [queryClient]);
-  const automationCountBadge = useMemo(() => {
-    const data = automationListQuery.data;
-    if (!data) return null;
-    const count = data.definitions.length;
-    return count > 0
-      ? {
-          text: String(count),
-          accessibleLabel: `${count} ${pluralize(count, "automation")}`,
-        }
-      : null;
-  }, [automationListQuery.data]);
+  const automationCountBadge = useMemo(
+    () => resolveAutomationCountBadge(automationListQuery.data),
+    [automationListQuery.data],
+  );
   const pullRequestRepositoryConfig = useMemo(
     () => pullRequestRepositoryConfigFingerprint(projects),
     [projects],
