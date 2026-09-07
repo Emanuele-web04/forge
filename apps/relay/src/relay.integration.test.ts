@@ -327,6 +327,51 @@ describe("3. Splice lifecycle", () => {
       code: RELAY_CLOSE_HOST_UNAVAILABLE,
     });
   });
+
+  it("delivers frames the client sent before the host dialed back, in order", async (context) => {
+    // The production sequence: the client opens its session and sends the
+    // mint request immediately, while the host is still dialing /host/data.
+    // Those frames must wait for the pair, not vanish. On Node the relay
+    // pauses TCP reads to achieve this; under Bun's `ws` shim there is no
+    // transport to pause, so the adapter holds them — either way, the host
+    // must receive every pre-pairing frame first and in arrival order.
+    if (skipWithoutLoopback(context)) return;
+    const id = hostId(22);
+    const control = await connectHost(id);
+    const { client, spliceId } = await openPending(control, id);
+    client.send(JSON.stringify({ v: 1, type: "mint_request", request: "early" }));
+    client.send(Buffer.from([7, 8, 9]));
+    // Give the frames time to reach the relay before the host exists.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    // The relay forwards the held frames the instant the host socket is
+    // admitted, which can be the same tick as this socket's `open`. Attach
+    // the listener before awaiting open — as the real host does, admitting
+    // the splice synchronously inside its open handler — or the frames are
+    // emitted to nobody and the test would blame the relay for its own race.
+    const data = new WebSocket(`${wsOrigin}/host/data?splice=${spliceId}`);
+    sockets.add(data);
+    const received: MessageResult[] = [];
+    data.on("message", (raw, binary) => received.push({ data: rawBuffer(raw), binary }));
+    await new Promise<void>((resolve, reject) => {
+      data.once("open", () => resolve());
+      data.once("error", reject);
+    });
+    await vi.waitFor(() => expect(received).toHaveLength(2));
+    expect(received[0]).toMatchObject({
+      data: Buffer.from(JSON.stringify({ v: 1, type: "mint_request", request: "early" })),
+      binary: false,
+    });
+    expect(received[1]).toMatchObject({ data: Buffer.from([7, 8, 9]), binary: true });
+
+    // And the pair is live in both directions afterwards.
+    const toClient = nextMessage(client);
+    data.send("after-pairing");
+    await expect(toClient).resolves.toMatchObject({
+      data: Buffer.from("after-pairing"),
+      binary: false,
+    });
+  });
 });
 
 describe("4. Backpressure", () => {

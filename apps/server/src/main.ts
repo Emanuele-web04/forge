@@ -360,6 +360,8 @@ const ServerConfigLive = (input: CliInput) =>
         staticDir,
         devUrl,
         publicUrl,
+        relayUrl,
+        sshForwardPort,
         allowInsecureRemote,
         noBrowser,
         authToken,

@@ -25,5 +25,25 @@ Build with the repository root as the Docker context and
 `RELAY_PORT` and keep the service at one replica: host presence, grant replay
 state, and splice state are intentionally process-local in this version.
 
+The deployed relay is the `relay` service in the Railway project that also
+hosts the account API. It auto-deploys from the same branch as the API, serves
+`https://relay.synara.vrbty.dev`, and is configured with
+`API_BASE_URL=https://api.synara.vrbty.dev`,
+`API_ISSUER=https://api.synara.vrbty.dev/api/v1`, `RELAY_PORT=8789`, a
+`/healthz` healthcheck, and the `RELAY_SERVICE_TOKEN` shared with the API
+service. The relay fetches JWKS before it listens, so it restarts until the
+API is reachable; deploy or repair the API first.
+
 The only ordinary HTTP endpoint is `GET /healthz`. `/host/control`,
 `/client/session`, and `/host/data` require WebSocket upgrades.
+
+## Runtime note: Bun replaces `ws`
+
+Under Bun the `ws` package resolves to Bun's own shim over its native
+WebSocket, not the npm package the test suite (Vitest on Node) exercises. The
+shim exposes no `_socket`, so transport-level `pause()` is a no-op there.
+`wsSocket.ts` therefore holds pre-pairing frames itself instead of relying on
+the transport to pause; without that, a client's first frame (its mint
+request) was dropped by the deployed image and every relay session hung.
+The in-process suite cannot see this — it runs on Node — which is what
+`apps/e2e/docker` (real images, real network boundary) exists to catch.
