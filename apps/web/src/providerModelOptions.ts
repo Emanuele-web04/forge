@@ -16,6 +16,8 @@ import {
   type CursorModelSelection,
   type DroidModelOptions,
   type DroidModelSelection,
+  type DevinModelOptions,
+  type DevinModelSelection,
   type GrokModelOptions,
   type GrokModelSelection,
   type ModelSelection,
@@ -206,7 +208,8 @@ export function mergeDynamicModelOptions(input: {
       input.provider === "opencode" ||
       input.provider === "cursor" ||
       input.provider === "droid" ||
-      input.provider === "grok") &&
+      input.provider === "grok" ||
+      input.provider === "devin") &&
     normalizedDynamicOptions.length > 0
       ? []
       : staticBuiltInModels.filter((model) => !dynamicNormalizedSlugs.has(model.slug));
@@ -221,7 +224,6 @@ export function mergeDynamicModelOptions(input: {
   return [...normalizedDynamicOptions, ...missingStaticBuiltIns, ...customOnlyModels];
 }
 
-/** Returns a compact label for provider descriptions that begin with an `Nx` cost multiplier. */
 export function providerModelCostMultiplierLabel(description?: string): string | null {
   const multiplier = description?.trim().match(/^(\d+(?:\.\d+)?)x(?:\s|$)/i)?.[1];
   return multiplier ? `${multiplier}×` : null;
@@ -344,6 +346,12 @@ export function buildNextProviderOptions(
       ...patch,
     } as DroidModelOptions;
   }
+  if (provider === "devin") {
+    return {
+      ...(modelOptions as DevinModelOptions | undefined),
+      ...patch,
+    } as DevinModelOptions;
+  }
   if (provider === "opencode") {
     return {
       ...(modelOptions as OpenCodeModelOptions | undefined),
@@ -406,6 +414,11 @@ export function buildModelSelection(
   options?: PiModelOptions | null | undefined,
 ): PiModelSelection;
 export function buildModelSelection(
+  provider: "devin",
+  model: string,
+  options?: DevinModelOptions | null | undefined,
+): DevinModelSelection;
+export function buildModelSelection(
   provider: ProviderKind,
   model: string,
   options?: ProviderOptions | null | undefined,
@@ -447,6 +460,14 @@ export function buildModelSelection(
             provider,
             model,
             options: options as CursorModelOptions,
+          }
+        : { provider, model };
+    case "devin":
+      return options
+        ? {
+            provider,
+            model,
+            options: options as DevinModelOptions,
           }
         : { provider, model };
     case "grok":

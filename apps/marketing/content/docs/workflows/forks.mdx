@@ -1,0 +1,80 @@
+---
+title: Thread forks
+description: Split a Synara conversation from the whole thread or an exact turn while preserving source lineage and environment intent.
+---
+
+A fork creates a new task from an existing Synara thread. Use it when you want to explore another approach, preserve a useful checkpoint in the conversation, or continue the same context in a separate environment without changing the source task.
+
+## Fork or new task
+
+Choose a fork when the new work needs the source transcript and its decisions. Create a normal new task when the objective should start without inherited conversation context.
+
+| Need                                                         | Better choice                                |
+| ------------------------------------------------------------ | -------------------------------------------- |
+| Try another implementation from the same discussion          | Fork                                         |
+| Continue from a specific completed turn                      | Fork from that turn                          |
+| Give unrelated work a clean owner                            | New task                                     |
+| Continue the same task with another provider                 | [Provider handoff](/docs/workflows/handoffs) |
+| Ask a narrow question without creating a full branch of work | Side thread                                  |
+
+## Fork the complete thread
+
+Run `/fork` in an existing server-backed task. Synara asks where the fork should run:
+
+- **Fork Into New Worktree** creates a new worktree-backed task from the source branch intent.
+- **Fork Into Local** reuses the source task's current local environment. If the source already runs in a worktree, local means that same worktree rather than the repository's root checkout.
+
+The source task remains unchanged. The fork opens as a separate task with its own future turns and delivery boundary.
+
+## Fork from one turn
+
+On an eligible settled assistant turn, choose **Fork from here** in the message footer. The new task imports the transcript only through that message, so later experiments or corrections from the source do not enter the fork.
+
+The fork renders a source divider at the point where its own work begins. Use it to return to the original task and verify exactly where the histories separated.
+
+## Choose the environment
+
+Use a new worktree when both tasks may edit files, when the fork is experimental, or when each result needs its own branch and pull request.
+
+Reuse the local environment only when shared working-tree ownership is deliberate. Two active tasks editing the same checkout can overwrite assumptions and make the final diff impossible to attribute.
+
+Read [Worktrees](/docs/workflows/worktrees) before running the source and fork as concurrent writers.
+
+## What Synara preserves
+
+A fork records its source thread and imported transcript boundary. It also carries the selected provider/model choice, runtime permission mode, interaction mode, and source environment intent into creation.
+
+The destination remains a distinct task. Future messages, queued turns, goals, notes, approvals, Git operations, and completion state belong to the task where they occur. Inspect them rather than assuming the two threads remain synchronized.
+
+## Native and reconstructed forks
+
+Synara uses a provider-native session fork when the runtime supports it and the source session is eligible. Current native coverage includes Codex, Claude Code, Cursor, Factory Droid, Grok, and OpenCode.
+
+Capability checks, active-turn guards, timeouts, and cleanup protect the native path. When a provider cannot fork natively, Synara can reconstruct safe context from the retained transcript instead. The visible Synara lineage remains useful in either case, but provider-private state may not transfer through transcript reconstruction.
+
+## When forking is unavailable
+
+Forking requires an existing server-backed thread. It may be hidden or rejected while the source is in an incompatible state, while the selected provider session is actively changing, or when the required project and environment metadata are unavailable.
+
+Wait for the relevant turn to settle, confirm the source task and project still exist, and retry from the intended turn. Do not work around an unavailable fork by manually copying an unreviewed partial transcript into a shared checkout.
+
+## Verify a fork
+
+After creation, confirm:
+
+1. The new task links to the intended source and turn boundary.
+2. The provider, model, runtime mode, and interaction mode are correct.
+3. The environment is local or worktree-backed as intended.
+4. The branch and working directory match the new ownership boundary.
+5. Any persistent goal is explicitly appropriate for the fork.
+6. The final diff contains only work attributable to this task.
+
+## Fork checklist
+
+- [ ] A fork is more appropriate than a new task or handoff
+- [ ] The source turn is settled and correct
+- [ ] Local versus new-worktree ownership is deliberate
+- [ ] Source lineage appears in the new task
+- [ ] Provider and mode selections are correct
+- [ ] Shared-checkout collision risk is understood
+- [ ] The fork's result is reviewed and delivered independently

@@ -11,10 +11,10 @@ export interface EnvironmentProviderUsageSummary {
 }
 
 function providerUsageStatusLabel(
-  snapshot: ServerProviderUsageSnapshot,
+  snapshot: ServerProviderUsageSnapshot | undefined,
   hasUsageLines: boolean,
 ): string {
-  switch (snapshot.status) {
+  switch (snapshot?.status) {
     case "needs-auth":
       return "Sign in";
     case "unsupported":
@@ -29,7 +29,8 @@ function providerUsageStatusLabel(
 export function resolveEnvironmentProviderUsageSummary(input: {
   readonly providerName: string;
   readonly rows: ReadonlyArray<ProviderUsageDisplayRow>;
-  readonly snapshot: ServerProviderUsageSnapshot;
+  /** Live batch snapshot when available; the row renders without one (local/thread fallbacks). */
+  readonly snapshot: ServerProviderUsageSnapshot | undefined;
   readonly hasUsageLines: boolean;
 }): EnvironmentProviderUsageSummary {
   const statusLabel = providerUsageStatusLabel(input.snapshot, input.hasUsageLines);

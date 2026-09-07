@@ -26,7 +26,7 @@ describe("EnvironmentSidechatsSection", () => {
     expect(markup).toContain("Expired");
   });
 
-  it("renders the creation affordance when there are no side chats yet", () => {
+  it("renders nothing when there are no side chats yet", () => {
     const markup = renderToStaticMarkup(
       <EnvironmentSidechatsSection
         sidechats={[]}
@@ -35,7 +35,6 @@ describe("EnvironmentSidechatsSection", () => {
       />,
     );
 
-    expect(markup).toContain("Side chats");
-    expect(markup).toContain("Start side chat");
+    expect(markup).toBe("");
   });
 });

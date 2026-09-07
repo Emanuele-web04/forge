@@ -1,0 +1,36 @@
+---
+title: Automations & Studio
+description: Understand Synara’s scheduled-work and long-running-project surfaces, then follow the detailed workflow guides.
+---
+
+Automations and Studio support work that does not fit a single interactive task. Automations run a defined objective on a schedule; Studio gives long-running, output-oriented work a dedicated home.
+
+## Automations
+
+The Automations workspace includes scheduled work, run history, current and paused states, inline editing, and task transcripts that identify automation-triggered turns.
+
+Use it when the objective, schedule, environment, verification, and stop condition can be reviewed before the first run. Scheduled work still uses real providers and environments, so its output requires the same diff and test review as an interactive task.
+
+<Cards>
+  <Card
+    title="Automation workflow"
+    description="Create safe recurring work, define stop conditions, review run history, and handle retries."
+    href="/docs/workflows/automations"
+  />
+  <Card
+    title="Studio workflow"
+    description="Define deliverables, organize outputs, review checkpoints, and decide when work should move into a normal project task."
+    href="/docs/workflows/studio"
+  />
+</Cards>
+
+## Studio
+
+Studio separates long-running, agent-led projects from day-to-day task conversations. Its Environment panel collects outputs such as files and generated images so the deliverables remain visible outside the transcript.
+
+Use it when the work spans several checkpoints and the artifact set matters more than one repository diff. Use a normal Git-backed task when branch ownership, tests, commits, and pull requests are the primary result.
+
+<Callout type="warn" title="Long-running does not mean unbounded">
+  Give scheduled work and Studio projects explicit authority, deliverables, verification, and
+  completion criteria before letting them continue unattended.
+</Callout>

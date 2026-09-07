@@ -7,7 +7,6 @@ import {
   findTarget,
   planScrollStep,
   readTapRequest,
-  resolveTapTarget,
   tapPointForNode,
 } from "./uiTreeTargeting.ts";
 
@@ -57,14 +56,14 @@ describe("tap point resolution", () => {
 
 describe("resolving a label to an element", () => {
   it("finds a switch by label and returns its own tap point and state", () => {
-    const match = resolveTapTarget(SCREEN, { label: "Dark Appearance" });
+    const match = findTarget(SCREEN, { label: "Dark Appearance" });
     expect(match.point).toEqual({ x: 336.5, y: 198 });
     expect(match.node.value).toBe("0");
     expect(match.node.subrole).toBe("Switch");
   });
 
   it("matches case-insensitively and ignores surrounding space", () => {
-    expect(resolveTapTarget(SCREEN, { label: "  dark appearance " }).point).toEqual({
+    expect(findTarget(SCREEN, { label: "  dark appearance " }).point).toEqual({
       x: 336.5,
       y: 198,
     });
@@ -87,7 +86,7 @@ describe("resolving a label to an element", () => {
         }),
       ],
     });
-    expect(resolveTapTarget(screen, { label: "Developer" }).point).toEqual({ x: 201, y: 125 });
+    expect(findTarget(screen, { label: "Developer" }).point).toEqual({ x: 201, y: 125 });
   });
 
   it("uses role to disambiguate a label that appears twice", () => {
@@ -105,12 +104,12 @@ describe("resolving a label to an element", () => {
         }),
       ],
     });
-    expect(() => resolveTapTarget(screen, { label: "Wi-Fi" })).toThrow(/2 elements match/);
-    expect(resolveTapTarget(screen, { label: "Wi-Fi", role: "Switch" }).point).toEqual({
+    expect(() => findTarget(screen, { label: "Wi-Fi" })).toThrow(/2 elements match/);
+    expect(findTarget(screen, { label: "Wi-Fi", role: "Switch" }).point).toEqual({
       x: 336,
       y: 222,
     });
-    expect(resolveTapTarget(screen, { label: "Wi-Fi", role: "Heading" }).point).toEqual({
+    expect(findTarget(screen, { label: "Wi-Fi", role: "Heading" }).point).toEqual({
       x: 201,
       y: 120,
     });
@@ -119,7 +118,7 @@ describe("resolving a label to an element", () => {
   it("names the elements on screen when the label matches nothing", () => {
     const error = (() => {
       try {
-        resolveTapTarget(SCREEN, { label: "Airplane Mode" });
+        findTarget(SCREEN, { label: "Airplane Mode" });
         return null;
       } catch (cause) {
         return cause as DeviceUiTargetError;
@@ -132,25 +131,8 @@ describe("resolving a label to an element", () => {
     expect(error?.candidates.length).toBeGreaterThan(0);
   });
 
-  it("refuses an off-screen match instead of tapping through to something else", () => {
-    // A scrolled-away row keeps a real frame with off-screen coordinates;
-    // tapping it would hit whatever now occupies that position.
-    const screen = node({
-      role: "Application",
-      frame: { x: 0, y: 0, width: 402, height: 874 },
-      children: [
-        node({
-          role: "Button",
-          label: "Far Below",
-          frame: { x: 0, y: 1800, width: 402, height: 50 },
-        }),
-      ],
-    });
-    expect(() => resolveTapTarget(screen, { label: "Far Below" })).toThrow(/scrolled off screen/);
-  });
-
   it("rejects an empty label rather than matching everything", () => {
-    expect(() => resolveTapTarget(SCREEN, { label: "   " })).toThrow(/non-empty label/);
+    expect(() => findTarget(SCREEN, { label: "   " })).toThrow(/non-empty label/);
   });
 });
 
@@ -240,8 +222,6 @@ describe("planning a scroll step", () => {
 
 describe("finding a target that is off screen", () => {
   it("reports an off-screen match rather than refusing it outright", () => {
-    // findTarget locates it for the scroll loop; resolveTapTarget is the one
-    // that insists on visibility, for callers that will not scroll.
     const screen = node({
       role: "Application",
       frame: { x: 0, y: 0, width: 402, height: 874 },
@@ -255,7 +235,6 @@ describe("finding a target that is off screen", () => {
     });
     const match = findTarget(screen, { label: "Far Below" });
     expect(match.onScreen).toBe(false);
-    expect(() => resolveTapTarget(screen, { label: "Far Below" })).toThrow(/scrolled off screen/);
   });
 
   it("prefers the visible match when a label repeats down a long list", () => {

@@ -3,12 +3,7 @@
 // Exports: resolveDiffPanelThread, diff view source helpers
 // Depends on: ChatView.logic draft-thread normalization.
 
-import {
-  DEFAULT_MODEL_BY_PROVIDER,
-  type ModelSelection,
-  type ThreadId,
-  type TurnId,
-} from "@synara/contracts";
+import { type ModelSelection, type ThreadId, type TurnId } from "@synara/contracts";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 
 import type { DraftThreadState } from "../composerDraftStore";
@@ -35,11 +30,6 @@ export type DiffPanelScopePickerValue =
   | `ref:${string}`
   | "allTurns"
   | "lastTurn";
-
-export type DiffPanelPickerOption =
-  | { id: "scope"; scope: DiffPanelRepoScopeOption }
-  | { id: "allTurns" }
-  | { id: "lastTurn" };
 
 export const DIFF_PANEL_PICKER_SCOPE_OPTIONS: ReadonlyArray<DiffPanelRepoScopeOption> = [
   "workingTree",
@@ -73,7 +63,7 @@ export function resolveDiffPanelThread(input: {
   threadId: ThreadId | null | undefined;
   serverThread: Thread | undefined;
   draftThread: DraftThreadState | null | undefined;
-  fallbackModelSelection: ModelSelection | null | undefined;
+  fallbackModelSelection: ModelSelection;
 }): Thread | undefined {
   if (input.serverThread) {
     return input.serverThread;
@@ -85,10 +75,7 @@ export function resolveDiffPanelThread(input: {
   return buildLocalDraftThread(
     input.threadId,
     input.draftThread,
-    input.fallbackModelSelection ?? {
-      provider: "codex",
-      model: DEFAULT_MODEL_BY_PROVIDER.codex,
-    },
+    input.fallbackModelSelection,
     null,
   );
 }
@@ -259,31 +246,6 @@ export function resolveConversationCacheScope(
   return `conversation:to-${conversationCheckpointTurnCount}`;
 }
 
-export function isDiffPanelPickerOptionSelected(
-  source: DiffPanelViewSource,
-  option: DiffPanelPickerOption,
-  latestTurnId: TurnId | null,
-  turnScopeIntent?: DiffPanelTurnScopeIntent,
-): boolean {
-  const activeValue = resolveDiffPanelScopePickerValue({
-    viewSource: source,
-    latestTurnId,
-    // Omit the key entirely when undefined: under exactOptionalPropertyTypes an
-    // explicit `undefined` is not assignable to the optional `turnScopeIntent`.
-    ...(turnScopeIntent !== undefined ? { turnScopeIntent } : {}),
-  });
-  if (activeValue === null) {
-    return false;
-  }
-  if (option.id === "allTurns") {
-    return activeValue === "allTurns";
-  }
-  if (option.id === "lastTurn") {
-    return activeValue === "lastTurn";
-  }
-  return activeValue === option.scope;
-}
-
 export function filterRenderableFilesForSearch(
   files: ReadonlyArray<FileDiffMetadata>,
   query: string,
@@ -366,6 +328,19 @@ export function resolveDiffChangeMarkers(input: {
       top: Math.min(maxTop, topRatio * input.stripHeight),
     };
   });
+}
+
+export function resolveWatchedDiffFilePath(
+  selectedFilePath: string | null,
+  files: ReadonlyArray<FileDiffMetadata>,
+): string | null {
+  if (
+    selectedFilePath &&
+    files.some((fileDiff) => resolveFileDiffPath(fileDiff) === selectedFilePath)
+  ) {
+    return selectedFilePath;
+  }
+  return files[0] ? resolveFileDiffPath(files[0]) : null;
 }
 
 export function areAllRenderableFilesCollapsed(

@@ -20,7 +20,8 @@ import {
   Semaphore,
   Stream,
 } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { makeEffectProcessCommand } from "../../platform/effectProcessRuntime.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import * as nodeFs from "node:fs/promises";
@@ -62,19 +63,57 @@ const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
 // with a longer TTL so a dead remote settles into occasional retries.
 const STATUS_UPSTREAM_REFRESH_INTERVAL = Duration.seconds(15);
 const STATUS_UPSTREAM_REFRESH_FAILURE_INTERVAL = Duration.seconds(30);
+const STATUS_UPSTREAM_REFRESH_FAILURE_INTERVAL_MAX = Duration.seconds(300);
 // 5s was below realistic authenticated-fetch cost on Windows (credential helper
 // latency). Align with the success refresh interval.
 const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(15);
 const STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY = 2_048;
 type StatusUpstreamRefreshResult = "refreshed" | "failed";
 
-/** Pure policy for status-upstream refresh cache TTL (#515). Exported for tests. */
-export function statusUpstreamRefreshCacheTimeToLive(
-  exit: Exit.Exit<StatusUpstreamRefreshResult, never>,
-): Duration.Duration {
-  return Exit.isSuccess(exit) && exit.value === "refreshed"
-    ? STATUS_UPSTREAM_REFRESH_INTERVAL
-    : STATUS_UPSTREAM_REFRESH_FAILURE_INTERVAL;
+interface StatusUpstreamRefreshCacheKeyFields {
+  readonly cwd: string;
+  readonly upstreamRef: string;
+  readonly remoteName: string;
+  readonly upstreamBranch: string;
+}
+
+// NUL cannot appear in filesystem paths or git refs, so it is an unambiguous
+// separator for the composite backoff key.
+function statusUpstreamRefreshBackoffMapKey(key: StatusUpstreamRefreshCacheKeyFields): string {
+  return `${key.cwd}\u0000${key.upstreamRef}\u0000${key.remoteName}\u0000${key.upstreamBranch}`;
+}
+
+/** Failure state is scoped and bounded like the upstream refresh cache itself. */
+export function makeStatusUpstreamRefreshCacheTimeToLive() {
+  const consecutiveFailures = new Map<string, number>();
+  return {
+    getFailureCount(key: StatusUpstreamRefreshCacheKeyFields): number {
+      return consecutiveFailures.get(statusUpstreamRefreshBackoffMapKey(key)) ?? 0;
+    },
+    timeToLive(
+      exit: Exit.Exit<StatusUpstreamRefreshResult, never>,
+      key: StatusUpstreamRefreshCacheKeyFields,
+    ): Duration.Duration {
+      const mapKey = statusUpstreamRefreshBackoffMapKey(key);
+      if (Exit.isSuccess(exit) && exit.value === "refreshed") {
+        consecutiveFailures.delete(mapKey);
+        return STATUS_UPSTREAM_REFRESH_INTERVAL;
+      }
+      const failures = consecutiveFailures.get(mapKey) ?? 0;
+      // Refresh insertion order so active repositories retain their backoff.
+      consecutiveFailures.delete(mapKey);
+      consecutiveFailures.set(mapKey, Math.min(failures + 1, 5));
+      if (consecutiveFailures.size > STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY) {
+        consecutiveFailures.delete(consecutiveFailures.keys().next().value!);
+      }
+      return Duration.millis(
+        Math.min(
+          Duration.toMillis(STATUS_UPSTREAM_REFRESH_FAILURE_INTERVAL) * 2 ** failures,
+          Duration.toMillis(STATUS_UPSTREAM_REFRESH_FAILURE_INTERVAL_MAX),
+        ),
+      );
+    },
+  };
 }
 const DEFAULT_BASE_BRANCH_CANDIDATES = ["main", "master"] as const;
 const EMPTY_TREE_OBJECT_ID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
@@ -107,12 +146,7 @@ type TraceTailState = {
   remainder: string;
 };
 
-class StatusUpstreamRefreshCacheKey extends Data.Class<{
-  cwd: string;
-  upstreamRef: string;
-  remoteName: string;
-  upstreamBranch: string;
-}> {}
+class StatusUpstreamRefreshCacheKey extends Data.Class<StatusUpstreamRefreshCacheKeyFields> {}
 
 interface ExecuteGitOptions {
   timeoutMs?: number | undefined;
@@ -666,7 +700,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           );
           const child = yield* commandSpawner
             .spawn(
-              ChildProcess.make("git", commandInput.args, {
+              makeEffectProcessCommand("git", commandInput.args, {
                 cwd: commandInput.cwd,
                 env: {
                   ...process.env,
@@ -1043,6 +1077,8 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       ).pipe(Effect.asVoid);
     };
 
+    const upstreamRefreshPolicy = makeStatusUpstreamRefreshCacheTimeToLive();
+
     const statusUpstreamRefreshCache = yield* Cache.makeWith({
       capacity: STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY,
       lookup: (cacheKey: StatusUpstreamRefreshCacheKey) =>
@@ -1052,18 +1088,30 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           upstreamBranch: cacheKey.upstreamBranch,
         }).pipe(
           Effect.as("refreshed" as const),
-          Effect.catch((cause) =>
-            Effect.logWarning("Git status upstream refresh failed; retry is temporarily paused", {
+          Effect.catch((cause) => {
+            const failures = upstreamRefreshPolicy.getFailureCount(cacheKey);
+            const logFields = {
               cause,
               cwd: cacheKey.cwd,
               remoteName: cacheKey.remoteName,
               upstreamBranch: cacheKey.upstreamBranch,
-            }).pipe(Effect.as("failed" as const)),
-          ),
+            };
+            const log =
+              failures === 0
+                ? Effect.logWarning(
+                    "Git status upstream refresh failed; retry is temporarily paused",
+                    logFields,
+                  )
+                : Effect.logDebug(
+                    "Git status upstream refresh failed again; backing off",
+                    logFields,
+                  );
+            return log.pipe(Effect.as("failed" as const));
+          }),
         ),
-      // Keep successful refreshes warm; also cache failures so unreachable
-      // remotes neither re-fetch nor re-log on every git.status (#515).
-      timeToLive: statusUpstreamRefreshCacheTimeToLive,
+      // Keep successful refreshes warm; cache failures with exponential backoff
+      // per upstream so unreachable remotes do not re-fetch on every git.status.
+      timeToLive: upstreamRefreshPolicy.timeToLive,
     });
 
     const refreshStatusUpstreamIfStale = (cwd: string): Effect.Effect<void, GitCommandError> =>

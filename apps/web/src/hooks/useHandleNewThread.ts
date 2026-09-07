@@ -13,8 +13,14 @@ import {
 import {
   type ComposerThreadDraftState,
   type DraftThreadState,
+  resolvePreferredComposerModelSelection,
   useComposerDraftStore,
 } from "../composerDraftStore";
+import {
+  findProviderStatus,
+  isProviderUsable,
+  resolveAvailableProviderPreference,
+} from "../lib/providerAvailability";
 import {
   buildDraftThreadContextPatch,
   createActiveDraftThreadSnapshot,
@@ -69,6 +75,12 @@ export function useHandleNewThread() {
     options?: NewThreadOptions,
     navigation?: NewThreadNavigationOptions,
   ): Promise<ThreadId | null> => {
+    // Project/thread targets are not authoritative until hydration completes. Read the
+    // store at call time so a stale UI callback cannot mint a draft during hydration.
+    if (!useStore.getState().threadsHydrated) {
+      return Promise.resolve(null);
+    }
+
     const entryPoint = options?.entryPoint ?? "chat";
     if (entryPoint === "chat") {
       const draftStore = useComposerDraftStore.getState();
@@ -178,6 +190,46 @@ export function useHandleNewThread() {
     const projectDefaultModelSelection =
       useStore.getState().projects.find((project) => project.id === projectId)
         ?.defaultModelSelection ?? null;
+    const applyUsableStickyState = (threadId: ThreadId) => {
+      applyStickyState(threadId);
+      if (options?.provider || !hasReconciledServerProviderStatuses(queryClient)) {
+        return;
+      }
+
+      const draft = useComposerDraftStore.getState().draftsByThreadId[threadId] ?? null;
+      const stickyProvider = draft?.activeProvider ?? null;
+      if (
+        !stickyProvider ||
+        isProviderUsable(findProviderStatus(providerStatuses, stickyProvider))
+      ) {
+        return;
+      }
+
+      const fallbackProvider = resolveAvailableProviderPreference({
+        preferredProvider: projectDefaultModelSelection?.provider ?? settings.defaultProvider,
+        statuses: providerStatuses,
+        providerOrder: settings.providerOrder,
+        hiddenProviders: settings.hiddenProviders,
+      });
+      if (!isProviderUsable(findProviderStatus(providerStatuses, fallbackProvider))) {
+        return;
+      }
+
+      setModelSelection(
+        threadId,
+        resolvePreferredComposerModelSelection({
+          draft: draft
+            ? {
+                modelSelectionByProvider: draft.modelSelectionByProvider,
+                activeProvider: fallbackProvider,
+              }
+            : null,
+          threadModelSelection: null,
+          projectModelSelection: projectDefaultModelSelection,
+          defaultProvider: fallbackProvider,
+        }),
+      );
+    };
     const activeThreadSnapshot = createActiveThreadSnapshot(activeThread, projectId);
     const activeDraftThreadSnapshot = createActiveDraftThreadSnapshot(activeDraftThread, projectId);
     const resolveCreationState = (
@@ -321,7 +373,9 @@ export function useHandleNewThread() {
         stage: () => {
           registerDraftThread(threadId, { projectId, ...draftSeed });
           activateThreadEntryPoint(threadId);
-          applyStickyState(threadId);
+          // Seed the draft from the sticky (last-used) selection so a new chat
+          // reopens with the model and options used most recently.
+          applyUsableStickyState(threadId);
           applyProviderOverride(threadId);
         },
         // Mark the draft-landing navigation as a transition so the new route

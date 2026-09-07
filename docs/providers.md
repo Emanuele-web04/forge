@@ -12,6 +12,7 @@ consistent workspace.
 | [Codex](https://www.trysynara.com/docs/providers/codex)                 | Your installed and authenticated Codex CLI                   |
 | [OpenCode](https://www.trysynara.com/docs/providers/opencode)           | Your local OpenCode runtime and configured model providers   |
 | [Cursor](https://www.trysynara.com/docs/providers/cursor)               | Your local Cursor agent runtime and account                  |
+| [Devin](https://docs.devin.ai)                                          | Your installed and authenticated Devin CLI                   |
 | [Antigravity](https://www.trysynara.com/docs/providers/antigravity)     | Your installed and authenticated Antigravity CLI             |
 | [Grok Build](https://www.trysynara.com/docs/providers/grok)             | Your configured Grok Build runtime and access                |
 | [Pi](https://www.trysynara.com/docs/providers/pi)                       | Pi and the model providers configured through it             |

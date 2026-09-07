@@ -10,7 +10,6 @@ import {
   resolveDiffChangeMarkers,
   resolveDiffChangeMarkerKind,
   DIFF_CHANGE_MARKER_HEIGHT_PX,
-  isDiffPanelPickerOptionSelected,
   isDiffPanelRepoScopeOption,
   isStaleDiffTurnSelection,
   resolveConversationCacheScope,
@@ -24,6 +23,7 @@ import {
   resolveDiffPanelScopePickerValue,
   resolveDiffPanelThread,
   resolveDiffPanelViewSource,
+  resolveWatchedDiffFilePath,
   resolveDiffSelectAllArmed,
   resolveDiffSelectAllWithinViewport,
   parseDiffPanelCompareRefValue,
@@ -126,7 +126,7 @@ describe("resolveDiffPanelThread", () => {
         threadId: THREAD_ID,
         serverThread: undefined,
         draftThread: null,
-        fallbackModelSelection: null,
+        fallbackModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
       }),
     ).toBeUndefined();
   });
@@ -364,35 +364,6 @@ describe("diff panel view source helpers", () => {
     ).toEqual({ ref: 4 });
   });
 
-  it("marks picker options selected only when they match the active scope", () => {
-    const latestTurnId = TurnId.makeUnsafe("turn-latest");
-
-    expect(
-      isDiffPanelPickerOptionSelected(
-        { kind: "turn", turnId: null },
-        { id: "allTurns" },
-        latestTurnId,
-        "all",
-      ),
-    ).toBe(true);
-    expect(
-      isDiffPanelPickerOptionSelected(
-        { kind: "turn", turnId: latestTurnId },
-        { id: "lastTurn" },
-        latestTurnId,
-        "last",
-      ),
-    ).toBe(true);
-    expect(
-      isDiffPanelPickerOptionSelected(
-        { kind: "turn", turnId: TurnId.makeUnsafe("turn-older") },
-        { id: "lastTurn" },
-        latestTurnId,
-        "last",
-      ),
-    ).toBe(false);
-  });
-
   it("detects stale turn selections and resolves summaries without fallback", () => {
     const summaries = [
       {
@@ -425,6 +396,17 @@ describe("diff panel view source helpers", () => {
 
     expect(filterRenderableFilesForSearch(files, "diffpanel")).toHaveLength(1);
     expect(filterRenderableFilesForSearch(files, "")).toHaveLength(2);
+  });
+
+  it("falls back to the first visible diff when the selected file is stale", () => {
+    const files = [
+      { name: "src/visible.ts", hunks: [] },
+      { name: "src/other.ts", hunks: [] },
+    ] as unknown as Parameters<typeof resolveWatchedDiffFilePath>[1];
+
+    expect(resolveWatchedDiffFilePath("src/other.ts", files)).toBe("src/other.ts");
+    expect(resolveWatchedDiffFilePath("src/stale.ts", files)).toBe("src/visible.ts");
+    expect(resolveWatchedDiffFilePath(null, [])).toBeNull();
   });
 });
 

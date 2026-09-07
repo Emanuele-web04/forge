@@ -20,6 +20,11 @@ const codexSkillPath = "/Users/me/.codex/skills/reviewer/SKILL.md";
 const claudeSkillPath = "/Users/me/.claude/skills/reviewer/SKILL.md";
 const cursorSkillPath = "/Users/me/.cursor/skills/reviewer/SKILL.md";
 const piSkillPath = "/Users/me/.pi/agent/skills/reviewer/SKILL.md";
+const devinSkillPath = "/Users/me/.config/devin/skills/reviewer/SKILL.md";
+const cognitionSkillPath = "/Users/me/.config/cognition/skills/reviewer/SKILL.md";
+const agentsSkillPath = "/Users/me/.agents/skills/reviewer/SKILL.md";
+const windsurfSkillPath = "/repo/.windsurf/skills/reviewer/SKILL.md";
+const codeiumSkillPath = "/Users/me/.codeium/windsurf/skills/reviewer/SKILL.md";
 
 describe("shouldInlineSkillForProvider", () => {
   it("skips codex-native and synara roots for codex but inlines foreign provider roots", () => {
@@ -47,6 +52,23 @@ describe("shouldInlineSkillForProvider", () => {
     expect(shouldInlineSkillForProvider("pi", synaraSkillPath)).toBe(true);
     expect(shouldInlineSkillForProvider("pi", claudeSkillPath)).toBe(true);
     expect(shouldInlineSkillForProvider("pi", piSkillPath)).toBe(false);
+  });
+
+  it("skips Devin-native skill roots and inlines foreign roots", () => {
+    for (const nativePath of [
+      devinSkillPath,
+      cognitionSkillPath,
+      agentsSkillPath,
+      windsurfSkillPath,
+      codeiumSkillPath,
+      claudeSkillPath,
+      "C:\\Users\\me\\AppData\\Roaming\\devin\\skills\\reviewer\\SKILL.md",
+    ]) {
+      expect(shouldInlineSkillForProvider("devin", nativePath)).toBe(false);
+    }
+    for (const foreignPath of [synaraSkillPath, codexSkillPath, cursorSkillPath, piSkillPath]) {
+      expect(shouldInlineSkillForProvider("devin", foreignPath)).toBe(true);
+    }
   });
 
   it("always inlines for providers without native skill support", () => {

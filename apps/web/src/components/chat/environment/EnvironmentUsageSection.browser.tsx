@@ -1,12 +1,12 @@
 // FILE: EnvironmentUsageSection.browser.tsx
-// Purpose: Browser coverage for enabled-provider rows and multi-window usage summaries.
+// Purpose: Browser coverage for the active-provider usage row and multi-window summaries.
 
 import "../../../index.css";
 
 import { DEFAULT_SERVER_SETTINGS_VIEW, type ServerProviderUsageSnapshot } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { page, userEvent } from "vitest/browser";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 const appSettingsMocks = vi.hoisted(() => ({
@@ -36,30 +36,86 @@ function snapshot(
   };
 }
 
-afterEach(() => {
-  document.body.innerHTML = "";
-});
+function createQueryClient(): QueryClient {
+  return new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } });
+}
 
 describe("EnvironmentUsageSection", () => {
-  it("renders every enabled provider and every reported usage window", async () => {
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  it("renders only the active provider with every reported usage window", async () => {
+    const queryClient = createQueryClient();
     queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
       snapshot("codex", [
         { window: "Weekly", usedPercent: 18, windowDurationMins: 10_080 },
         { window: "5h", usedPercent: 5, windowDurationMins: 300 },
       ]),
       snapshot("claudeAgent", [{ window: "Weekly", usedPercent: 54, windowDurationMins: 10_080 }]),
-      snapshot("cursor", [{ window: "Current", usedPercent: 30 }]),
+    ]);
+    queryClient.setQueryData(serverQueryKeys.settings(), DEFAULT_SERVER_SETTINGS_VIEW);
+
+    await render(
+      <QueryClientProvider client={queryClient}>
+        <EnvironmentUsageSection provider="codex" />
+      </QueryClientProvider>,
+    );
+
+    const codex = page.getByRole("button", {
+      name: "Codex usage: 5h 95% remaining, Weekly 82% remaining",
+    });
+    await expect.element(codex).toBeVisible();
+    expect(document.querySelector('button[aria-label^="Claude usage:"]')).toBeNull();
+    await expect.element(page.getByText("5h", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("Weekly", { exact: true })).toBeVisible();
+
+    await codex.click();
+
+    await expect.element(page.getByText("95% left", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("82% left", { exact: true })).toBeVisible();
+  });
+
+  it("hides the section while the provider has nothing displayable yet", async () => {
+    const queryClient = createQueryClient();
+    // Batch resolved but the provider's live fetch was dropped (e.g. errored server-side) and no
+    // local/thread fallback produced rows: nothing renders until some source yields data.
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
+      snapshot("codex", [{ window: "Weekly", usedPercent: 18, windowDurationMins: 10_080 }]),
+    ]);
+    queryClient.setQueryData(serverQueryKeys.settings(), DEFAULT_SERVER_SETTINGS_VIEW);
+
+    await render(
+      <QueryClientProvider client={queryClient}>
+        <EnvironmentUsageSection provider="claudeAgent" />
+      </QueryClientProvider>,
+    );
+
+    expect(document.querySelector('button[aria-label^="Claude usage:"]')).toBeNull();
+  });
+
+  it("shows the row from usage lines alone when the provider reports no limit windows", async () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
       snapshot(
         "droid",
         [],
-        [
-          {
-            label: "Limits",
-            value: "Remaining limits stay in the Droid CLI.",
-          },
-        ],
+        [{ label: "Limits", value: "Remaining limits stay in the Droid CLI." }],
       ),
+    ]);
+    queryClient.setQueryData(serverQueryKeys.settings(), DEFAULT_SERVER_SETTINGS_VIEW);
+
+    await render(
+      <QueryClientProvider client={queryClient}>
+        <EnvironmentUsageSection provider="droid" />
+      </QueryClientProvider>,
+    );
+
+    await expect
+      .element(page.getByRole("button", { name: "Droid usage: Connected" }))
+      .toBeVisible();
+  });
+
+  it("hides the section when the active provider is disabled", async () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
+      snapshot("cursor", [{ window: "Current", usedPercent: 30 }]),
     ]);
     queryClient.setQueryData(serverQueryKeys.settings(), {
       ...DEFAULT_SERVER_SETTINGS_VIEW,
@@ -71,36 +127,10 @@ describe("EnvironmentUsageSection", () => {
 
     await render(
       <QueryClientProvider client={queryClient}>
-        <EnvironmentUsageSection />
+        <EnvironmentUsageSection provider="cursor" />
       </QueryClientProvider>,
     );
 
-    const codex = page.getByRole("button", {
-      name: "Codex usage: 5h 95% remaining, Weekly 82% remaining",
-    });
-    const claude = page.getByRole("button", {
-      name: "Claude usage: Weekly 46% remaining",
-    });
-    const droid = page.getByRole("button", { name: "Droid usage: Connected" });
-    await expect.element(codex).toBeVisible();
-    await expect.element(claude).toBeVisible();
-    await expect.element(droid).toBeVisible();
     expect(document.querySelector('button[aria-label^="Cursor usage:"]')).toBeNull();
-    expect(appSettingsMocks.useAppSettings).not.toHaveBeenCalled();
-    expect(queryClient.getQueryState(serverQueryKeys.providerUsage("codex", null))).toBeUndefined();
-    await expect.element(page.getByText("5h", { exact: true })).toBeVisible();
-    await expect.element(page.getByText("Weekly", { exact: true }).first()).toBeVisible();
-
-    await codex.click();
-
-    await expect.element(page.getByText("95% left", { exact: true })).toBeVisible();
-    await expect.element(page.getByText("82% left", { exact: true })).toBeVisible();
-
-    await userEvent.keyboard("{Escape}");
-    await droid.click();
-
-    await expect
-      .element(page.getByText("Remaining limits stay in the Droid CLI.", { exact: true }))
-      .toBeVisible();
   });
 });

@@ -1147,6 +1147,148 @@ describe("ProviderRuntimeIngestion", () => {
     expect(events.some((event) => event.type === "thread.goal-continuation-requested")).toBe(false);
   });
 
+  it.each(["success", "restart-failure", "user-interrupt", "user-cancel"] as const)(
+    "preserves Devin recovery goal ownership through %s",
+    async (outcome) => {
+      const harness = await createHarness();
+      const threadId = asThreadId("thread-1");
+      const turnId = asTurnId("devin-recovery-old-turn");
+      const replacementTurnId = asTurnId("devin-recovery-new-turn");
+      const base = { provider: "devin" as const, threadId, createdAt: new Date().toISOString() };
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("goal-before-recovery"),
+          threadId,
+          goal: "Finish the task",
+        }),
+      );
+      harness.emit({
+        ...base,
+        type: "turn.started",
+        eventId: asEventId("recovery-old-started"),
+        turnId,
+      });
+      await waitForThread(harness.engine, (thread) => thread.session?.activeTurnId === turnId);
+      harness.emit({
+        ...base,
+        type: "turn.completed",
+        eventId: asEventId("recovery-old-cancelled"),
+        turnId,
+        payload: {
+          state: "cancelled",
+          stopReason: outcome === "user-cancel" ? "cancelled" : "synara.devin.wedge-recovery",
+        },
+      });
+      await waitForThread(harness.engine, (thread) => thread.session?.status === "interrupted");
+      await harness.drain();
+      let thread = (await Effect.runPromise(harness.engine.getReadModel())).threads.find(
+        (entry) => entry.id === threadId,
+      )!;
+      expect(thread.session?.activeTurnId).toBeNull();
+      expect(thread.latestTurn?.state).toBe("interrupted");
+      expect(thread.goalPausedAt != null).toBe(outcome === "user-cancel");
+      const eventsBeforeRestart = Array.from(
+        await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
+      );
+      expect(
+        eventsBeforeRestart.some((event) => event.type === "thread.goal-continuation-requested"),
+      ).toBe(false);
+
+      if (outcome === "user-interrupt") {
+        // A user stop in the session gap pauses independently of provider events.
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.interrupt",
+            commandId: CommandId.makeUnsafe("user-stop-during-recovery"),
+            threadId,
+            turnId,
+            createdAt: new Date().toISOString(),
+          }),
+        );
+      }
+      harness.emit({
+        ...base,
+        type: "session.exited",
+        eventId: asEventId("recovery-old-exited"),
+        payload: { exitKind: "graceful" },
+      });
+      await waitForThread(harness.engine, (entry) => entry.session?.status === "stopped");
+      await harness.drain();
+      thread = (await Effect.runPromise(harness.engine.getReadModel())).threads.find(
+        (entry) => entry.id === threadId,
+      )!;
+      expect(thread.goalPausedAt != null).toBe(
+        outcome === "user-cancel" || outcome === "user-interrupt",
+      );
+      if (outcome === "restart-failure") {
+        harness.emit({
+          ...base,
+          type: "runtime.error",
+          eventId: asEventId("recovery-failed"),
+          turnId,
+          payload: {
+            message: "Arbitrary failure message",
+            class: "transport_error",
+            detail: { reason: "synara.devin.wedge-recovery" },
+          },
+        });
+        thread = await waitForThread(
+          harness.engine,
+          (entry) => entry.session?.status === "error" && entry.goalPausedAt != null,
+        );
+        expect(thread.session?.lastError).toBe("Arbitrary failure message");
+        expect(thread.latestTurn?.state).not.toBe("running");
+        await harness.drain();
+        const events = Array.from(
+          await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
+        );
+        expect(events.some((event) => event.type === "thread.goal-continuation-requested")).toBe(
+          false,
+        );
+        return;
+      }
+      if (outcome !== "success") return;
+      harness.emit({
+        ...base,
+        type: "session.started",
+        eventId: asEventId("recovery-session-started"),
+        payload: {},
+      });
+      harness.emit({
+        ...base,
+        type: "turn.started",
+        eventId: asEventId("recovery-new-started"),
+        turnId: replacementTurnId,
+      });
+      thread = await waitForThread(
+        harness.engine,
+        (entry) => entry.session?.activeTurnId === replacementTurnId,
+      );
+      expect(thread.goalPausedAt).toBeNull();
+      expect(thread.latestTurn?.state).toBe("running");
+      harness.emit({
+        ...base,
+        type: "turn.completed",
+        eventId: asEventId("recovery-new-completed"),
+        turnId: replacementTurnId,
+        payload: { state: "completed" },
+      });
+      await waitForThread(harness.engine, (entry) => entry.session?.status === "ready");
+      await harness.drain();
+      const events = Array.from(
+        await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
+      );
+      expect(events.filter((event) => event.type === "thread.goal-continuation-requested")).toEqual(
+        [
+          expect.objectContaining({
+            payload: expect.objectContaining({ sourceTurnId: replacementTurnId }),
+          }),
+        ],
+      );
+    },
+  );
+
   it("applies provider session.state.changed transitions directly", async () => {
     const harness = await createHarness();
     const waitingAt = new Date().toISOString();
@@ -6976,13 +7118,15 @@ describe("ProviderRuntimeIngestion", () => {
   it("starts when an accepted open-turn row can no longer replay its stored command", async () => {
     const harness = await createHarness({ startIngestion: false });
     const eventId = asEventId("evt-open-turn-unreplayable");
+    const turnId = asTurnId("turn-open-turn-unreplayable");
+    const bufferedItemId = asItemId("item-after-unreplayable-open-turn");
     const event: ProviderRuntimeEvent = {
       type: "item.updated",
       eventId,
       provider: "codex",
       createdAt: "2026-07-14T00:03:00.000Z",
       threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-open-turn-unreplayable"),
+      turnId,
       itemId: asItemId("item-collab-unreplayable"),
       payload: {
         itemType: "collab_agent_tool_call",
@@ -7032,24 +7176,68 @@ describe("ProviderRuntimeIngestion", () => {
       ),
     ).toBe(true);
 
+    const bufferedRow = await Effect.runPromise(
+      harness.runtimeEventRepository.append({
+        type: "content.delta",
+        eventId: asEventId("evt-buffered-after-unreplayable-open-turn"),
+        provider: "codex",
+        createdAt: "2026-07-14T00:03:00.500Z",
+        threadId: asThreadId("thread-1"),
+        turnId,
+        itemId: bufferedItemId,
+        payload: {
+          streamKind: "assistant_text",
+          delta: "Replay continued after the failed event.",
+        },
+      }),
+    );
+    expect(
+      await Effect.runPromise(
+        harness.runtimeEventRepository.advanceConsumerCursor({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          eventSequence: bufferedRow.sequence,
+          updatedAt: "2026-07-14T00:03:00.500Z",
+        }),
+      ),
+    ).toBe(true);
+
     await harness.startIngestion();
 
+    await Effect.runPromise(
+      harness.runtimeEventRepository.append({
+        type: "item.completed",
+        eventId: asEventId("evt-complete-after-unreplayable-open-turn"),
+        provider: "codex",
+        createdAt: "2026-07-14T00:03:01.000Z",
+        threadId: asThreadId("thread-1"),
+        turnId,
+        itemId: bufferedItemId,
+        payload: { itemType: "assistant_message", status: "completed" },
+      }),
+    );
     await Effect.runPromise(
       harness.runtimeEventRepository.append({
         type: "runtime.warning",
         eventId: asEventId("evt-after-unreplayable-open-turn"),
         provider: "codex",
-        createdAt: "2026-07-14T00:03:01.000Z",
+        createdAt: "2026-07-14T00:03:02.000Z",
         threadId: asThreadId("thread-1"),
         payload: { message: "still ingesting" },
       }),
     );
     await harness.drain();
-    const parent = await waitForThread(harness.engine, (entry) =>
-      entry.activities.some(
-        (activity: ProviderRuntimeTestActivity) =>
-          activity.id === "evt-after-unreplayable-open-turn",
-      ),
+    const parent = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.activities.some(
+          (activity: ProviderRuntimeTestActivity) =>
+            activity.id === "evt-after-unreplayable-open-turn",
+        ) &&
+        entry.messages.some(
+          (message) =>
+            message.id === `assistant:${bufferedItemId}` &&
+            message.text === "Replay continued after the failed event.",
+        ),
     );
     expect(parent.id).toBe("thread-1");
   });

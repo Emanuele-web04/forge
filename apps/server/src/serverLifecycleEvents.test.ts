@@ -1,11 +1,7 @@
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
-import {
-  getWelcomeEvent,
-  ServerLifecycleEvents,
-  ServerLifecycleEventsLive,
-} from "./serverLifecycleEvents";
+import { ServerLifecycleEvents, ServerLifecycleEventsLive } from "./serverLifecycleEvents";
 
 const runWithLifecycle = <A, E>(effect: Effect.Effect<A, E, ServerLifecycleEvents>) =>
   Effect.runPromise(effect.pipe(Effect.provide(ServerLifecycleEventsLive)));
@@ -48,7 +44,7 @@ describe("ServerLifecycleEvents", () => {
     expect(snapshot.sequence).toBe(3);
     expect(snapshot.events).toHaveLength(2);
     expect(snapshot.events.map((event) => event.type)).toEqual(["welcome", "ready"]);
-    expect(getWelcomeEvent(snapshot)?.payload).toMatchObject({
+    expect(snapshot.events.find((event) => event.type === "welcome")?.payload).toMatchObject({
       cwd: "/two",
       projectName: "two",
     });

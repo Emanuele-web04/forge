@@ -307,6 +307,7 @@ describe("wsNativeApi", () => {
           codex: { enabled: true, binaryPath: "codex", homePath: "", customModels: [] },
           claudeAgent: { enabled: true, binaryPath: "claude", launchArgs: "", customModels: [] },
           cursor: { enabled: false, binaryPath: "agent", apiEndpoint: "", customModels: [] },
+          devin: { enabled: true, binaryPath: "devin", customModels: [] },
           antigravity: { enabled: true, binaryPath: "agy", customModels: [] },
           grok: { enabled: true, binaryPath: "grok", customModels: [] },
           droid: { enabled: true, binaryPath: "droid", customModels: [] },
@@ -504,6 +505,22 @@ describe("wsNativeApi", () => {
     expect(requestMock).toHaveBeenCalledWith(ORCHESTRATION_WS_METHODS.dispatchCommand, {
       command,
     });
+  });
+
+  it("runs thread-title regeneration without a client timeout", async () => {
+    requestMock.mockResolvedValue({ status: "renamed", title: "Backend auth" });
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    await api.orchestration.regenerateThreadTitle({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+    });
+
+    expect(requestMock).toHaveBeenCalledWith(
+      ORCHESTRATION_WS_METHODS.regenerateThreadTitle,
+      { threadId: "thread-1" },
+      { timeoutMs: null },
+    );
   });
 
   it("forwards terminal output ACKs to the websocket transport", async () => {

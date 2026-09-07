@@ -20,7 +20,6 @@ import type {
 import { ServerProviderUpdateError } from "@synara/contracts";
 import { parseCodexConfigModelProvider } from "@synara/shared/codexConfig";
 import { decodeJsonResult } from "@synara/shared/schemaJson";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   Array,
@@ -41,7 +40,8 @@ import {
   Scope,
   Stream,
 } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { makeEffectProcessCommand } from "../../platform/effectProcessRuntime.ts";
 
 import {
   compareCodexCliVersions,
@@ -65,6 +65,11 @@ import {
 } from "../acp/CursorAcpCommand";
 import { hasDroidApiKeyEnv, resolveDroidCliBinaryPath } from "../acp/DroidAcpSupport";
 import { hasGrokApiKeyEnv } from "../acp/GrokAcpSupport";
+import {
+  hasDevinApiKeyEnv,
+  readDevinStoredCredentials,
+  resolveDevinBinaryPath,
+} from "../acp/DevinAcpSupport";
 import {
   claudeAuthMetadata,
   isStructuredClaudeAuthFalseNegativeCandidate,
@@ -117,6 +122,7 @@ const CURSOR_PROVIDER = "cursor" as const;
 const ANTIGRAVITY_PROVIDER = "antigravity" as const;
 const GROK_PROVIDER = "grok" as const;
 const DROID_PROVIDER = "droid" as const;
+const DEVIN_PROVIDER = "devin" as const;
 const OPENCODE_PROVIDER = "opencode" as const;
 const PI_PROVIDER = "pi" as const;
 type ProviderStatuses = ReadonlyArray<ServerProviderStatus>;
@@ -130,6 +136,7 @@ const PROVIDERS = [
   ANTIGRAVITY_PROVIDER,
   GROK_PROVIDER,
   DROID_PROVIDER,
+  DEVIN_PROVIDER,
   OPENCODE_PROVIDER,
   PI_PROVIDER,
 ] as const satisfies ReadonlyArray<ProviderKind>;
@@ -600,43 +607,6 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
  */
 const OPENAI_AUTH_PROVIDERS = new Set(["openai"]);
 
-/**
- * Read the `model_provider` value from the Codex CLI config file.
- *
- * Looks for the file at `$CODEX_HOME/config.toml` (falls back to
- * `~/.codex/config.toml`). Uses a simple line-by-line scan rather than
- * a full TOML parser to avoid adding a dependency for a single key.
- *
- * Returns `undefined` when the file does not exist or does not set
- * `model_provider`.
- */
-export const readCodexConfigModelProvider = Effect.gen(function* () {
-  const fileSystem = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const codexHome = process.env.CODEX_HOME || path.join(OS.homedir(), ".codex");
-  const configPath = path.join(codexHome, "config.toml");
-
-  const content = yield* fileSystem
-    .readFileString(configPath)
-    .pipe(Effect.orElseSucceed(() => undefined));
-  if (content === undefined) {
-    return undefined;
-  }
-
-  return parseCodexConfigModelProvider(content);
-});
-
-/**
- * Returns `true` when the Codex CLI is configured with a custom
- * (non-OpenAI) model provider, meaning `codex login` auth is not
- * required because authentication is handled through provider-specific
- * environment variables.
- */
-export const hasCustomModelProvider = Effect.map(
-  readCodexConfigModelProvider,
-  (provider) => provider !== undefined && !OPENAI_AUTH_PROVIDERS.has(provider),
-);
-
 // ── Effect-native command execution ─────────────────────────────────
 
 const collectStreamAsString = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.Effect<string, E> =>
@@ -653,10 +623,7 @@ const runProviderCommand = (
 ) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const prepared = prepareWindowsSafeProcess(executable, args, { env });
-    const command = ChildProcess.make(prepared.command, prepared.args, {
-      shell: prepared.shell,
-      ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+    const command = makeEffectProcessCommand(executable, args, {
       env,
       // Health probes are non-interactive. Leaving stdin as a pipe can keep CLIs
       // such as Antigravity waiting even after a read-only subcommand has finished.
@@ -834,7 +801,7 @@ async function makeCodexProbeEnv(homePath?: string): Promise<NodeJS.ProcessEnv> 
   });
 }
 
-const readCodexConfigModelProviderForEnv = (env: NodeJS.ProcessEnv) =>
+export const readCodexConfigModelProviderForEnv = (env: NodeJS.ProcessEnv) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -1376,8 +1343,6 @@ export const makeCheckDroidProviderStatus = (
     } satisfies ServerProviderStatus;
   });
 
-export const checkDroidProviderStatus = makeCheckDroidProviderStatus();
-
 // ── OpenCode health check ───────────────────────────────────────────
 
 export const makeCheckOpenCodeProviderStatus = (
@@ -1821,6 +1786,88 @@ export const makeCheckCursorProviderStatus = (
 
 export const checkCursorProviderStatus = makeCheckCursorProviderStatus();
 
+// ── Devin health check ───────────────────────────────────────────────
+
+export const makeCheckDevinProviderStatus = (
+  binaryPath?: string,
+  readStoredCredentials: typeof readDevinStoredCredentials = readDevinStoredCredentials,
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const executable = resolveDevinBinaryPath(binaryPath);
+    const env = buildProviderChildEnvironment({ provider: DEVIN_PROVIDER });
+
+    const versionProbe = yield* probeProviderCliVersion(
+      runProviderCommand(executable, ["--version"], env),
+      DEFAULT_TIMEOUT_MS,
+    );
+
+    if (versionProbe.outcome === "missing" || versionProbe.outcome === "failure") {
+      const error = versionProbe.cause;
+      return {
+        provider: DEVIN_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message:
+          versionProbe.outcome === "missing"
+            ? "Devin CLI (`devin`) is not installed or not on PATH."
+            : `Failed to execute Devin CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+      } satisfies ServerProviderStatus;
+    }
+
+    if (versionProbe.outcome === "timeout") {
+      return {
+        provider: DEVIN_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: "Devin CLI is installed but failed to run. Timed out while running command.",
+      } satisfies ServerProviderStatus;
+    }
+
+    if (versionProbe.outcome === "nonzero") {
+      const versionResult = versionProbe.result;
+      const detail = detailFromResult(versionResult);
+      return {
+        provider: DEVIN_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: detail
+          ? `Devin CLI is installed but failed to run. ${detail}`
+          : "Devin CLI is installed but failed to run.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const versionResult = versionProbe.result;
+    const parsedVersion = parseGenericCliVersion(
+      `${versionResult.stdout}\n${versionResult.stderr}`,
+    );
+    const storedCredentials = yield* Effect.promise(() => readStoredCredentials());
+    const hasApiKey = hasDevinApiKeyEnv() || storedCredentials?.apiKey !== undefined;
+
+    return {
+      provider: DEVIN_PROVIDER,
+      status: "ready" as const,
+      available: true,
+      authStatus: hasApiKey ? ("authenticated" as const) : ("unknown" as const),
+      version: parsedVersion,
+      checkedAt,
+      ...(hasApiKey
+        ? { authType: "apiKey" as const, authLabel: "Devin API Key" }
+        : {
+            message:
+              "Devin CLI is installed. Run `devin auth login` to authenticate locally, or set WINDSURF_API_KEY before starting a session.",
+          }),
+    } satisfies ServerProviderStatus;
+  });
+
+export const checkDevinProviderStatus = makeCheckDevinProviderStatus();
+
 // ── Snapshot helpers ────────────────────────────────────────────────
 
 function comparableProviderVersionAdvisory(
@@ -2104,6 +2151,8 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             return settings.providers.opencode.binaryPath;
           case "pi":
             return settings.providers.pi.binaryPath;
+          case "devin":
+            return settings.providers.devin.binaryPath;
         }
       };
 
@@ -2143,7 +2192,7 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             });
           }
           return yield* resolveProviderMaintenanceCapabilitiesEffect(definition, {
-            binaryPath: getProviderBinaryPath(provider, settings),
+            binaryPath: getProviderBinaryPath(provider, settings) ?? null,
             env: providerCommandEnv(provider),
             platform: process.platform,
           }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
@@ -2283,6 +2332,11 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                   settings,
                   CURSOR_PROVIDER,
                   makeCheckCursorProviderStatus(settings.providers.cursor.binaryPath),
+                ),
+                checkProviderWhenEnabled(
+                  settings,
+                  DEVIN_PROVIDER,
+                  makeCheckDevinProviderStatus(settings.providers.devin?.binaryPath),
                 ),
                 checkProviderWhenEnabled(
                   settings,
@@ -2496,11 +2550,8 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                 .join(OS.platform() === "win32" ? ";" : ":"),
             }
           : baseEnv;
-        const prepared = prepareWindowsSafeProcess(input.command, input.args, { env: updateEnv });
         const child = yield* spawner.spawn(
-          ChildProcess.make(prepared.command, prepared.args, {
-            shell: prepared.shell,
-            ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+          makeEffectProcessCommand(input.command, input.args, {
             env: updateEnv,
           }),
         );

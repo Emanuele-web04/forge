@@ -28,21 +28,6 @@ function terminalVisualStatePriority(state: TerminalVisualState): number {
   }
 }
 
-export function resolveTerminalVisualState(input: {
-  runningTerminalIds: readonly string[];
-  terminalAttentionStatesById: Record<string, "attention" | "review">;
-  terminalId: string;
-}): TerminalVisualState {
-  const runningTerminalIdSet = new Set(
-    input.runningTerminalIds.map((id) => id.trim()).filter((id) => id.length > 0),
-  );
-  return resolveTerminalVisualStateFromSet({
-    runningTerminalIdSet,
-    terminalAttentionStatesById: input.terminalAttentionStatesById,
-    terminalId: input.terminalId,
-  });
-}
-
 function resolveTerminalVisualStateFromSet(input: {
   runningTerminalIdSet: ReadonlySet<string>;
   terminalAttentionStatesById: Record<string, "attention" | "review">;

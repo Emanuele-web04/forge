@@ -33,6 +33,7 @@ import {
   OrchestrationGetSnapshotInput,
   OrchestrationGetTurnDiffInput,
   OrchestrationReplayEventsInput,
+  OrchestrationRegenerateThreadTitleInput,
 } from "./orchestration";
 import {
   GitActionProgressEvent,
@@ -81,6 +82,7 @@ import {
   ProjectDiscoverScriptsInput,
   ProjectListDirectoriesInput,
   ProjectReadFileInput,
+  ProjectWatchFileInput,
   ProjectPrewarmSearchIndexInput,
   ProjectResolveWorkspaceFileReferencesInput,
   ProjectResolveOutOfRootFileReferenceInput,
@@ -174,6 +176,7 @@ export const WS_METHODS = {
   projectsSearchContent: "projects.searchContent",
   projectsPrewarmSearchIndex: "projects.prewarmSearchIndex",
   projectsReadFile: "projects.readFile",
+  projectsSubscribeFileChange: "projects.subscribeFileChange",
   projectsResolveWorkspaceFileReferences: "projects.resolveWorkspaceFileReferences",
   projectsResolveOutOfRootFileReference: "projects.resolveOutOfRootFileReference",
   projectsCreateLocalFilePreviewGrant: "projects.createLocalFilePreviewGrant",
@@ -333,6 +336,10 @@ const WebSocketRequestBody = Schema.Union([
     Schema.Struct({ command: ClientOrchestrationCommand }),
   ),
   tagRequestBody(ORCHESTRATION_WS_METHODS.importThread, OrchestrationImportThreadInput),
+  tagRequestBody(
+    ORCHESTRATION_WS_METHODS.regenerateThreadTitle,
+    OrchestrationRegenerateThreadTitleInput,
+  ),
   tagRequestBody(ORCHESTRATION_WS_METHODS.getSnapshot, OrchestrationGetSnapshotInput),
   tagRequestBody(ORCHESTRATION_WS_METHODS.getShellSnapshot, OrchestrationGetShellSnapshotInput),
   tagRequestBody(
@@ -356,6 +363,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.projectsSearchContent, ProjectSearchContentInput),
   tagRequestBody(WS_METHODS.projectsPrewarmSearchIndex, ProjectPrewarmSearchIndexInput),
   tagRequestBody(WS_METHODS.projectsReadFile, ProjectReadFileInput),
+  tagRequestBody(WS_METHODS.projectsSubscribeFileChange, ProjectWatchFileInput),
   tagRequestBody(
     WS_METHODS.projectsResolveWorkspaceFileReferences,
     ProjectResolveWorkspaceFileReferencesInput,

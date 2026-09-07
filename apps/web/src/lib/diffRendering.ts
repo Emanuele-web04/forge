@@ -322,11 +322,15 @@ export function splitRepoRelativePath(path: string): { dir: string; name: string
 
 // Natural-order comparator for parsed file diffs by working-tree path, so file
 // lists stay stable and human-friendly (numeric-aware, case-insensitive).
+let diffPathCollator: Intl.Collator | undefined;
+
+export function compareDiffPaths(left: string, right: string): number {
+  diffPathCollator ??= new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+  return diffPathCollator.compare(left, right);
+}
+
 export function compareFileDiffByPath(left: FileDiffMetadata, right: FileDiffMetadata): number {
-  return resolveFileDiffPath(left).localeCompare(resolveFileDiffPath(right), undefined, {
-    numeric: true,
-    sensitivity: "base",
-  });
+  return compareDiffPaths(resolveFileDiffPath(left), resolveFileDiffPath(right));
 }
 
 export function sortFileDiffsByPath(files: ReadonlyArray<FileDiffMetadata>): FileDiffMetadata[] {

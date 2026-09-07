@@ -743,4 +743,121 @@ describe("provider runtime activity projection", () => {
       ),
     ).toEqual([]);
   });
+
+  it("keeps routine hook lifecycle internal and surfaces only consequential completions", () => {
+    expect(
+      projectProviderRuntimeActivities(
+        runtimeEvent({
+          type: "hook.started",
+          eventId: "hook-started",
+          turnId: TURN_ID,
+          payload: {
+            hookId: "hook-run-1",
+            hookName: "/Users/example/.codex/hooks.json",
+            hookEvent: "preToolUse",
+          },
+        }),
+      ),
+    ).toEqual([]);
+    expect(
+      projectProviderRuntimeActivities(
+        runtimeEvent({
+          type: "hook.progress",
+          eventId: "hook-progress",
+          turnId: TURN_ID,
+          payload: {
+            hookId: "hook-run-1",
+            stdout: "Still running.",
+          },
+        }),
+      ),
+    ).toEqual([]);
+    expect(
+      projectProviderRuntimeActivities(
+        runtimeEvent({
+          type: "hook.completed",
+          eventId: "hook-success",
+          turnId: TURN_ID,
+          payload: {
+            hookId: "hook-run-1",
+            hookName: "/Users/example/.codex/hooks.json",
+            hookEvent: "preToolUse",
+            outcome: "success",
+            status: "completed",
+            durationMs: 8,
+          },
+        }),
+      ),
+    ).toEqual([]);
+    expect(
+      projectProviderRuntimeActivities(
+        runtimeEvent({
+          type: "hook.completed",
+          eventId: "hook-cancelled",
+          turnId: TURN_ID,
+          payload: {
+            hookId: "hook-run-2",
+            outcome: "cancelled",
+          },
+        }),
+      ),
+    ).toEqual([]);
+
+    const [failed] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "hook.completed",
+        eventId: "hook-failed",
+        turnId: TURN_ID,
+        payload: {
+          hookId: "hook-run-3",
+          hookName: "/Users/example/.codex/hooks.json",
+          hookEvent: "postToolUse",
+          outcome: "error",
+          status: "failed",
+          statusMessage: "Hook process exited with code 1.",
+          durationMs: 20,
+        },
+      }),
+    );
+    expect(failed).toMatchObject({
+      tone: "error",
+      kind: "runtime.warning",
+      summary: "postToolUse hook failed",
+      payload: {
+        message: "Hook process exited with code 1.",
+        hookId: "hook-run-3",
+        hookEvent: "postToolUse",
+        outcome: "error",
+        status: "failed",
+        durationMs: 20,
+      },
+    });
+    expect(() => decodeActivityAppendCommand(failed!)).not.toThrow();
+
+    const [blocked] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "hook.completed",
+        eventId: "hook-blocked",
+        turnId: TURN_ID,
+        payload: {
+          hookId: "hook-run-4",
+          hookEvent: "preToolUse",
+          outcome: "cancelled",
+          status: "blocked",
+          statusMessage: "Policy blocked the command.",
+        },
+      }),
+    );
+    expect(blocked).toMatchObject({
+      tone: "info",
+      kind: "runtime.warning",
+      summary: "preToolUse hook blocked an action",
+      payload: {
+        message: "Policy blocked the command.",
+        outcome: "cancelled",
+        status: "blocked",
+      },
+    });
+    expect(() => decodeActivityAppendCommand(blocked!)).not.toThrow();
+  });
 });

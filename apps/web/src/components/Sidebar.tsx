@@ -472,10 +472,6 @@ const ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS = 6;
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS = 50;
 const GITHUB_CANCEL_RECOVERY_MAX_ATTEMPTS = 40;
 const GITHUB_CANCEL_RECOVERY_DELAY_MS = 250;
-const SIDEBAR_VIEW_LABELS: Record<SidebarView, string> = {
-  threads: "Projects",
-  studio: "Studio",
-};
 /** Snap the optimistic segment selection back if the navigation never lands. */
 const EMPTY_PROJECT_SIDEBAR_DATA: ReadonlyMap<ProjectId, SidebarDerivedProjectData> = new Map();
 const DebugFeatureFlagsMenu = import.meta.env.DEV
@@ -1551,7 +1547,6 @@ export default function Sidebar() {
       }
     };
   }, []);
-  const createSplitViewFromDrop = useSplitViewStore((store) => store.createFromDrop);
   const setSplitFocusedPane = useSplitViewStore((store) => store.setFocusedPane);
   const openRightDockPane = useRightDockStore((store) => store.openPane);
   // Query defaults are applied after destructuring: a default inside the destructuring
@@ -2144,10 +2139,11 @@ export default function Sidebar() {
         return true;
       }
 
-      void handleNewThread(projectId, {
-        envMode: appSettings.defaultThreadEnvMode,
-      }).catch(() => undefined);
-      return true;
+      return (
+        (await handleNewThread(projectId, {
+          envMode: appSettings.defaultThreadEnvMode,
+        }).catch(() => null)) !== null
+      );
     },
     [
       appSettings.defaultThreadEnvMode,
@@ -2187,10 +2183,11 @@ export default function Sidebar() {
       }
 
       setProjectExpanded(projectId, true);
-      void handleNewThread(projectId, {
-        envMode: appSettings.defaultThreadEnvMode,
-      }).catch(() => undefined);
-      return true;
+      return (
+        (await handleNewThread(projectId, {
+          envMode: appSettings.defaultThreadEnvMode,
+        }).catch(() => null)) !== null
+      );
     },
     [
       appSettings.defaultThreadEnvMode,
@@ -2590,6 +2587,7 @@ export default function Sidebar() {
             ? {}
             : { createIfMissing: options.createIfMissing }),
           ...(options.spaceId === undefined ? {} : { spaceId: options.spaceId }),
+          defaultProvider: appSettings.defaultProvider,
           loadSnapshot: () => api.orchestration.getShellSnapshot().catch(() => null),
           maxAttempts: ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS,
           delayMs: ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS,
@@ -2610,6 +2608,11 @@ export default function Sidebar() {
           if (recovered) {
             return;
           }
+          if (creationResult.created) {
+            // The opener's draft navigation was superseded; retrying here
+            // would override the user's newer route.
+            throw new Error("Project creation was superseded before its chat opened.");
+          }
         }
 
         if (!creationResult.created) {
@@ -2624,14 +2627,18 @@ export default function Sidebar() {
         // snapshot is just slow to catch up, continue with the local new-thread flow
         // instead of surfacing a false-negative sidebar sync error.
         setProjectExpanded(creationResult.projectId, true);
-        void handleNewThread(creationResult.projectId, {
+        const threadId = await handleNewThread(creationResult.projectId, {
           envMode: appSettings.defaultThreadEnvMode,
-        }).catch(() => undefined);
+        }).catch(() => null);
+        if (!threadId) {
+          throw new Error("Project creation was superseded before its chat opened.");
+        }
       };
 
       await runExclusiveProjectAddition(projectAdditionLockRef, runAddProject);
     },
     [
+      appSettings.defaultProvider,
       appSettings.defaultThreadEnvMode,
       handleNewThread,
       projects,
@@ -3401,8 +3408,7 @@ export default function Sidebar() {
               if (!project || !snapshot) return false;
 
               handleSelectSpaceForIncomingProject(project.spaceId ?? null);
-              await openExistingProjectFromSnapshot(project.id, snapshot);
-              return true;
+              return openExistingProjectFromSnapshot(project.id, snapshot);
             };
             const requestedProjectId = newProjectId();
             const requestedWorkspaceRoot = joinProjectPath(

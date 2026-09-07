@@ -82,7 +82,8 @@ export function getRuntimeAwareModelCapabilities(input: {
   const staticCapabilities = getModelCapabilities(input.provider, input.model);
   // Runtime discovery is authoritative when available; the static table is only a startup fallback.
   const supportsFastMode =
-    (input.provider === "codex" || input.provider === "cursor") && input.runtimeModel
+    (input.provider === "codex" || input.provider === "cursor" || input.provider === "devin") &&
+    input.runtimeModel
       ? input.runtimeModel.supportsFastMode === true
       : staticCapabilities.supportsFastMode;
   const supportsThinkingToggle =
@@ -104,7 +105,8 @@ export function getRuntimeAwareModelCapabilities(input: {
       input.provider !== "grok" &&
       input.provider !== "droid" &&
       input.provider !== "opencode" &&
-      input.provider !== "pi") ||
+      input.provider !== "pi" &&
+      input.provider !== "devin") ||
     !runtimeEfforts ||
     runtimeEfforts.length === 0
   ) {

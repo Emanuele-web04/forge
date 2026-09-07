@@ -366,6 +366,29 @@ describe("agent gateway target resolver", () => {
     }),
   );
 
+  it.effect("keeps Devin modelVariant custom instead of suggesting effort labels", () =>
+    Effect.gen(function* () {
+      const descriptor = makeEffortDescriptor("devin-model", "low");
+      const guidance = agentGatewayTargetOptionGuidance({
+        provider: "devin",
+        defaultModel: descriptor.slug,
+        enabled: true,
+        available: true,
+        models: [descriptor],
+      });
+      assert.deepEqual(
+        guidance.optionsByModel[descriptor.slug]?.find((option) => option.key === "modelVariant"),
+        {
+          key: "modelVariant",
+          valueType: "string",
+          allowedValues: [],
+          allowedValuesSource: "model-discovery",
+          allowsCustomValue: true,
+        },
+      );
+    }),
+  );
+
   it.effect("uses registry rules for model capability and context-window options", () =>
     Effect.gen(function* () {
       const descriptor: ProviderModelDescriptor = {

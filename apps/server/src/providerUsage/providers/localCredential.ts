@@ -7,27 +7,13 @@ import nodePath from "node:path";
 
 import type { ProviderKind } from "@synara/contracts";
 
-import { getDroidApiKeyEnv } from "../../provider/acp/DroidAcpSupport";
-import { credentialFingerprint, readJsonFile } from "../credentials";
+import { readJsonFile } from "../credentials";
 import { asRecord, buildSnapshot, needsAuthSnapshot } from "../parse";
 import type { ProviderUsageContext, ProviderUsageFetcher } from "../types";
 
 async function jsonObjectHasKeys(path: string): Promise<boolean> {
   const parsed = asRecord(await readJsonFile(path));
   return parsed !== null && Object.keys(parsed).length > 0;
-}
-
-async function resolveDroidSignedIn(ctx: ProviderUsageContext): Promise<string | null> {
-  const apiKey = getDroidApiKeyEnv(ctx.env);
-  if (apiKey) return `api:${credentialFingerprint(apiKey)}`;
-  const factoryHome = nodePath.join(ctx.homeDir, ".factory");
-  for (const fileName of ["auth.json", "session.json", "credentials.json"]) {
-    const filePath = nodePath.join(factoryHome, fileName);
-    if (await jsonObjectHasKeys(filePath)) {
-      return `file:${fileName}`;
-    }
-  }
-  return null;
 }
 
 async function resolvePiSignedIn(ctx: ProviderUsageContext): Promise<string | null> {
@@ -62,14 +48,6 @@ function localCredentialFetcher(input: {
     },
   };
 }
-
-export const droidUsageFetcher = localCredentialFetcher({
-  provider: "droid",
-  source: "droid-local",
-  detail:
-    "Droid is signed in locally. Individual rate limits stay in the Droid `/limits` command; Factory has no public personal quota API.",
-  resolveSignedIn: resolveDroidSignedIn,
-});
 
 export const piUsageFetcher = localCredentialFetcher({
   provider: "pi",

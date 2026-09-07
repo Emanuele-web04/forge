@@ -5,6 +5,7 @@
 // Depends on: provider runtime item metadata already truncated by server ingestion
 
 import type { ToolLifecycleItemType } from "@synara/contracts";
+import { stripTrailingToolExitCode as stripTrailingExitCode } from "@synara/shared/toolOutputSummary";
 
 type WorkLogRequestKind = "command" | "file-read" | "file-change" | "permissions";
 
@@ -103,25 +104,6 @@ function firstNumber(...values: unknown[]): number | undefined {
     }
   }
   return undefined;
-}
-
-function stripTrailingExitCode(value: string): {
-  output: string | null;
-  exitCode?: number | undefined;
-} {
-  const trimmed = value.trim();
-  const match = /^(?<output>[\s\S]*?)(?:\s*<exited with exit code (?<code>\d+)>)\s*$/i.exec(
-    trimmed,
-  );
-  if (!match?.groups) {
-    return { output: value.trim().length > 0 ? value : null };
-  }
-  const exitCode = Number.parseInt(match.groups.code ?? "", 10);
-  const output = value.replace(/\s*<exited with exit code \d+>\s*$/i, "");
-  return {
-    output: output.trim().length > 0 ? output : null,
-    ...(Number.isInteger(exitCode) ? { exitCode } : {}),
-  };
 }
 
 function outputText(value: unknown): string | undefined {

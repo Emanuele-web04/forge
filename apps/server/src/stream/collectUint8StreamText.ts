@@ -43,7 +43,7 @@ export function collectUint8StreamText<E>(input: {
     input.stream,
     (): CollectState => ({ chunks: [], byteLength: 0, truncated: false }),
     (state, chunk) => {
-      if (state.truncated) {
+      if (state.truncated || chunk.byteLength === 0) {
         return state;
       }
 

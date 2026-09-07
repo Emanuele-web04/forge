@@ -337,6 +337,56 @@ describe("getGitTextGenerationModelOptions", () => {
       isCustom: true,
     });
   });
+
+  it("offers built-in Droid and Cursor models to a user currently on Codex", () => {
+    const options = getGitTextGenerationModelOptions({
+      customCodexModels: [],
+      customOpenCodeModels: [],
+      textGenerationModel: "gpt-5.6-luna",
+      textGenerationProvider: "codex",
+    });
+
+    expect(options.some((option) => option.provider === "droid" && option.slug === "auto")).toBe(
+      true,
+    );
+    expect(
+      options.some((option) => option.provider === "cursor" && option.slug === "composer-2.5"),
+    ).toBe(true);
+    expect(options.some((option) => option.provider === "codex")).toBe(true);
+  });
+
+  it("includes custom Cursor models in the git writing picker", () => {
+    const options = getGitTextGenerationModelOptions({
+      customCodexModels: [],
+      customCursorModels: ["cursor/custom-composer"],
+      customOpenCodeModels: [],
+      textGenerationModel: "gpt-5.6-luna",
+      textGenerationProvider: "codex",
+    });
+
+    expect(
+      options.some(
+        (option) => option.provider === "cursor" && option.slug === "cursor/custom-composer",
+      ),
+    ).toBe(true);
+  });
+
+  it("omits chat-only providers that have no Git text-generation backend", () => {
+    const options = getGitTextGenerationModelOptions({
+      customCodexModels: [],
+      customClaudeModels: ["claude-opus-4-8"],
+      customGrokModels: ["grok-4.6"],
+      customOpenCodeModels: [],
+      textGenerationModel: "gpt-5.6-luna",
+      textGenerationProvider: "codex",
+    });
+
+    expect(options.some((option) => option.provider === "claudeAgent")).toBe(false);
+    expect(options.some((option) => option.provider === "grok")).toBe(false);
+    expect(options.some((option) => option.provider === "antigravity")).toBe(false);
+    expect(options.some((option) => option.provider === "pi")).toBe(false);
+    expect(options.some((option) => option.provider === "devin")).toBe(false);
+  });
 });
 
 describe("isGitTextGenerationSettingsDirty", () => {
@@ -384,6 +434,7 @@ describe("resolveAppModelSelection", () => {
           codex: ["galapagos-alpha"],
           claudeAgent: [],
           cursor: [],
+          devin: [],
           antigravity: [],
           grok: [],
           droid: [],
@@ -403,6 +454,7 @@ describe("resolveAppModelSelection", () => {
           codex: [],
           claudeAgent: [],
           cursor: [],
+          devin: [],
           antigravity: [],
           grok: [],
           droid: [],
@@ -422,6 +474,7 @@ describe("resolveAppModelSelection", () => {
           codex: [],
           claudeAgent: [],
           cursor: [],
+          devin: [],
           antigravity: [],
           grok: [],
           droid: [],
@@ -441,6 +494,7 @@ describe("resolveAppModelSelection", () => {
           codex: [],
           claudeAgent: [],
           cursor: [],
+          devin: [],
           antigravity: [],
           grok: [],
           droid: [],
@@ -460,6 +514,7 @@ describe("resolveAppModelSelection", () => {
           codex: [],
           claudeAgent: [],
           cursor: [],
+          devin: [],
           antigravity: [],
           grok: [],
           droid: [],
@@ -623,6 +678,7 @@ describe("getProviderStartOptions", () => {
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "",
+        devinBinaryPath: "/usr/local/bin/devin",
       }),
     ).toEqual({
       claudeAgent: {
@@ -640,6 +696,9 @@ describe("getProviderStartOptions", () => {
       },
       grok: {
         binaryPath: "/usr/local/bin/grok",
+      },
+      devin: {
+        binaryPath: "/usr/local/bin/devin",
       },
     });
   });
@@ -660,6 +719,7 @@ describe("getProviderStartOptions", () => {
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "",
+        devinBinaryPath: "",
       }),
     ).toBeUndefined();
   });
@@ -674,6 +734,7 @@ describe("getProviderStartOptions", () => {
         cursorBinaryPath: "cursor-agent",
         antigravityBinaryPath: "agy",
         grokBinaryPath: "grok",
+        devinBinaryPath: "devin",
         droidBinaryPath: "droid",
         openCodeBinaryPath: "opencode",
         openCodeExperimentalWebSockets: false,
@@ -693,6 +754,7 @@ describe("provider-indexed custom model settings", () => {
     customAntigravityModels: ["Gemini 3.5 Flash (Experimental)"],
     customGrokModels: ["grok/custom-fast"],
     customDroidModels: ["claude-opus-4-8-custom"],
+    customDevinModels: ["devin/custom-model"],
     customOpenCodeModels: ["openrouter/gpt-oss-120b"],
     customPiModels: ["anthropic/custom-pi"],
   } as const;
@@ -702,6 +764,7 @@ describe("provider-indexed custom model settings", () => {
       "codex",
       "claudeAgent",
       "cursor",
+      "devin",
       "antigravity",
       "grok",
       "droid",
@@ -722,6 +785,7 @@ describe("provider-indexed custom model settings", () => {
     expect(getCustomModelsForProvider(settings, "cursor")).toEqual(["cursor/custom-model"]);
     expect(getCustomModelsForProvider(settings, "grok")).toEqual(["grok/custom-fast"]);
     expect(getCustomModelsForProvider(settings, "droid")).toEqual(["claude-opus-4-8-custom"]);
+    expect(getCustomModelsForProvider(settings, "devin")).toEqual(["devin/custom-model"]);
     expect(getCustomModelsForProvider(settings, "opencode")).toEqual(["openrouter/gpt-oss-120b"]);
     expect(getCustomModelsForProvider(settings, "pi")).toEqual(["anthropic/custom-pi"]);
   });
@@ -734,6 +798,7 @@ describe("provider-indexed custom model settings", () => {
       customAntigravityModels: ["Gemini 3.5 Flash (Experimental)"],
       customGrokModels: ["grok/default-fast"],
       customDroidModels: ["droid/default-model"],
+      customDevinModels: ["adaptive"],
       customOpenCodeModels: ["openai/gpt-5"],
       customPiModels: ["anthropic/default-pi"],
     } as const;
@@ -748,6 +813,7 @@ describe("provider-indexed custom model settings", () => {
     ]);
     expect(getDefaultCustomModelsForProvider(defaults, "grok")).toEqual(["grok/default-fast"]);
     expect(getDefaultCustomModelsForProvider(defaults, "droid")).toEqual(["droid/default-model"]);
+    expect(getDefaultCustomModelsForProvider(defaults, "devin")).toEqual(["adaptive"]);
     expect(getDefaultCustomModelsForProvider(defaults, "opencode")).toEqual(["openai/gpt-5"]);
     expect(getDefaultCustomModelsForProvider(defaults, "pi")).toEqual(["anthropic/default-pi"]);
   });
@@ -782,6 +848,12 @@ describe("provider-indexed custom model settings", () => {
     });
   });
 
+  it("patches custom models for devin", () => {
+    expect(patchCustomModels("devin", ["devin/custom-model"])).toEqual({
+      customDevinModels: ["devin/custom-model"],
+    });
+  });
+
   it("patches custom models for cursor", () => {
     expect(patchCustomModels("cursor", ["cursor/custom-model"])).toEqual({
       customCursorModels: ["cursor/custom-model"],
@@ -808,6 +880,7 @@ describe("provider-indexed custom model settings", () => {
       antigravity: ["Gemini 3.5 Flash (Experimental)"],
       grok: ["grok/custom-fast"],
       droid: ["claude-opus-4-8-custom"],
+      devin: ["devin/custom-model"],
       opencode: ["openrouter/gpt-oss-120b"],
       pi: ["anthropic/custom-pi"],
     });
@@ -834,6 +907,9 @@ describe("provider-indexed custom model settings", () => {
       true,
     );
     expect(
+      modelOptionsByProvider.devin.some((option) => option.slug === "devin/custom-model"),
+    ).toBe(true);
+    expect(
       modelOptionsByProvider.opencode.some((option) => option.slug === "openrouter/gpt-oss-120b"),
     ).toBe(true);
     expect(modelOptionsByProvider.pi.some((option) => option.slug === "anthropic/custom-pi")).toBe(
@@ -853,6 +929,7 @@ describe("provider-indexed custom model settings", () => {
       ],
       customGrokModels: [" grok-build ", "grok/custom-fast", "grok/custom-fast"],
       customDroidModels: [" opus ", "droid/custom-model", "droid/custom-model"],
+      customDevinModels: [" adaptive ", "devin/custom-model", "devin/custom-model"],
       customOpenCodeModels: [
         " openai/gpt-5 ",
         "openrouter/gpt-oss-120b",
@@ -892,6 +969,9 @@ describe("provider-indexed custom model settings", () => {
     expect(modelOptionsByProvider.grok.some((option) => option.slug === "grok-4.6")).toBe(true);
     expect(
       modelOptionsByProvider.grok.filter((option) => option.slug === "grok-build"),
+    ).toHaveLength(1);
+    expect(
+      modelOptionsByProvider.devin.filter((option) => option.slug === "devin/custom-model"),
     ).toHaveLength(1);
     expect(
       modelOptionsByProvider.opencode.filter((option) => option.slug === "openrouter/gpt-oss-120b"),
@@ -978,6 +1058,16 @@ describe("AppSettingsSchema", () => {
     expect(
       decode(JSON.stringify({ environmentPanelDefaultOpen: true })).environmentPanelDefaultOpen,
     ).toBe(true);
+  });
+
+  it("preserves a disabled simulator auto-open preference across settings persistence", () => {
+    const codec = Schema.fromJsonString(AppSettingsSchema);
+    const decode = Schema.decodeSync(codec);
+    const defaults = decode("{}");
+    expect(defaults.autoOpenDevicePane).toBe(true);
+
+    const settings = applyLocalAppSettingsPatch(defaults, { autoOpenDevicePane: false });
+    expect(decode(Schema.encodeSync(codec)(settings)).autoOpenDevicePane).toBe(false);
   });
 
   it("fills decoding defaults for persisted settings that predate newer keys", () => {

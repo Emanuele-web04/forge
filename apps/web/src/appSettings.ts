@@ -12,8 +12,10 @@ import {
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
   DEFAULT_SERVER_SETTINGS,
   DEFAULT_SERVER_SETTINGS_VIEW,
+  GIT_TEXT_GENERATION_PROVIDERS,
   TrimmedNonEmptyString,
   ProviderKind,
+  type GitTextGenerationProvider,
   type ProviderStartOptions,
   type ServerSettingsView,
   type ServerSettingsPatch,
@@ -135,6 +137,7 @@ type CustomModelSettingsKey =
   | "customAntigravityModels"
   | "customGrokModels"
   | "customDroidModels"
+  | "customDevinModels"
   | "customOpenCodeModels"
   | "customPiModels";
 export type ProviderCustomModelConfig = {
@@ -151,6 +154,7 @@ const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>
   codex: new Set(getModelOptions("codex").map((option) => option.slug)),
   claudeAgent: new Set(getModelOptions("claudeAgent").map((option) => option.slug)),
   cursor: new Set(getModelOptions("cursor").map((option) => option.slug)),
+  devin: new Set(getModelOptions("devin").map((option) => option.slug)),
   antigravity: new Set(getModelOptions("antigravity").map((option) => option.slug)),
   grok: new Set(getModelOptions("grok").map((option) => option.slug)),
   droid: new Set(getModelOptions("droid").map((option) => option.slug)),
@@ -175,6 +179,7 @@ const PersistedProviderKind = Schema.Literals([
   "codex",
   "claudeAgent",
   "cursor",
+  "devin",
   "antigravity",
   "gemini",
   "grok",
@@ -261,6 +266,7 @@ export const AppSettingsSchema = Schema.Struct({
   codexHomePath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   cursorBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   cursorApiEndpoint: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  devinBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   antigravityBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   // Deprecated Gemini keys remain decodable until normalization rewrites local storage.
   geminiBinaryPath: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(4096))),
@@ -318,6 +324,7 @@ export const AppSettingsSchema = Schema.Struct({
   showEnvironmentNotepad: Schema.Boolean.pipe(withDefaults(() => false)),
   followUpBehavior: FollowUpBehavior.pipe(withDefaults(() => DEFAULT_FOLLOW_UP_BEHAVIOR)),
   enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => true)),
+  autoOpenDevicePane: Schema.Boolean.pipe(withDefaults(() => true)),
   enableProviderUpdateChecks: Schema.Boolean.pipe(withDefaults(() => true)),
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),
   desktopAppIcon: DesktopAppIcon.pipe(withDefaults(() => "default" as const)),
@@ -346,6 +353,7 @@ export const AppSettingsSchema = Schema.Struct({
   customCodexModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customClaudeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customCursorModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  customDevinModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customAntigravityModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customGeminiModels: Schema.optionalKey(Schema.Array(Schema.String)),
   customGrokModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
@@ -430,6 +438,15 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     description: "Save additional Cursor model slugs for the picker and provider runtime.",
     placeholder: "cursor-model-slug",
     example: "composer-2",
+  },
+  devin: {
+    provider: "devin",
+    settingsKey: "customDevinModels",
+    defaultSettingsKey: "customDevinModels",
+    title: "Devin",
+    description: "Save additional Devin model slugs for the picker and provider runtime.",
+    placeholder: "devin-model-slug",
+    example: "adaptive",
   },
   antigravity: {
     provider: "antigravity",
@@ -595,6 +612,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     claudeBinaryPath: normalizeProviderBinaryPathOverride("claudeAgent", settings.claudeBinaryPath),
     codexBinaryPath: normalizeProviderBinaryPathOverride("codex", settings.codexBinaryPath),
     cursorBinaryPath: normalizeProviderBinaryPathOverride("cursor", settings.cursorBinaryPath),
+    devinBinaryPath: normalizeProviderBinaryPathOverride("devin", settings.devinBinaryPath),
     antigravityBinaryPath: normalizeProviderBinaryPathOverride(
       "antigravity",
       settings.antigravityBinaryPath || legacyGeminiBinaryPath,
@@ -614,6 +632,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     customCodexModels: normalizeCustomModelSlugs(settings.customCodexModels, "codex"),
     customClaudeModels: normalizeCustomModelSlugs(settings.customClaudeModels, "claudeAgent"),
     customCursorModels: normalizeCustomModelSlugs(settings.customCursorModels, "cursor"),
+    customDevinModels: normalizeCustomModelSlugs(settings.customDevinModels, "devin"),
     customAntigravityModels: normalizeCustomModelSlugs(
       [...settings.customAntigravityModels, ...(legacyCustomGeminiModels ?? [])],
       "antigravity",
@@ -656,6 +675,7 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     codexHomePath: settings.providers.codex.homePath,
     cursorApiEndpoint: settings.providers.cursor.apiEndpoint,
     cursorBinaryPath: settings.providers.cursor.binaryPath,
+    devinBinaryPath: settings.providers.devin.binaryPath,
     defaultThreadEnvMode: settings.defaultThreadEnvMode,
     enableAssistantStreaming: settings.enableAssistantStreaming,
     enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
@@ -671,6 +691,7 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     customCodexModels: settings.providers.codex.customModels,
     customClaudeModels: settings.providers.claudeAgent.customModels,
     customCursorModels: settings.providers.cursor.customModels,
+    customDevinModels: settings.providers.devin.customModels,
     customAntigravityModels: settings.providers.antigravity.customModels,
     customGrokModels: settings.providers.grok.customModels,
     customDroidModels: settings.providers.droid.customModels,
@@ -699,6 +720,7 @@ function hasOwn<Key extends keyof AppSettings>(patch: Partial<AppSettings>, key:
 
 function touchesProviderDiscoverySettings(patch: Partial<AppSettings>): boolean {
   return (
+    hasOwn(patch, "devinBinaryPath") ||
     hasOwn(patch, "openCodeBinaryPath") ||
     hasOwn(patch, "openCodeExperimentalWebSockets") ||
     hasOwn(patch, "openCodeServerPassword") ||
@@ -802,6 +824,14 @@ export function appSettingsPatchToServerSettingsPatch(
         : {}),
     };
   }
+  if (hasOwn(patch, "devinBinaryPath") || hasOwn(patch, "customDevinModels")) {
+    providers.devin = {
+      ...(hasOwn(patch, "devinBinaryPath") ? { binaryPath: patch.devinBinaryPath ?? "" } : {}),
+      ...(hasOwn(patch, "customDevinModels")
+        ? { customModels: patch.customDevinModels ?? [] }
+        : {}),
+    };
+  }
   if (hasOwn(patch, "antigravityBinaryPath") || hasOwn(patch, "customAntigravityModels")) {
     providers.antigravity = {
       ...(hasOwn(patch, "antigravityBinaryPath")
@@ -902,6 +932,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "defaultThreadEnvMode",
     "enableAssistantStreaming",
     "enableProviderUpdateChecks",
+    "devinBinaryPath",
     "antigravityBinaryPath",
     "grokBinaryPath",
     "droidBinaryPath",
@@ -929,6 +960,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "customCodexModels",
     "customClaudeModels",
     "customCursorModels",
+    "customDevinModels",
     "customAntigravityModels",
     "customGrokModels",
     "customDroidModels",
@@ -996,6 +1028,7 @@ export function getCustomModelsByProvider(
     codex: getCustomModelsForProvider(settings, "codex"),
     claudeAgent: getCustomModelsForProvider(settings, "claudeAgent"),
     cursor: getCustomModelsForProvider(settings, "cursor"),
+    devin: getCustomModelsForProvider(settings, "devin"),
     antigravity: getCustomModelsForProvider(settings, "antigravity"),
     grok: getCustomModelsForProvider(settings, "grok"),
     droid: getCustomModelsForProvider(settings, "droid"),
@@ -1055,10 +1088,8 @@ export function getAppModelOptions(
   return options;
 }
 
-type GitTextGenerationDiscoveredProvider = "codex" | "opencode";
-
 export function mapCatalogModelOptionsToAppModelOptions(
-  provider: GitTextGenerationDiscoveredProvider,
+  provider: GitTextGenerationProvider,
   options: ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>,
 ): AppModelOption[] {
   return options.map((option) => ({
@@ -1069,25 +1100,20 @@ export function mapCatalogModelOptionsToAppModelOptions(
 }
 
 export function getGitTextGenerationModelOptions(
-  settings: Pick<
-    AppSettings,
-    "customCodexModels" | "customOpenCodeModels" | "textGenerationModel" | "textGenerationProvider"
-  >,
+  settings: Pick<AppSettings, "textGenerationModel" | "textGenerationProvider"> &
+    Partial<Pick<AppSettings, CustomModelSettingsKey>>,
   discoveredOptionsByProvider?: Partial<
-    Record<
-      GitTextGenerationDiscoveredProvider,
-      ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>
-    >
+    Record<GitTextGenerationProvider, ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>>
   >,
 ): AppModelOption[] {
-  const options = [
-    ...(discoveredOptionsByProvider?.codex
-      ? mapCatalogModelOptionsToAppModelOptions("codex", discoveredOptionsByProvider.codex)
-      : getAppModelOptions("codex", settings.customCodexModels)),
-    ...(discoveredOptionsByProvider?.opencode
-      ? mapCatalogModelOptionsToAppModelOptions("opencode", discoveredOptionsByProvider.opencode)
-      : getAppModelOptions("opencode", settings.customOpenCodeModels)),
-  ];
+  const options = GIT_TEXT_GENERATION_PROVIDERS.flatMap((provider) => {
+    const discovered = discoveredOptionsByProvider?.[provider];
+    if (discovered !== undefined) {
+      return mapCatalogModelOptionsToAppModelOptions(provider, discovered);
+    }
+    const customModels = settings[PROVIDER_CUSTOM_MODEL_CONFIG[provider].settingsKey] ?? [];
+    return getAppModelOptions(provider, customModels);
+  });
   const deduped: AppModelOption[] = [];
   const seen = new Set<string>();
 
@@ -1136,6 +1162,7 @@ export function getCustomModelOptionsByProvider(
     codex: getAppModelOptions("codex", customModelsByProvider.codex),
     claudeAgent: getAppModelOptions("claudeAgent", customModelsByProvider.claudeAgent),
     cursor: getAppModelOptions("cursor", customModelsByProvider.cursor),
+    devin: getAppModelOptions("devin", customModelsByProvider.devin),
     antigravity: getAppModelOptions("antigravity", customModelsByProvider.antigravity),
     grok: getAppModelOptions("grok", customModelsByProvider.grok),
     droid: getAppModelOptions("droid", customModelsByProvider.droid),
@@ -1152,6 +1179,7 @@ export function getProviderStartOptions(
     | "codexHomePath"
     | "cursorApiEndpoint"
     | "cursorBinaryPath"
+    | "devinBinaryPath"
     | "antigravityBinaryPath"
     | "grokBinaryPath"
     | "droidBinaryPath"
@@ -1168,6 +1196,7 @@ export function getProviderStartOptions(
   );
   const codexBinaryPath = normalizeProviderBinaryPathOverride("codex", settings.codexBinaryPath);
   const cursorBinaryPath = normalizeProviderBinaryPathOverride("cursor", settings.cursorBinaryPath);
+  const devinBinaryPath = normalizeProviderBinaryPathOverride("devin", settings.devinBinaryPath);
   const antigravityBinaryPath = normalizeProviderBinaryPathOverride(
     "antigravity",
     settings.antigravityBinaryPath,
@@ -1203,6 +1232,13 @@ export function getProviderStartOptions(
           cursor: {
             ...(cursorBinaryPath ? { binaryPath: cursorBinaryPath } : {}),
             ...(settings.cursorApiEndpoint ? { apiEndpoint: settings.cursorApiEndpoint } : {}),
+          },
+        }
+      : {}),
+    ...(devinBinaryPath
+      ? {
+          devin: {
+            binaryPath: devinBinaryPath,
           },
         }
       : {}),
@@ -1283,6 +1319,7 @@ export function getCustomBinaryPathForProvider(
     | "claudeBinaryPath"
     | "codexBinaryPath"
     | "cursorBinaryPath"
+    | "devinBinaryPath"
     | "antigravityBinaryPath"
     | "grokBinaryPath"
     | "droidBinaryPath"
@@ -1298,6 +1335,8 @@ export function getCustomBinaryPathForProvider(
       return normalizeProviderBinaryPathOverride(provider, settings.claudeBinaryPath);
     case "cursor":
       return normalizeProviderBinaryPathOverride(provider, settings.cursorBinaryPath);
+    case "devin":
+      return normalizeProviderBinaryPathOverride(provider, settings.devinBinaryPath);
     case "antigravity":
       return normalizeProviderBinaryPathOverride(provider, settings.antigravityBinaryPath);
     case "grok":

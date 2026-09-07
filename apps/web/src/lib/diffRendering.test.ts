@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildFileDiffRenderKey,
   buildPatchCacheKey,
+  compareDiffPaths,
   fileDiffStatsByPath,
   getRenderablePatch,
   resolveDiffCopyText,
@@ -252,6 +253,30 @@ describe("splitRepoRelativePath", () => {
 });
 
 describe("sortFileDiffsByPath", () => {
+  it("preserves default-locale ordering and stable case, accent, and numeric ties", () => {
+    const paths = [
+      "File2.ts",
+      "file02.ts",
+      "file10.ts",
+      "é.ts",
+      "E.ts",
+      "e.ts",
+      "日本2.ts",
+      "日本10.ts",
+    ];
+    const expected = paths.toSorted((left, right) =>
+      left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" }),
+    );
+    expect(paths.toSorted(compareDiffPaths)).toEqual(expected);
+    for (const left of paths) {
+      for (const right of paths) {
+        expect(Math.sign(compareDiffPaths(left, right))).toBe(
+          Math.sign(left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" })),
+        );
+      }
+    }
+  });
+
   const outOfOrderPatch = [
     "diff --git a/src/zebra.ts b/src/zebra.ts",
     "index 1111111..2222222 100644",

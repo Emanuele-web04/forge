@@ -111,6 +111,16 @@ export const PROVIDER_DESCRIPTORS = defineProviderDescriptors([
       learnMoreHref: "https://pi.dev",
     },
   },
+  {
+    kind: "devin",
+    displayName: PROVIDER_DISPLAY_NAMES.devin,
+    available: true,
+    supportsNativeTurnSteering: false,
+    usage: {
+      signInCommand: "devin auth login",
+      learnMoreHref: "https://app.devin.ai/usage",
+    },
+  },
 ] as const satisfies readonly ProviderDescriptor[]);
 
 export const PROVIDER_DESCRIPTOR_BY_KIND = Object.fromEntries(

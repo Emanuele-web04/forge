@@ -1,10 +1,8 @@
 import { type ProviderModelDescriptor, ThreadId } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
-import {
-  getComposerProviderState,
-  renderProviderTraitsMenuContent,
-  renderProviderTraitsPicker,
-} from "./composerProviderRegistry";
+import { renderToStaticMarkup } from "react-dom/server";
+import { getComposerProviderState } from "./composerProviderRegistry";
+import { TraitsPicker } from "./TraitsPicker";
 import { getComposerTraitSelection } from "./composerTraits";
 
 const OPENCODE_RUNTIME_MODEL_WITH_REASONING: ProviderModelDescriptor = {
@@ -101,7 +99,242 @@ const GROK_RUNTIME_4_5_WITH_REASONING: ProviderModelDescriptor = {
   defaultReasoningEffort: "high",
 };
 
+const DEVIN_RUNTIME_CLAUDE_WITH_VARIANTS: ProviderModelDescriptor = {
+  slug: "claude-opus-4.6",
+  name: "Claude Opus 4.6",
+  supportsThinkingToggle: true,
+  contextWindowOptions: [
+    { value: "200k", label: "200K", isDefault: true },
+    { value: "1m", label: "1M" },
+  ],
+  defaultContextWindow: "200k",
+  modelVariants: [
+    { model: "claude-opus-4-6", contextWindow: "200k", thinking: false },
+    { model: "claude-opus-4-6-thinking", contextWindow: "200k", thinking: true },
+    { model: "claude-opus-4-6-1m", contextWindow: "1m", thinking: false },
+    { model: "claude-opus-4-6-thinking-1m", contextWindow: "1m", thinking: true },
+  ],
+};
+
+const DEVIN_RUNTIME_GPT_5_6_WITH_VARIANTS: ProviderModelDescriptor = {
+  slug: "gpt-5.6-sol",
+  name: "GPT-5.6 Sol",
+  supportedReasoningEfforts: [
+    { value: "low", label: "Low" },
+    { value: "medium", label: "Medium" },
+    { value: "high", label: "High" },
+  ],
+  defaultReasoningEffort: "medium",
+  supportsFastMode: true,
+  contextWindowOptions: [
+    { value: "200k", label: "200K", isDefault: true },
+    { value: "1m", label: "1M" },
+  ],
+  defaultContextWindow: "200k",
+  modelVariants: [
+    {
+      model: "gpt-5-6-sol-low",
+      reasoningEffort: "low",
+      contextWindow: "200k",
+      fastMode: false,
+    },
+    {
+      model: "gpt-5-6-sol-medium",
+      reasoningEffort: "medium",
+      contextWindow: "200k",
+      fastMode: false,
+    },
+    {
+      model: "gpt-5-6-sol-high",
+      reasoningEffort: "high",
+      contextWindow: "200k",
+      fastMode: false,
+    },
+    {
+      model: "gpt-5-6-sol-medium-priority",
+      reasoningEffort: "medium",
+      contextWindow: "200k",
+      fastMode: true,
+    },
+  ],
+};
+
 describe("getComposerProviderState", () => {
+  it("dispatches Devin effort selections with their concrete model variant", () => {
+    const state = getComposerProviderState({
+      provider: "devin",
+      model: "gpt-5.6-sol",
+      runtimeModel: DEVIN_RUNTIME_GPT_5_6_WITH_VARIANTS,
+      prompt: "",
+      modelOptions: { devin: { reasoningEffort: "high" } },
+    });
+
+    expect(state).toEqual({
+      provider: "devin",
+      promptEffort: "high",
+      modelOptionsForDispatch: {
+        reasoningEffort: "high",
+        modelVariant: "gpt-5-6-sol-high",
+      },
+    });
+  });
+
+  it("dispatches Devin fast mode using the default effort variant", () => {
+    const state = getComposerProviderState({
+      provider: "devin",
+      model: "gpt-5.6-sol",
+      runtimeModel: DEVIN_RUNTIME_GPT_5_6_WITH_VARIANTS,
+      prompt: "",
+      modelOptions: { devin: { fastMode: true } },
+    });
+
+    expect(state).toEqual({
+      provider: "devin",
+      promptEffort: "medium",
+      modelOptionsForDispatch: {
+        fastMode: true,
+        modelVariant: "gpt-5-6-sol-medium-priority",
+      },
+    });
+  });
+
+  it("keeps Devin thinking enabled when only the context window changes", () => {
+    const state = getComposerProviderState({
+      provider: "devin",
+      model: "claude-opus-4.6",
+      runtimeModel: DEVIN_RUNTIME_CLAUDE_WITH_VARIANTS,
+      prompt: "",
+      modelOptions: { devin: { contextWindow: "1m" } },
+    });
+
+    expect(state).toEqual({
+      provider: "devin",
+      promptEffort: null,
+      modelOptionsForDispatch: {
+        contextWindow: "1m",
+        modelVariant: "claude-opus-4-6-thinking-1m",
+      },
+    });
+  });
+
+  it("recomputes a stored Devin variant when effort changes", () => {
+    const state = getComposerProviderState({
+      provider: "devin",
+      model: "gpt-5.6-sol",
+      runtimeModel: DEVIN_RUNTIME_GPT_5_6_WITH_VARIANTS,
+      prompt: "",
+      modelOptions: {
+        devin: { reasoningEffort: "low", modelVariant: "gpt-5-6-sol-high" },
+      },
+    });
+
+    expect(state.modelOptionsForDispatch).toEqual({
+      reasoningEffort: "low",
+      modelVariant: "gpt-5-6-sol-low",
+    });
+  });
+
+  it("recomputes a stored Devin variant when fast mode changes", () => {
+    const enabled = getComposerProviderState({
+      provider: "devin",
+      model: "gpt-5.6-sol",
+      runtimeModel: DEVIN_RUNTIME_GPT_5_6_WITH_VARIANTS,
+      prompt: "",
+      modelOptions: {
+        devin: { fastMode: true, modelVariant: "gpt-5-6-sol-medium" },
+      },
+    });
+    const disabled = getComposerProviderState({
+      provider: "devin",
+      model: "gpt-5.6-sol",
+      runtimeModel: DEVIN_RUNTIME_GPT_5_6_WITH_VARIANTS,
+      prompt: "",
+      modelOptions: {
+        devin: { fastMode: false, modelVariant: "gpt-5-6-sol-medium-priority" },
+      },
+    });
+
+    expect(enabled.modelOptionsForDispatch).toEqual({
+      fastMode: true,
+      modelVariant: "gpt-5-6-sol-medium-priority",
+    });
+    expect(disabled.modelOptionsForDispatch).toEqual({
+      modelVariant: "gpt-5-6-sol-medium",
+    });
+  });
+
+  it("recomputes a stored Devin variant when thinking changes", () => {
+    const state = getComposerProviderState({
+      provider: "devin",
+      model: "claude-opus-4.6",
+      runtimeModel: DEVIN_RUNTIME_CLAUDE_WITH_VARIANTS,
+      prompt: "",
+      modelOptions: {
+        devin: {
+          thinking: false,
+          contextWindow: "1m",
+          modelVariant: "claude-opus-4-6-thinking-1m",
+        },
+      },
+    });
+
+    expect(state.modelOptionsForDispatch).toEqual({
+      thinking: false,
+      contextWindow: "1m",
+      modelVariant: "claude-opus-4-6-1m",
+    });
+  });
+
+  it("recomputes a stored Devin variant when context changes", () => {
+    const state = getComposerProviderState({
+      provider: "devin",
+      model: "claude-opus-4.6",
+      runtimeModel: DEVIN_RUNTIME_CLAUDE_WITH_VARIANTS,
+      prompt: "",
+      modelOptions: {
+        devin: {
+          contextWindow: "1m",
+          modelVariant: "claude-opus-4-6-thinking",
+        },
+      },
+    });
+
+    expect(state.modelOptionsForDispatch).toEqual({
+      contextWindow: "1m",
+      modelVariant: "claude-opus-4-6-thinking-1m",
+    });
+  });
+
+  it("preserves a truly explicit Devin variant when no trait mapping applies", () => {
+    const state = getComposerProviderState({
+      provider: "devin",
+      model: "custom-family",
+      runtimeModel: {
+        slug: "custom-family",
+        name: "Custom Family",
+        modelVariants: [{ model: "custom-concrete-model" }],
+      },
+      prompt: "",
+      modelOptions: { devin: { modelVariant: "custom-concrete-model" } },
+    });
+
+    expect(state.modelOptionsForDispatch).toEqual({ modelVariant: "custom-concrete-model" });
+  });
+
+  it("resolves Devin static SWE fast mode to a concrete variant", () => {
+    const state = getComposerProviderState({
+      provider: "devin",
+      model: "swe-1-7",
+      prompt: "",
+      modelOptions: { devin: { fastMode: true } },
+    });
+
+    expect(state.modelOptionsForDispatch).toEqual({
+      fastMode: true,
+      modelVariant: "swe-1-7-lightning",
+    });
+  });
+
   it("dispatches Antigravity effort separately from its base model", () => {
     const state = getComposerProviderState({
       provider: "antigravity",
@@ -126,16 +359,18 @@ describe("getComposerProviderState", () => {
       ).effortLevels.map((effort) => effort.value),
     ).toEqual(["low", "medium", "high"]);
     expect(
-      renderProviderTraitsPicker({
-        provider: "antigravity",
-        threadId: ThreadId.makeUnsafe("thread-antigravity-effort"),
-        model: "Gemini 3.5 Flash",
-        runtimeModel: ANTIGRAVITY_RUNTIME_GEMINI_WITH_REASONING,
-        modelOptions: { reasoningEffort: "high" },
-        prompt: "",
-        onPromptChange: vi.fn(),
-      }),
-    ).not.toBeNull();
+      renderToStaticMarkup(
+        <TraitsPicker
+          provider="antigravity"
+          threadId={ThreadId.makeUnsafe("thread-antigravity-effort")}
+          model="Gemini 3.5 Flash"
+          runtimeModel={ANTIGRAVITY_RUNTIME_GEMINI_WITH_REASONING}
+          modelOptions={{ reasoningEffort: "high" }}
+          prompt=""
+          onPromptChange={vi.fn()}
+        />,
+      ),
+    ).toContain('aria-label="Change effort, context, and speed"');
   });
 
   it("hides Antigravity effort controls when the selected model has only one effort", () => {
@@ -149,16 +384,18 @@ describe("getComposerProviderState", () => {
 
     expect(selection.effortLevels).toEqual([]);
     expect(
-      renderProviderTraitsPicker({
-        provider: "antigravity",
-        threadId: ThreadId.makeUnsafe("thread-antigravity-single-effort"),
-        model: "Claude Sonnet 4.6",
-        runtimeModel: ANTIGRAVITY_RUNTIME_CLAUDE_WITH_SINGLE_EFFORT,
-        modelOptions: undefined,
-        prompt: "",
-        onPromptChange: vi.fn(),
-      }),
-    ).toBeNull();
+      renderToStaticMarkup(
+        <TraitsPicker
+          provider="antigravity"
+          threadId={ThreadId.makeUnsafe("thread-antigravity-single-effort")}
+          model="Claude Sonnet 4.6"
+          runtimeModel={ANTIGRAVITY_RUNTIME_CLAUDE_WITH_SINGLE_EFFORT}
+          modelOptions={undefined}
+          prompt=""
+          onPromptChange={vi.fn()}
+        />,
+      ),
+    ).toBe("");
   });
 
   it("returns codex defaults when no codex draft options exist", () => {
@@ -445,6 +682,63 @@ describe("getComposerProviderState", () => {
     });
   });
 
+  it.each([
+    ["claude-fable-5-1", "auto"],
+    ["claude-opus-5", "auto"],
+    ["claude-opus-4-8", "auto"],
+    ["claude-sonnet-5", "auto"],
+    ["claude-opus-4-6", "auto"],
+    ["claude-sonnet-4-6", "auto"],
+  ] as const)("shows %s with the %s model-native window", (model, expectedDefault) => {
+    const selection = getComposerTraitSelection("claudeAgent", model, "", undefined);
+
+    expect(selection.defaultContextWindow).toBe(expectedDefault);
+    expect(selection.contextWindow).toBe(expectedDefault);
+    expect(
+      selection.contextWindowOptions.find((option) => option.value === expectedDefault)?.isDefault,
+    ).toBe(true);
+  });
+
+  it("shows Auto as the default auto-compact window for a 1M Claude suffix", () => {
+    const defaults = getComposerTraitSelection(
+      "claudeAgent",
+      "claude-fable-5-1[1M]",
+      "",
+      undefined,
+    );
+    const explicit200k = getComposerTraitSelection("claudeAgent", "claude-fable-5-1[1m]", "", {
+      autoCompactWindow: "200k",
+    });
+
+    expect(defaults.defaultContextWindow).toBe("auto");
+    expect(defaults.contextWindow).toBe("auto");
+    expect(defaults.contextWindowOptions).toEqual([
+      { value: "auto", label: "Auto (Claude Code)", isDefault: true },
+      { value: "200k", label: "200k" },
+      { value: "1m", label: "1M" },
+    ]);
+    expect(explicit200k.contextWindow).toBe("200k");
+  });
+
+  it("normalizes Claude auto-compact dispatch against the model-aware default", () => {
+    expect(
+      getComposerProviderState({
+        provider: "claudeAgent",
+        model: "claude-fable-5-1",
+        prompt: "",
+        modelOptions: { claudeAgent: { autoCompactWindow: "1m" } },
+      }).modelOptionsForDispatch,
+    ).toEqual({ autoCompactWindow: "1m" });
+    expect(
+      getComposerProviderState({
+        provider: "claudeAgent",
+        model: "claude-fable-5-1",
+        prompt: "",
+        modelOptions: { claudeAgent: { autoCompactWindow: "200k" } },
+      }).modelOptionsForDispatch,
+    ).toEqual({ autoCompactWindow: "200k" });
+  });
+
   it("tracks Claude ultrathink from the prompt without changing dispatch effort", () => {
     const state = getComposerProviderState({
       provider: "claudeAgent",
@@ -661,16 +955,18 @@ describe("getComposerProviderState", () => {
       prompt: "",
       modelOptions: { droid: { reasoningEffort: "xhigh" } },
     });
-    const picker = renderProviderTraitsPicker({
-      provider: "droid",
-      threadId,
-      model: "gpt-5.6-sol",
-      runtimeModel: DROID_RUNTIME_GPT_5_6_WITH_REASONING,
-      modelOptions: { reasoningEffort: "xhigh" },
-      prompt: "",
-      includeFastMode: false,
-      onPromptChange: vi.fn(),
-    });
+    const picker = renderToStaticMarkup(
+      <TraitsPicker
+        provider="droid"
+        threadId={threadId}
+        model="gpt-5.6-sol"
+        runtimeModel={DROID_RUNTIME_GPT_5_6_WITH_REASONING}
+        modelOptions={{ reasoningEffort: "xhigh" }}
+        prompt=""
+        includeFastMode={false}
+        onPromptChange={vi.fn()}
+      />,
+    );
 
     expect(selection.effortLevels.map((effort) => effort.value)).toEqual([
       "none",
@@ -686,7 +982,7 @@ describe("getComposerProviderState", () => {
       promptEffort: "xhigh",
       modelOptionsForDispatch: { reasoningEffort: "xhigh" },
     });
-    expect(picker).not.toBeNull();
+    expect(picker).toContain('aria-label="Change effort, context, and speed"');
   });
 
   it("dispatches an explicitly selected Droid effort even when ACP reports it as current", () => {
@@ -926,27 +1222,19 @@ describe("getComposerProviderState", () => {
   it("does not render a traits picker for OpenCode models without exposed controls", () => {
     const threadId = ThreadId.makeUnsafe("thread-opencode-traits-hidden");
 
-    const picker = renderProviderTraitsPicker({
-      provider: "opencode",
-      threadId,
-      model: "openrouter/gpt-oss-120b:free",
-      modelOptions: undefined,
-      prompt: "",
-      includeFastMode: false,
-      onPromptChange: vi.fn(),
-    });
+    const picker = renderToStaticMarkup(
+      <TraitsPicker
+        provider="opencode"
+        threadId={threadId}
+        model="openrouter/gpt-oss-120b:free"
+        modelOptions={undefined}
+        prompt=""
+        includeFastMode={false}
+        onPromptChange={vi.fn()}
+      />,
+    );
 
-    const menuContent = renderProviderTraitsMenuContent({
-      provider: "opencode",
-      threadId,
-      model: "openrouter/gpt-oss-120b:free",
-      modelOptions: undefined,
-      prompt: "",
-      onPromptChange: vi.fn(),
-    });
-
-    expect(picker).toBeNull();
-    expect(menuContent).toBeNull();
+    expect(picker).toBe("");
   });
 
   it("keeps OpenCode runtime thinking selections on the variant field", () => {
@@ -1006,28 +1294,19 @@ describe("getComposerProviderState", () => {
   it("renders OpenCode thinking controls when runtime metadata exposes levels without a default", () => {
     const threadId = ThreadId.makeUnsafe("thread-opencode-runtime-thinking");
 
-    const picker = renderProviderTraitsPicker({
-      provider: "opencode",
-      threadId,
-      model: "opencode/gpt-5-nano",
-      runtimeModel: OPENCODE_RUNTIME_MODEL_WITHOUT_DEFAULT,
-      modelOptions: undefined,
-      prompt: "",
-      includeFastMode: false,
-      onPromptChange: vi.fn(),
-    });
+    const picker = renderToStaticMarkup(
+      <TraitsPicker
+        provider="opencode"
+        threadId={threadId}
+        model="opencode/gpt-5-nano"
+        runtimeModel={OPENCODE_RUNTIME_MODEL_WITHOUT_DEFAULT}
+        modelOptions={undefined}
+        prompt=""
+        includeFastMode={false}
+        onPromptChange={vi.fn()}
+      />,
+    );
 
-    const menuContent = renderProviderTraitsMenuContent({
-      provider: "opencode",
-      threadId,
-      model: "opencode/gpt-5-nano",
-      runtimeModel: OPENCODE_RUNTIME_MODEL_WITHOUT_DEFAULT,
-      modelOptions: undefined,
-      prompt: "",
-      onPromptChange: vi.fn(),
-    });
-
-    expect(picker).not.toBeNull();
-    expect(menuContent).not.toBeNull();
+    expect(picker).toContain('aria-label="Change effort, context, and speed"');
   });
 });

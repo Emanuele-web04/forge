@@ -106,20 +106,6 @@ export function terminalContextIdListsEqual<T extends { id: string }>(
   );
 }
 
-function previewTerminalContextText(text: string): string {
-  const normalized = normalizeTerminalContextText(text);
-  if (normalized.length === 0) {
-    return "";
-  }
-  const lines = normalized.split("\n");
-  const visibleLines = lines.slice(0, 3);
-  if (lines.length > 3) {
-    visibleLines.push("...");
-  }
-  const preview = visibleLines.join("\n");
-  return preview.length > 180 ? `${preview.slice(0, 177)}...` : preview;
-}
-
 export function normalizeTerminalContextSelection(
   selection: TerminalContextSelection,
 ): TerminalContextSelection | null {
@@ -168,28 +154,6 @@ export function formatInlineTerminalContextLabel(selection: {
       ? `${selection.lineStart}`
       : `${selection.lineStart}-${selection.lineEnd}`;
   return `@${terminalLabel}:${range}`;
-}
-
-export function buildTerminalContextPreviewTitle(
-  contexts: ReadonlyArray<TerminalContextSelection>,
-): string | null {
-  if (contexts.length === 0) {
-    return null;
-  }
-  const previews = contexts
-    .map((context) => {
-      const normalized = normalizeTerminalContextSelection(context);
-      if (!normalized) {
-        return null;
-      }
-      const preview = previewTerminalContextText(normalized.text);
-      return preview.length > 0
-        ? `${formatTerminalContextLabel(normalized)}\n${preview}`
-        : formatTerminalContextLabel(normalized);
-    })
-    .filter((value): value is string => value !== null)
-    .join("\n\n");
-  return previews.length > 0 ? previews : null;
 }
 
 function buildTerminalContextBodyLines(selection: TerminalContextSelection): string[] {
@@ -256,13 +220,6 @@ export function appendTerminalContextsToPrompt(
     return trimmedPrompt;
   }
   return trimmedPrompt.length > 0 ? `${trimmedPrompt}\n\n${contextBlock}` : contextBlock;
-}
-
-export function appendOriginalTerminalContextBlock(input: {
-  editedPrompt: string;
-  originalPrompt: string;
-}): string {
-  return appendOriginalComposerPromptBlocks(input);
 }
 
 // Edits operate on visible bubble text. Reattach the hidden composer metadata

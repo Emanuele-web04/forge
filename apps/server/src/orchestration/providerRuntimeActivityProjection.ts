@@ -1076,6 +1076,62 @@ export function projectProviderRuntimeActivities(
       ];
     }
 
+    case "hook.started":
+    case "hook.progress":
+      // Hook lifecycle is operational evidence, not transcript content. The
+      // canonical runtime journal retains it for replay and diagnostics.
+      return [];
+
+    case "hook.completed": {
+      const status = event.payload.status;
+      // Successful hooks are routine, and cancelled hooks normally reflect an
+      // interrupted turn. Neither should add rows or transcript height churn.
+      if (
+        event.payload.outcome === "success" ||
+        (event.payload.outcome === "cancelled" && !status)
+      ) {
+        return [];
+      }
+      const hookLabel = event.payload.hookEvent ?? "Lifecycle";
+      const summary =
+        status === "blocked"
+          ? `${hookLabel} hook blocked an action`
+          : status === "stopped"
+            ? `${hookLabel} hook stopped execution`
+            : `${hookLabel} hook failed`;
+      const message = truncateDetail(
+        event.payload.statusMessage ??
+          event.payload.stderr ??
+          event.payload.output ??
+          event.payload.stdout ??
+          summary,
+        500,
+      );
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: status === "failed" || event.payload.outcome === "error" ? "error" : "info",
+          kind: "runtime.warning",
+          summary,
+          payload: toActivityPayload({
+            message,
+            detail: message,
+            hookId: event.payload.hookId,
+            ...(event.payload.hookName ? { hookName: event.payload.hookName } : {}),
+            ...(event.payload.hookEvent ? { hookEvent: event.payload.hookEvent } : {}),
+            outcome: event.payload.outcome,
+            ...(status ? { status } : {}),
+            ...(event.payload.durationMs !== undefined
+              ? { durationMs: event.payload.durationMs }
+              : {}),
+          }),
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
     case "account.rate-limits.updated": {
       const rawRateLimits = event.payload.rateLimits;
       if (!rawRateLimits || typeof rawRateLimits !== "object") {

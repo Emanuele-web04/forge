@@ -44,27 +44,6 @@ export function isThreadCurrentlyArchived(
   return thread?.archivedAt !== null && thread?.archivedAt !== undefined;
 }
 
-export const logCleanupCauseUnlessInterrupted = <R, E>({
-  effect,
-  message,
-  threadId,
-}: {
-  readonly effect: Effect.Effect<void, E, R>;
-  readonly message: string;
-  readonly threadId: ThreadDeletedEvent["payload"]["threadId"];
-}): Effect.Effect<void, E, R> =>
-  effect.pipe(
-    Effect.catchCause((cause) => {
-      if (Cause.hasInterruptsOnly(cause)) {
-        return Effect.failCause(cause);
-      }
-      return Effect.logDebug(message, {
-        threadId,
-        cause: Cause.pretty(cause),
-      });
-    }),
-  );
-
 export const cleanupSucceededUnlessInterrupted = <R, E>({
   effect,
   message,

@@ -79,6 +79,7 @@ import {
   acceptAcpPlanUpdate,
   clearAcpActiveTurn,
   finalizeAcpActiveTurnCost,
+  forkAcpAdapterTurnIdleWatchdog,
   makeAcpThreadLock,
   recordAcpSessionCost,
   resolveAcpSessionCwd,
@@ -87,6 +88,7 @@ import {
   scopeAcpToolCallStateForTurn,
   settleAcpPendingApprovalsAsCancelled,
   settleAcpPendingUserInputsAsEmptyAnswers,
+  waitForAcpQueuedTurnEventsDrained,
   withAcpPlanModePrompt,
 } from "../acp/AcpAdapterSessionSupport.ts";
 import { forkViaAcpRuntime } from "../acp/acpFork.ts";
@@ -104,7 +106,7 @@ import {
 import { type AcpToolCallState, parsePermissionRequest } from "../acp/AcpRuntimeModel.ts";
 import { makeAcpDebugLoggers, makeAcpNativeLoggers } from "../acp/AcpNativeLogging.ts";
 import {
-  forkAcpTurnIdleWatchdog,
+  isAcpTurnProgressEventTag,
   resolveAcpTurnIdleTimeoutMs,
 } from "../acp/AcpTurnIdleWatchdog.ts";
 import {
@@ -719,24 +721,12 @@ export function makeDroidAdapter(
         return ctx.activeTurnId;
       });
 
-    // Holds the active-turn window open until session/update events that were
-    // already enqueued when the prompt response resolved have been fully
-    // handled by the notification consumer, so they settle with their turn
-    // attribution (and recorded failed-tool detail) intact. Snapshotting the
-    // runtime's enqueued count and waiting for the adapter's processed count
-    // to catch up is immune to stream chunk buffering and in-flight handlers,
-    // unlike a queue-size probe. Returns immediately when the consumer kept
-    // up; bounded so a chatty stream cannot stall settlement past the cap.
     const waitForDroidQueuedTurnEventsDrained = (ctx: DroidSessionContext) =>
-      Effect.gen(function* () {
-        const target = yield* ctx.acp.sessionUpdatesEnqueuedCount;
-        const startedAt = Date.now();
-        while (
-          ctx.sessionUpdatesProcessed < target &&
-          Date.now() - startedAt < DROID_TURN_SETTLE_DRAIN_MAX_WAIT_MS
-        ) {
-          yield* Effect.sleep(DROID_TURN_SETTLE_DRAIN_POLL_MS);
-        }
+      waitForAcpQueuedTurnEventsDrained({
+        sessionUpdatesEnqueuedCount: ctx.acp.sessionUpdatesEnqueuedCount,
+        sessionUpdatesProcessed: () => ctx.sessionUpdatesProcessed,
+        maxWaitMs: DROID_TURN_SETTLE_DRAIN_MAX_WAIT_MS,
+        pollMs: DROID_TURN_SETTLE_DRAIN_POLL_MS,
       });
 
     const startSession: DroidAdapterShape["startSession"] = (input) =>
@@ -1061,9 +1051,9 @@ export function makeDroidAdapter(
           const notificationFiber = yield* Stream.runDrain(
             Stream.mapEffect(acp.getEvents(), (event) =>
               Effect.gen(function* () {
-                // Any inbound ACP event proves the child is alive and making
-                // progress; reset the idle-progress watchdog clock.
-                ctx.lastTurnActivityAt = Date.now();
+                if (isAcpTurnProgressEventTag(event._tag)) {
+                  ctx.lastTurnActivityAt = Date.now();
+                }
                 switch (event._tag) {
                   case "ModeChanged":
                     return;
@@ -1731,20 +1721,15 @@ export function makeDroidAdapter(
         // Backstop the forked prompt: if the child goes silent, fail the turn
         // instead of leaving it "Working" forever. Self-terminates when the
         // turn settles; pauses while a human approval is pending.
-        yield* forkAcpTurnIdleWatchdog({
+        yield* forkAcpAdapterTurnIdleWatchdog({
+          context: ctx,
+          turnId,
           idleTimeoutMs: DROID_TURN_IDLE_TIMEOUT_MS,
           currentIdleTimeoutMs: () =>
             ctx.activeNestedTaskToolCallIds.size > 0
               ? DROID_NESTED_TASK_IDLE_TIMEOUT_MS
               : DROID_TURN_IDLE_TIMEOUT_MS,
           checkIntervalMs: DROID_TURN_WATCHDOG_INTERVAL_MS,
-          scope: ctx.scope,
-          isTurnActive: () => ctx.activeTurnId === turnId && !ctx.stopped,
-          isAwaitingHuman: () => ctx.pendingApprovals.size > 0 || ctx.pendingUserInputs.size > 0,
-          lastActivityAt: () => ctx.lastTurnActivityAt ?? Date.now(),
-          touchActivity: () => {
-            ctx.lastTurnActivityAt = Date.now();
-          },
           onIdleTimeout: (idleMs) => failDroidTurnAsTimedOut(ctx, turnId, idleMs),
         });
 

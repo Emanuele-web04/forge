@@ -39,15 +39,12 @@ import {
   Stream,
 } from "effect";
 import * as Semaphore from "effect/Semaphore";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { makeEffectProcessCommand } from "../platform/effectProcessRuntime.ts";
 
 import { NetService, type NetServiceShape } from "@synara/shared/Net";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import { buildProviderChildEnvironment } from "../providerChildEnvironment.ts";
-import {
-  readOpenCodeAuthFileUtf8,
-  resolveOpenCodeCompatibleAuthPaths,
-} from "./openCodeAuthPaths.ts";
+import { readOpenCodeAuthFileUtf8 } from "./openCodeAuthPaths.ts";
 import {
   teardownEffectProcessTree,
   teardownProviderProcessTree,
@@ -462,22 +459,6 @@ function readOpenCodeVariantEffort(
   return null;
 }
 
-export function resolveOpenCodeAuthFilePath(
-  pathInfo: Pick<OpenCodePathInfo, "home">,
-  cliSpec: OpenCodeCompatibleCliSpec = OPENCODE_CLI_SPEC,
-): string {
-  const [preferredPath] = resolveOpenCodeCompatibleAuthPaths({
-    homeDir: pathInfo.home,
-    env: process.env,
-    platform: process.platform,
-    dataDirectoryName: cliSpec.dataDirectoryName,
-  });
-  if (!preferredPath) {
-    throw new Error("OpenCode auth path resolution produced no candidates");
-  }
-  return preferredPath;
-}
-
 export function parseOpenCodeCredentialProviderIDs(content: string): ReadonlyArray<string> {
   const parsed = JSON.parse(content) as unknown;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -867,14 +848,8 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
     const runOpenCodeCommand: OpenCodeRuntimeShape["runOpenCodeCommand"] = (input) =>
       Effect.gen(function* () {
         const childEnv = buildOpenCodeServerProcessEnv({});
-        const prepared = prepareWindowsSafeProcess(input.binaryPath, input.args, {
-          cwd: input.cwd,
-          env: childEnv,
-        });
         const child = yield* spawner.spawn(
-          ChildProcess.make(prepared.command, prepared.args, {
-            shell: prepared.shell,
-            ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+          makeEffectProcessCommand(input.binaryPath, input.args, {
             ...(input.cwd ? { cwd: input.cwd } : {}),
             env: childEnv,
           }),
@@ -937,18 +912,9 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
             ? { experimentalWebSockets: input.experimentalWebSockets }
             : {}),
         });
-        // Match runOpenCodeCommand: bare npm/pi-node shims like `opencode.cmd` need
-        // Windows-safe resolution before Effect/Node spawn can launch them.
-        const prepared = prepareWindowsSafeProcess(input.binaryPath, args, {
-          cwd: input.cwd,
-          env: childEnv,
-        });
-
         const child = yield* spawner
           .spawn(
-            ChildProcess.make(prepared.command, prepared.args, {
-              shell: prepared.shell,
-              ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+            makeEffectProcessCommand(input.binaryPath, args, {
               env: childEnv,
               ...(input.cwd ? { cwd: input.cwd } : {}),
               detached: false,

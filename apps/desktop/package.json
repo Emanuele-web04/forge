@@ -1,6 +1,6 @@
 {
   "name": "@synara/desktop",
-  "version": "0.7.3",
+  "version": "0.8.3",
   "private": true,
   "main": "dist-electron/main.js",
   "scripts": {
@@ -9,7 +9,9 @@
     "dev:electron": "bun run scripts/dev-electron.mjs",
     "build": "tsdown",
     "start": "bun run scripts/start-electron.mjs",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "node ../../node_modules/@typescript/native/bin/tsc --noEmit --tsBuildInfoFile node_modules/.cache/typescript-native.tsbuildinfo",
+    "typecheck:native": "bun run typecheck",
+    "typecheck:legacy": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "smoke-test": "node scripts/smoke-test.mjs"
   },

@@ -33,6 +33,7 @@ const PROVIDER_KINDS = new Set<ProviderKind>([
   "droid",
   "opencode",
   "pi",
+  "devin",
 ]);
 
 type HeatmapCell = ProfileStats["activity"]["heatmap"][number];

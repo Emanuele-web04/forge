@@ -21,13 +21,13 @@
 // Opt in:   SYNARA_CLAUDE_KEEPALIVE=1
 // Tune:     SYNARA_CLAUDE_KEEPALIVE_MINUTES=<n>   (default 30)
 
-import { execFile } from "node:child_process";
+import { execProcessFile } from "@synara/shared/processRuntime";
 import { promisify } from "node:util";
 
 import { acquireClaudeAuthStatusLock } from "./claudeAuthStatusLock";
 import { buildClaudeProcessEnv } from "./claudeProcessEnv";
 
-const execFileAsync = promisify(execFile);
+const execFileAsync = promisify(execProcessFile);
 
 const DEFAULT_INTERVAL_MINUTES = 30;
 const COMMAND_TIMEOUT_MS = 20_000;
@@ -79,9 +79,11 @@ async function nudgeClaudeTokenRefresh(
   const release = await acquireClaudeAuthStatusLockWithSignal(signal);
   try {
     await execFileAsync(binaryPath, [...CLAUDE_CREDENTIAL_KEEPALIVE_AUTH_STATUS_ARGS], {
+      encoding: "utf8",
       timeout: COMMAND_TIMEOUT_MS,
       signal,
       env: buildClaudeProcessEnv(homeDir ? { homeDir } : undefined),
+      requireExecutable: true,
     });
   } finally {
     release();

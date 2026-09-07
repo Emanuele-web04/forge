@@ -5,7 +5,7 @@
 
 import { randomUUID } from "node:crypto";
 import type * as Acp from "@agentclientprotocol/sdk";
-import { parseWindowsWslUncPath, prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
+import { resolveExecutionWorkingDirectory } from "@synara/shared/wslBridge";
 import {
   Cause,
   Deferred,
@@ -20,7 +20,8 @@ import {
   ServiceMap,
   Stream,
 } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { makeEffectProcessCommand } from "../../platform/effectProcessRuntime.ts";
 import * as AcpErrors from "./AcpErrors.ts";
 import { makeAcpLoadReplayGate, type AcpLoadReplayGate } from "./AcpLoadReplayGate.ts";
 import { loadAcpSdk, type AcpSdkModule } from "./AcpSdk.ts";
@@ -49,6 +50,10 @@ const ACP_INCOMING_CHUNK_QUEUE_CAPACITY = 64;
 const ACP_LOAD_REPLAY_QUIET_MS = 350;
 const ACP_LOAD_REPLAY_HARD_TIMEOUT_MS = 30_000;
 export const ACP_MAX_INCOMING_FRAME_BYTES = 8 * 1024 * 1024;
+
+const ACP_MAX_PENDING_NOTIFICATIONS_TOTAL = 2_048;
+const ACP_MAX_PENDING_NOTIFICATIONS_PER_SESSION = 512;
+const ACP_MAX_PENDING_EVENTS = 2_048;
 
 export type AcpSessionStartupStep =
   | "initialize"
@@ -118,6 +123,28 @@ export function isAcpStartupTimeoutError(
   );
 }
 
+function messageLooksLikeAuthRequired(message: string): boolean {
+  return /\b(?:unauthenticated|not authenticated|authentication required|authorization required|auth(?:orization|entication) (?:required|failed|expired|error)|login required|missing (?:auth(?:orization|entication)?|credentials|token|api[- ]?key)|invalid (?:credentials|token|api[- ]?key)|access denied|permission denied|token expired)\b/i.test(
+    message,
+  );
+}
+
+export function isAcpAuthRequiredError(error: AcpErrors.AcpError): boolean {
+  if (error._tag !== "AcpRequestError") {
+    return false;
+  }
+  const message = error.errorMessage ?? "";
+  // Protocol-level auth-required uses -32000 in ACP. Require a
+  // recognizable auth-failure phrase so a generic -32000 server error is not
+  // misclassified as an auth challenge.
+  return error.code === -32000 && messageLooksLikeAuthRequired(message);
+}
+
+export function causeIndicatesAuthRequired(cause: Cause.Cause<AcpErrors.AcpError>): boolean {
+  const failReason = Cause.findFail(cause);
+  return failReason._tag === "Success" && isAcpAuthRequiredError(failReason.success.error);
+}
+
 export interface AcpProtocolLogEvent {
   readonly direction: "incoming" | "outgoing";
   readonly stage: "raw" | "decoded";
@@ -140,6 +167,96 @@ type AcpIncomingFrame =
   | { readonly _tag: "chunk"; readonly chunk: Uint8Array }
   | { readonly _tag: "error"; readonly error: unknown }
   | { readonly _tag: "end" };
+
+/**
+ * Drains the child agent's stderr for the lifetime of the session scope,
+ * forwarding complete lines to the provider tap. The stream is consumed even
+ * when no tap is installed: an unread stderr pipe eventually fills and blocks
+ * the child's writes. A mid-life stream error or a throwing tap must not stop
+ * the drain, so failures are logged and swallowed.
+ */
+export const runAcpChildStderrTap = <E>(
+  stderr: Stream.Stream<Uint8Array, E>,
+  onLine: ((line: string) => void) | undefined,
+): Effect.Effect<void> =>
+  stderr.pipe(
+    Stream.decodeText,
+    Stream.splitLines,
+    Stream.runForEach((line) =>
+      Effect.sync(() => {
+        if (!onLine) return;
+        try {
+          onLine(line);
+        } catch {
+          // A broken tap must never kill the drain.
+        }
+      }),
+    ),
+    Effect.catchCause((cause) =>
+      Effect.logWarning("acp.stderr_drain_failed", { cause: Cause.pretty(cause) }),
+    ),
+  );
+
+export function normalizeAcpIncomingJsonMessages(
+  input: ReadableStream<Uint8Array>,
+  normalize: (message: unknown) => unknown,
+): ReadableStream<Uint8Array> {
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let pending = "";
+  return input.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        pending += decoder.decode(chunk, { stream: true });
+        const lines = pending.split("\n");
+        pending = lines.pop() ?? "";
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) {
+            controller.enqueue(encoder.encode("\n"));
+            continue;
+          }
+          try {
+            controller.enqueue(
+              encoder.encode(`${JSON.stringify(normalize(JSON.parse(trimmed)))}\n`),
+            );
+          } catch {
+            controller.enqueue(encoder.encode(`${line}\n`));
+          }
+        }
+      },
+      flush(controller) {
+        pending += decoder.decode();
+        if (!pending) return;
+        const trimmed = pending.trim();
+        try {
+          controller.enqueue(encoder.encode(JSON.stringify(normalize(JSON.parse(trimmed)))));
+        } catch {
+          controller.enqueue(encoder.encode(pending));
+        }
+      },
+    }),
+  );
+}
+
+export type SessionEpoch = { generation: number; activeSessionId: Option.Option<string> };
+const isActiveSessionId = (sessionId: string, epoch: SessionEpoch): boolean =>
+  Option.isSome(epoch.activeSessionId) && epoch.activeSessionId.value === sessionId;
+
+// True when the session is still the active epoch's session. Every state
+// mutation path re-checks this before applying an update or offering an event,
+// so a stale in-flight handler can never mutate state or enqueue events after
+// the session has been replaced.
+const isCurrentSessionEpoch = (
+  getSessionEpoch: () => Effect.Effect<SessionEpoch>,
+  sessionId: string,
+  epoch: SessionEpoch,
+): Effect.Effect<boolean> =>
+  getSessionEpoch().pipe(
+    Effect.map(
+      (current) => current.generation === epoch.generation && isActiveSessionId(sessionId, current),
+    ),
+  );
 
 export function makeAcpIncomingFrameGuard(
   maxFrameBytes = ACP_MAX_INCOMING_FRAME_BYTES,
@@ -184,10 +301,7 @@ export function resolveAcpSessionCwd(
   cwd: string,
   platform: NodeJS.Platform = process.platform,
 ): string {
-  if (platform !== "win32") {
-    return cwd;
-  }
-  return parseWindowsWslUncPath(cwd)?.linuxPath ?? cwd;
+  return resolveExecutionWorkingDirectory(cwd, platform);
 }
 
 export interface AcpFreshSessionRetryPolicy {
@@ -223,8 +337,6 @@ export interface AcpSessionRuntimeOptions {
   readonly cwd: string;
   readonly resumeSessionId?: string;
   readonly clientCapabilities?: Acp.InitializeRequest["clientCapabilities"];
-  /** Provider-specific metadata sent on session/new, session/load, and session/resume. */
-  readonly sessionMeta?: Record<string, unknown>;
   readonly clientInfo: {
     readonly name: string;
     readonly version: string;
@@ -233,6 +345,45 @@ export interface AcpSessionRuntimeOptions {
   readonly resolveAuthMethodId?: (
     initializeResult: Acp.InitializeResponse,
   ) => Effect.Effect<string, AcpErrors.AcpError>;
+  readonly validateInitializeResult?: (
+    initializeResult: Acp.InitializeResponse,
+  ) => Effect.Effect<void, AcpErrors.AcpError>;
+  /**
+   * Provider-specific metadata attached as `_meta` to session/new, session/load,
+   * and session/resume requests. Grok registers client hooks through it.
+   */
+  readonly sessionMeta?: Record<string, unknown>;
+  /**
+   * Retries one fresh `session/new` when the failure matches the policy (e.g.
+   * Grok's eventually-consistent session storage). Never applied to
+   * resume/load, where repeating the request would make delivery ambiguous.
+   */
+  readonly freshSessionRetry?: AcpFreshSessionRetryPolicy;
+  /**
+   * Per-step startup budgets. Adapters with slow-but-healthy handshakes
+   * (Keychain prompts, enterprise proxies) override individual entries; the
+   * rest fall back to DEFAULT_ACP_SESSION_STARTUP_TIMEOUTS.
+   */
+  readonly startupTimeouts?: Partial<AcpSessionStartupTimeouts>;
+  /**
+   * When to send the ACP `authenticate` request during start.
+   * - "always" (default): authenticate right after initialize, before session setup.
+   * - "on-demand": attempt session setup without authenticate; if it fails with a
+   *   verified auth-required error, resolve the advertised auth method,
+   *   authenticate once, and retry the same setup operation once.
+   */
+  readonly authPolicy?: "always" | "on-demand";
+  /**
+   * Provider-specific predicate consulted during on-demand auth. After session
+   * setup returns while still unauthenticated, if this returns true the session
+   * is treated as an auth-required failure, discarded, authenticated once, and
+   * retried. Generic ACP only retries on a verified auth-required transport or
+   * request failure.
+   */
+  readonly authSetupHeuristic?: (
+    initializeResult: Acp.InitializeResponse,
+    setupResult: Acp.NewSessionResponse | Acp.LoadSessionResponse | Acp.ResumeSessionResponse,
+  ) => boolean;
   /**
    * MCP servers to attach to the session. Invoked after `initialize` so the
    * builder can pick a transport based on the agent's advertised
@@ -240,16 +391,22 @@ export interface AcpSessionRuntimeOptions {
    */
   readonly buildMcpServers?: (initializeResult: Acp.InitializeResponse) => Array<Acp.McpServer>;
   readonly authenticateMeta?: Record<string, unknown>;
-  /** Optional one-time retry for a fresh session/new failure. Never applies to resume/load. */
-  readonly freshSessionRetry?: AcpFreshSessionRetryPolicy;
-  /** Overrides for {@link DEFAULT_ACP_SESSION_STARTUP_TIMEOUTS}. */
-  readonly startupTimeouts?: Partial<AcpSessionStartupTimeouts>;
   /** Test/provider policy overrides for session/load transcript replay suppression. */
   readonly loadReplayPolicy?: {
     readonly quietMs?: number;
     readonly hardTimeoutMs?: number;
   };
   readonly requestLogger?: (event: AcpSessionRequestLogEvent) => Effect.Effect<void, never>;
+  readonly normalizeIncomingMessage?: (message: unknown) => unknown;
+  /**
+   * Per-line tap on the child agent's stderr. The child mirrors its full log
+   * stream there (e.g. Devin's `affogato::stall_watch` warnings and exec
+   * `create_session` lifecycle lines), which is the only out-of-band liveness
+   * signal available when a child wedges while alive. The stderr stream is
+   * always drained so an unread pipe can never fill and block the child,
+   * whether or not a tap is installed.
+   */
+  readonly onChildStderrLine?: (line: string) => void;
   readonly protocolLogging?: {
     readonly logIncoming?: boolean;
     readonly logOutgoing?: boolean;
@@ -257,6 +414,13 @@ export interface AcpSessionRuntimeOptions {
   };
   /** Test seam for the single shared ACP subprocess teardown owner. */
   readonly teardownProcessTree?: typeof teardownProviderProcessTree;
+  /**
+   * Test seam signalled when setSessionEpoch has captured the pending buffer
+   * but has not yet installed the new epoch (the transition window).
+   */
+  readonly __testTransitionReached?: Effect.Effect<void>;
+  /** Test seam awaited inside the transition window before the epoch installs. */
+  readonly __testTransitionPause?: Effect.Effect<void>;
 }
 
 export interface AcpSessionRequestLogEvent {
@@ -325,16 +489,20 @@ export interface AcpSessionRuntimeShape {
   /** Completes when the owned ACP process exits, regardless of its exit status. */
   readonly awaitExit: Effect.Effect<void>;
   readonly getEvents: () => Stream.Stream<AcpParsedSessionEvent, never>;
-  // Monotonic count of parsed session/update events enqueued for the
-  // getEvents() consumer. Adapters snapshot it and wait until their own
-  // processed count catches up, so turn attribution stays open until every
-  // event received during the turn has actually been handled — immune to
-  // stream chunk buffering and in-flight handlers, unlike a queue-size probe.
+  // Count of processed, in-flight, or deliverable parsed session/update
+  // events. Adapters snapshot it and wait until their own processed count
+  // catches up, so turn attribution stays open until every deliverable event
+  // received during the turn has actually been handled — immune to stream
+  // chunk buffering and in-flight handlers.
   readonly sessionUpdatesEnqueuedCount: Effect.Effect<number>;
   readonly supportsSessionFork: Effect.Effect<boolean, AcpErrors.AcpError>;
   /** Whether a persisted session id can be reopened through resume or load. */
   readonly supportsSessionRecovery: Effect.Effect<boolean, AcpErrors.AcpError>;
   readonly getModeState: Effect.Effect<AcpSessionModeState | undefined, AcpErrors.AcpError>;
+  /** @internal Exposed for tests: the current session epoch. */
+  readonly getSessionEpoch: () => Effect.Effect<SessionEpoch>;
+  /** @internal Exposed for tests: total buffered pending session/update notifications. */
+  readonly getPendingSessionNotificationCount: () => Effect.Effect<number>;
   readonly getConfigOptions: Effect.Effect<
     ReadonlyArray<Acp.SessionConfigOption>,
     AcpErrors.AcpError
@@ -431,8 +599,11 @@ function officialSdkError(acpSdk: AcpSdkModule, error: unknown): AcpErrors.AcpEr
 const makeOfficialSdkClient = Effect.fnUntraced(function* (
   child: ChildProcessSpawner.ChildProcessHandle,
   runtimeScope: Scope.Scope,
-  protocolLogging?: AcpSessionRuntimeOptions["protocolLogging"],
+  options: Pick<AcpSessionRuntimeOptions, "normalizeIncomingMessage" | "protocolLogging">,
 ) {
+  // The ACP SDK is only needed once a provider process is actually spawned, so
+  // it is imported here instead of at module scope (see AcpSdk.ts).
+  const acpSdk = yield* Effect.promise(() => loadAcpSdk());
   type RequestPermissionHandler = Parameters<AcpSessionRuntimeShape["handleRequestPermission"]>[0];
   type ElicitationHandler = Parameters<AcpSessionRuntimeShape["handleElicitation"]>[0];
   type ReadTextFileHandler = Parameters<AcpSessionRuntimeShape["handleReadTextFile"]>[0];
@@ -458,21 +629,18 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
   let terminalRelease: TerminalReleaseHandler | undefined;
   const sessionUpdateHandlers: SessionUpdateHandler[] = [];
   const elicitationCompleteHandlers: ElicitationCompleteHandler[] = [];
-  // The ACP SDK is only needed once a provider process is actually spawned, so
-  // it is imported here instead of at module scope (see AcpSdk.ts).
-  const acpSdk = yield* Effect.promise(() => loadAcpSdk());
   const logProtocol = (
     direction: "incoming" | "outgoing",
     stage: "raw" | "decoded",
     payload: unknown,
   ) => {
     if (
-      (direction === "incoming" && protocolLogging?.logIncoming !== true) ||
-      (direction === "outgoing" && protocolLogging?.logOutgoing !== true)
+      (direction === "incoming" && options.protocolLogging?.logIncoming !== true) ||
+      (direction === "outgoing" && options.protocolLogging?.logOutgoing !== true)
     ) {
       return Effect.void;
     }
-    const logger = protocolLogging?.logger;
+    const logger = options.protocolLogging?.logger;
     return logger?.({ direction, stage, payload }) ?? Effect.void;
   };
   let sessionUpdateTail = Promise.resolve();
@@ -541,7 +709,7 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
     Effect.forkIn(runtimeScope),
   );
   yield* Scope.addFinalizer(runtimeScope, Queue.shutdown(incoming));
-  const input = new ReadableStream<Uint8Array>({
+  const rawInput = new ReadableStream<Uint8Array>({
     pull(controller) {
       return Effect.runPromise(Queue.take(incoming)).then((frame) => {
         switch (frame._tag) {
@@ -565,6 +733,10 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
       );
     },
   });
+
+  const input = options.normalizeIncomingMessage
+    ? normalizeAcpIncomingJsonMessages(rawInput, options.normalizeIncomingMessage)
+    : rawInput;
 
   const clientApp = acpSdk
     .client({ name: "synara" })
@@ -658,17 +830,22 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
         request(acpSdk.methods.agent.authenticate, payload),
       logout: (payload: Acp.LogoutRequest) => request(acpSdk.methods.agent.logout, payload),
       createSession: (payload: Acp.NewSessionRequest) =>
-        request(acpSdk.methods.agent.session.new, payload),
+        request(acpSdk.methods.agent.session.new, payload).pipe(
+          Effect.tap(() => fromPromise(awaitSessionUpdateDrain)),
+        ),
       loadSession: (payload: Acp.LoadSessionRequest) =>
         request(acpSdk.methods.agent.session.load, payload).pipe(
           Effect.map((response) => response ?? {}),
+          Effect.tap(() => fromPromise(awaitSessionUpdateDrain)),
         ),
       listSessions: (payload: Acp.ListSessionsRequest) =>
         request(acpSdk.methods.agent.session.list, payload),
       forkSession: (payload: Acp.ForkSessionRequest) =>
         request(acpSdk.methods.agent.session.fork, payload),
       resumeSession: (payload: Acp.ResumeSessionRequest) =>
-        request(acpSdk.methods.agent.session.resume, payload),
+        request(acpSdk.methods.agent.session.resume, payload).pipe(
+          Effect.tap(() => fromPromise(awaitSessionUpdateDrain)),
+        ),
       closeSession: (payload: Acp.CloseSessionRequest) =>
         request(acpSdk.methods.agent.session.close, payload).pipe(
           Effect.map((response) => response ?? {}),
@@ -743,6 +920,184 @@ export class AcpSessionRuntime extends ServiceMap.Service<
   }
 }
 
+type StartupInteraction<Req, Res> = {
+  readonly dispatch: (req: Req) => Effect.Effect<Res, AcpErrors.AcpError>;
+  readonly register: (
+    handler: (req: Req) => Effect.Effect<Res, AcpErrors.AcpError>,
+  ) => Effect.Effect<void>;
+  readonly begin: () => Effect.Effect<void>;
+  readonly complete: () => Effect.Effect<void>;
+  readonly cancel: () => Effect.Effect<void>;
+};
+
+const ACP_MAX_STARTUP_INTERACTIONS = 256;
+
+/** @internal Exported only for unit testing the startup interaction registry. */
+export function makeStartupInteractionRegistry<Req, Res>(
+  defaultResponse: Res,
+): Effect.Effect<StartupInteraction<Req, Res>, never, never> {
+  return Effect.gen(function* () {
+    type Handler = (req: Req) => Effect.Effect<Res, AcpErrors.AcpError>;
+    interface PendingItem {
+      readonly req: Req;
+      readonly deferred: Deferred.Deferred<Res, AcpErrors.AcpError>;
+      readonly generation: number;
+    }
+    // Single atomic state machine (mirrors the pending-session state machine used
+    // by setSessionEpoch): every transition is one Ref.modify so a dispatch can
+    // never observe a partially applied begin/complete/register and end up
+    // stranded in the buffer or delivered twice.
+    interface RegistryState {
+      readonly generation: number;
+      readonly started: boolean;
+      readonly handler: Option.Option<Handler>;
+      readonly pending: ReadonlyArray<PendingItem>;
+    }
+    const stateRef = yield* Ref.make<RegistryState>({
+      generation: 0,
+      started: false,
+      handler: Option.none(),
+      pending: [],
+    });
+
+    const cancelItems = (items: ReadonlyArray<PendingItem>) =>
+      Effect.forEach(
+        items,
+        (item) => Deferred.complete(item.deferred, Effect.succeed(defaultResponse)),
+        { discard: true },
+      );
+
+    // Items from a stale generation are answered with the safe default instead of
+    // being replayed to the next session's handler.
+    const deliverItems = (
+      items: ReadonlyArray<PendingItem>,
+      handler: Handler,
+      generation: number,
+    ) =>
+      Effect.forEach(
+        items,
+        (item) =>
+          Deferred.complete(
+            item.deferred,
+            item.generation === generation ? handler(item.req) : Effect.succeed(defaultResponse),
+          ),
+        { discard: true },
+      );
+
+    type DispatchDecision =
+      | { readonly _tag: "deliver"; readonly handler: Handler }
+      | { readonly _tag: "overflow" }
+      | { readonly _tag: "buffered" };
+
+    const dispatch = (req: Req) =>
+      Effect.gen(function* () {
+        const deferred = yield* Deferred.make<Res, AcpErrors.AcpError>();
+        const decision = yield* Ref.modify(stateRef, (state): [DispatchDecision, RegistryState] => {
+          if (state.started && Option.isSome(state.handler)) {
+            return [{ _tag: "deliver", handler: state.handler.value }, state];
+          }
+          if (state.pending.length >= ACP_MAX_STARTUP_INTERACTIONS) {
+            return [{ _tag: "overflow" }, state];
+          }
+          return [
+            { _tag: "buffered" },
+            {
+              ...state,
+              pending: state.pending.concat({ req, deferred, generation: state.generation }),
+            },
+          ];
+        });
+        switch (decision._tag) {
+          case "deliver":
+            return yield* decision.handler(req);
+          case "overflow":
+            return yield* new AcpErrors.AcpRequestError({
+              code: -32000,
+              errorMessage: "Startup interaction buffer overflow",
+            });
+          case "buffered":
+            return yield* Deferred.await(deferred);
+        }
+      });
+
+    const register = (handler: Handler) =>
+      Ref.modify(
+        stateRef,
+        (
+          state,
+        ): [
+          { readonly items: ReadonlyArray<PendingItem>; readonly generation: number },
+          RegistryState,
+        ] => {
+          if (!state.started) {
+            return [
+              { items: [], generation: state.generation },
+              { ...state, handler: Option.some(handler) },
+            ];
+          }
+          return [
+            { items: state.pending, generation: state.generation },
+            { ...state, handler: Option.some(handler), pending: [] },
+          ];
+        },
+      ).pipe(Effect.flatMap(({ items, generation }) => deliverItems(items, handler, generation)));
+
+    const begin = Ref.modify(stateRef, (state): [ReadonlyArray<PendingItem>, RegistryState] => [
+      state.pending,
+      {
+        generation: state.generation + 1,
+        started: false,
+        handler: state.handler,
+        pending: [],
+      },
+    ]).pipe(Effect.flatMap(cancelItems));
+
+    type CompleteDecision =
+      | {
+          readonly _tag: "flush";
+          readonly handler: Handler;
+          readonly items: ReadonlyArray<PendingItem>;
+          readonly generation: number;
+        }
+      | { readonly _tag: "hold" };
+
+    const complete = Ref.modify(stateRef, (state): [CompleteDecision, RegistryState] => {
+      if (Option.isNone(state.handler)) {
+        // No handler yet: keep buffering; register will flush once it arrives.
+        return [{ _tag: "hold" }, { ...state, started: true }];
+      }
+      return [
+        {
+          _tag: "flush",
+          handler: state.handler.value,
+          items: state.pending,
+          generation: state.generation,
+        },
+        { ...state, started: true, pending: [] },
+      ];
+    }).pipe(
+      Effect.flatMap((decision) =>
+        decision._tag === "flush"
+          ? deliverItems(decision.items, decision.handler, decision.generation)
+          : Effect.void,
+      ),
+    );
+
+    const cancel = Ref.modify(stateRef, (state): [ReadonlyArray<PendingItem>, RegistryState] => [
+      state.pending,
+      { ...state, pending: [] },
+    ]).pipe(Effect.flatMap(cancelItems));
+
+    return {
+      dispatch,
+      register,
+      begin: () => begin,
+      complete: () => complete,
+      cancel: () => cancel,
+    };
+  });
+}
+
 const makeAcpSessionRuntime = (
   options: AcpSessionRuntimeOptions,
 ): Effect.Effect<
@@ -753,7 +1108,13 @@ const makeAcpSessionRuntime = (
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const runtimeScope = yield* Scope.Scope;
+    const testTransitionReached = options.__testTransitionReached;
+    const testTransitionPause = options.__testTransitionPause;
     const eventQueue = yield* Queue.bounded<AcpParsedSessionEvent>(2_048);
+    const sessionEpochRef = yield* Ref.make<{
+      generation: number;
+      activeSessionId: Option.Option<string>;
+    }>({ generation: 0, activeSessionId: Option.none() });
     const modeStateRef = yield* Ref.make<AcpSessionModeState | undefined>(undefined);
     const availableCommandsRef = yield* Ref.make<ReadonlyArray<Acp.AvailableCommand>>([]);
     const toolCallsRef = yield* Ref.make(new Map<string, AcpToolCallState>());
@@ -766,9 +1127,31 @@ const makeAcpSessionRuntime = (
       [],
     );
     const startStateRef = yield* Ref.make<AcpStartState>({ _tag: "NotStarted" });
-    // session/load can replay a large history before the consumer attaches; drop
-    // those notifications so they never accumulate in the bounded queue.
-    let acceptingSessionUpdates = false;
+
+    // Single bounded pending-session state machine keyed by (provisional) session
+    // id. All session/update notifications that arrive before the final epoch is
+    // installed are held here, bounded by total count and per-session count.
+    interface PendingSessionState {
+      readonly notifications: ReadonlyArray<Acp.SessionNotification>;
+    }
+    const pendingSessionStateRef = yield* Ref.make<Map<string, PendingSessionState>>(new Map());
+    const pendingEventsRef = yield* Ref.make<ReadonlyArray<AcpParsedSessionEvent>>([]);
+    const acceptingSessionUpdatesRef = yield* Ref.make(false);
+    const consumerAttachedRef = yield* Ref.make(false);
+
+    // Provisional startup registry for approval/elicitation interactions. They are
+    // buffered until the runtime reports startup complete, then promoted to the
+    // registered handlers. On startup failure, session replacement, or stale generation
+    // they are cancelled with safe defaults.
+    const requestPermissionStartup = yield* makeStartupInteractionRegistry<
+      Acp.RequestPermissionRequest,
+      Acp.RequestPermissionResponse
+    >({ outcome: { outcome: "cancelled" } });
+    const elicitationStartup = yield* makeStartupInteractionRegistry<
+      Acp.CreateElicitationRequest,
+      Acp.CreateElicitationResponse
+    >({ action: "decline" });
+
     let loadReplayGate: AcpLoadReplayGate | undefined;
     const awaitLoadReplayReady = Effect.suspend(() => {
       const gate = loadReplayGate;
@@ -794,14 +1177,218 @@ const makeAcpSessionRuntime = (
     const getAvailableCommands = awaitLoadReplayReady.pipe(
       Effect.andThen(Ref.get(availableCommandsRef)),
     );
-    // Counts every parsed event offered into eventQueue (see
-    // sessionUpdatesEnqueuedCount on the shape). Plain mutable state: single
-    // writer per offer, and readers only need a monotonic snapshot.
+    // Counts processed, in-flight, or deliverable events after cleanup drops.
+    // Plain mutable adjustments are fenced while session event offers are in
+    // flight; see sessionUpdatesEnqueuedCount on the shape.
     let sessionUpdatesEnqueued = 0;
-    const offerSessionEvent = (event: AcpParsedSessionEvent): Effect.Effect<void> =>
-      Effect.suspend(() => {
-        sessionUpdatesEnqueued += 1;
-        return Effect.asVoid(Queue.offer(eventQueue, event));
+    let sessionEventOffersInFlight = 0;
+
+    const appendPendingNotification = (
+      map: Map<string, PendingSessionState>,
+      sessionId: string,
+      notification: Acp.SessionNotification,
+    ): Map<string, PendingSessionState> => {
+      const state = map.get(sessionId) ?? { notifications: [] };
+      let notifications = state.notifications.concat(notification);
+      if (notifications.length > ACP_MAX_PENDING_NOTIFICATIONS_PER_SESSION) {
+        notifications = notifications.slice(
+          notifications.length - ACP_MAX_PENDING_NOTIFICATIONS_PER_SESSION,
+        );
+      }
+      const next = new Map(map);
+      next.set(sessionId, { notifications });
+      let total = 0;
+      for (const s of next.values()) {
+        total += s.notifications.length;
+      }
+      while (total > ACP_MAX_PENDING_NOTIFICATIONS_TOTAL) {
+        let removed = false;
+        for (const [key, s] of next) {
+          if (s.notifications.length > 0) {
+            const trimmed = s.notifications.slice(1);
+            if (trimmed.length === 0) {
+              next.delete(key);
+            } else {
+              next.set(key, { notifications: trimmed });
+            }
+            total -= 1;
+            removed = true;
+            break;
+          }
+        }
+        if (!removed) break;
+      }
+      return next;
+    };
+
+    const getSessionEpoch = (): Effect.Effect<SessionEpoch> => Ref.get(sessionEpochRef);
+
+    const clearSessionEpoch = (): Effect.Effect<number> =>
+      Effect.gen(function* () {
+        yield* Ref.update(sessionEpochRef, (epoch) => ({
+          generation: epoch.generation + 1,
+          activeSessionId: Option.none(),
+        }));
+        yield* Ref.set(pendingSessionStateRef, new Map());
+        const pendingEvents = yield* Ref.getAndSet(pendingEventsRef, []);
+        yield* Ref.set(acceptingSessionUpdatesRef, false);
+        return pendingEvents.length;
+      });
+
+    const setSessionEpoch = (
+      sessionId: string,
+      sessionSetupResult:
+        | Acp.LoadSessionResponse
+        | Acp.NewSessionResponse
+        | Acp.ResumeSessionResponse,
+      options: {
+        readonly replay?: "all" | "bounded-only";
+        readonly resetState?: boolean;
+      } = {},
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const replay = options.replay ?? "all";
+        const resetState = options.resetState ?? false;
+
+        // Atomically capture and clear pending state for the new session. Notifications
+        // belonging to other (e.g. discarded probe) sessions are discarded.
+        const pending = yield* Ref.getAndSet(pendingSessionStateRef, new Map());
+        const sessionPending = pending.get(sessionId) ?? { notifications: [] };
+
+        if (testTransitionReached) {
+          yield* testTransitionReached;
+        }
+        if (testTransitionPause) {
+          yield* testTransitionPause;
+        }
+
+        // Install the setup baseline first so early mode/config updates are replayed
+        // on top of the authoritative response, not overwritten by it.
+        yield* Ref.set(modeStateRef, parseSessionModeState(sessionSetupResult));
+        const currentConfigOptions = yield* Ref.get(configOptionsRef);
+        yield* Ref.set(
+          configOptionsRef,
+          sessionConfigOptionsFromSetup(sessionSetupResult, currentConfigOptions),
+        );
+        yield* Ref.set(availableCommandsRef, []);
+
+        if (resetState) {
+          yield* Ref.set(toolCallsRef, new Map());
+          yield* Ref.set(assistantSegmentRef, { nextSegmentIndex: 0 });
+        }
+
+        yield* Ref.update(sessionEpochRef, (epoch) => ({
+          generation: epoch.generation + 1,
+          activeSessionId: Option.some(sessionId),
+        }));
+        yield* Ref.set(acceptingSessionUpdatesRef, true);
+
+        const epoch = yield* getSessionEpoch();
+        const offer = offerSessionEvent(sessionId, epoch);
+        const apply = (notification: Acp.SessionNotification) =>
+          processSessionUpdate({
+            getSessionEpoch,
+            offer,
+            sessionId,
+            epoch,
+            availableCommandsRef,
+            configOptionsRef,
+            modeStateRef,
+            toolCallsRef,
+            assistantSegmentRef,
+            runtimeInstanceId,
+            resolveConfigOptionUpdateWaiters,
+            skipTranscriptEvents: replay === "bounded-only",
+            params: notification,
+          });
+        for (const notification of sessionPending.notifications) {
+          yield* apply(notification);
+        }
+
+        // Notifications can race into the pending buffer between the capture
+        // above and the epoch install. Drain the buffer until it is empty so
+        // every update that arrived during the transition window is applied
+        // exactly once and no pending state is left behind.
+        while (true) {
+          const raced = yield* Ref.getAndSet(pendingSessionStateRef, new Map());
+          const racedPending = raced.get(sessionId);
+          if (!racedPending || racedPending.notifications.length === 0) break;
+          for (const notification of racedPending.notifications) {
+            yield* apply(notification);
+          }
+        }
+      });
+
+    const offerSessionEvent =
+      (sessionId: string, epoch: SessionEpoch) =>
+      (event: AcpParsedSessionEvent): Effect.Effect<void> =>
+        Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            sessionEventOffersInFlight += 1;
+            if (!(yield* isCurrentSessionEpoch(getSessionEpoch, sessionId, epoch))) return;
+            const consumerAttached = yield* Ref.get(consumerAttachedRef);
+            if (consumerAttached) {
+              const offered = yield* restore(Queue.offer(eventQueue, event));
+              if (offered) {
+                sessionUpdatesEnqueued += 1;
+              }
+            } else {
+              const retainedCountIncreased = yield* Ref.modify(pendingEventsRef, (events) => {
+                const next = events.concat(event);
+                return [
+                  events.length < ACP_MAX_PENDING_EVENTS,
+                  next.length > ACP_MAX_PENDING_EVENTS
+                    ? next.slice(next.length - ACP_MAX_PENDING_EVENTS)
+                    : next,
+                ] as const;
+              });
+              if (retainedCountIncreased) {
+                sessionUpdatesEnqueued += 1;
+              }
+            }
+          }).pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                sessionEventOffersInFlight -= 1;
+              }),
+            ),
+          ),
+        );
+
+    // Closes the buffering-path TOCTOU: a session/update handler may read a
+    // pre-transition epoch and buffer its notification after setSessionEpoch
+    // has already drained the pending buffer. Rechecking here guarantees the
+    // notification is applied exactly once by whichever side wins the
+    // atomic getAndSet, leaving no pending state behind.
+    const drainPendingForActiveSession = (): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        while (true) {
+          const epoch = yield* getSessionEpoch();
+          if (Option.isNone(epoch.activeSessionId)) return;
+          if (!(yield* Ref.get(acceptingSessionUpdatesRef))) return;
+          const sessionId = epoch.activeSessionId.value;
+          const raced = yield* Ref.getAndSet(pendingSessionStateRef, new Map());
+          const racedPending = raced.get(sessionId);
+          if (!racedPending || racedPending.notifications.length === 0) return;
+          const offer = offerSessionEvent(sessionId, epoch);
+          for (const notification of racedPending.notifications) {
+            yield* processSessionUpdate({
+              getSessionEpoch,
+              offer,
+              sessionId,
+              epoch,
+              availableCommandsRef,
+              configOptionsRef,
+              modeStateRef,
+              toolCallsRef,
+              assistantSegmentRef,
+              runtimeInstanceId,
+              resolveConfigOptionUpdateWaiters,
+              skipTranscriptEvents: false,
+              params: notification,
+            });
+          }
+        }
       });
 
     const logRequest = (event: AcpSessionRequestLogEvent) =>
@@ -842,17 +1429,11 @@ const makeAcpSessionRuntime = (
       provider: "acp",
       baseEnv: options.spawn.env ? { ...options.spawn.env } : process.env,
     });
-    const prepared = prepareWindowsSafeProcess(options.spawn.command, options.spawn.args, {
-      cwd: options.spawn.cwd,
-      env,
-    });
     const child = yield* spawner
       .spawn(
-        ChildProcess.make(prepared.command, prepared.args, {
+        makeEffectProcessCommand(options.spawn.command, options.spawn.args, {
           ...(options.spawn.cwd ? { cwd: options.spawn.cwd } : {}),
           env,
-          shell: prepared.shell,
-          ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
         }),
       )
       .pipe(
@@ -871,7 +1452,13 @@ const makeAcpSessionRuntime = (
     // prompt/fork waiter before waiting for the child process to exit.
     yield* Effect.addFinalizer(() => loadReplayGate?.release ?? Effect.void);
 
-    const acp = yield* makeOfficialSdkClient(child, runtimeScope, options.protocolLogging);
+    // Always drain the child's stderr (an unread pipe eventually fills and
+    // blocks the child's writes) and forward lines to the provider tap.
+    yield* runAcpChildStderrTap(child.stderr, options.onChildStderrLine).pipe(
+      Effect.forkIn(runtimeScope),
+    );
+
+    const acp = yield* makeOfficialSdkClient(child, runtimeScope, options);
 
     const resolveConfigOptionUpdateWaiters = (
       configOptions: ReadonlyArray<Acp.SessionConfigOption>,
@@ -897,53 +1484,62 @@ const makeAcpSessionRuntime = (
       );
 
     yield* acp.handleSessionUpdate((notification) =>
-      Effect.suspend(() => {
-        const update = notification.update;
-        const rememberCommands =
-          update.sessionUpdate === "available_commands_update"
-            ? Ref.set(availableCommandsRef, update.availableCommands)
-            : Effect.void;
-        const rememberConfigOptions =
-          update.sessionUpdate === "config_option_update"
-            ? Ref.set(configOptionsRef, update.configOptions).pipe(
-                Effect.andThen(resolveConfigOptionUpdateWaiters(update.configOptions)),
-              )
-            : Effect.void;
-        const rememberMode =
-          update.sessionUpdate === "current_mode_update"
-            ? Ref.update(modeStateRef, (current) =>
-                current === undefined ? current : updateModeState(current, update.currentModeId),
-              )
-            : Effect.void;
-        const rememberBoundedState = rememberCommands.pipe(
-          Effect.andThen(rememberConfigOptions),
-          Effect.andThen(rememberMode),
-        );
-        const processUpdate = (suppress: boolean) => {
-          // Command, configuration, and mode inventories are bounded state, not
-          // transcript replay; retain them even while historical session
-          // updates are being suppressed.
-          if (suppress) {
-            return rememberBoundedState;
-          }
-          return rememberBoundedState.pipe(
-            Effect.andThen(
-              handleSessionUpdate({
-                offer: offerSessionEvent,
-                modeStateRef,
-                toolCallsRef,
-                assistantSegmentRef,
-                runtimeInstanceId,
-                params: notification,
-              }),
-            ),
+      Effect.gen(function* () {
+        const epoch = yield* getSessionEpoch();
+        const sessionId = notification.sessionId;
+
+        // No authoritative session id yet: buffer everything in one bounded state
+        // machine keyed by the provisional session id. setSessionEpoch will
+        // atomically install the setup baseline and replay only the matching session.
+        if (Option.isNone(epoch.activeSessionId)) {
+          yield* Ref.update(pendingSessionStateRef, (map) =>
+            appendPendingNotification(map, sessionId, notification),
           );
-        };
-        return loadReplayGate === undefined
-          ? processUpdate(!acceptingSessionUpdates)
-          : loadReplayGate.suppressUpdate.pipe(Effect.flatMap(processUpdate));
+          return yield* drainPendingForActiveSession();
+        }
+
+        if (!isActiveSessionId(sessionId, epoch)) {
+          return;
+        }
+
+        const accepting = yield* Ref.get(acceptingSessionUpdatesRef);
+        if (!accepting) {
+          // The gate is closed; hold the update until the consumer attaches.
+          yield* Ref.update(pendingSessionStateRef, (map) =>
+            appendPendingNotification(map, sessionId, notification),
+          );
+          return;
+        }
+
+        if (!(yield* isCurrentSessionEpoch(getSessionEpoch, sessionId, epoch))) return;
+
+        const offer = offerSessionEvent(sessionId, epoch);
+        const apply = (suppress: boolean) =>
+          processSessionUpdate({
+            getSessionEpoch,
+            offer,
+            sessionId,
+            epoch,
+            availableCommandsRef,
+            configOptionsRef,
+            modeStateRef,
+            toolCallsRef,
+            assistantSegmentRef,
+            runtimeInstanceId,
+            resolveConfigOptionUpdateWaiters,
+            skipTranscriptEvents: suppress,
+            params: notification,
+          });
+        return yield* loadReplayGate === undefined
+          ? apply(false)
+          : loadReplayGate.suppressUpdate.pipe(Effect.flatMap(apply));
       }),
     );
+
+    // Register the startup dispatchers before any start() so ACP requests that
+    // arrive during session setup are held in the provisional registry.
+    yield* acp.handleRequestPermission(requestPermissionStartup.dispatch);
+    yield* acp.handleElicitation(elicitationStartup.dispatch);
 
     const initializeClientCapabilities = {
       fs: {
@@ -1139,163 +1735,292 @@ const makeAcpSessionRuntime = (
       );
 
     const startOnce = Effect.gen(function* () {
-      const initializePayload = {
-        protocolVersion: 1,
-        clientCapabilities: initializeClientCapabilities,
-        clientInfo: options.clientInfo,
-      } satisfies Acp.InitializeRequest;
+      yield* requestPermissionStartup.begin();
+      yield* elicitationStartup.begin();
 
-      const initializeResult = yield* withStartupTimeout(
-        "initialize",
-        startupTimeouts.initializeMs,
-        runLoggedRequest("initialize", initializePayload, acp.agent.initialize(initializePayload)),
-      );
-      const authMethodId =
-        options.resolveAuthMethodId !== undefined
-          ? yield* options.resolveAuthMethodId(initializeResult)
-          : options.authMethodId;
+      const startupResult = yield* Effect.gen(function* () {
+        const initializePayload = {
+          protocolVersion: 1,
+          clientCapabilities: initializeClientCapabilities,
+          clientInfo: options.clientInfo,
+        } satisfies Acp.InitializeRequest;
 
-      if (!authMethodId) {
-        return yield* new AcpErrors.AcpRequestError({
-          code: -32602,
-          errorMessage: "ACP agent did not provide an authentication method.",
-          data: { authMethods: initializeResult.authMethods ?? [] },
+        const initializeResult = yield* withStartupTimeout(
+          "initialize",
+          startupTimeouts.initializeMs,
+          runLoggedRequest(
+            "initialize",
+            initializePayload,
+            acp.agent.initialize(initializePayload),
+          ),
+        );
+
+        if (options.validateInitializeResult !== undefined) {
+          yield* options.validateInitializeResult(initializeResult);
+        }
+
+        // Tracks whether authenticate has already been run so the on-demand
+        // path only retries session setup once.
+        const authenticatedRef = yield* Ref.make(false);
+
+        const mcpServers = options.buildMcpServers?.(initializeResult) ?? [];
+        const sessionCwd = resolveAcpSessionCwd(options.cwd);
+
+        const runAuthenticate = Effect.gen(function* () {
+          const authMethodId =
+            options.resolveAuthMethodId !== undefined
+              ? yield* options.resolveAuthMethodId(initializeResult)
+              : options.authMethodId;
+
+          if (!authMethodId) {
+            return yield* new AcpErrors.AcpRequestError({
+              code: -32602,
+              errorMessage: "ACP agent did not provide an authentication method.",
+              data: { authMethods: initializeResult.authMethods ?? [] },
+            });
+          }
+
+          const authenticatePayload = {
+            methodId: authMethodId,
+            ...(options.authenticateMeta ? { _meta: options.authenticateMeta } : {}),
+          } satisfies Acp.AuthenticateRequest;
+
+          yield* withStartupTimeout(
+            "authenticate",
+            startupTimeouts.authenticateMs,
+            runLoggedRequest(
+              "authenticate",
+              authenticatePayload,
+              acp.agent.authenticate(authenticatePayload),
+            ),
+          );
+
+          yield* Ref.set(authenticatedRef, true);
         });
-      }
 
-      const authenticatePayload = {
-        methodId: authMethodId,
-        ...(options.authenticateMeta ? { _meta: options.authenticateMeta } : {}),
-      } satisfies Acp.AuthenticateRequest;
+        const cleanupDiscardedAcpSession = (discardedSessionId: string) =>
+          Effect.gen(function* () {
+            // Stop accepting new transcript updates and bump the session generation so
+            // any in-flight handlers that were admitted under the discarded epoch are
+            // rejected before they can mutate state or enqueue events.
+            yield* Ref.set(acceptingSessionUpdatesRef, false);
+            const pending = yield* clearSessionEpoch();
 
-      yield* withStartupTimeout(
-        "authenticate",
-        startupTimeouts.authenticateMs,
-        runLoggedRequest(
-          "authenticate",
-          authenticatePayload,
-          acp.agent.authenticate(authenticatePayload),
+            // Drain any events that were already enqueued for the discarded session.
+            let queued = 0;
+            while (true) {
+              const event = yield* Queue.poll(eventQueue);
+              if (Option.isSome(event)) {
+                queued += 1;
+                continue;
+              }
+              if (sessionEventOffersInFlight === 0) break;
+              yield* Effect.yieldNow;
+            }
+            sessionUpdatesEnqueued -= pending + queued;
+
+            // Reset bounded state derived from the discarded session so it cannot leak
+            // into the final authenticated session.
+            yield* Ref.set(availableCommandsRef, []);
+            yield* Ref.set(configOptionsRef, sessionConfigOptionsFromSetup(undefined));
+            yield* Ref.set(modeStateRef, undefined);
+            yield* Ref.set(toolCallsRef, new Map());
+            yield* Ref.set(assistantSegmentRef, { nextSegmentIndex: 0 });
+
+            // Best-effort close so the agent does not keep the probe session alive.
+            const supportsClose =
+              initializeResult.agentCapabilities?.sessionCapabilities?.close != null;
+            if (supportsClose) {
+              yield* acp.agent.closeSession({ sessionId: discardedSessionId }).pipe(Effect.ignore);
+            }
+          });
+
+        const runSessionSetup = Effect.gen(function* () {
+          let sessionId: string;
+          let sessionSetupResult:
+            | Acp.LoadSessionResponse
+            | Acp.NewSessionResponse
+            | Acp.ResumeSessionResponse;
+          let resumedExistingSession = false;
+          let sessionSetupMethod: AcpSessionRuntimeStartResult["sessionSetupMethod"] = "new";
+
+          if (options.resumeSessionId) {
+            const resumePayload = {
+              sessionId: options.resumeSessionId,
+              cwd: sessionCwd,
+              mcpServers,
+              ...(options.sessionMeta ? { _meta: options.sessionMeta } : {}),
+            } satisfies Acp.ResumeSessionRequest;
+            const supportsResume =
+              initializeResult.agentCapabilities?.sessionCapabilities?.resume != null;
+            const supportsLoad = initializeResult.agentCapabilities?.loadSession === true;
+            if (!supportsResume && !supportsLoad) {
+              return yield* new AcpErrors.AcpRequestError({
+                code: -32601,
+                errorMessage:
+                  "ACP agent cannot reopen the requested session because it advertises neither session/resume nor session/load.",
+              });
+            }
+            const resumed = yield* supportsResume
+              ? withStartupTimeout(
+                  "session/resume",
+                  startupTimeouts.sessionSetupMs,
+                  runLoggedRequest(
+                    "session/resume",
+                    resumePayload,
+                    acp.agent.resumeSession(resumePayload),
+                  ),
+                )
+              : (() => {
+                  const loadPayload = {
+                    sessionId: options.resumeSessionId,
+                    cwd: sessionCwd,
+                    mcpServers,
+                    ...(options.sessionMeta ? { _meta: options.sessionMeta } : {}),
+                  } satisfies Acp.LoadSessionRequest;
+                  return withStartupTimeout(
+                    "session/load",
+                    startupTimeouts.sessionSetupMs,
+                    runLoggedRequest(
+                      "session/load",
+                      loadPayload,
+                      acp.agent.loadSession(loadPayload),
+                    ),
+                  );
+                })();
+            // Resume/load failure is terminal. Retrying as session/new would create a second
+            // conversation and make delivery outcome ambiguous.
+            sessionId = options.resumeSessionId;
+            sessionSetupResult = resumed;
+            resumedExistingSession = true;
+            sessionSetupMethod = supportsResume ? "resume" : "load";
+          } else {
+            // Fresh session: do not accept notifications until session/new has
+            // returned a concrete session id. This prevents notifications from a
+            // discarded probe session (e.g. on-demand auth) from being mistaken
+            // for the final authenticated session while the request is pending.
+            yield* Ref.set(acceptingSessionUpdatesRef, false);
+            const createPayload = {
+              cwd: sessionCwd,
+              mcpServers,
+              ...(options.sessionMeta ? { _meta: options.sessionMeta } : {}),
+            } satisfies Acp.NewSessionRequest;
+            const created = yield* withStartupTimeout(
+              "session/new",
+              startupTimeouts.sessionSetupMs,
+              runAcpFreshSessionSetup(
+                runLoggedRequest(
+                  "session/new",
+                  createPayload,
+                  acp.agent.createSession(createPayload),
+                ),
+                options.freshSessionRetry,
+              ),
+            );
+            sessionId = created.sessionId;
+            sessionSetupResult = created;
+            sessionSetupMethod = "new";
+          }
+
+          // On-demand authentication: consult the provider-specific heuristic to
+          // decide whether an unauthenticated setup result is an auth-required
+          // signal. The generic ACP path only retries on a verified auth-required
+          // transport/request failure.
+          if (options.authPolicy === "on-demand" && !(yield* Ref.get(authenticatedRef))) {
+            const authRequired =
+              options.authSetupHeuristic?.(initializeResult, sessionSetupResult) ?? false;
+            if (authRequired) {
+              yield* cleanupDiscardedAcpSession(sessionId);
+              return yield* new AcpErrors.AcpRequestError({
+                code: -32000,
+                errorMessage:
+                  "Authentication required: ACP session setup returned an unusable result; authenticate and retry.",
+                data: { authMethods: initializeResult.authMethods ?? [] },
+              });
+            }
+          }
+
+          // session/load may replay a large transcript before the consumer attaches;
+          // gate prompt/fork/config access and per-update suppression until the
+          // replay settles or reaches its hard cap.
+          if (sessionSetupMethod === "load") {
+            const quietMs = options.loadReplayPolicy?.quietMs ?? ACP_LOAD_REPLAY_QUIET_MS;
+            const hardTimeoutMs =
+              options.loadReplayPolicy?.hardTimeoutMs ?? ACP_LOAD_REPLAY_HARD_TIMEOUT_MS;
+            loadReplayGate = yield* makeAcpLoadReplayGate({
+              quietMs,
+              hardTimeoutMs,
+              onHardTimeout: ({ elapsedMs }) =>
+                Effect.logWarning("acp.session_load_replay_quiet_wait_timeout", {
+                  sessionId,
+                  command: options.spawn.command,
+                  elapsedMs,
+                  quietMs,
+                  hardTimeoutMs,
+                }),
+            });
+          }
+
+          // Install the final session id, baseline, and replay policy. Fresh sessions
+          // replay all buffered updates; resumed sessions only apply bounded-state
+          // updates (commands/config/mode) because transcript replay before attachment
+          // is treated as historical context, not live output.
+          yield* setSessionEpoch(sessionId, sessionSetupResult, {
+            replay: resumedExistingSession ? "bounded-only" : "all",
+            resetState: resumedExistingSession,
+          });
+          if (loadReplayGate !== undefined) {
+            yield* loadReplayGate.settle.pipe(Effect.forkIn(runtimeScope));
+          }
+
+          return {
+            sessionId,
+            sessionSetupResult,
+            resumedExistingSession,
+            sessionSetupMethod,
+          };
+        });
+
+        const setup =
+          options.authPolicy === "on-demand"
+            ? runSessionSetup.pipe(
+                Effect.catchCause((cause) =>
+                  causeIndicatesAuthRequired(cause)
+                    ? runAuthenticate.pipe(Effect.andThen(runSessionSetup))
+                    : Effect.failCause(cause),
+                ),
+              )
+            : runAuthenticate.pipe(Effect.andThen(runSessionSetup));
+
+        const { sessionId, sessionSetupResult, sessionSetupMethod } = yield* setup;
+
+        // setSessionEpoch already installed the setup baseline and replayed pending
+        // updates through the same reducer, so no separate post-setup mutation is
+        // needed here.
+        const nextState = {
+          sessionId,
+          initializeResult,
+          sessionSetupResult,
+          modelConfigId: extractModelConfigId(sessionSetupResult),
+          sessionSetupMethod,
+        } satisfies AcpStartedState;
+        return nextState;
+      }).pipe(
+        Effect.tap(() =>
+          Effect.gen(function* () {
+            yield* requestPermissionStartup.complete();
+            yield* elicitationStartup.complete();
+          }),
+        ),
+        Effect.ensuring(
+          Effect.gen(function* () {
+            yield* requestPermissionStartup.cancel();
+            yield* elicitationStartup.cancel();
+          }),
         ),
       );
 
-      const mcpServers = options.buildMcpServers?.(initializeResult) ?? [];
-      const sessionCwd = resolveAcpSessionCwd(options.cwd);
-
-      let sessionId: string;
-      let sessionSetupResult:
-        | Acp.LoadSessionResponse
-        | Acp.NewSessionResponse
-        | Acp.ResumeSessionResponse;
-      let resumedExistingSession = false;
-      let sessionSetupMethod: AcpSessionRuntimeStartResult["sessionSetupMethod"] = "new";
-      if (options.resumeSessionId) {
-        const resumePayload = {
-          sessionId: options.resumeSessionId,
-          cwd: sessionCwd,
-          mcpServers,
-          ...(options.sessionMeta ? { _meta: options.sessionMeta } : {}),
-        } satisfies Acp.ResumeSessionRequest;
-        const supportsResume =
-          initializeResult.agentCapabilities?.sessionCapabilities?.resume != null;
-        const supportsLoad = initializeResult.agentCapabilities?.loadSession === true;
-        if (!supportsResume && !supportsLoad) {
-          return yield* new AcpErrors.AcpRequestError({
-            code: -32601,
-            errorMessage:
-              "ACP agent cannot reopen the requested session because it advertises neither session/resume nor session/load.",
-          });
-        }
-        const resumed = yield* supportsResume
-          ? withStartupTimeout(
-              "session/resume",
-              startupTimeouts.sessionSetupMs,
-              runLoggedRequest(
-                "session/resume",
-                resumePayload,
-                acp.agent.resumeSession(resumePayload),
-              ),
-            )
-          : (() => {
-              const loadPayload = {
-                sessionId: options.resumeSessionId,
-                cwd: sessionCwd,
-                mcpServers,
-                ...(options.sessionMeta ? { _meta: options.sessionMeta } : {}),
-              } satisfies Acp.LoadSessionRequest;
-              return withStartupTimeout(
-                "session/load",
-                startupTimeouts.sessionSetupMs,
-                runLoggedRequest("session/load", loadPayload, acp.agent.loadSession(loadPayload)),
-              );
-            })();
-        // Resume/load failure is terminal. Retrying as session/new would create a second
-        // conversation and make delivery outcome ambiguous.
-        sessionId = options.resumeSessionId;
-        sessionSetupResult = resumed;
-        resumedExistingSession = true;
-        sessionSetupMethod = supportsResume ? "resume" : "load";
-      } else {
-        // Fresh session: accept updates from before session/new so any early
-        // agent output emitted while the request is in flight is buffered.
-        acceptingSessionUpdates = true;
-        const createPayload = {
-          cwd: sessionCwd,
-          mcpServers,
-          ...(options.sessionMeta ? { _meta: options.sessionMeta } : {}),
-        } satisfies Acp.NewSessionRequest;
-        const created = yield* withStartupTimeout(
-          "session/new",
-          startupTimeouts.sessionSetupMs,
-          runAcpFreshSessionSetup(
-            runLoggedRequest("session/new", createPayload, acp.agent.createSession(createPayload)),
-            options.freshSessionRetry,
-          ),
-        );
-        sessionId = created.sessionId;
-        sessionSetupResult = created;
-        sessionSetupMethod = "new";
-      }
-
-      yield* Ref.set(modeStateRef, parseSessionModeState(sessionSetupResult));
-      yield* Ref.update(configOptionsRef, (current) =>
-        sessionConfigOptionsFromSetup(sessionSetupResult, current),
-      );
-      // Fresh sessions accept session/update while session/new is in flight, and
-      // those events are already in the queue; resetting the merge/segment state
-      // they created would orphan their continuations (new segment ids, unmerged
-      // tool updates). Only the resumed replay-dropping path starts clean.
-      if (resumedExistingSession) {
-        yield* Ref.set(toolCallsRef, new Map());
-        yield* Ref.set(assistantSegmentRef, { nextSegmentIndex: 0 });
-      }
-
-      if (sessionSetupMethod === "load") {
-        const quietMs = options.loadReplayPolicy?.quietMs ?? ACP_LOAD_REPLAY_QUIET_MS;
-        const hardTimeoutMs =
-          options.loadReplayPolicy?.hardTimeoutMs ?? ACP_LOAD_REPLAY_HARD_TIMEOUT_MS;
-        loadReplayGate = yield* makeAcpLoadReplayGate({
-          quietMs,
-          hardTimeoutMs,
-          onHardTimeout: ({ elapsedMs }) =>
-            Effect.logWarning("acp.session_load_replay_quiet_wait_timeout", {
-              sessionId,
-              command: options.spawn.command,
-              elapsedMs,
-              quietMs,
-              hardTimeoutMs,
-            }),
-        });
-        yield* loadReplayGate.settle.pipe(Effect.forkIn(runtimeScope));
-      }
-
-      const nextState = {
-        sessionId,
-        initializeResult,
-        sessionSetupResult,
-        modelConfigId: extractModelConfigId(sessionSetupResult),
-        sessionSetupMethod,
-      } satisfies AcpStartedState;
-      return nextState;
+      return startupResult;
     });
 
     // Backstop for a step that stays under its own budget while the handshake as
@@ -1332,8 +2057,8 @@ const makeAcpSessionRuntime = (
     });
 
     return {
-      handleRequestPermission: acp.handleRequestPermission,
-      handleElicitation: acp.handleElicitation,
+      handleRequestPermission: requestPermissionStartup.register,
+      handleElicitation: elicitationStartup.register,
       handleReadTextFile: acp.handleReadTextFile,
       handleWriteTextFile: acp.handleWriteTextFile,
       handleCreateTerminal: acp.handleCreateTerminal,
@@ -1347,50 +2072,79 @@ const makeAcpSessionRuntime = (
       handleExtNotification: acp.handleExtNotification,
       start: () => start,
       awaitExit: awaitAcpChildExit(child),
-      getEvents: () => {
-        const gate = loadReplayGate;
-        if (gate !== undefined) {
-          return Stream.fromEffect(gate.attachConsumer).pipe(
-            Stream.flatMap(() => Stream.fromQueue(eventQueue)),
-          );
-        }
-        acceptingSessionUpdates = true;
-        return Stream.fromQueue(eventQueue);
-      },
+      getEvents: () =>
+        Stream.unwrap(
+          Effect.gen(function* () {
+            // Attaching a consumer opens the gate and drains any events that were
+            // buffered while no consumer was attached. The stream begins with the
+            // drained events and then pulls from the live queue.
+            const gate = loadReplayGate;
+            if (gate !== undefined) {
+              yield* gate.attachConsumer;
+            }
+            yield* Ref.set(acceptingSessionUpdatesRef, true);
+            yield* Ref.set(consumerAttachedRef, true);
+            const pending = yield* Ref.getAndSet(pendingEventsRef, []);
+            for (const event of pending) {
+              yield* Queue.offer(eventQueue, event);
+            }
+            return Stream.fromQueue(eventQueue);
+          }),
+        ),
       sessionUpdatesEnqueuedCount: Effect.sync(() => sessionUpdatesEnqueued),
       getModeState,
+      getSessionEpoch,
+      getPendingSessionNotificationCount: () =>
+        Ref.get(pendingSessionStateRef).pipe(
+          Effect.map((map) => {
+            let total = 0;
+            for (const state of map.values()) {
+              total += state.notifications.length;
+            }
+            return total;
+          }),
+        ),
       getConfigOptions,
       getAvailableCommands,
       awaitLoadReplayReady,
       prompt: (payload) =>
         getStartedState.pipe(
-          Effect.flatMap((started) => {
-            const requestPayload = {
-              sessionId: started.sessionId,
-              ...payload,
-            } satisfies Acp.PromptRequest;
-            return awaitLoadReplayReady.pipe(
-              Effect.andThen(
-                closeActiveAssistantSegment({
-                  offer: offerSessionEvent,
+          Effect.flatMap((started) =>
+            awaitLoadReplayReady.pipe(
+              Effect.andThen(Ref.get(sessionEpochRef)),
+              Effect.flatMap((epoch) => {
+                const offer = offerSessionEvent(started.sessionId, epoch);
+                const requestPayload = {
+                  sessionId: started.sessionId,
+                  ...payload,
+                } satisfies Acp.PromptRequest;
+                return closeActiveAssistantSegment({
+                  getSessionEpoch,
+                  offer,
+                  sessionId: started.sessionId,
+                  epoch,
                   assistantSegmentRef,
-                }),
-              ),
-              Effect.andThen(
-                runLoggedRequest(
-                  "session/prompt",
-                  requestPayload,
-                  acp.agent.prompt(requestPayload),
-                ),
-              ),
-              Effect.tap(() =>
-                closeActiveAssistantSegment({
-                  offer: offerSessionEvent,
-                  assistantSegmentRef,
-                }),
-              ),
-            );
-          }),
+                }).pipe(
+                  Effect.andThen(
+                    runLoggedRequest(
+                      "session/prompt",
+                      requestPayload,
+                      acp.agent.prompt(requestPayload),
+                    ),
+                  ),
+                  Effect.tap(() =>
+                    closeActiveAssistantSegment({
+                      getSessionEpoch,
+                      offer,
+                      sessionId: started.sessionId,
+                      epoch,
+                      assistantSegmentRef,
+                    }),
+                  ),
+                );
+              }),
+            ),
+          ),
         ),
       cancel: getStartedState.pipe(
         Effect.flatMap((started) => acp.agent.cancel({ sessionId: started.sessionId })),
@@ -1435,7 +2189,25 @@ const makeAcpSessionRuntime = (
       ),
       setModel: (model) =>
         getStartedState.pipe(
-          Effect.flatMap((started) => setConfigOption(started.modelConfigId ?? "model", model)),
+          Effect.flatMap((started) => {
+            if (!started.modelConfigId) {
+              return Ref.get(configOptionsRef).pipe(
+                Effect.flatMap((configOptions) =>
+                  Effect.fail(
+                    new AcpErrors.AcpRequestError({
+                      code: -32602,
+                      errorMessage: "ACP session did not advertise a model config option.",
+                      data: {
+                        requestedModel: model,
+                        configOptionIds: configOptions.map((option) => option.id),
+                      },
+                    }),
+                  ),
+                ),
+              );
+            }
+            return setConfigOption(started.modelConfigId, model);
+          }),
           Effect.asVoid,
         ),
       forkSession: (payload) =>
@@ -1473,8 +2245,31 @@ export function sessionConfigOptionsFromSetup(
   return response?.configOptions ?? fallback;
 }
 
+function mergeSessionConfigOptions(
+  current: ReadonlyArray<Acp.SessionConfigOption>,
+  update: ReadonlyArray<Acp.SessionConfigOption>,
+): ReadonlyArray<Acp.SessionConfigOption> {
+  const byId = new Map(current.map((option) => [option.id, option]));
+  for (const option of update) {
+    byId.set(option.id, option);
+  }
+  const result: Acp.SessionConfigOption[] = [];
+  const seen = new Set<string>();
+  for (const option of current) {
+    result.push(byId.get(option.id) ?? option);
+    seen.add(option.id);
+  }
+  for (const option of update) {
+    if (!seen.has(option.id)) {
+      result.push(option);
+      seen.add(option.id);
+    }
+  }
+  return result;
+}
+
 // Flattens grouped ACP select options so semantic configuration lookup stays provider-agnostic.
-function flattenSessionConfigSelectOptions(
+export function flattenSessionConfigSelectOptions(
   options:
     | ReadonlyArray<Acp.SessionConfigSelectOption>
     | ReadonlyArray<Acp.SessionConfigSelectGroup>,
@@ -1525,32 +2320,77 @@ function isEmptyRecord(value: unknown): value is Record<string, never> {
   );
 }
 
-const handleSessionUpdate = ({
+const processSessionUpdate = ({
+  getSessionEpoch,
   offer,
+  sessionId,
+  epoch,
+  availableCommandsRef,
+  configOptionsRef,
   modeStateRef,
   toolCallsRef,
   assistantSegmentRef,
   runtimeInstanceId,
+  skipTranscriptEvents,
+  resolveConfigOptionUpdateWaiters,
   params,
 }: {
+  readonly getSessionEpoch: () => Effect.Effect<SessionEpoch>;
   readonly offer: (event: AcpParsedSessionEvent) => Effect.Effect<void>;
+  readonly sessionId: string;
+  readonly epoch: SessionEpoch;
+  readonly availableCommandsRef: Ref.Ref<ReadonlyArray<Acp.AvailableCommand>>;
+  readonly configOptionsRef: Ref.Ref<ReadonlyArray<Acp.SessionConfigOption>>;
   readonly modeStateRef: Ref.Ref<AcpSessionModeState | undefined>;
   readonly toolCallsRef: Ref.Ref<Map<string, AcpToolCallState>>;
   readonly assistantSegmentRef: Ref.Ref<AcpAssistantSegmentState>;
   readonly runtimeInstanceId: string;
+  readonly skipTranscriptEvents: boolean;
+  readonly resolveConfigOptionUpdateWaiters: (
+    configOptions: ReadonlyArray<Acp.SessionConfigOption>,
+  ) => Effect.Effect<void>;
   readonly params: Acp.SessionNotification;
 }): Effect.Effect<void> =>
   Effect.gen(function* () {
+    const update = params.update;
+
+    // Bounded state is always applied because it is not part of the transcript.
+    if (update.sessionUpdate === "available_commands_update") {
+      if (!(yield* isCurrentSessionEpoch(getSessionEpoch, sessionId, epoch))) return;
+      yield* Ref.set(availableCommandsRef, update.availableCommands);
+      return;
+    }
+
+    if (update.sessionUpdate === "config_option_update") {
+      if (!(yield* isCurrentSessionEpoch(getSessionEpoch, sessionId, epoch))) return;
+      yield* Ref.update(configOptionsRef, (currentOptions) =>
+        mergeSessionConfigOptions(currentOptions, update.configOptions),
+      );
+      yield* resolveConfigOptionUpdateWaiters(update.configOptions);
+      return;
+    }
+
     const parsed = parseSessionUpdateEvent(params);
-    if (parsed.modeId) {
+    const modeId = parsed.modeId;
+    if (modeId) {
+      if (!(yield* isCurrentSessionEpoch(getSessionEpoch, sessionId, epoch))) return;
       yield* Ref.update(modeStateRef, (current) =>
-        current === undefined ? current : updateModeState(current, parsed.modeId!),
+        current === undefined ? current : updateModeState(current, modeId),
       );
     }
+
+    if (skipTranscriptEvents) {
+      return;
+    }
+
     for (const event of parsed.events) {
       if (event._tag === "ToolCallUpdated") {
+        if (!(yield* isCurrentSessionEpoch(getSessionEpoch, sessionId, epoch))) return;
         yield* closeActiveAssistantSegment({
+          getSessionEpoch,
           offer,
+          sessionId,
+          epoch,
           assistantSegmentRef,
         });
         const { previous, merged } = yield* Ref.modify(toolCallsRef, (current) => {
@@ -1576,19 +2416,23 @@ const handleSessionUpdate = ({
       }
       if (event._tag === "ContentDelta") {
         if (event.streamKind === "reasoning_text") {
+          if (!(yield* isCurrentSessionEpoch(getSessionEpoch, sessionId, epoch))) return;
           yield* offer(event);
           continue;
         }
         if (event.text.trim().length === 0) {
+          if (!(yield* isCurrentSessionEpoch(getSessionEpoch, sessionId, epoch))) return;
           const assistantSegmentState = yield* Ref.get(assistantSegmentRef);
           if (!assistantSegmentState.activeItemId) {
             continue;
           }
         }
         const itemId = yield* ensureActiveAssistantSegment({
+          getSessionEpoch,
           offer,
           assistantSegmentRef,
-          sessionId: params.sessionId,
+          sessionId,
+          epoch,
           runtimeInstanceId,
           requestedItemId: event.itemId,
         });
@@ -1641,85 +2485,109 @@ export const assistantItemId = (
 ) => `assistant:${sessionId}:${runtimeInstanceId}:segment:${segmentIndex}`;
 
 const ensureActiveAssistantSegment = ({
+  getSessionEpoch,
   offer,
   assistantSegmentRef,
   sessionId,
+  epoch,
   runtimeInstanceId,
   requestedItemId,
 }: {
+  readonly getSessionEpoch: () => Effect.Effect<SessionEpoch>;
   readonly offer: (event: AcpParsedSessionEvent) => Effect.Effect<void>;
   readonly assistantSegmentRef: Ref.Ref<AcpAssistantSegmentState>;
   readonly sessionId: string;
+  readonly epoch: SessionEpoch;
   readonly runtimeInstanceId: string;
   readonly requestedItemId?: string | undefined;
 }) =>
-  Ref.modify<AcpAssistantSegmentState, EnsureActiveAssistantSegmentResult>(
-    assistantSegmentRef,
-    (current) => {
-      if (current.activeItemId && current.activeItemId === requestedItemId) {
-        return [{ itemId: current.activeItemId }, current] as const;
-      }
-      if (current.activeItemId && requestedItemId === undefined) {
-        return [{ itemId: current.activeItemId }, current] as const;
-      }
-      // Cursor can provide stable message ids for chunks that resume after tool calls.
-      // Keep those ids so projection appends the pieces instead of displaying broken segments.
-      const itemId =
-        requestedItemId ?? assistantItemId(sessionId, runtimeInstanceId, current.nextSegmentIndex);
-      const completedEvent = current.activeItemId
-        ? ({
-            _tag: "AssistantItemCompleted",
-            itemId: current.activeItemId,
-          } satisfies Extract<AcpParsedSessionEvent, { readonly _tag: "AssistantItemCompleted" }>)
-        : undefined;
-      return [
-        {
-          itemId,
-          ...(completedEvent ? { completedEvent } : {}),
-          startedEvent: {
-            _tag: "AssistantItemStarted",
+  Effect.gen(function* () {
+    if (!(yield* isCurrentSessionEpoch(getSessionEpoch, sessionId, epoch))) {
+      return requestedItemId ?? assistantItemId(sessionId, runtimeInstanceId, 0);
+    }
+    return yield* Ref.modify<AcpAssistantSegmentState, EnsureActiveAssistantSegmentResult>(
+      assistantSegmentRef,
+      (current) => {
+        if (current.activeItemId && current.activeItemId === requestedItemId) {
+          return [{ itemId: current.activeItemId }, current] as const;
+        }
+        if (current.activeItemId && requestedItemId === undefined) {
+          return [{ itemId: current.activeItemId }, current] as const;
+        }
+        // Cursor can provide stable message ids for chunks that resume after tool calls.
+        // Keep those ids so projection appends the pieces instead of displaying broken segments.
+        const itemId =
+          requestedItemId ??
+          assistantItemId(sessionId, runtimeInstanceId, current.nextSegmentIndex);
+        const completedEvent = current.activeItemId
+          ? ({
+              _tag: "AssistantItemCompleted",
+              itemId: current.activeItemId,
+            } satisfies Extract<AcpParsedSessionEvent, { readonly _tag: "AssistantItemCompleted" }>)
+          : undefined;
+        return [
+          {
             itemId,
-          } satisfies Extract<AcpParsedSessionEvent, { readonly _tag: "AssistantItemStarted" }>,
-        },
-        {
-          nextSegmentIndex:
-            requestedItemId === undefined ? current.nextSegmentIndex + 1 : current.nextSegmentIndex,
-          activeItemId: itemId,
-        } satisfies AcpAssistantSegmentState,
-      ] as const;
-    },
-  ).pipe(
-    Effect.flatMap((result) =>
-      Effect.gen(function* () {
-        if (result.completedEvent) {
-          yield* offer(result.completedEvent);
-        }
-        if (result.startedEvent) {
-          yield* offer(result.startedEvent);
-        }
-        return result.itemId;
-      }),
-    ),
-  );
+            ...(completedEvent ? { completedEvent } : {}),
+            startedEvent: {
+              _tag: "AssistantItemStarted",
+              itemId,
+            } satisfies Extract<AcpParsedSessionEvent, { readonly _tag: "AssistantItemStarted" }>,
+          },
+          {
+            nextSegmentIndex:
+              requestedItemId === undefined
+                ? current.nextSegmentIndex + 1
+                : current.nextSegmentIndex,
+            activeItemId: itemId,
+          } satisfies AcpAssistantSegmentState,
+        ] as const;
+      },
+    ).pipe(
+      Effect.flatMap((result) =>
+        Effect.gen(function* () {
+          if (result.completedEvent) {
+            yield* offer(result.completedEvent);
+          }
+          if (result.startedEvent) {
+            yield* offer(result.startedEvent);
+          }
+          return result.itemId;
+        }),
+      ),
+    );
+  });
 
 const closeActiveAssistantSegment = ({
+  getSessionEpoch,
   offer,
+  sessionId,
+  epoch,
   assistantSegmentRef,
 }: {
+  readonly getSessionEpoch: () => Effect.Effect<SessionEpoch>;
   readonly offer: (event: AcpParsedSessionEvent) => Effect.Effect<void>;
+  readonly sessionId: string;
+  readonly epoch: SessionEpoch;
   readonly assistantSegmentRef: Ref.Ref<AcpAssistantSegmentState>;
 }) =>
-  Ref.modify(assistantSegmentRef, (current) => {
-    if (!current.activeItemId) {
-      return [undefined, current] as const;
+  Effect.gen(function* () {
+    if (!(yield* isCurrentSessionEpoch(getSessionEpoch, sessionId, epoch))) return;
+    const event = yield* Ref.modify(assistantSegmentRef, (current) => {
+      if (!current.activeItemId) {
+        return [undefined, current] as const;
+      }
+      return [
+        {
+          _tag: "AssistantItemCompleted",
+          itemId: current.activeItemId,
+        } satisfies AcpParsedSessionEvent,
+        {
+          nextSegmentIndex: current.nextSegmentIndex,
+        } satisfies AcpAssistantSegmentState,
+      ] as const;
+    });
+    if (event) {
+      yield* offer(event);
     }
-    return [
-      {
-        _tag: "AssistantItemCompleted",
-        itemId: current.activeItemId,
-      } satisfies AcpParsedSessionEvent,
-      {
-        nextSegmentIndex: current.nextSegmentIndex,
-      } satisfies AcpAssistantSegmentState,
-    ] as const;
-  }).pipe(Effect.flatMap((event) => (event ? offer(event) : Effect.void)));
+  });

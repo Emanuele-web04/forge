@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { collectLeaves, findParentSplitNode } from "./splitView.logic";
 import {
-  resolvePreferredSplitViewIdForThread,
   resolveSplitViewFocusedThreadId,
   resolveSplitViewPaneIdForThread,
   resolveSplitViewThreadIds,
@@ -408,7 +407,6 @@ describe("splitViewStore", () => {
     expect(splitView.sourceThreadId).toBe(THREAD_B);
     expect(nextState.splitViewIdBySourceThreadId[THREAD_A]).toBeUndefined();
     expect(nextState.splitViewIdBySourceThreadId[THREAD_B]).toBe(splitViewId);
-    expect(resolvePreferredSplitViewIdForThread({ ...nextState, threadId: THREAD_A })).toBeNull();
   });
 
   it("replacePaneThread reanchors a split when replacing the source pane", () => {
@@ -432,9 +430,6 @@ describe("splitViewStore", () => {
     );
     expect(nextState.splitViewIdBySourceThreadId[THREAD_A]).toBeUndefined();
     expect(nextState.splitViewIdBySourceThreadId[THREAD_C]).toBe(splitViewId);
-    expect(resolvePreferredSplitViewIdForThread({ ...nextState, threadId: THREAD_C })).toBe(
-      splitViewId,
-    );
   });
 
   it("replacePaneThread does not steal another split's source mapping", () => {
@@ -597,70 +592,5 @@ describe("splitViewStore", () => {
     const nextState = useSplitViewStore.getState();
     expect(nextState.splitViewsById[splitId]).toBeUndefined();
     expect(nextState.splitViewIdBySourceThreadId[THREAD_A]).toBeUndefined();
-  });
-
-  it("prefers the source split for a thread before other matching splits", () => {
-    const store = useSplitViewStore.getState();
-    const sourceSplitId = store.createFromThread({
-      sourceThreadId: THREAD_A,
-      ownerProjectId: PROJECT_ID,
-    });
-    const otherSplitId = store.createFromThread({
-      sourceThreadId: THREAD_C,
-      ownerProjectId: PROJECT_ID,
-    });
-    const otherEmptyId = findEmptyLeafId(snapshot(otherSplitId));
-    store.replacePaneThread(otherSplitId, otherEmptyId, THREAD_A);
-
-    expect(
-      resolvePreferredSplitViewIdForThread({
-        splitViewsById: useSplitViewStore.getState().splitViewsById,
-        splitViewIdBySourceThreadId: useSplitViewStore.getState().splitViewIdBySourceThreadId,
-        threadId: THREAD_A,
-      }),
-    ).toBe(sourceSplitId);
-  });
-
-  it("resolves the only matching split for non-source threads", () => {
-    const store = useSplitViewStore.getState();
-    const splitId = store.createFromThread({
-      sourceThreadId: THREAD_A,
-      ownerProjectId: PROJECT_ID,
-    });
-    const emptyId = findEmptyLeafId(snapshot(splitId));
-    store.replacePaneThread(splitId, emptyId, THREAD_B);
-
-    expect(
-      resolvePreferredSplitViewIdForThread({
-        splitViewsById: useSplitViewStore.getState().splitViewsById,
-        splitViewIdBySourceThreadId: useSplitViewStore.getState().splitViewIdBySourceThreadId,
-        threadId: THREAD_B,
-      }),
-    ).toBe(splitId);
-  });
-
-  it("returns null for ambiguous non-source split membership instead of guessing by recency", () => {
-    const store = useSplitViewStore.getState();
-    const olderSplitId = store.createFromThread({
-      sourceThreadId: THREAD_A,
-      ownerProjectId: PROJECT_ID,
-    });
-    const olderEmptyId = findEmptyLeafId(snapshot(olderSplitId));
-    store.replacePaneThread(olderSplitId, olderEmptyId, THREAD_B);
-
-    const newerSplitId = store.createFromThread({
-      sourceThreadId: THREAD_C,
-      ownerProjectId: PROJECT_ID,
-    });
-    const newerEmptyId = findEmptyLeafId(snapshot(newerSplitId));
-    store.replacePaneThread(newerSplitId, newerEmptyId, THREAD_B);
-
-    expect(
-      resolvePreferredSplitViewIdForThread({
-        splitViewsById: useSplitViewStore.getState().splitViewsById,
-        splitViewIdBySourceThreadId: useSplitViewStore.getState().splitViewIdBySourceThreadId,
-        threadId: THREAD_B,
-      }),
-    ).toBeNull();
   });
 });

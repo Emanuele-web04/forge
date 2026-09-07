@@ -18,6 +18,7 @@ export const PROVIDER_KINDS: ReadonlyArray<ProviderKind> = [
   "droid",
   "opencode",
   "pi",
+  "devin",
 ];
 
 export const MODEL_SELECTION_INPUT_SCHEMA = {

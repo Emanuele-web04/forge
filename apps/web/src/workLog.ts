@@ -17,7 +17,10 @@ import {
   approvalRequestKindFromRequestType,
   type ApprovalRequestKind,
 } from "@synara/shared/threadSummary";
-import { summarizeToolRawOutput } from "@synara/shared/toolOutputSummary";
+import {
+  stripTrailingToolExitCode,
+  summarizeToolRawOutput,
+} from "@synara/shared/toolOutputSummary";
 import { pluralize } from "@synara/shared/text";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import {
@@ -786,9 +789,15 @@ function deriveProviderRuntimeReconciliationCollapseKey(
   ) {
     return undefined;
   }
+  // Session and turn projections converge independently. A single stale turn
+  // can therefore be observed first as interrupted, then as terminal or
+  // failed. Those settlement actions refine one recovery; a runtime
+  // realignment remains distinct because its live turn id identifies separate
+  // evidence.
+  const operation = action === "align-running-turn" ? action : "settle-running-turn";
   return `provider-runtime-reconcile:${JSON.stringify([
     provider,
-    action,
+    operation,
     projectedTurnId,
     runtimeTurnId ?? null,
   ])}`;
@@ -1004,7 +1013,8 @@ function collapseDerivedWorkLogEntries(
   // Older servers included the current observation sequence in recovery ids,
   // so the same repair could be persisted more than once while projections
   // converged. Preserve the first row for each semantic repair and hide only
-  // exact repeats; different turns/actions remain independently visible.
+  // exact repeats; different turns and runtime realignments remain independently
+  // visible.
   const seenRuntimeReconciliationKeys = new Set<string>();
   // Task-list snapshots (collapseKey "taskList:<turnId>") fold into one row per
   // turn: each update replaces the row's content while the row itself stays
@@ -2063,21 +2073,7 @@ function stripTrailingExitCode(value: string): {
   output: string | null;
   exitCode?: number | undefined;
 } {
-  const trimmed = value.trim();
-  const match = /^(?<output>[\s\S]*?)(?:\s*<exited with exit code (?<code>\d+)>)\s*$/i.exec(
-    trimmed,
-  );
-  if (!match?.groups) {
-    return {
-      output: trimmed.length > 0 ? trimmed : null,
-    };
-  }
-  const exitCode = Number.parseInt(match.groups.code ?? "", 10);
-  const normalizedOutput = match.groups.output?.trim() ?? "";
-  return {
-    output: normalizedOutput.length > 0 ? normalizedOutput : null,
-    ...(Number.isInteger(exitCode) ? { exitCode } : {}),
-  };
+  return stripTrailingToolExitCode(value.trim());
 }
 
 function extractDetailCollapseHint(detail: string | undefined): string {

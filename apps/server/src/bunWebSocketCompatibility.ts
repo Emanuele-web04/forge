@@ -65,7 +65,7 @@ export function patchBunWebSocketCloseEventCompatibility() {
   });
 }
 
-function patchCloseEventTarget(target: CloseEventTarget) {
+export function patchCloseEventTarget(target: CloseEventTarget) {
   const socket = target as CloseEventTarget & { readonly [PATCHED]?: true };
   if (socket[PATCHED]) return;
 
@@ -82,7 +82,7 @@ function patchCloseEventTarget(target: CloseEventTarget) {
       return originalAddEventListener.call(this, type, listener as RawListener, options);
     }
 
-    const listenerKey = typeof listener === "function" ? listener : listener.handleEvent;
+    const listenerKey: object = listener;
     let wrapped = wrappedCloseListeners.get(listenerKey);
     if (!wrapped) {
       wrapped = function patchedCloseListener(this: WebSocket, first: unknown, second: unknown) {
@@ -108,7 +108,7 @@ function patchCloseEventTarget(target: CloseEventTarget) {
       return originalRemoveEventListener.call(this, type, listener as RawListener, options);
     }
 
-    const listenerKey = typeof listener === "function" ? listener : listener.handleEvent;
+    const listenerKey: object = listener;
     return originalRemoveEventListener.call(
       this,
       type,

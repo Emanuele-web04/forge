@@ -1592,6 +1592,101 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("maps Codex hook notifications to bounded canonical lifecycle events", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const eventsFiber = yield* Stream.take(adapter.streamEvents, 2).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const commonRun = {
+        id: "hook-run-1",
+        eventName: "preToolUse",
+        executionMode: "sync",
+        handlerType: "command",
+        scope: "turn",
+        source: "user",
+        sourcePath: "/Users/example/.codex/hooks.json",
+        displayOrder: 0,
+        startedAt: 100,
+      };
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-codex-hook-started"),
+        kind: "notification",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        createdAt: new Date().toISOString(),
+        method: "hook/started",
+        payload: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          run: {
+            ...commonRun,
+            status: "running",
+            statusMessage: null,
+            completedAt: null,
+            durationMs: null,
+            entries: [],
+          },
+        },
+      } satisfies ProviderEvent);
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-codex-hook-completed"),
+        kind: "notification",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        createdAt: new Date().toISOString(),
+        method: "hook/completed",
+        payload: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          run: {
+            ...commonRun,
+            status: "blocked",
+            statusMessage: "api_key=private-hook-secret blocked this action",
+            completedAt: 112,
+            durationMs: 12,
+            entries: [{ kind: "error", text: "Authorization: Bearer private-hook-token" }],
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.equal(events.length, 2);
+      const [started, completed] = events;
+      assert.equal(started?.type, "hook.started");
+      if (started?.type !== "hook.started") return;
+      assert.deepEqual(started.payload, {
+        hookId: "hook-run-1",
+        hookName: "/Users/example/.codex/hooks.json",
+        hookEvent: "preToolUse",
+        data: {
+          ...commonRun,
+          status: "running",
+          statusMessage: null,
+          completedAt: null,
+          durationMs: null,
+          entries: [],
+        },
+      });
+      assert.deepEqual(started.raw?.payload, { synaraSanitized: true });
+
+      assert.equal(completed?.type, "hook.completed");
+      if (completed?.type !== "hook.completed") return;
+      assert.equal(completed.payload.outcome, "cancelled");
+      assert.equal(completed.payload.status, "blocked");
+      assert.equal(completed.payload.durationMs, 12);
+      const serialized = JSON.stringify(completed);
+      assert.equal(serialized.includes("private-hook-secret"), false);
+      assert.equal(serialized.includes("private-hook-token"), false);
+      assert.equal(serialized.includes("[REDACTED]"), true);
+      assert.deepEqual(completed.raw?.payload, { synaraSanitized: true });
+    }),
+  );
+
   it.effect(
     "surfaces previously-unmapped native events with bounded redacted diagnostics instead of raw payloads",
     () =>
@@ -1646,6 +1741,45 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         assert.equal(firstEvent.value.itemId, "agent_message_9");
         assert.equal(firstEvent.value.providerRefs?.providerItemId, "agent_message_9");
       }),
+  );
+
+  it.effect("keeps routine Codex startup notifications out of the activity stream", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const eventsFiber = yield* Stream.take(adapter.streamEvents, 3).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const emit = (method: string, kind: ProviderEvent["kind"] = "notification") =>
+        lifecycleManager.emit("event", {
+          id: asEventId(`startup-${method}-${kind}`),
+          kind,
+          provider: "codex",
+          createdAt: new Date().toISOString(),
+          method,
+          threadId: asThreadId("startup-thread"),
+          ...(kind === "error" ? { message: "Failed to open thread" } : {}),
+          payload: { status: "disabled" },
+        } satisfies ProviderEvent);
+
+      emit("remoteControl/status/changed");
+      emit("skills/changed");
+      emit("session/threadOpenRequested", "session");
+      // Real errors and useful unknown events must survive the filter.
+      emit("session/threadOpenRequested", "error");
+      emit("item/future/completed");
+      emit("session/started", "session");
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.deepEqual(
+        events.map((event) => event.type),
+        ["runtime.error", "event.unmapped", "session.started"],
+      );
+      assert.equal(
+        events[1]?.type === "event.unmapped" ? events[1].payload.nativeType : undefined,
+        "item/future/completed",
+      );
+    }),
   );
 
   it.effect("coalesces repeated unmapped burst events", () =>

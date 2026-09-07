@@ -6,7 +6,7 @@
  *
  * @module ClaudeAdapterLive
  */
-import { execFile, spawn as spawnChildProcess } from "node:child_process";
+import { execProcessFile, spawnProcess } from "@synara/shared/processRuntime";
 import type {
   AgentInfo,
   CanUseTool,
@@ -63,15 +63,17 @@ import {
 } from "@synara/contracts";
 import {
   applyClaudePromptEffortPrefix,
+  getClaudeContextWindowSuffix,
   getDefaultModel,
   getEffectiveClaudeCodeEffort,
   getModelCapabilities,
+  getProviderOptionDescriptors,
   hasEffortLevel,
   resolveApiModelId,
+  stripClaudeContextWindowSuffix,
   trimOrNull,
 } from "@synara/shared/model";
 import { buildClaudeSubagentPrompt } from "@synara/shared/agentMentions";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import {
   Cause,
   DateTime,
@@ -116,7 +118,6 @@ import {
   resolveEffectiveClaudeContextWindow,
   resolveSelectedClaudeAutoCompactWindow,
   snapshotFromClaudeContextUsage,
-  stripClaudeContextWindowSuffix,
 } from "../claudeTokenUsage.ts";
 import {
   applyClaudeTaskToolResult,
@@ -452,7 +453,9 @@ interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
   readonly applyFlagSettings: (settings: {
     [K in keyof Settings]?: Settings[K] | null;
   }) => Promise<void>;
-  readonly getContextUsage: () => Promise<SDKControlGetContextUsageResponse>;
+  readonly getContextUsage: (options?: {
+    readonly detail?: "summary" | "full";
+  }) => Promise<SDKControlGetContextUsageResponse>;
   readonly supportedCommands: () => Promise<SlashCommand[]>;
   readonly supportedModels: () => Promise<ModelInfo[]>;
   readonly supportedAgents: () => Promise<AgentInfo[]>;
@@ -515,18 +518,12 @@ interface ClaudeProcessOwner {
 }
 
 function spawnOwnedClaudeCodeProcess(options: ClaudeSpawnOptions): ClaudeOwnedProcess {
-  const prepared = prepareWindowsSafeProcess(options.command, options.args, {
-    cwd: options.cwd,
-    env: options.env,
-  });
-  return spawnChildProcess(prepared.command, prepared.args, {
+  return spawnProcess(options.command, options.args, {
+    requireExecutable: true,
     ...(options.cwd ? { cwd: options.cwd } : {}),
     env: options.env,
     signal: options.signal,
-    shell: prepared.shell,
-    ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
     stdio: ["pipe", "pipe", "inherit"],
-    windowsHide: true,
   }) as unknown as ClaudeOwnedProcess;
 }
 
@@ -535,20 +532,14 @@ async function readInstalledClaudeCliVersion(input: {
   readonly cwd?: string;
   readonly env: NodeJS.ProcessEnv;
 }): Promise<string | null> {
-  const prepared = prepareWindowsSafeProcess(input.binaryPath, ["--version"], {
-    cwd: input.cwd,
-    env: input.env,
-  });
   return new Promise((resolve, reject) => {
-    execFile(
-      prepared.command,
-      prepared.args,
+    execProcessFile(
+      input.binaryPath,
+      ["--version"],
       {
+        requireExecutable: true,
         ...(input.cwd ? { cwd: input.cwd } : {}),
         env: input.env,
-        shell: prepared.shell,
-        ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
-        windowsHide: true,
         timeout: 10_000,
         maxBuffer: 64 * 1024,
         encoding: "utf8",
@@ -644,14 +635,10 @@ type ClaudeAutoModeModelResolution =
   | { readonly status: "conflicting" };
 
 function stripSupportedClaudeContextWindowQualifier(modelId: string): string {
-  const qualifierMatch = /\[([^\]]+)\]$/u.exec(modelId);
-  if (
-    !qualifierMatch ||
-    !Object.hasOwn(CLAUDE_CONTEXT_WINDOW_MAX_TOKENS, qualifierMatch[1] ?? "")
-  ) {
-    return modelId;
-  }
-  return modelId.slice(0, qualifierMatch.index);
+  const qualifier = getClaudeContextWindowSuffix(modelId);
+  return qualifier && Object.hasOwn(CLAUDE_CONTEXT_WINDOW_MAX_TOKENS, qualifier)
+    ? stripClaudeContextWindowSuffix(modelId)
+    : modelId;
 }
 
 function claudeModelIdentifiers(model: ModelInfo): ReadonlyArray<string> {
@@ -911,10 +898,15 @@ function toPermissionMode(value: unknown): PermissionMode | undefined {
 }
 
 function mapClaudeModelInfo(model: ModelInfo): ProviderListModelsResult["models"][number] {
+  const optionDescriptors = getProviderOptionDescriptors({
+    provider: PROVIDER,
+    caps: getModelCapabilities(PROVIDER, model.resolvedModel ?? model.value),
+  });
   return {
     slug: model.value,
     ...(model.resolvedModel ? { resolvedModel: model.resolvedModel } : {}),
     name: model.displayName,
+    ...(optionDescriptors.length > 0 ? { optionDescriptors } : {}),
     ...(typeof model.supportsAutoMode === "boolean"
       ? { supportsAutoMode: model.supportsAutoMode }
       : {}),
@@ -1455,6 +1447,8 @@ function claudeAssistantErrorMessage(error: SDKAssistantMessageError): string {
       return "Claude is not authenticated. Run `claude auth login --claudeai`, then retry.";
     case "oauth_org_not_allowed":
       return "Claude authentication succeeded, but this organization does not allow Claude Code.";
+    case "account_on_hold":
+      return "The active Claude account is on hold. Resolve the account issue, then retry.";
     case "billing_error":
       return "Claude billing or subscription access failed. Check the active Claude account, then retry.";
     case "rate_limit":
@@ -1478,6 +1472,7 @@ function claudeAssistantErrorRequiresProcessRestart(error: SDKAssistantMessageEr
   return (
     error === "authentication_failed" ||
     error === "oauth_org_not_allowed" ||
+    error === "account_on_hold" ||
     error === "billing_error"
   );
 }
@@ -2447,7 +2442,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         return Effect.succeed(undefined);
       }
       return Effect.tryPromise({
-        try: () => context.query.getContextUsage(),
+        try: () => context.query.getContextUsage({ detail: "summary" }),
         catch: (cause) => toError(cause, "Failed to read Claude context usage."),
       }).pipe(
         Effect.timeoutOption(CLAUDE_CONTEXT_USAGE_TIMEOUT_MS),
@@ -2781,10 +2776,12 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         const liveContextUsage = yield* readClaudeContextUsage(context);
         const resultContextWindow = maxClaudeContextWindowFromModelUsage(result?.modelUsage);
         const liveRawContextWindow = positiveFiniteNumber(liveContextUsage?.rawMaxTokens);
-        const effectiveContextWindow = resolveEffectiveClaudeContextWindow({
-          reportedContextWindow: liveRawContextWindow ?? resultContextWindow,
-          lastKnownContextWindow: context.lastKnownContextWindow,
-        });
+        const effectiveContextWindow =
+          liveRawContextWindow ??
+          resolveEffectiveClaudeContextWindow({
+            reportedContextWindow: resultContextWindow,
+            lastKnownContextWindow: context.lastKnownContextWindow,
+          });
         if (effectiveContextWindow !== undefined) {
           context.lastKnownContextWindow = effectiveContextWindow;
         }
@@ -5250,8 +5247,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             : (toPermissionMode(providerOptions?.permissionMode) ??
               (input.runtimeMode === "full-access" ? "bypassPermissions" : undefined));
         const settings = {
-          // Native 1M models otherwise compact near their full model limit. Keep
-          // Synara's safer 200k budget explicit unless the thread opts into 1M.
+          // Pin only explicit non-native overrides. Otherwise Claude Code owns
+          // resolution via server tuning, settings.json, and
+          // CLAUDE_CODE_AUTO_COMPACT_WINDOW.
           autoCompactEnabled: true,
           ...(requestedAutoCompactWindowTokens !== undefined
             ? { autoCompactWindow: requestedAutoCompactWindowTokens }
@@ -5592,14 +5590,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               providerRefs: {},
             });
 
-            if (context.currentAutoCompactWindow === CLAUDE_CONTEXT_WINDOW_MAX_TOKENS["1m"]) {
-              context.emittedContextUsageWarnings.add("one-million-window");
-              yield* emitRuntimeWarning(
-                context,
-                "Claude's auto-compact budget is set to the model's 1M limit for this thread. Long conversations can consume usage limits much faster; switch Auto-compact to 200k unless the larger working context is intentional.",
-              );
-            }
-
             const streamFiber = Effect.runFork(runSdkStream(context));
             context.streamFiber = streamFiber;
             streamFiber.addObserver((exit) => {
@@ -5704,9 +5694,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           yield* updateResumeCursor(context);
         }
 
+        let apiModelChanged = false;
         if (modelSelection?.model) {
           const apiModelId = resolveApiModelId(modelSelection);
           if (apiModelId !== context.currentApiModelId) {
+            apiModelChanged = true;
             if (context.session.runtimeMode === "auto") {
               yield* verifyClaudeAutoModelSupport({
                 queryRuntime: context.query,
@@ -5722,12 +5714,17 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           }
           context.currentApiModelId = apiModelId;
           context.rerouteOriginalApiModelId = undefined;
-          context.lastKnownContextWindow =
-            resolveClaudeApiModelIdContextWindowMaxTokens(apiModelId);
+          if (apiModelChanged) {
+            context.lastKnownContextWindow =
+              resolveClaudeApiModelIdContextWindowMaxTokens(apiModelId);
+            context.lastKnownAutoCompactThreshold = requestedAutoCompactWindow;
+          }
           yield* updateResumeCursor(context);
         }
 
-        if (modelSelection && requestedAutoCompactWindow !== context.currentAutoCompactWindow) {
+        const autoCompactWindowChanged =
+          requestedAutoCompactWindow !== context.currentAutoCompactWindow;
+        if (modelSelection && autoCompactWindowChanged) {
           yield* Effect.tryPromise({
             try: () =>
               context.query.applyFlagSettings({
@@ -5737,15 +5734,18 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           });
           context.currentAutoCompactWindow = requestedAutoCompactWindow;
           context.lastKnownAutoCompactThreshold = requestedAutoCompactWindow;
+        }
+        // Re-announce model switches, but do not label a catalog capacity as
+        // the effective auto window. Claude settings and runtime tuning own it.
+        if (modelSelection && (autoCompactWindowChanged || apiModelChanged)) {
           context.emittedContextUsageWarnings.delete("near-window");
           context.emittedContextUsageWarnings.delete("large-prompt");
 
-          const configuredWindow =
-            requestedAutoCompactWindow !== undefined
-              ? { autoCompactWindow: requestedAutoCompactWindow }
-              : context.lastKnownContextWindow !== undefined
-                ? { contextWindow: context.lastKnownContextWindow }
-                : { autoCompactWindow: null };
+          const configuredWindow = {
+            autoCompactWindow: requestedAutoCompactWindow ?? null,
+            model: modelSelection.model,
+            apiModelId: context.currentApiModelId,
+          };
           const configuredStamp = yield* makeEventStamp();
           yield* offerRuntimeEvent(context, {
             type: "session.configured",

@@ -33,6 +33,7 @@ function makeSettings(
     claudeBinaryPath: "",
     cursorBinaryPath: "",
     cursorApiEndpoint: "",
+    devinBinaryPath: "",
     antigravityBinaryPath: "",
     grokBinaryPath: "",
     droidBinaryPath: "",
@@ -202,6 +203,15 @@ describe("providerModelsPrefetchQueryOptions", () => {
       providerDiscoveryQueryKeys.models("pi", "/bin/pi", null, "/tmp/pi-agent", "/tmp/project"),
     );
 
+    const devinOptions = providerModelsPrefetchQueryOptions({
+      provider: "devin",
+      settings: makeSettings({ devinBinaryPath: "/bin/devin" }),
+      cwd: "/tmp/project",
+    });
+    expect(devinOptions.queryKey).toEqual(
+      providerDiscoveryQueryKeys.models("devin", "/bin/devin", null, null, "/tmp/project"),
+    );
+
     expect(providerModelsPrefetchQueryOptions({ provider: "codex", settings }).queryKey).toEqual(
       providerDiscoveryQueryKeys.models("codex", null, null, null, null),
     );
@@ -211,6 +221,7 @@ describe("providerModelsPrefetchQueryOptions", () => {
 describe("prefetchModelsForNewThread", () => {
   it("warms every provider except Droid, selected provider first", async () => {
     const queryClient = new QueryClient();
+    const cancelQueries = vi.spyOn(queryClient, "cancelQueries");
     const prefetchQuery = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);
 
     prefetchModelsForNewThread(queryClient, {
@@ -227,12 +238,37 @@ describe("prefetchModelsForNewThread", () => {
     );
     // Warm results stay fresh for 30 minutes, so repeated hovers do not re-probe.
     expect(prefetchQuery.mock.calls[0]?.[0].staleTime).toBe(30 * 60_000);
-    expect(modelKeys).toHaveLength(7);
+    expect(modelKeys).toHaveLength(8);
     expect(modelKeys).not.toContainEqual(
       providerDiscoveryQueryKeys.models("droid", null, null, null, "/tmp/project"),
     );
     expect(modelKeys).toContainEqual(
       providerDiscoveryQueryKeys.models("claudeAgent", null, null, null, null),
+    );
+    expect(cancelQueries).toHaveBeenCalledWith({
+      queryKey: providerDiscoveryQueryKeys.modelsAll,
+      type: "inactive",
+      predicate: expect.any(Function),
+    });
+    const cancelFilters = cancelQueries.mock.calls[0]?.[0];
+    if (!cancelFilters?.predicate) {
+      throw new Error("Expected stale model prefetch cancellation predicate.");
+    }
+    const shouldCancel = cancelFilters.predicate as (query: {
+      queryKey: readonly unknown[];
+    }) => boolean;
+    expect(
+      shouldCancel({
+        queryKey: providerDiscoveryQueryKeys.models("opencode", null, null, null, "/tmp/project"),
+      }),
+    ).toBe(false);
+    expect(
+      shouldCancel({
+        queryKey: providerDiscoveryQueryKeys.models("opencode", null, null, null, "/tmp/stale"),
+      }),
+    ).toBe(true);
+    expect(cancelQueries.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY).toBeLessThan(
+      prefetchQuery.mock.invocationCallOrder[0] ?? Number.NEGATIVE_INFINITY,
     );
   });
 
@@ -256,7 +292,7 @@ describe("prefetchModelsForNewThread", () => {
     const modelKeys = prefetchQuery.mock.calls
       .map((call) => call[0].queryKey)
       .filter((key) => key[0] === "provider-discovery" && key[1] === "models");
-    expect(modelKeys).toHaveLength(5);
+    expect(modelKeys).toHaveLength(6);
     expect(modelKeys).not.toContainEqual(
       providerDiscoveryQueryKeys.models("cursor", null, null, null, "/tmp/project"),
     );
@@ -282,6 +318,7 @@ describe("prefetchModelsForNewThread", () => {
       providerDiscoveryQueryKeys.models("droid", null, null, null, "/tmp/project"),
     );
 
+    prefetchQuery.mockClear();
     prefetchModelsForNewThread(queryClient, {
       settings: makeSettings(),
       providerOverride: "droid",
@@ -292,6 +329,9 @@ describe("prefetchModelsForNewThread", () => {
     const modelKeys2 = prefetchQuery.mock.calls
       .map((call) => call[0].queryKey)
       .filter((key) => key[0] === "provider-discovery" && key[1] === "models");
+    expect(modelKeys2[0]).toEqual(
+      providerDiscoveryQueryKeys.models("droid", null, null, null, "/tmp/project"),
+    );
     expect(modelKeys2).toContainEqual(
       providerDiscoveryQueryKeys.models("droid", null, null, null, "/tmp/project"),
     );
@@ -348,7 +388,7 @@ describe("prefetchModelsForNewThread — availability parity (#652)", () => {
     const queryClient = new QueryClient();
     const prefetchQuery = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);
 
-    // Reconciled + confirmed-unavailable cursor → skipped (7 - 1 = 6).
+    // Reconciled + confirmed-unavailable cursor → skipped (8 - 1 = 7).
     prefetchModelsForNewThread(queryClient, {
       settings: makeSettings(),
       providerStatuses: availableStatuses(["cursor"]),
@@ -356,12 +396,12 @@ describe("prefetchModelsForNewThread — availability parity (#652)", () => {
       projectCwd: "/tmp/project",
     });
     let modelKeys = modelKeysFromCalls(prefetchQuery);
-    expect(modelKeys).toHaveLength(6);
+    expect(modelKeys).toHaveLength(7);
     expect(modelKeys).not.toContainEqual(
       providerDiscoveryQueryKeys.models("cursor", null, null, null, null),
     );
 
-    // Unreconciled → safe default: warm everything (7), even confirmed-unavailable.
+    // Unreconciled → safe default: warm everything (8), even confirmed-unavailable.
     prefetchQuery.mockClear();
     prefetchModelsForNewThread(queryClient, {
       settings: makeSettings(),
@@ -370,7 +410,7 @@ describe("prefetchModelsForNewThread — availability parity (#652)", () => {
       projectCwd: "/tmp/project",
     });
     modelKeys = modelKeysFromCalls(prefetchQuery);
-    expect(modelKeys).toHaveLength(7);
+    expect(modelKeys).toHaveLength(8);
 
     // Preferred provider unavailable → warm leads with ChatView's swap target (codex).
     prefetchQuery.mockClear();
@@ -421,7 +461,7 @@ describe("prefetchModelsForNewThread — availability parity (#652)", () => {
 });
 
 describe("prefetchModelsForNewThread — warm-option invariants", () => {
-  it("applies retry: 0 and 30-minute gcTime to every warm call; capabilities once per provider; droid capabilities only on explicit intent", async () => {
+  it("preserves model retry policies while keeping ancillary warming fail-fast", async () => {
     const queryClient = new QueryClient();
     const prefetchQuery = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);
 
@@ -431,11 +471,25 @@ describe("prefetchModelsForNewThread — warm-option invariants", () => {
     });
 
     const calls = prefetchQuery.mock.calls.map((call) => call[0]);
-    // 7 models + 7 capabilities + 3 agents (claudeAgent, codex, opencode).
-    expect(calls).toHaveLength(7 + 7 + 3);
+    // 8 models + 8 capabilities + 3 agents (claudeAgent, codex, opencode).
+    expect(calls).toHaveLength(8 + 8 + 3);
     for (const options of calls) {
-      expect(options.retry).toBe(0);
       expect(options.gcTime).toBe(NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS);
+    }
+    const modelCalls = calls.filter((options) => options.queryKey[1] === "models");
+    expect(modelCalls.find((options) => options.queryKey[2] === "cursor")?.retry).toBe(0);
+    expect(modelCalls.find((options) => options.queryKey[2] === "codex")?.retry).toBe(0);
+    expect(modelCalls.find((options) => options.queryKey[2] === "claudeAgent")?.retry).toBe(0);
+    for (const options of modelCalls.filter(
+      (options) =>
+        options.queryKey[2] !== "cursor" &&
+        options.queryKey[2] !== "codex" &&
+        options.queryKey[2] !== "claudeAgent",
+    )) {
+      expect(options.retry).toBe(3);
+    }
+    for (const options of calls.filter((options) => options.queryKey[1] !== "models")) {
+      expect(options.retry).toBe(0);
     }
     const capabilityKeys = calls
       .map((options) => options.queryKey)
@@ -453,10 +507,16 @@ describe("prefetchModelsForNewThread — warm-option invariants", () => {
       projectCwd: "/tmp/project",
       includeDroid: true,
     });
-    const droidKeys = prefetchQuery.mock.calls.map((call) => call[0].queryKey);
+    const droidCalls = prefetchQuery.mock.calls.map((call) => call[0]);
+    const droidKeys = droidCalls.map((options) => options.queryKey);
     expect(droidKeys).toContainEqual(
       providerDiscoveryQueryKeys.models("droid", "/bin/droid", null, null, "/tmp/project"),
     );
     expect(droidKeys).toContainEqual(providerDiscoveryQueryKeys.composerCapabilities("droid"));
+    expect(
+      droidCalls.find(
+        (options) => options.queryKey[1] === "models" && options.queryKey[2] === "droid",
+      )?.retry,
+    ).toBe(2);
   });
 });

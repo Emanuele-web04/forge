@@ -384,6 +384,7 @@ const orchestrationEngine = {
   readThreadEvents: () => Stream.empty,
   readThreadEventsThrough: () => Stream.empty,
   getEventHighWaterSequence: Effect.succeed(0),
+  getThreadTitleHighWaterSequence: () => Effect.succeed(0),
   subscribeDomainEvents: Effect.succeed(Stream.empty),
   getReadModel: () =>
     Effect.succeed({
@@ -3484,6 +3485,7 @@ layer("AutomationService", (it) => {
           codex: { enabled: false },
           cursor: { enabled: false },
           opencode: { enabled: false },
+          droid: { enabled: false },
         },
       });
 

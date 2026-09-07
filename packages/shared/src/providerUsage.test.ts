@@ -33,6 +33,7 @@ describe("provider usage metadata", () => {
       "droid",
       "opencode",
       "pi",
+      "devin",
     ]);
   });
 

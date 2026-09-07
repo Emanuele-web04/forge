@@ -4,6 +4,7 @@ import {
   ClaudeModelOptions,
   CodexModelOptions,
   CursorModelOptions,
+  DevinModelOptions,
   DroidModelOptions,
   GrokModelOptions,
   OpenCodeModelOptions,
@@ -35,6 +36,7 @@ export const ORCHESTRATION_WS_METHODS = {
   getThreadDetailSnapshot: "orchestration.getThreadDetailSnapshot",
   dispatchCommand: "orchestration.dispatchCommand",
   importThread: "orchestration.importThread",
+  regenerateThreadTitle: "orchestration.regenerateThreadTitle",
   repairState: "orchestration.repairState",
   getTurnDiff: "orchestration.getTurnDiff",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
@@ -63,6 +65,7 @@ export const ProviderKind = Schema.Literals([
   "droid",
   "opencode",
   "pi",
+  "devin",
 ]);
 export type ProviderKind = typeof ProviderKind.Type;
 
@@ -105,7 +108,6 @@ export const ProviderSandboxMode = Schema.Literals([
   "danger-full-access",
 ]);
 export type ProviderSandboxMode = typeof ProviderSandboxMode.Type;
-export const DEFAULT_PROVIDER_KIND: ProviderKind = "codex";
 
 export const CodexModelSelection = Schema.Struct({
   provider: Schema.Literal("codex"),
@@ -164,10 +166,18 @@ export const PiModelSelection = Schema.Struct({
 });
 export type PiModelSelection = typeof PiModelSelection.Type;
 
+export const DevinModelSelection = Schema.Struct({
+  provider: Schema.Literal("devin"),
+  model: TrimmedNonEmptyString,
+  options: Schema.optional(DevinModelOptions),
+});
+export type DevinModelSelection = typeof DevinModelSelection.Type;
+
 export const ModelSelection = Schema.Union([
   CodexModelSelection,
   ClaudeModelSelection,
   CursorModelSelection,
+  DevinModelSelection,
   AntigravityModelSelection,
   GrokModelSelection,
   DroidModelSelection,
@@ -215,10 +225,15 @@ export const PiProviderStartOptions = Schema.Struct({
   agentDir: Schema.optional(TrimmedNonEmptyString),
 });
 
+export const DevinProviderStartOptions = Schema.Struct({
+  binaryPath: Schema.optional(TrimmedNonEmptyString),
+});
+
 export const ProviderStartOptions = Schema.Struct({
   codex: Schema.optional(CodexProviderStartOptions),
   claudeAgent: Schema.optional(ClaudeProviderStartOptions),
   cursor: Schema.optional(CursorProviderStartOptions),
+  devin: Schema.optional(DevinProviderStartOptions),
   antigravity: Schema.optional(AntigravityProviderStartOptions),
   grok: Schema.optional(GrokProviderStartOptions),
   droid: Schema.optional(DroidProviderStartOptions),
@@ -1243,6 +1258,8 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   title: Schema.optional(TrimmedNonEmptyString),
+  /** Apply the title only while no newer durable title event exists. */
+  expectedTitleSequence: Schema.optional(NonNegativeInt),
   modelSelection: Schema.optional(ModelSelection),
   envMode: Schema.optional(ThreadEnvironmentMode),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -2688,6 +2705,22 @@ export const OrchestrationImportThreadResult = Schema.Struct({
 });
 export type OrchestrationImportThreadResult = typeof OrchestrationImportThreadResult.Type;
 
+export const OrchestrationRegenerateThreadTitleInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type OrchestrationRegenerateThreadTitleInput =
+  typeof OrchestrationRegenerateThreadTitleInput.Type;
+
+export const OrchestrationRegenerateThreadTitleResult = Schema.Union([
+  Schema.Struct({
+    status: Schema.Literals(["renamed", "unchanged"]),
+    title: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({ status: Schema.Literals(["no-context", "stale"]), title: Schema.Null }),
+]);
+export type OrchestrationRegenerateThreadTitleResult =
+  typeof OrchestrationRegenerateThreadTitleResult.Type;
+
 export const OrchestrationUnsubscribeThreadInput = Schema.Struct({
   threadId: ThreadId,
 });
@@ -2717,6 +2750,10 @@ export const OrchestrationRpcSchemas = {
   importThread: {
     input: OrchestrationImportThreadInput,
     output: OrchestrationImportThreadResult,
+  },
+  regenerateThreadTitle: {
+    input: OrchestrationRegenerateThreadTitleInput,
+    output: OrchestrationRegenerateThreadTitleResult,
   },
   getTurnDiff: {
     input: OrchestrationGetTurnDiffInput,

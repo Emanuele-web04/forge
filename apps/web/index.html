@@ -7,10 +7,29 @@
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!--
+      Web fonts are network-backed and non-essential for first paint. A plain
+      render-blocking stylesheet would also hold back the deferred module
+      script below (scripts wait for pending stylesheets), so an offline or
+      captive network could leave the boot splash up until the request timed
+      out. Preload keeps the fetch at normal priority without blocking, then
+      the sheet is promoted once it arrives.
+    -->
     <link
       href="https://fonts.googleapis.com/css2?family=Cal+Sans&family=DM+Sans:ital,opsz,wght@0,9..40,300..800;1,9..40,300..800&family=Geist:wght@100..900&family=Geist+Mono:wght@100..900&family=Inter:opsz,wght@14..32,100..900&display=swap"
-      rel="stylesheet"
+      rel="preload"
+      as="style"
+      onload="
+        this.onload = null;
+        this.rel = 'stylesheet';
+      "
     />
+    <noscript>
+      <link
+        href="https://fonts.googleapis.com/css2?family=Cal+Sans&family=DM+Sans:ital,opsz,wght@0,9..40,300..800;1,9..40,300..800&family=Geist:wght@100..900&family=Geist+Mono:wght@100..900&family=Inter:opsz,wght@14..32,100..900&display=swap"
+        rel="stylesheet"
+      />
+    </noscript>
     <title>Synara</title>
     <style>
       /* Boot splash — shown while the JS bundle is parsing and React mounts.

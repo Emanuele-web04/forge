@@ -1,6 +1,6 @@
 {
   "name": "@synara/web",
-  "version": "0.7.3",
+  "version": "0.8.3",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,7 +8,9 @@
     "build": "vite build",
     "prepare": "effect-language-service patch",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "node ../../node_modules/@typescript/native/bin/tsc --noEmit --tsBuildInfoFile node_modules/.cache/typescript-native.tsbuildinfo",
+    "typecheck:native": "bun run typecheck",
+    "typecheck:legacy": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "test:browser": "vitest run --config vitest.browser.config.ts",
     "test:browser:stable": "vitest run --config vitest.browser.stable.config.ts",

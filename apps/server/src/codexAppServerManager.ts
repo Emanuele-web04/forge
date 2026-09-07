@@ -1,4 +1,4 @@
-import { type ChildProcess, type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import type { ChildProcess, ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 
@@ -37,7 +37,7 @@ import {
 import { prewarmChatGptVoiceTranscriptionConnection } from "@synara/shared/chatGptVoiceTranscription";
 import { getModelSelectionBooleanOptionValue, normalizeModelSlug } from "@synara/shared/model";
 import { decodeSubagentReceiverThreadIds } from "@synara/shared/subagents";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
+import { spawnProcess } from "@synara/shared/processRuntime";
 import { Effect, ServiceMap } from "effect";
 
 import {
@@ -426,18 +426,13 @@ const CODEX_BROWSER_TOOL_ROUTING_INSTRUCTIONS = `
 
 ## Browser tool routing
 
-Prefer Synara's built-in browser for browser work. It may continue in the background without changing the user's active chat. In code mode, call its MCP methods directly inside \`functions.exec\` with the exact \`tools.mcp__synara__browser_*\` prefix (for example, \`await tools.mcp__synara__browser_open({ url })\` and \`await tools.mcp__synara__browser_snapshot({})\`). The available suffixes are ${BROWSER_TOOL_NAMES.map((name) => `\`${name.slice("browser_".length)}\``).join(", ")}.
+In code mode, call browser MCP methods directly inside \`functions.exec\` with the exact \`tools.mcp__synara__browser_*\` prefix (for example, \`await tools.mcp__synara__browser_open({ url })\` and \`await tools.mcp__synara__browser_snapshot({})\`). The available suffixes are ${BROWSER_TOOL_NAMES.map((name) => `\`${name.slice("browser_".length)}\``).join(", ")}.
 
 For element actions, keep the \`snapshotId\` returned by the fresh snapshot and use the exact shapes \`browser_type({ target: { ref, snapshotId }, text })\`, \`browser_click({ target: { ref, snapshotId } })\`, and \`browser_press({ keys: ["Enter"] })\`. Wait for observable changes with \`browser_wait({ conditions: [{ kind: "url", glob: "*expected*" }] })\` or another published condition. Never pass a bare \`ref\` without its \`snapshotId\`.
 
-Do not search or filter \`ALL_TOOLS\` to discover these methods. When several browser steps are deterministic, run their awaited MCP calls sequentially in one \`functions.exec\` invocation, inspect each result there, and stop as soon as the requested result is verified. Take a fresh semantic snapshot before element actions and after navigation or human interaction.
+Do not search or filter \`ALL_TOOLS\` to discover these methods. When several steps are deterministic, run their awaited MCP calls sequentially in one \`functions.exec\` invocation and inspect each result there.
 
-Use \`Computer Use\` only when at least one of these is true:
-- the user explicitly asks to use \`Computer Use\`
-- the task is outside the in-app browser (desktop apps, OS settings, system UI, other app windows)
-- the in-app browser cannot complete the task and a broader desktop fallback is required
-
-Do not choose \`Computer Use\` first for ordinary browser inspection, browser screenshots, or browser navigation when the in-app browser can handle the request.`;
+Use \`Computer Use\` only when the user explicitly asks for it, the task is outside the in-app browser (desktop apps, OS settings, other windows), or the in-app browser cannot complete the task.`;
 
 export const CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Plan Mode (Conversational)
 
@@ -719,17 +714,11 @@ function spawnCodexAppServer(input: {
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
 }): ChildProcessWithoutNullStreams {
-  const prepared = prepareWindowsSafeProcess(input.binaryPath, ["app-server"], {
-    cwd: input.cwd,
-    env: input.env,
-  });
-  return spawn(prepared.command, prepared.args, {
+  return spawnProcess(input.binaryPath, ["app-server"], {
+    requireExecutable: true,
     cwd: input.cwd,
     env: input.env,
     stdio: ["pipe", "pipe", "pipe"],
-    shell: prepared.shell,
-    windowsHide: prepared.windowsHide,
-    windowsVerbatimArguments: prepared.windowsVerbatimArguments,
   });
 }
 
@@ -4130,21 +4119,14 @@ function runCodexVersionCommand(input: {
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
 }): Promise<CodexVersionCommandResult> {
-  const prepared = prepareWindowsSafeProcess(input.binaryPath, ["--version"], {
-    cwd: input.cwd,
-    env: input.env,
-  });
-
   return new Promise<CodexVersionCommandResult>((resolve) => {
     let child: ChildProcess;
     try {
-      child = spawn(prepared.command, prepared.args, {
+      child = spawnProcess(input.binaryPath, ["--version"], {
+        requireExecutable: true,
         cwd: input.cwd,
         env: input.env,
         stdio: ["ignore", "pipe", "pipe"],
-        shell: prepared.shell,
-        windowsHide: prepared.windowsHide,
-        windowsVerbatimArguments: prepared.windowsVerbatimArguments,
       });
     } catch (error) {
       resolve({

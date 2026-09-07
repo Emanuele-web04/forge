@@ -121,6 +121,8 @@ import type {
   ProjectListDirectoriesResult,
   ProjectReadFileInput,
   ProjectReadFileResult,
+  ProjectFileChangeEvent,
+  ProjectWatchFileInput,
   ProjectPrewarmSearchIndexInput,
   ProjectPrewarmSearchIndexResult,
   ProjectResolveWorkspaceFileReferencesInput,
@@ -222,6 +224,8 @@ import type {
   OrchestrationGetThreadDetailSnapshotResult,
   OrchestrationImportThreadInput,
   OrchestrationImportThreadResult,
+  OrchestrationRegenerateThreadTitleInput,
+  OrchestrationRegenerateThreadTitleResult,
   OrchestrationListProviderDeliveryBlockersInput,
   OrchestrationListProviderDeliveryBlockersResult,
   OrchestrationReconcileProviderDeliveryInput,
@@ -697,6 +701,10 @@ export interface NativeApi {
       input: ProjectReadFileInput,
       options?: { readonly signal?: AbortSignal },
     ) => Promise<ProjectReadFileResult>;
+    onFileChange?: (
+      input: ProjectWatchFileInput,
+      callback: (event: ProjectFileChangeEvent) => void,
+    ) => () => void;
     resolveWorkspaceFileReferences: (
       input: ProjectResolveWorkspaceFileReferencesInput,
     ) => Promise<ProjectResolveWorkspaceFileReferencesResult>;
@@ -875,6 +883,9 @@ export interface NativeApi {
     importThread: (
       input: OrchestrationImportThreadInput,
     ) => Promise<OrchestrationImportThreadResult>;
+    regenerateThreadTitle: (
+      input: OrchestrationRegenerateThreadTitleInput,
+    ) => Promise<OrchestrationRegenerateThreadTitleResult>;
     repairState: () => Promise<OrchestrationReadModel>;
     getTurnDiff: (input: OrchestrationGetTurnDiffInput) => Promise<OrchestrationGetTurnDiffResult>;
     getFullThreadDiff: (

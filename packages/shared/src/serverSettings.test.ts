@@ -46,6 +46,10 @@ describe("providerStartOptionsFromServerSettings", () => {
           binaryPath: "",
           agentDir: "",
         },
+        devin: {
+          ...DEFAULT_SERVER_SETTINGS.providers.devin,
+          binaryPath: "",
+        },
       },
     };
 
@@ -67,6 +71,7 @@ describe("providerStartOptionsFromServerSettings", () => {
     expect(providerOptions.droid).toEqual({});
     expect(providerOptions.opencode).toEqual({ experimentalWebSockets: false });
     expect(providerOptions.pi).toEqual({});
+    expect(providerOptions.devin).toEqual({});
   });
 
   it("preserves configured launch settings", () => {
@@ -85,6 +90,10 @@ describe("providerStartOptionsFromServerSettings", () => {
           serverUrl: "http://127.0.0.1:4096",
           experimentalWebSockets: true,
         },
+        devin: {
+          ...DEFAULT_SERVER_SETTINGS.providers.devin,
+          binaryPath: "/custom/bin/devin",
+        },
       },
     };
 
@@ -99,5 +108,6 @@ describe("providerStartOptionsFromServerSettings", () => {
       serverUrl: "http://127.0.0.1:4096",
       experimentalWebSockets: true,
     });
+    expect(providerOptions.devin).toEqual({ binaryPath: "/custom/bin/devin" });
   });
 });

@@ -11,7 +11,6 @@ import {
   restorePinAtIndex,
   setPinDone,
   setPinLabel,
-  togglePin,
   togglePinDone,
 } from "./pinnedMessages";
 
@@ -122,16 +121,6 @@ describe("restorePinAtIndex", () => {
   it("does not duplicate a pin that is already present", () => {
     const pins = [pin("a"), pin("b")];
     expect(restorePinAtIndex(pins, pins[1]!, 0)).toBe(pins);
-  });
-});
-
-describe("togglePin", () => {
-  it("adds when absent and removes when present", () => {
-    const added = togglePin([pin("a")], m("b"), "2026-06-06T01:00:00.000Z");
-    expect(added.map((p) => p.messageId)).toEqual([m("a"), m("b")]);
-    expect(togglePin(added, m("b"), "2026-06-06T01:00:00.000Z").map((p) => p.messageId)).toEqual([
-      m("a"),
-    ]);
   });
 });
 

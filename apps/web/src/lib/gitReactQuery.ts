@@ -41,6 +41,7 @@ export const gitQueryKeys = {
   recentCommits: (cwd: string | null, limit: number) =>
     ["git", "recent-commits", cwd, limit] as const,
   pullRequest: (cwd: string | null) => ["git", "pull-request", cwd] as const,
+  workingTreeDiffs: (cwd: string | null) => ["git", "working-tree-diff", cwd] as const,
   workingTreeDiff: (
     cwd: string | null,
     scope: GitReadWorkingTreeDiffInput["scope"] = "workingTree",
@@ -200,7 +201,7 @@ function activeGitDetailQueries(queryClient: QueryClient, cwd: string) {
   const queryCache = queryClient.getQueryCache();
   const queries = [
     ...queryCache.findAll({
-      queryKey: ["git", "working-tree-diff", cwd] as const,
+      queryKey: gitQueryKeys.workingTreeDiffs(cwd),
       type: "active",
     }),
     ...queryCache.findAll({ queryKey: gitQueryKeys.pullRequest(cwd), type: "active" }),
@@ -222,7 +223,7 @@ function activeGitDetailQueries(queryClient: QueryClient, cwd: string) {
 async function refreshActiveGitDetails(queryClient: QueryClient, cwd: string): Promise<void> {
   await Promise.all([
     queryClient.invalidateQueries({
-      queryKey: ["git", "working-tree-diff", cwd] as const,
+      queryKey: gitQueryKeys.workingTreeDiffs(cwd),
       refetchType: "none",
     }),
     queryClient.invalidateQueries({
@@ -241,6 +242,27 @@ async function refreshActiveGitDetails(queryClient: QueryClient, cwd: string): P
     }),
   ]);
   for (const query of activeGitDetailQueries(queryClient, cwd)) {
+    await enqueueGitRefresh(queryClient, () => refetchFreshGitQueries(queryClient, query.queryKey));
+  }
+}
+
+/**
+ * Revalidates active working-tree diff variants from scratch after a watched
+ * file changes. Reads stay on the shared Git queue so stats and patch variants
+ * cannot consume expensive-read capacity in parallel.
+ */
+export async function refreshGitWorkingTreeDiffsForCwd(
+  queryClient: QueryClient,
+  cwd: string,
+): Promise<void> {
+  await queryClient.invalidateQueries({
+    queryKey: gitQueryKeys.workingTreeDiffs(cwd),
+    refetchType: "none",
+  });
+  const queries = activeGitDetailQueries(queryClient, cwd).filter(
+    (query) => query.queryKey[1] === "working-tree-diff",
+  );
+  for (const query of queries) {
     await enqueueGitRefresh(queryClient, () => refetchFreshGitQueries(queryClient, query.queryKey));
   }
 }
@@ -779,30 +801,6 @@ export function gitPullMutationOptions(input: { cwd: string | null; queryClient:
     invalidate: "cwd",
     awaitInvalidation: false,
     run: (api, cwd) => api.git.pull({ cwd }),
-  });
-}
-
-export function gitCreateWorktreeMutationOptions(input: { queryClient: QueryClient }) {
-  return mutationOptions({
-    mutationFn: async ({
-      cwd,
-      branch,
-      newBranch,
-      path,
-    }: {
-      cwd: string;
-      branch: string;
-      newBranch: string;
-      path?: string | null;
-    }) => {
-      const api = ensureNativeApi();
-      if (!cwd) throw new Error("Git worktree creation is unavailable.");
-      return api.git.createWorktree({ cwd, branch, newBranch, path: path ?? null });
-    },
-    mutationKey: ["git", "mutation", "create-worktree"] as const,
-    onSettled: async () => {
-      await invalidateGitQueries(input.queryClient);
-    },
   });
 }
 

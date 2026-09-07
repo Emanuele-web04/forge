@@ -224,6 +224,11 @@ export function resolvePromptEffortFromModelSelection(
       return modelSelection.options?.reasoningEffort ?? null;
     case "pi":
       return modelSelection.options?.thinkingLevel ?? null;
+    case "devin":
+      return (
+        modelSelection.options?.reasoningEffort ??
+        (modelSelection.options?.fastMode === true ? "fast" : null)
+      );
     case "opencode":
       return null;
   }
@@ -354,17 +359,6 @@ export async function stageUploadComposerAttachments(input: {
   };
 
   return { attachments, commit, cleanup, runWithDispatch };
-}
-
-// Compatibility wrapper for callers that have not yet adopted the explicit
-// commit/cleanup lifecycle. Sequential upload failure compensation still applies.
-export async function buildUploadComposerAttachments(input: {
-  threadId: string;
-  images: ReadonlyArray<ComposerImageAttachment>;
-  files?: ReadonlyArray<ComposerFileAttachment>;
-  assistantSelections: ReadonlyArray<ComposerAssistantSelectionAttachment>;
-}): Promise<UploadChatAttachment[]> {
-  return (await stageUploadComposerAttachments(input)).attachments;
 }
 
 /**

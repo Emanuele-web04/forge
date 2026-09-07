@@ -1,17 +1,19 @@
 import type { ProviderKind } from "@synara/contracts";
+import { expect } from "vitest";
 import { it, assert, vi } from "@effect/vitest";
 import { assertFailure } from "@effect/vitest/utils";
 
 import { Effect, Layer, Stream } from "effect";
 
+import { AntigravityAdapter, AntigravityAdapterShape } from "../Services/AntigravityAdapter.ts";
 import { ClaudeAdapter, ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import { CodexAdapter, CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import { CursorAdapter, CursorAdapterShape } from "../Services/CursorAdapter.ts";
+import { DevinAdapter, DevinAdapterShape } from "../Services/DevinAdapter.ts";
 import { DroidAdapter, DroidAdapterShape } from "../Services/DroidAdapter.ts";
 import { GrokAdapter, GrokAdapterShape } from "../Services/GrokAdapter.ts";
 import { OpenCodeAdapter, OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
 import { PiAdapter, PiAdapterShape } from "../Services/PiAdapter.ts";
-import { AntigravityAdapter, AntigravityAdapterShape } from "../Services/AntigravityAdapter.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
 import { ProviderAdapterRegistryLive } from "./ProviderAdapterRegistry.ts";
 import { ProviderUnsupportedError } from "../Errors.ts";
@@ -140,6 +142,23 @@ const fakePiAdapter: PiAdapterShape = {
   streamEvents: Stream.empty,
 };
 
+const fakeDevinAdapter: DevinAdapterShape = {
+  provider: "devin",
+  capabilities: { sessionModelSwitch: "restart-session" },
+  startSession: vi.fn(),
+  sendTurn: vi.fn(),
+  interruptTurn: vi.fn(),
+  respondToRequest: vi.fn(),
+  respondToUserInput: vi.fn(),
+  stopSession: vi.fn(),
+  listSessions: vi.fn(),
+  hasSession: vi.fn(),
+  readThread: vi.fn(),
+  rollbackThread: vi.fn(),
+  stopAll: vi.fn(),
+  streamEvents: Stream.empty,
+};
+
 const fakeAntigravityAdapter: AntigravityAdapterShape = {
   provider: "antigravity",
   capabilities: { sessionModelSwitch: "restart-session" },
@@ -157,14 +176,15 @@ const fakeAntigravityAdapter: AntigravityAdapterShape = {
   streamEvents: Stream.empty,
 };
 
-const layer = it.layer(
+const registryLayer = (codexAdapter = fakeCodexAdapter) =>
   Layer.mergeAll(
     Layer.provide(
       ProviderAdapterRegistryLive,
       Layer.mergeAll(
-        Layer.succeed(CodexAdapter, fakeCodexAdapter),
+        Layer.succeed(CodexAdapter, codexAdapter),
         Layer.succeed(ClaudeAdapter, fakeClaudeAdapter),
         Layer.succeed(CursorAdapter, fakeCursorAdapter),
+        Layer.succeed(DevinAdapter, fakeDevinAdapter),
         Layer.succeed(AntigravityAdapter, fakeAntigravityAdapter),
         Layer.succeed(GrokAdapter, fakeGrokAdapter),
         Layer.succeed(DroidAdapter, fakeDroidAdapter),
@@ -173,8 +193,9 @@ const layer = it.layer(
       ),
     ),
     NodeServices.layer,
-  ),
-);
+  );
+
+const layer = it.layer(registryLayer());
 
 layer("ProviderAdapterRegistryLive", (it) => {
   it.effect("resolves a registered provider adapter", () =>
@@ -183,6 +204,7 @@ layer("ProviderAdapterRegistryLive", (it) => {
       const codex = yield* registry.getByProvider("codex");
       const claude = yield* registry.getByProvider("claudeAgent");
       const cursor = yield* registry.getByProvider("cursor");
+      const devin = yield* registry.getByProvider("devin");
       const antigravity = yield* registry.getByProvider("antigravity");
       const grok = yield* registry.getByProvider("grok");
       const droid = yield* registry.getByProvider("droid");
@@ -191,6 +213,7 @@ layer("ProviderAdapterRegistryLive", (it) => {
       assert.equal(codex, fakeCodexAdapter);
       assert.equal(claude, fakeClaudeAdapter);
       assert.equal(cursor, fakeCursorAdapter);
+      assert.equal(devin, fakeDevinAdapter);
       assert.equal(antigravity, fakeAntigravityAdapter);
       assert.equal(grok, fakeGrokAdapter);
       assert.equal(droid, fakeDroidAdapter);
@@ -202,6 +225,7 @@ layer("ProviderAdapterRegistryLive", (it) => {
         "codex",
         "claudeAgent",
         "cursor",
+        "devin",
         "antigravity",
         "grok",
         "droid",
@@ -218,4 +242,22 @@ layer("ProviderAdapterRegistryLive", (it) => {
       assertFailure(adapter, new ProviderUnsupportedError({ provider: "unknown" }));
     }),
   );
+});
+
+it("rejects missing required methods while constructing the registry", async () => {
+  const malformed = { ...fakeCodexAdapter };
+  Reflect.deleteProperty(malformed, "stopAll");
+
+  await expect(
+    Effect.runPromise(Effect.provide(Effect.void, registryLayer(malformed))),
+  ).rejects.toThrow("required method stopAll() is missing");
+});
+
+it("rejects duplicate provider identities while constructing the registry", async () => {
+  const duplicate = { ...fakeCodexAdapter };
+  Reflect.set(duplicate, "provider", "claudeAgent");
+
+  await expect(
+    Effect.runPromise(Effect.provide(Effect.void, registryLayer(duplicate))),
+  ).rejects.toThrow("Duplicate provider adapter registrations: claudeAgent at index 1.");
 });

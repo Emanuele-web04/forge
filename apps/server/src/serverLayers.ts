@@ -109,6 +109,7 @@ export function makeServerRuntimeServicesLayer(
   );
   const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(providerHealthLayer),
     Layer.provideMerge(OrchestrationEventDeliveryRepositoryLive),
     Layer.provideMerge(studioOutputReactorLayer),
     Layer.provideMerge(GitCoreLive),

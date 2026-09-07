@@ -1,6 +1,6 @@
 {
   "name": "@synara/cli",
-  "version": "0.7.3",
+  "version": "0.8.3",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -20,16 +20,18 @@
     "build": "node scripts/cli.ts build",
     "start": "node dist/index.mjs",
     "prepare": "effect-language-service patch",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "node ../../node_modules/@typescript/native/bin/tsc --noEmit --tsBuildInfoFile node_modules/.cache/typescript-native.tsbuildinfo",
+    "typecheck:native": "bun run typecheck",
+    "typecheck:legacy": "tsc --noEmit",
     "test": "vitest run --maxWorkers=1 --no-file-parallelism"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.2.1",
-    "@anthropic-ai/claude-agent-sdk": "0.3.207",
+    "@anthropic-ai/claude-agent-sdk": "0.3.259",
     "@anthropic-ai/sdk": "^0.100.0",
-    "@earendil-works/pi-agent-core": "^0.81.1",
-    "@earendil-works/pi-ai": "^0.81.1",
-    "@earendil-works/pi-coding-agent": "^0.81.1",
+    "@earendil-works/pi-agent-core": "^0.85.1",
+    "@earendil-works/pi-ai": "^0.85.1",
+    "@earendil-works/pi-coding-agent": "^0.85.1",
     "@effect/platform-node": "catalog:",
     "@effect/sql-sqlite-bun": "catalog:",
     "@opencode-ai/sdk": "^1.15.13",
@@ -39,7 +41,8 @@
     "node-pty": "^1.1.0",
     "open": "^10.1.0",
     "tree-kill": "^1.2.2",
-    "ws": "^8.21.0"
+    "ws": "^8.21.0",
+    "zod": "4.3.6"
   },
   "devDependencies": {
     "@effect/language-service": "catalog:",
@@ -52,8 +55,7 @@
     "@types/ws": "^8.5.13",
     "tsdown": "catalog:",
     "typescript": "catalog:",
-    "vitest": "catalog:",
-    "zod": "4.3.6"
+    "vitest": "catalog:"
   },
   "engines": {
     "node": "^22.19 || ^23.11 || >=24.10"

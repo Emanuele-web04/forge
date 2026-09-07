@@ -1,4 +1,5 @@
 import {
+  DEFAULT_MODEL_BY_PROVIDER,
   ProjectId,
   ThreadId,
   type GitWorktreeSetupPhase,
@@ -12,7 +13,7 @@ import {
   type ServerProviderAuthStatus,
   type ThreadId as ThreadIdType,
 } from "@synara/contracts";
-import { normalizeModelSlug } from "@synara/shared/model";
+import { getDefaultModel, normalizeModelSlug } from "@synara/shared/model";
 import { buildSynaraBranchName } from "@synara/shared/git";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { isGenericTerminalThreadTitle } from "@synara/shared/terminalThreads";
@@ -46,7 +47,7 @@ import {
   type WorkLogEntry,
 } from "../session-logic";
 import { localSubagentThreadId } from "./ChatView.selectors";
-import type { ProviderModelOption } from "../providerModelOptions";
+import { buildModelSelection, type ProviderModelOption } from "../providerModelOptions";
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "synara:last-invoked-script-by-project";
 export const DISMISSED_PROVIDER_HEALTH_BANNERS_KEY = "synara:dismissed-provider-health-banners";
@@ -251,22 +252,6 @@ export function shouldEnableComposerPastedTextCollapse(input: {
   return (
     !input.isComposerApprovalState && !input.hasPendingUserInput && !input.showPlanFollowUpPrompt
   );
-}
-
-export function buildComposerMenuSelectionKey(input: {
-  menuOpen: boolean;
-  picker: string | null;
-  triggerKind: string | null;
-  triggerQuery: string;
-  items: readonly { id: string }[];
-}): string | null {
-  if (!input.menuOpen) {
-    return null;
-  }
-  const sourceKey = input.picker
-    ? `picker:${input.picker}`
-    : `trigger:${input.triggerKind ?? "none"}:${input.triggerQuery}`;
-  return `${sourceKey}\u001f${input.items.map((item) => item.id).join("\u001e")}`;
 }
 
 export function buildTranscriptAutoFollowSignal(input: {
@@ -746,6 +731,27 @@ export function resolveThreadDetailHydration(input: {
     return "ready";
   }
   return input.detailSyncState === "failed" ? "failed" : "loading";
+}
+
+/**
+ * Fallback model selection for a draft thread before the first server turn exists.
+ * An explicit project default wins; otherwise the user's default provider is used
+ * (pi has no default model, so it is skipped), then codex. The model comes from the
+ * project default only when it matches the chosen provider, otherwise the provider's
+ * own default.
+ */
+export function resolveDraftFallbackModelSelection(input: {
+  projectDefault: ModelSelection | null | undefined;
+  settingsDefaultProvider: ProviderKind;
+}): ModelSelection {
+  const settingsProvider =
+    input.settingsDefaultProvider === "pi" ? null : input.settingsDefaultProvider;
+  const provider = input.projectDefault?.provider ?? settingsProvider ?? "codex";
+  const model =
+    (provider === input.projectDefault?.provider ? input.projectDefault.model : null) ??
+    getDefaultModel(provider) ??
+    DEFAULT_MODEL_BY_PROVIDER.codex;
+  return buildModelSelection(provider, model);
 }
 
 export function buildLocalDraftThread(
@@ -1318,11 +1324,22 @@ export function hasServerAcknowledgedLocalDispatch(input: {
 /** Fail-open bound for the post-ack "awaiting turn start" Thinking bridge. */
 export const LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS = 60_000;
 
+/** The exact label set the transcript's working indicator can render. */
+export type WorkingLabel = "Loading" | "Thinking" | `Starting ${string}…`;
+
 export function resolveWorkingLabel(input: {
   isSendBusy: boolean;
   turnTakenOver: boolean;
-}): "Loading" | "Thinking" {
-  return input.isSendBusy && !input.turnTakenOver ? "Loading" : "Thinking";
+  isConnecting?: boolean;
+  providerName?: string;
+}): WorkingLabel {
+  if (input.isSendBusy && !input.turnTakenOver) {
+    return "Loading";
+  }
+  if (input.isConnecting && input.providerName) {
+    return `Starting ${input.providerName}…`;
+  }
+  return "Thinking";
 }
 
 /**

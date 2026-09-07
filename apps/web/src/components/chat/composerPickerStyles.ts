@@ -3,7 +3,7 @@
 // Layer: UI styling helper
 // Exports: surface/option/radius tokens; open panels via ComposerPickerMenuPopup / ComposerPickerSelectPopup
 
-import { ELEVATED_HOVER_SURFACE_CLASS_NAME, MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
+import { MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
 
 export { COMPOSER_PICKER_SIZE, type ComposerPickerSize } from "./composerPickerSize";
 
@@ -23,7 +23,12 @@ export const COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME =
  * `size-3` `ChevronDownIcon` so the three triggers stay on identical icon + chevron sizes.
  * Capsule radius so the hover fill reads as a pill, matching the other toolbar chips.
  */
-export const COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME = `inline-flex cursor-pointer items-center gap-1.5 rounded-full px-2 py-1 ${ELEVATED_HOVER_SURFACE_CLASS_NAME} ${COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME}`;
+export const COMPOSER_TOOLBAR_CAPSULE_HOVER_CLASS_NAME =
+  "rounded-full transition-colors hover:bg-[var(--color-background-button-secondary-hover)]";
+
+export const COMPOSER_FOLDER_PICKER_CAPSULE_HOVER_CLASS_NAME = `${COMPOSER_TOOLBAR_CAPSULE_HOVER_CLASS_NAME} group-hover/project-picker-trigger:bg-[var(--color-background-button-secondary-hover)]`;
+
+export const COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME = `inline-flex cursor-pointer items-center gap-1.5 px-2 py-1 ${COMPOSER_TOOLBAR_CAPSULE_HOVER_CLASS_NAME} ${COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME}`;
 
 /** Caps model-provider submenu height; pairs with the list scroll class below. */
 export const COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME =

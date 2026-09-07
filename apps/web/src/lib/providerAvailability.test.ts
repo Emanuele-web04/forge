@@ -235,6 +235,22 @@ describe("resolveAvailableProviderPreference", () => {
     ).toBe("cursor");
   });
 
+  it("falls back when the preferred provider is installed but unauthenticated", () => {
+    expect(
+      resolveAvailableProviderPreference({
+        preferredProvider: "claudeAgent",
+        statuses: [
+          {
+            ...READY_STATUS,
+            provider: "claudeAgent",
+            authStatus: "unauthenticated",
+          },
+          { ...READY_STATUS, provider: "codex" },
+        ],
+      }),
+    ).toBe("codex");
+  });
+
   it("preserves the preference while provider status is loading", () => {
     expect(
       resolveAvailableProviderPreference({

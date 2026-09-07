@@ -1,7 +1,7 @@
 import type { ThreadId } from "@synara/contracts";
 
 import { IconButton } from "~/components/ui/icon-button";
-import { ChatBubbleIcon, PlusIcon } from "~/lib/icons";
+import { PlusIcon, SidechatIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
 import {
@@ -26,6 +26,10 @@ export function EnvironmentSidechatsSection({
   readonly onCreate: () => void;
   readonly onOpen: (threadId: ThreadId) => void;
 }) {
+  // No side chats yet: hide the whole section instead of showing an empty header row.
+  if (sidechats.length === 0) {
+    return null;
+  }
   return (
     <>
       <EnvironmentSectionDivider />
@@ -41,7 +45,7 @@ export function EnvironmentSidechatsSection({
           return (
             <EnvironmentRow
               key={sidechat.id}
-              icon={<ChatBubbleIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
+              icon={<SidechatIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
               label={<span className="truncate">{sidechat.title}</span>}
               trailing={
                 expired ? (
