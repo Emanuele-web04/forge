@@ -66,6 +66,7 @@ import {
   WorktreeIcon,
 } from "~/lib/icons";
 import { pinActionLabel } from "~/lib/pin";
+import { syncAnimationsToTimelineOrigin } from "~/lib/animationTimelineSync";
 import { Button } from "../ui/button";
 import { composerOverlayScrollMaskImage } from "./composerOverlay";
 import { CrossTaskOriginLabel, type CrossTaskOrigin } from "./CrossTaskOriginLabel";
@@ -357,7 +358,10 @@ function WorktreeSetupCard({
     <div className="w-fit max-w-full rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-primary)] px-3.5 py-3 font-system-ui shadow-xs">
       <div className="flex items-center gap-2">
         <WorktreeIcon className="size-3.5 shrink-0 text-[var(--color-text-foreground-tertiary)]" />
-        <span className="shimmer text-[13px] font-medium text-[var(--color-text-foreground-secondary)]">
+        <span
+          ref={syncAnimationsToTimelineOrigin}
+          className="shimmer text-[13px] font-medium text-[var(--color-text-foreground-secondary)]"
+        >
           Preparing worktree...
         </span>
       </div>
@@ -2593,6 +2597,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
       {row.kind === "working" && (
         <div
+          ref={syncAnimationsToTimelineOrigin}
           className={cn("shimmer pt-0.5 font-system-ui", MUTED_LABEL_TEXT_CLASS_NAME)}
           style={{ fontSize: `${appTypographyScale.chatPx}px` }}
         >

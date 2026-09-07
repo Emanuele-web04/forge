@@ -1,0 +1,14 @@
+[
+  {
+    "className": "animate-spin-stepped motion-reduce:animate-none",
+    "animations": 0,
+    "color": "rgb(153, 153, 153)",
+    "textFill": "rgb(153, 153, 153)"
+  },
+  {
+    "className": "work shimmer",
+    "animations": 0,
+    "color": "rgb(221, 221, 221)",
+    "textFill": "rgb(221, 221, 221)"
+  }
+]
