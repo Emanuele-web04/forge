@@ -2460,6 +2460,30 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("shows a ref-tracked path recreated untracked as one modification", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        yield* writeTextFile(path.join(tmp, "x.txt"), "one\n");
+        yield* git(tmp, ["add", "x.txt"]);
+        yield* git(tmp, ["commit", "-m", "add x"]);
+        const baseSha = yield* git(tmp, ["rev-parse", "HEAD"]);
+        yield* git(tmp, ["rm", "-q", "x.txt"]);
+        yield* writeTextFile(path.join(tmp, "x.txt"), "two\nthree\n");
+
+        const refPatch = (yield* core.readRefPatch(tmp, baseSha)).patch;
+        expect(refPatch.match(/^diff --git a\/x\.txt b\/x\.txt$/gm)).toHaveLength(1);
+        expect(refPatch).not.toContain("deleted file mode");
+        expect(refPatch).toContain("-one");
+        expect(refPatch).toContain("+two");
+        expect(refPatch).not.toContain("synara-ref-blob-");
+
+        const stats = yield* core.readDiffStats(tmp, "ref", baseSha);
+        expect(stats).toEqual({ additions: 2, deletions: 1, fileCount: 1 });
+      }),
+    );
+
     it.effect("reads a patch against a branch name", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
