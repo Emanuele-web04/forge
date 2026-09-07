@@ -312,7 +312,7 @@ export const readWindowsPersistentEnvironment: WindowsEnvironmentReader = (
   const output = execFile(
     resolveWindowsPowerShellPath(),
     ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_ENVIRONMENT_SCRIPT],
-    { encoding: "utf8", timeout: 5000 },
+    { encoding: "utf8", timeout: 5000, windowsHide: true },
   );
 
   let parsed: {
