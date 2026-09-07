@@ -29,6 +29,8 @@ import { DesktopWindowControls } from "../components/DesktopWindowControls";
 import { RunningChatsQuitCoordinator } from "../components/RunningChatsQuitCoordinator";
 import { AppSnapCoordinator } from "../components/AppSnapCoordinator";
 import { AppSnapWelcomeDialog } from "../components/AppSnapWelcomeDialog";
+import { OnboardingDialog } from "../onboarding/OnboardingDialog";
+import { useOnboarding } from "../onboarding/useOnboarding";
 import { QueuedComposerDrainCoordinator } from "../components/QueuedComposerDrainCoordinator";
 import { FeedbackDialog } from "../components/FeedbackDialog";
 import { SETTINGS_TARGETS } from "../settingsNavigation";
@@ -307,6 +309,7 @@ function RootRouteView() {
           <TaskCompletionNotifications />
           <QueuedComposerDrainCoordinator />
           <AppSnapWelcomeDialog />
+          <GlobalOnboardingDialog />
           <AppSnapCoordinator />
           <DesktopProjectBootstrap />
           <Outlet />
@@ -772,6 +775,17 @@ function GlobalFeedbackDialog() {
   };
 
   return <FeedbackDialog open={isOpen} context={context} onOpenChange={setOpen} />;
+}
+
+function GlobalOnboardingDialog() {
+  const onboarding = useOnboarding();
+  return (
+    <OnboardingDialog
+      open={onboarding.isOpen}
+      onOpenChange={onboarding.onOpenChange}
+      onComplete={onboarding.complete}
+    />
+  );
 }
 
 function GlobalWhatsNewSurface() {

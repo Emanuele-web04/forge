@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { TrimmedString } from "./baseSchemas";
+import { IsoDateTime, TrimmedString } from "./baseSchemas";
 import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "./model";
 import { ModelSelection, ProviderKind, ThreadEnvironmentMode } from "./orchestration";
 
@@ -111,6 +111,9 @@ export const ServerSettings = Schema.Struct({
     pi: PiServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   }).pipe(Schema.withDecodingDefault(() => ({}))),
   skills: SkillsServerSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+  // When the first-run welcome tour was completed or skipped. Server-backed so a
+  // browser-storage reset does not replay setup on an already configured install.
+  onboardingCompletedAt: Schema.optionalKey(Schema.NullOr(IsoDateTime)),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -189,6 +192,7 @@ export const ServerSettingsPatch = Schema.Struct({
       disabled: Schema.optionalKey(Schema.Array(Schema.String.check(Schema.isMaxLength(256)))),
     }),
   ),
+  onboardingCompletedAt: Schema.optionalKey(Schema.NullOr(IsoDateTime)),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
