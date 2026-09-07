@@ -896,10 +896,12 @@ describe("Antigravity CLI integration helpers", () => {
         Effect.gen(function* () {
           const adapter = yield* AntigravityAdapter;
           const toolEventsFiber = yield* adapter.streamEvents.pipe(
+            Stream.takeUntil((event) => event.type === "turn.completed"),
             Stream.filter(
-              (event) => event.type === "item.started" || event.type === "item.completed",
+              (event) =>
+                (event.type === "item.started" || event.type === "item.completed") &&
+                event.payload.itemType === "command_execution",
             ),
-            Stream.take(4),
             Stream.runCollect,
             Effect.forkChild,
           );
@@ -918,7 +920,7 @@ describe("Antigravity CLI integration helpers", () => {
           });
           expect(eventFile).toBeTruthy();
 
-          // Both sources report two run_command calls in the same planner step.
+          // Real CLI hooks use execution step 2; transcript uses planner step 1.
           // Each real call must render once, without either duplicating the
           // hook/transcript copy or collapsing the repeated tool name.
           yield* Effect.promise(() =>
@@ -929,10 +931,10 @@ describe("Antigravity CLI integration helpers", () => {
                   conversationId: "conv-dedup-1",
                   transcriptPath: transcriptFile,
                 })}`,
-                'pre-tool\t{"stepIdx":1,"toolCall":{"name":"run_command","args":{"CommandLine":"echo first"}}}',
-                'post-tool\t{"stepIdx":1,"toolCall":{"name":"run_command"},"error":""}',
-                'pre-tool\t{"stepIdx":1,"toolCall":{"name":"run_command","args":{"CommandLine":"echo second"}}}',
-                'post-tool\t{"stepIdx":1,"toolCall":{"name":"run_command"},"error":""}',
+                'pre-tool\t{"stepIdx":2,"toolCall":{"name":"run_command","args":{"CommandLine":"echo first"}}}',
+                'post-tool\t{"stepIdx":2,"toolCall":{"name":"run_command"},"error":""}',
+                'pre-tool\t{"stepIdx":2,"toolCall":{"name":"run_command","args":{"CommandLine":"echo second"}}}',
+                'post-tool\t{"stepIdx":2,"toolCall":{"name":"run_command"},"error":""}',
                 "",
               ].join("\n"),
             ),
@@ -955,6 +957,7 @@ describe("Antigravity CLI integration helpers", () => {
             ),
           );
 
+          child?.emit("close", 0, null);
           const events = Array.from(
             yield* Fiber.join(toolEventsFiber).pipe(Effect.timeout("2 seconds")),
           );
@@ -965,12 +968,17 @@ describe("Antigravity CLI integration helpers", () => {
             "item.started",
             "item.completed",
           ]);
-          const comparable = events.map((event) => ({
-            type: event.type,
-            itemType: event.payload.itemType,
-            title: event.payload.title,
-            toolCallId: (event.payload.data as { toolCallId?: string })?.toolCallId,
-          }));
+          const comparable = events.map((event) => {
+            if (event.type !== "item.started" && event.type !== "item.completed") {
+              throw new Error(`Unexpected tool event: ${event.type}`);
+            }
+            return {
+              type: event.type,
+              itemType: event.payload.itemType,
+              title: event.payload.title,
+              toolCallId: (event.payload.data as { toolCallId?: string })?.toolCallId,
+            };
+          });
           expect(comparable).toEqual([
             {
               type: "item.started",
@@ -998,7 +1006,6 @@ describe("Antigravity CLI integration helpers", () => {
             },
           ]);
 
-          child?.emit("close", 0, null);
           yield* Effect.sleep("25 millis");
           yield* adapter.stopSession(threadId);
         }).pipe(
@@ -1354,6 +1361,7 @@ describe("Antigravity turn settle on cancel (#465)", () => {
       Object.assign(child, {
         stdout,
         stderr,
+        eventFile: _options.env?.SYNARA_ANTIGRAVITY_EVENTS,
         killed: false,
         exitCode: null as number | null,
         signalCode: null as NodeJS.Signals | null,
@@ -1366,6 +1374,113 @@ describe("Antigravity turn settle on cancel (#465)", () => {
   const failTeardown = async () => {
     throw new Error("process exit could not be proven");
   };
+
+  it.each([
+    { error: "Historical failure", turns: 6, stopCleanup: false },
+    { error: "timeout waiting for response", turns: 1, stopCleanup: false },
+    { error: "timeout waiting for response", turns: 1, stopCleanup: true },
+    { error: undefined, turns: 1, stopCleanup: true },
+  ])(
+    "persists completed stream usage despite $error (turns=$turns)",
+    async ({ error, turns, stopCleanup }) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-json-usage-"));
+      const children: ChildProcess[] = [];
+      try {
+        await Effect.runPromise(
+          Effect.gen(function* () {
+            const adapter = yield* AntigravityAdapter;
+            const threadId = ThreadId.makeUnsafe("thread-antigravity-json-usage");
+            yield* adapter.startSession({
+              provider: "antigravity",
+              threadId,
+              runtimeMode: "full-access",
+              cwd: root,
+              providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+            });
+            const eventsFiber = yield* adapter.streamEvents.pipe(
+              Stream.takeUntil((event) => event.type === "turn.completed"),
+              Stream.runCollect,
+              Effect.forkChild,
+            );
+            yield* adapter.sendTurn({ threadId, input: "usage test", attachments: [] });
+            children[0]!.stdout!.emit(
+              "data",
+              [
+                JSON.stringify({
+                  event: "step_update",
+                  step_update: {
+                    step_index: 32,
+                    state: "DONE",
+                    step_type: "agent_response",
+                    text_delta: "SG-OK",
+                    usage: {
+                      input_tokens: 13286,
+                      output_tokens: 3,
+                      cache_read_tokens: 0,
+                      thinking_tokens: 0,
+                    },
+                  },
+                }),
+                JSON.stringify({
+                  event: "result",
+                  result: {
+                    status: error ? "ERROR" : "SUCCESS",
+                    error,
+                    response: turns === 1 ? "" : "SG-OK",
+                    duration_seconds: 9259,
+                    num_turns: turns,
+                    usage: { input_tokens: 61019, output_tokens: 1023, cache_read_tokens: 105860 },
+                  },
+                }),
+              ].join("\n"),
+            );
+            if (stopCleanup) {
+              yield* Effect.promise(() =>
+                fs.writeFile(
+                  (children[0] as ChildProcess & { eventFile: string }).eventFile,
+                  "stop\t{}\n",
+                ),
+              );
+            }
+            children[0]!.emit("close", stopCleanup ? null : 1, stopCleanup ? "SIGKILL" : null);
+            const events = Array.from(
+              yield* Fiber.join(eventsFiber).pipe(Effect.timeout("2 seconds")),
+            );
+            expect(events.find((event) => event.type === "turn.completed")?.payload).toMatchObject({
+              state: "completed",
+              usage: {
+                inputTokens: 13286,
+                outputTokens: 3,
+                cachedInputTokens: 0,
+                reasoningOutputTokens: 0,
+                durationMs: expect.any(Number),
+              },
+            });
+            expect(
+              events
+                .filter((event) => event.type === "content.delta")
+                .map((event) => event.payload),
+            ).toEqual([{ streamKind: "assistant_text", delta: "SG-OK" }]);
+            yield* adapter.stopSession(threadId);
+          }).pipe(
+            Effect.provide(
+              makeAntigravityAdapterLive({
+                ensurePlugin: async () => undefined,
+                spawnProcess: makeSpawnProcess(children),
+              }).pipe(
+                Layer.provideMerge(
+                  ServerConfig.layerTest(root, { prefix: "antigravity-json-usage-" }),
+                ),
+                Layer.provideMerge(NodeServices.layer),
+              ),
+            ),
+          ),
+        );
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("unlocks Cancel without letting a late close settle the follow-up", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-interrupt-hung-"));

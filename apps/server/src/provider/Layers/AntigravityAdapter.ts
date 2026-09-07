@@ -1,3 +1,4 @@
+import { parseAntigravityPrintResult } from "../antigravityResultUsage.ts";
 import crypto from "node:crypto";
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
@@ -117,6 +118,7 @@ type ToolSurfaceCounters = {
   surfacedToolCallCounts: Map<string, number>;
   /** Occurrence order observed specifically from pre-tool hook events. */
   hookToolCallCounts: Map<string, number>;
+  transcriptToolCallCounts: Map<string, number>;
 };
 
 type ForeignConversationState = ToolSurfaceCounters & {
@@ -174,6 +176,7 @@ type AntigravitySessionContext = ToolSurfaceCounters & {
   stopped: boolean;
   /** Guards against double turn.completed (process close + interrupt/stop). */
   turnTerminalEmitted: boolean;
+  stopTeardownRequested?: boolean;
 };
 
 function messageFromCause(cause: unknown, fallback: string): string {
@@ -189,6 +192,27 @@ function nextToolOccurrence(counts: Map<string, number>, key: string): number {
   const occurrence = (counts.get(key) ?? 0) + 1;
   counts.set(key, occurrence);
   return occurrence;
+}
+
+// Hook stepIdx names the execution step; transcript tool_calls belong to the
+// preceding model step. Match argument signatures and per-source occurrence
+// counts across the turn, preserving intentionally repeated identical calls.
+function canonicalToolArgs(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalToolArgs);
+  if (value && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value)
+        .toSorted(([a], [b]) => a.localeCompare(b))
+        .map(([key, child]) => [key, canonicalToolArgs(child)]),
+    );
+  return value;
+}
+function antigravityToolSurfaceKey(
+  step: number,
+  name: string,
+  args: Record<string, unknown> | undefined,
+): string {
+  return args ? `${name}:${JSON.stringify(canonicalToolArgs(args))}` : `${step}:${name}`;
 }
 
 function claimToolOccurrence(
@@ -1217,6 +1241,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         return;
       }
       const child = context.activeProcess;
+      context.stopTeardownRequested = true;
       void teardownProcessTree(child).catch(() => {
         try {
           child.kill("SIGKILL");
@@ -1236,6 +1261,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       input: {
         readonly state: "completed" | "interrupted" | "failed";
         readonly stopReason: "model_stop" | "interrupted" | "error";
+        readonly usage?: Record<string, number>;
         readonly errorMessage?: string;
         readonly raw?: ReturnType<typeof raw>;
       },
@@ -1289,7 +1315,11 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                   stopReason: "error",
                   errorMessage: input.errorMessage ?? "Antigravity turn failed.",
                 }
-              : { state: "completed", stopReason: "model_stop" },
+              : {
+                  state: "completed",
+                  stopReason: "model_stop",
+                  ...(input.usage ? { usage: input.usage } : {}),
+                },
         ...(input.raw ? { raw: input.raw } : {}),
       } satisfies ProviderRuntimeEvent);
       return true;
@@ -1355,17 +1385,17 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       stepIndex: number,
       calls: ReadonlyArray<NonNullable<TranscriptStep["tool_calls"]>[number]>,
     ) => {
-      const transcriptCounts = new Map<string, number>();
+      const transcriptCounts = context.transcriptToolCallCounts;
       for (const call of calls) {
         const name = typeof call?.name === "string" ? trim(call.name) : undefined;
         if (!name) continue;
-        const surfaceKey = `${stepIndex}:${name}`;
-        const occurrence = nextToolOccurrence(transcriptCounts, surfaceKey);
-        if (!claimToolOccurrence(context.surfacedToolCallCounts, surfaceKey, occurrence)) continue;
         const args =
           call.args && typeof call.args === "object"
             ? (call.args as Record<string, unknown>)
             : undefined;
+        const surfaceKey = antigravityToolSurfaceKey(stepIndex, name, args);
+        const occurrence = nextToolOccurrence(transcriptCounts, surfaceKey);
+        if (!claimToolOccurrence(context.surfacedToolCallCounts, surfaceKey, occurrence)) continue;
         const itemId = RuntimeItemId.makeUnsafe(
           `antigravity-${context.activeTurnId ?? "turn"}-tool-${context.nextToolSequence++}`,
         );
@@ -1543,6 +1573,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           pendingTools: [],
           surfacedToolCallCounts: new Map(),
           hookToolCallCounts: new Map(),
+          transcriptToolCallCounts: new Map(),
           nextToolSequence: 0,
           terminalEmitted: false,
         };
@@ -1767,7 +1798,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               ? (toolCall.args as Record<string, unknown>)
               : undefined;
           if (name) {
-            const surfaceKey = `${stepIndex}:${name}`;
+            const surfaceKey = antigravityToolSurfaceKey(stepIndex, name, toolArgs);
             const occurrence = nextToolOccurrence(context.hookToolCallCounts, surfaceKey);
             if (!claimToolOccurrence(context.surfacedToolCallCounts, surfaceKey, occurrence)) {
               // The transcript already surfaced this call as a completed item;
@@ -2002,6 +2033,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           foreignConversations: new Map(),
           surfacedToolCallCounts: new Map(),
           hookToolCallCounts: new Map(),
+          transcriptToolCallCounts: new Map(),
           sawAssistant: false,
           interrupted: false,
           stopped: false,
@@ -2129,9 +2161,11 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         context.foreignConversations.clear();
         context.surfacedToolCallCounts.clear();
         context.hookToolCallCounts.clear();
+        context.transcriptToolCallCounts.clear();
         context.sawAssistant = false;
         context.interrupted = false;
         context.turnTerminalEmitted = false;
+        delete context.stopTeardownRequested;
         context.turns.push({ id: turnId, items: [] });
         context.session = {
           ...context.session,
@@ -2152,6 +2186,8 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           "--dangerously-skip-permissions",
           "--model",
           cliModel,
+          "--output-format",
+          "stream-json",
           "--log-file",
           logFile,
           "--print-timeout",
@@ -2159,6 +2195,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           "-p",
           providerPrompt,
         ];
+        const invocationStartedAt = Date.now();
         let child: AntigravityChildProcess;
         try {
           const spawnProcess =
@@ -2253,13 +2290,18 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
               return;
             }
-            if (!context.sawAssistant && stdout.trim()) {
+            const printResult = parseAntigravityPrintResult(
+              stdout.trim(),
+              Date.now() - invocationStartedAt,
+            );
+            const responseText = printResult?.response ?? stdout.trim();
+            if (!context.sawAssistant && responseText) {
               emitTextItem(
                 context,
                 {
                   step_index: Number.MAX_SAFE_INTEGER,
                   type: "PRINT_OUTPUT",
-                  content: stdout.trim(),
+                  content: responseText,
                 },
                 "assistant_message",
                 "assistant_text",
@@ -2270,8 +2312,23 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
               return;
             }
-            const interrupted = context.interrupted || signal !== null;
-            const failed = !interrupted && (code ?? 1) !== 0;
+            // agy can emit a timeout envelope after the final response is DONE,
+            // even on the first turn. Resumes can also carry historical errors.
+            // Require completed stream steps and no pending work before recovery.
+            const completedDespiteEnvelopeError =
+              (code === 1 || context.stopTeardownRequested === true) &&
+              printResult?.completedResponse === true &&
+              context.sawAssistant &&
+              !stderr.trim() &&
+              context.pendingTools.length === 0 &&
+              context.pendingBackgroundTasks.size === 0 &&
+              context.pendingAnonymousBackgroundTasks === 0;
+            const interrupted =
+              context.interrupted || (signal !== null && !completedDespiteEnvelopeError);
+            const failed =
+              !interrupted &&
+              ((code ?? 1) !== 0 || printResult?.failed === true) &&
+              !completedDespiteEnvelopeError;
             if (failed && stderr.trim()) {
               offer({
                 ...base(context, { includeTurn: false }),
@@ -2282,10 +2339,14 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
             }
             settleActiveTurn(context, {
               state: interrupted ? "interrupted" : failed ? "failed" : "completed",
+              ...(printResult?.usage ? { usage: printResult.usage } : {}),
               stopReason: interrupted ? "interrupted" : failed ? "error" : "model_stop",
               ...(failed
                 ? {
-                    errorMessage: stderr.trim() || `Antigravity CLI exited with code ${code ?? 1}.`,
+                    errorMessage:
+                      printResult?.error ||
+                      stderr.trim() ||
+                      `Antigravity CLI exited with code ${code ?? 1}.`,
                   }
                 : {}),
               raw: raw("process-exit", { code, signal, stdout, stderr }),
