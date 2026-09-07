@@ -813,6 +813,26 @@ export function filterSidechatTranscriptMessages(
     : [...messages];
 }
 
+// Imported fork history should not lock a Side chat's provider before its first native turn.
+export function threadHasProviderLockingMessages(
+  thread: Pick<Thread, "messages" | "sidechatSourceThreadId">,
+): boolean {
+  if (!thread.sidechatSourceThreadId) {
+    return thread.messages.length > 0;
+  }
+  return thread.messages.some((message) => (message.source ?? "native") !== "fork-import");
+}
+
+export function threadHasProviderLockingActivity(
+  thread: Pick<Thread, "messages" | "sidechatSourceThreadId" | "latestTurn" | "session">,
+): boolean {
+  return (
+    thread.latestTurn !== null ||
+    thread.session !== null ||
+    threadHasProviderLockingMessages(thread)
+  );
+}
+
 export function revokeBlobPreviewUrl(previewUrl: string | undefined): void {
   if (!previewUrl || typeof URL === "undefined" || !previewUrl.startsWith("blob:")) {
     return;
