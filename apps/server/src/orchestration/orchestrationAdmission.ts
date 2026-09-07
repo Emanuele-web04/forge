@@ -65,6 +65,12 @@ export function usesReservedCommandAdmission(type: OrchestrationCommand["type"])
   }
 }
 
+export function isQuiescingCommandAdmissible(type: OrchestrationCommand["type"]): boolean {
+  // Settlement diagnostics must survive quiesce, but remain in the normal lane
+  // so activity traffic cannot consume the capacity reserved for stopping work.
+  return usesReservedCommandAdmission(type) || type === "thread.activity.append";
+}
+
 export function orchestrationCommandLane(
   type: OrchestrationCommand["type"],
 ): OrchestrationCommandLane {

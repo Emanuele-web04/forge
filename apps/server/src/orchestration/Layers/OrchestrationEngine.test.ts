@@ -257,6 +257,24 @@ describe("OrchestrationEngine", () => {
     );
 
     await system.run(system.engine.quiesce);
+    const diagnostic = {
+      type: "thread.activity.append",
+      commandId: CommandId.makeUnsafe("cmd-engine-quiesce-diagnostic"),
+      threadId,
+      activity: {
+        id: EventId.makeUnsafe("engine-quiesce-diagnostic"),
+        tone: "error",
+        kind: "provider.turn.interrupt.failed",
+        summary: "Provider turn interrupt failed",
+        payload: { detail: "Provider rejected the interrupt during shutdown." },
+        turnId: null,
+        createdAt,
+      },
+      createdAt,
+    } as const;
+    await expect(system.run(system.engine.dispatch(diagnostic))).resolves.toMatchObject({
+      sequence: expect.any(Number),
+    });
     await expect(
       system.run(
         system.engine.dispatch({
@@ -309,6 +327,13 @@ describe("OrchestrationEngine", () => {
     ).resolves.toMatchObject({ sequence: expect.any(Number) });
     await system.run(system.engine.drain);
     await system.run(system.engine.stop);
+
+    await expect(
+      system.run(system.engine.dispatch({
+        ...diagnostic,
+        commandId: CommandId.makeUnsafe("cmd-engine-stopped-diagnostic"),
+      })),
+    ).rejects.toMatchObject({ _tag: "OrchestrationCommandAdmissionError", reason: "stopped" });
 
     await expect(
       system.run(

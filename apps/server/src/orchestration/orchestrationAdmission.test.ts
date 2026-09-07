@@ -33,6 +33,10 @@ describe("orchestration command admission", () => {
           accepted: false,
           reason: "overloaded",
         });
+        expect(admit("diagnostic-overload", "thread.activity.append")).toEqual({
+          accepted: false,
+          reason: "overloaded",
+        });
 
         expect(admit("control", "thread.turn.interrupt")).toEqual({ accepted: true });
         expect(admit("control-overload", "thread.session.stop")).toEqual({
