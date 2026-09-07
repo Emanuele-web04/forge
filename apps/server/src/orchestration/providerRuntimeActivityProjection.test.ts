@@ -290,7 +290,7 @@ describe("provider runtime activity projection", () => {
     ];
     expect(absent.map(projectProviderRuntimeActivities)).toEqual([[], [], []]);
 
-    for (const provider of ["codex", "antigravity"] as const) {
+    for (const provider of ["codex", "antigravity", "claudeAgent"] as const) {
       const [activity] = projectProviderRuntimeActivities(
         runtimeEvent({
           type: "item.completed",

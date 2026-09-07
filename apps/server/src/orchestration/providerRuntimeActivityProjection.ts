@@ -528,7 +528,9 @@ export function projectProviderRuntimeActivities(
   // transcript rows. Waiting for the authoritative completion also avoids
   // per-token activity writes and transcript height churn.
   if (
-    (event.provider === "codex" || event.provider === "antigravity") &&
+    (event.provider === "codex" ||
+      event.provider === "antigravity" ||
+      event.provider === "claudeAgent") &&
     event.type === "item.completed" &&
     event.payload.itemType === "reasoning" &&
     event.itemId !== undefined &&

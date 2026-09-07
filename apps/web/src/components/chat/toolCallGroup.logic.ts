@@ -1,3 +1,4 @@
+import { isReasoningUpdateWorkEntry } from "./agentActivity.logic";
 // FILE: toolCallGroup.logic.ts
 // Purpose: Summarizes a settled run of tool-call work entries into one compact
 //          label ("Ran 2 commands, Edited 2 files, Searched 3 files") for the
@@ -46,6 +47,7 @@ export interface ToolCallGroupSummary {
 export function isSummarizableToolCallEntry(entry: WorkLogEntry): boolean {
   return (
     entry.tone === "tool" &&
+    !isReasoningUpdateWorkEntry(entry) &&
     !entry.synaraThreadCreation &&
     !entry.automation &&
     !entry.subagentAction &&

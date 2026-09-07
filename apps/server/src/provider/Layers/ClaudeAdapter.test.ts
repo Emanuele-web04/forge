@@ -725,6 +725,7 @@ describe("ClaudeAdapterLive", () => {
 
       const createInput = harness.getLastCreateQueryInput();
       assert.deepEqual(createInput?.options.settingSources, ["user", "project", "local"]);
+      assert.deepEqual(createInput?.options.extraArgs, { "thinking-display": "summarized" });
       assert.equal(createInput?.options.permissionMode, "bypassPermissions");
       assert.equal(createInput?.options.allowDangerouslySkipPermissions, true);
     }).pipe(
@@ -847,6 +848,7 @@ describe("ClaudeAdapterLive", () => {
 
       const createInput = harness.getLastCreateQueryInput();
       assert.deepEqual(createInput?.options.settingSources, ["user", "project", "local"]);
+      assert.deepEqual(createInput?.options.extraArgs, { "thinking-display": "summarized" });
       assert.equal(createInput?.options.permissionMode, undefined);
       assert.equal(createInput?.options.allowDangerouslySkipPermissions, undefined);
       const systemPrompt = createInput?.options.systemPrompt;
@@ -1815,12 +1817,69 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect(
+    "renders complete thinking snapshots and marks unavailable text without exposing signatures",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const eventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.takeUntil((event) => event.type === "turn.completed"),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        const session = yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "full-access",
+        });
+        yield* adapter.sendTurn({ threadId: session.threadId, input: "test", attachments: [] });
+        for (const [uuid, thinking] of [
+          ["visible-thinking", "Check the constraints."],
+          ["hidden-thinking", ""],
+        ]) {
+          harness.query.emit({
+            type: "assistant",
+            session_id: "thinking-session",
+            uuid,
+            parent_tool_use_id: null,
+            message: {
+              id: uuid,
+              content: [{ type: "thinking", thinking, signature: "private-signature" }],
+            },
+          } as unknown as SDKMessage);
+        }
+        harness.query.emit({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          errors: [],
+          session_id: "thinking-session",
+          uuid: "done",
+        } as unknown as SDKMessage);
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        const details = events.flatMap((event) =>
+          event.type === "item.completed" && event.payload.itemType === "reasoning"
+            ? [event.payload.detail]
+            : [],
+        );
+        assert.deepEqual(details, [
+          "Check the constraints.",
+          "Claude completed a thinking step but did not provide its text.",
+        ]);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
   it.effect("maps Claude reasoning deltas, streamed tool inputs, and tool results", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
 
-      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 11).pipe(
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 12).pipe(
         Stream.runCollect,
         Effect.forkChild,
       );
@@ -1850,6 +1909,14 @@ describe("ClaudeAdapterLive", () => {
             thinking: "Let",
           },
         },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-tool-streams",
+        uuid: "thinking-stop",
+        parent_tool_use_id: null,
+        event: { type: "content_block_stop", index: 0 },
       } as unknown as SDKMessage);
 
       harness.query.emit({
@@ -1931,6 +1998,7 @@ describe("ClaudeAdapterLive", () => {
           "turn.started",
           "thread.started",
           "content.delta",
+          "item.completed",
           "item.started",
           "item.updated",
           "item.updated",
@@ -1947,6 +2015,14 @@ describe("ClaudeAdapterLive", () => {
         assert.equal(reasoningDelta.payload.delta, "Let");
         assert.equal(String(reasoningDelta.turnId), String(turn.turnId));
       }
+
+      const thinking = runtimeEvents.find(
+        (event) => event.type === "item.completed" && event.payload.itemType === "reasoning",
+      );
+      assert.equal(
+        thinking?.type === "item.completed" ? thinking.payload.detail : undefined,
+        "Let",
+      );
 
       const toolStarted = runtimeEvents.find((event) => event.type === "item.started");
       assert.equal(toolStarted?.type, "item.started");
