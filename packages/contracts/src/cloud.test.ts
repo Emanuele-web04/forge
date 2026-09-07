@@ -2,10 +2,18 @@ import { describe, expect, it } from "vitest";
 import { Schema } from "effect";
 
 import {
+  CloudAuthSession,
+  CloudConnectedRepository,
+  CloudCreateWorkspaceInput,
   CloudEvent,
+  CloudMembership,
+  CloudOrganization,
   CloudRunnerHeartbeat,
+  CloudSignInInput,
+  CloudSignUpInput,
   CloudTask,
   CloudTerminateWorkspaceInput,
+  CloudUser,
   CloudWorkspace,
 } from "./cloud";
 import { CloudWorkspaceId } from "./baseSchemas";
@@ -24,6 +32,7 @@ function workspace() {
     status: "ready",
     region: "eu-west-1",
     repository: {
+      connectedRepositoryId: "repo-1",
       owner: "acme",
       repo: "widgets",
       branch: "main",
@@ -59,6 +68,87 @@ describe("CloudWorkspace", () => {
     expect(() =>
       decodeWorkspace({ ...workspace(), organizationId: undefined }),
     ).toThrow();
+  });
+});
+
+describe("Cloud control-plane identity", () => {
+  it("decodes organization, membership, user, and connected repository records", () => {
+    expect(
+      Schema.decodeUnknownSync(CloudOrganization)({
+        id: "org-1",
+        slug: "ada-personal",
+        name: "Ada's workspace",
+        personal: true,
+        createdAt: "2026-09-07T00:00:00.000Z",
+      }),
+    ).toMatchObject({ id: "org-1", personal: true });
+    expect(
+      Schema.decodeUnknownSync(CloudMembership)({
+        organizationId: "org-1",
+        userId: "user-1",
+        role: "owner",
+        createdAt: "2026-09-07T00:00:00.000Z",
+      }).role,
+    ).toBe("owner");
+    expect(
+      Schema.decodeUnknownSync(CloudUser)({
+        id: "user-1",
+        email: "ada@example.com",
+        createdAt: "2026-09-07T00:00:00.000Z",
+      }).email,
+    ).toBe("ada@example.com");
+    expect(
+      Schema.decodeUnknownSync(CloudConnectedRepository)({
+        id: "repo-1",
+        organizationId: "org-1",
+        provider: "github",
+        owner: "acme",
+        name: "widgets",
+        defaultBranch: "main",
+        installationId: "installation-1",
+        permissions: "write",
+        connectedAt: "2026-09-07T00:00:00.000Z",
+      }).permissions,
+    ).toBe("write");
+  });
+});
+
+describe("Cloud authentication contracts", () => {
+  it("accepts password sign-in and sign-up requests without exposing a session token", () => {
+    expect(
+      Schema.decodeUnknownSync(CloudSignInInput)({
+        email: "ada@example.com",
+        password: "not-a-token",
+      }),
+    ).toMatchObject({ email: "ada@example.com" });
+    expect(
+      Schema.decodeUnknownSync(CloudSignUpInput)({
+        email: "ada@example.com",
+        password: "not-a-token",
+        acceptedTermsAt: "2026-09-07T00:00:00.000Z",
+      }),
+    ).toMatchObject({ email: "ada@example.com" });
+    expect(
+      Schema.decodeUnknownSync(CloudAuthSession)({
+        user: { id: "user-1", email: "ada@example.com", emailVerified: false },
+      }),
+    ).toEqual({
+      user: { id: "user-1", email: "ada@example.com", emailVerified: false },
+    });
+  });
+});
+
+describe("Cloud workspace commands", () => {
+  it("ties workspace creation to an organization and connected repository", () => {
+    expect(
+      Schema.decodeUnknownSync(CloudCreateWorkspaceInput)({
+        organizationId: "org-1",
+        connectedRepositoryId: "repo-1",
+        name: "Fix login",
+        baseBranch: "main",
+        region: "eu-west-1",
+      }),
+    ).toMatchObject({ connectedRepositoryId: "repo-1", baseBranch: "main" });
   });
 });
 
@@ -100,6 +190,12 @@ describe("Cloud control-plane surface", () => {
   it("decodes a termination request", () => {
     const decoded = decodeTerminate({ workspaceId: "workspace-cloud-1", reason: "expired" });
     expect(decoded.reason).toBe("expired");
+  });
+
+  it("rejects an unclassified workspace termination reason", () => {
+    expect(() =>
+      decodeTerminate({ workspaceId: "workspace-cloud-1", reason: "cleanup" }),
+    ).toThrow();
   });
 
   it("decodes the branded workspace identifier", () => {
