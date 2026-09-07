@@ -1,7 +1,10 @@
 // FILE: OnboardingDialog.tsx
-// Purpose: First-run welcome tour: intro → feature tour → providers → theme → project → done.
+// Purpose: First-run welcome tour: intro → feature tour → agents → appearance → project → done.
 //          Owns step navigation and the per-run results the final summary reads.
 // Layer: Web UI overlay (mounted once from the root route)
+//
+// The popup is a fixed 800×540 frame for every step so the window never resizes as the
+// user moves through the tour; hero steps (welcome, done) center their content in it.
 
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import { useEffect, useState } from "react";
@@ -13,16 +16,21 @@ import {
   Dialog,
   DialogDescription,
   DialogHeader,
-  DialogPanel,
   DialogPopup,
   DialogTitle,
 } from "~/components/ui/dialog";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
+import { useTheme } from "~/hooks/useTheme";
+import { CheckIcon } from "~/lib/icons";
 import { findProviderStatus } from "~/lib/providerAvailability";
+import { cn } from "~/lib/utils";
+import { CODE_THEME_OPTIONS } from "~/theme/theme.logic";
+import { ONBOARDING_INSET_CLASS_NAME } from "./layout";
 import {
   classifyProviderSetup,
   isOnboardingSetupStep,
   nextOnboardingStep,
+  ONBOARDING_STEPS,
   previousOnboardingStep,
   summarizeProviderSetup,
   type OnboardingStep,
@@ -45,20 +53,29 @@ const STEP_TITLES: Record<OnboardingStep, string> = {
   done: "You're all set",
 };
 
-const STEP_DESCRIPTIONS: Record<OnboardingStep, string> = {
-  welcome: "",
-  tour: "A quick look at the workspace before you set it up.",
-  providers: "Synara detected these runtimes on this machine. Uncheck any you do not want to use.",
-  theme: "You can change this anytime in Settings → Appearance.",
-  project: "Point Synara at a folder, preferably a Git repository.",
-  done: "Your agents, appearance, and first project are ready.",
+const STEP_DESCRIPTIONS: Record<Exclude<OnboardingStep, "done">, string> = {
+  welcome: "A local-first workspace for coding agents. Setup takes about a minute.",
+  tour: "",
+  providers: `Detected on this machine. Uncheck any you don't want ${APP_BASE_NAME} to use.`,
+  theme: "Applies live behind this window. Change it anytime in Settings → Appearance.",
+  project: `A project is a folder ${APP_BASE_NAME} works in. Git repositories unlock branches, worktrees, diffs and pull requests.`,
 };
+
+/** Welcome and Done are hero steps: centered header, no step counter, centered body. */
+function isHeroStep(step: OnboardingStep): boolean {
+  return step === "welcome" || step === "done";
+}
+
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
 
 function OnboardingFlow(props: { onComplete: () => void }) {
   const [step, setStep] = useState<OnboardingStep>("welcome");
   const [projectResults, setProjectResults] = useState<ReadonlyArray<OnboardingProjectResult>>([]);
   const { settings } = useAppSettings();
   const statuses = useProviderStatusesForLocalConfig();
+  const { activeTheme } = useTheme();
 
   const goBack = () => setStep(previousOnboardingStep(step));
   const goNext = () => setStep(nextOnboardingStep(step));
@@ -78,6 +95,20 @@ function OnboardingFlow(props: { onComplete: () => void }) {
       }),
     })),
   );
+  const themeLabel =
+    CODE_THEME_OPTIONS.find((option) => option.id === activeTheme.codeThemeId)?.label ??
+    activeTheme.codeThemeId;
+  const doneSummary = [
+    `${plural(providerSummary.connected, "agent")} connected`,
+    `${themeLabel} theme`,
+    projectResults.length > 0
+      ? `${plural(projectResults.length, "project")} added`
+      : "No project yet",
+  ].join(" · ");
+
+  const description = step === "done" ? doneSummary : STEP_DESCRIPTIONS[step];
+  const stepIndex = ONBOARDING_STEPS.indexOf(step);
+  const hero = isHeroStep(step);
 
   const primaryAction = (() => {
     switch (step) {
@@ -98,21 +129,42 @@ function OnboardingFlow(props: { onComplete: () => void }) {
   })();
 
   return (
-    <div className="flex flex-col outline-none" tabIndex={-1}>
-      <DialogHeader className={step === "welcome" ? "px-6 pt-6 pb-3" : "px-5 pt-5"}>
-        {step === "welcome" ? (
-          <div className="flex items-center gap-4 pr-8">
-            <SynaraLogo aria-hidden className="size-9" />
-            <DialogTitle>{STEP_TITLES[step]}</DialogTitle>
-          </div>
-        ) : (
-          <>
-            <DialogTitle>{STEP_TITLES[step]}</DialogTitle>
-            <DialogDescription>{STEP_DESCRIPTIONS[step]}</DialogDescription>
-          </>
+    <div className="flex min-h-0 flex-1 flex-col outline-none" tabIndex={-1}>
+      <DialogHeader
+        className={cn(
+          "gap-1.5 pt-8 pb-0",
+          ONBOARDING_INSET_CLASS_NAME,
+          hero && "items-center text-center",
         )}
+      >
+        {step === "welcome" ? <SynaraLogo aria-hidden className="mb-3.5 size-11" /> : null}
+        {step === "done" ? (
+          <span
+            aria-hidden
+            className="mb-3.5 flex size-11 items-center justify-center rounded-full bg-success/8 text-success dark:bg-success/16"
+          >
+            <CheckIcon className="size-5" />
+          </span>
+        ) : null}
+        {hero ? null : (
+          <span className="text-[length:var(--app-font-size-ui-sm,11px)] font-medium tracking-[0.04em] text-muted-foreground/70 uppercase">
+            Step {stepIndex + 1} of {ONBOARDING_STEPS.length}
+          </span>
+        )}
+        <DialogTitle className="text-[22px] tracking-[-0.01em]">{STEP_TITLES[step]}</DialogTitle>
+        {description ? (
+          <DialogDescription className="max-w-[560px] text-[length:var(--app-font-size-ui-lg,13px)] leading-normal">
+            {description}
+          </DialogDescription>
+        ) : null}
       </DialogHeader>
-      <DialogPanel className={step === "welcome" ? "px-6 pt-2 pb-5" : "px-5 py-4"}>
+      <div
+        className={cn(
+          "flex min-h-0 flex-1 flex-col overflow-y-auto pt-6",
+          ONBOARDING_INSET_CLASS_NAME,
+          hero && "justify-center pb-6",
+        )}
+      >
         {step === "welcome" ? <WelcomeStep /> : null}
         {step === "tour" ? <FeatureTourStep /> : null}
         {step === "providers" ? <ProvidersStep /> : null}
@@ -129,14 +181,8 @@ function OnboardingFlow(props: { onComplete: () => void }) {
             }
           />
         ) : null}
-        {step === "done" ? (
-          <DoneStep
-            enabledProviders={providerSummary.enabled}
-            connectedProviders={providerSummary.connected}
-            projectsAdded={projectResults.length}
-          />
-        ) : null}
-      </DialogPanel>
+        {step === "done" ? <DoneStep /> : null}
+      </div>
       <OnboardingStepFooter
         step={step}
         onBack={goBack}
@@ -155,7 +201,7 @@ export function OnboardingDialog(props: {
 }) {
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogPopup showCloseButton className="max-w-2xl">
+      <DialogPopup showCloseButton className="h-[540px] max-h-full max-w-[800px]">
         {/* Remount per open so a replay from Settings starts at the first step. */}
         {props.open ? <OnboardingFlow onComplete={props.onComplete} /> : null}
       </DialogPopup>

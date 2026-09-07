@@ -1,20 +1,23 @@
 // FILE: ProjectStep.tsx
-// Purpose: First-project step of the welcome tour: browse (desktop) or type a folder path,
-//          create the project through the shared create-or-recover flow, and list what was
-//          added. Multiple folders can be added before continuing.
+// Purpose: First-project step of the welcome tour: drop a folder (anywhere in the window),
+//          browse (desktop) or type a path, create the project through the shared
+//          create-or-recover flow, and list what was added. Several folders can be added
+//          before continuing.
 // Layer: Web UI component
 
 import type { ProjectId } from "@synara/contracts";
 import { useState, type FormEvent } from "react";
 
 import { useAppSettings } from "~/appSettings";
-import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
-import { Input } from "~/components/ui/input";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "~/components/ui/input-group";
 import { isElectron } from "~/env";
-import { FolderOpenIcon } from "~/lib/icons";
+import { useWindowFolderDrop } from "~/hooks/useWindowFolderDrop";
+import { CentralIcon } from "~/lib/central-icons";
+import { CheckIcon, FolderIcon } from "~/lib/icons";
 import { createOrRecoverProjectFromPath } from "~/lib/projectCreation";
 import { expandProjectHomePath } from "~/lib/projectPaths";
+import { cn } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import { useStore } from "~/store";
 import { useWorkspacePathsStore } from "~/workspacePathsStore";
@@ -24,6 +27,8 @@ export interface OnboardingProjectResult {
   readonly workspaceRoot: string;
   readonly created: boolean;
 }
+
+const FIELD_CONTROL_CLASS_NAME = "h-9 rounded-lg border-foreground/12";
 
 export function ProjectStep(props: {
   results: ReadonlyArray<OnboardingProjectResult>;
@@ -82,70 +87,106 @@ export function ProjectStep(props: {
     }
   };
 
+  const isDropTarget = useWindowFolderDrop({
+    enabled: isElectron && !submitting,
+    onFolder: (dropped) => void addProject(dropped),
+    onError: setError,
+  });
+
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
     void addProject(path);
   };
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-4">
+      {isElectron ? (
+        <button
+          type="button"
+          disabled={picking || submitting}
+          className={cn(
+            "flex h-[168px] w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-foreground/18 text-[length:var(--app-font-size-ui-lg,13px)] text-foreground transition-colors outline-none hover:bg-foreground/3 focus-visible:border-foreground/40 disabled:opacity-50 motion-reduce:transition-none",
+            isDropTarget && "border-solid border-[color:var(--color-border-focus)] bg-foreground/5",
+          )}
+          onClick={() => void browse()}
+        >
+          <CentralIcon
+            name="folder-add-left"
+            className="size-[22px] text-foreground/70"
+            aria-hidden="true"
+          />
+          {picking ? (
+            <span>Opening the folder picker…</span>
+          ) : (
+            <span>
+              Drop a folder here, or{" "}
+              <span className="underline decoration-dotted decoration-[1.5px] underline-offset-[5px]">
+                browse
+              </span>
+            </span>
+          )}
+        </button>
+      ) : null}
+
       <form onSubmit={onSubmit} className="flex items-center gap-2">
-        <Input
-          value={path}
-          onChange={(event) => setPath(event.target.value)}
-          placeholder={homeDir ? `${homeDir}/code/my-repo` : "/path/to/repository"}
-          aria-label="Project folder path"
-          disabled={submitting}
-          className="flex-1"
-        />
-        {isElectron ? (
-          <Button
-            type="button"
-            variant="outline"
-            disabled={picking || submitting}
-            onClick={() => void browse()}
-          >
-            <FolderOpenIcon className="size-4" aria-hidden />
-            Browse
-          </Button>
-        ) : null}
-        <Button type="submit" disabled={submitting || path.trim().length === 0}>
+        <InputGroup className={cn(FIELD_CONTROL_CLASS_NAME, "min-w-0 flex-1")}>
+          <InputGroupAddon className="w-10 self-stretch border-e border-foreground/12 ps-0">
+            <FolderIcon className="size-4 text-muted-foreground/70" aria-hidden />
+          </InputGroupAddon>
+          <InputGroupInput
+            value={path}
+            onChange={(event) => {
+              setPath(event.target.value);
+              setError(null);
+            }}
+            placeholder={homeDir ? `${homeDir}/code/my-repo` : "/path/to/repository"}
+            aria-label="Project folder path"
+            spellCheck={false}
+            autoCorrect="off"
+            autoCapitalize="off"
+            disabled={submitting}
+          />
+        </InputGroup>
+        <Button
+          type="submit"
+          variant="outline"
+          className={cn(FIELD_CONTROL_CLASS_NAME, "shrink-0 px-4")}
+          disabled={submitting || path.trim().length === 0}
+        >
           Add
         </Button>
       </form>
 
       {error ? (
-        <p
-          role="alert"
-          className="rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive"
-        >
+        <p role="alert" className="text-[length:var(--app-font-size-ui,12px)] text-destructive">
           {error}
         </p>
       ) : null}
 
       {props.results.length > 0 ? (
-        <ul className="space-y-1" aria-label="Added projects">
+        <ul className="flex flex-col gap-1.5" aria-label="Added projects">
           {props.results.map((result) => (
             <li
               key={result.projectId}
-              className="flex items-center gap-3 rounded-lg border border-border/70 bg-muted/20 px-3 py-2"
+              className="flex h-10 items-center gap-3 rounded-lg bg-foreground/3 px-3.5"
             >
-              <span className="min-w-0 flex-1 truncate text-sm text-foreground">
+              <FolderIcon className="size-[15px] shrink-0 text-foreground/70" aria-hidden />
+              <span className="min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] text-foreground">
                 {result.workspaceRoot}
               </span>
-              <Badge variant={result.created ? "success" : "outline"}>
+              <span
+                className={cn(
+                  "flex items-center gap-1.5 text-[length:var(--app-font-size-ui-sm,11px)]",
+                  result.created ? "text-success" : "text-muted-foreground",
+                )}
+              >
+                <CheckIcon className="size-3" aria-hidden />
                 {result.created ? "Added" : "Already linked"}
-              </Badge>
+              </span>
             </li>
           ))}
         </ul>
       ) : null}
-
-      <p className="text-xs text-muted-foreground">
-        A project is the folder Synara works with. A Git repository is strongly recommended: it
-        unlocks branches, worktrees, diffs, commits, pushes, and pull requests. You can add more
-        projects or clone one from GitHub later from the sidebar.
-      </p>
     </div>
   );
 }
