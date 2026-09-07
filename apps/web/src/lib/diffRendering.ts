@@ -307,6 +307,14 @@ export function resolveFileDiffPrevPath(fileDiff: FileDiffMetadata): string | nu
   return raw;
 }
 
+const GIT_SYMLINK_MODE = "120000";
+
+// A symlink diff shows the link target, but the workspace read/write path
+// follows the link, so editing it in place would edit the target file instead.
+export function isSymlinkFileDiff(fileDiff: FileDiffMetadata): boolean {
+  return (fileDiff.mode ?? fileDiff.prevMode) === GIT_SYMLINK_MODE;
+}
+
 // Stable identity for a parsed file diff, used as a React key and selection id.
 export function buildFileDiffRenderKey(fileDiff: FileDiffMetadata): string {
   return fileDiff.cacheKey ?? `${fileDiff.prevName ?? "none"}:${fileDiff.name}`;

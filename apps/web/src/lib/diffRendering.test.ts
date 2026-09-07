@@ -10,6 +10,7 @@ import {
   compareDiffPaths,
   fileDiffStatsByPath,
   getRenderablePatch,
+  isSymlinkFileDiff,
   resolveDiffCopyText,
   resolveFileDiffStatByChangedPath,
   resolveFileDiffPath,
@@ -237,6 +238,64 @@ describe("resolveFileDiffPrevPath", () => {
       ].join("\n"),
     );
     expect(resolveFileDiffPrevPath(changed)).toBeNull();
+  });
+});
+
+describe("isSymlinkFileDiff", () => {
+  const parseSingleFile = (patch: string) => {
+    const renderable = getRenderablePatch(patch, "symlink:test");
+    if (renderable?.kind !== "files" || renderable.files.length !== 1) {
+      throw new Error("expected one parsed file");
+    }
+    return renderable.files[0]!;
+  };
+
+  it("recognizes changed and added symlinks by their git mode", () => {
+    const changed = parseSingleFile(
+      [
+        "diff --git a/link b/link",
+        "index 1111111..2222222 120000",
+        "--- a/link",
+        "+++ b/link",
+        "@@ -1 +1 @@",
+        "-old-target",
+        "\\ No newline at end of file",
+        "+new-target",
+        "\\ No newline at end of file",
+        "",
+      ].join("\n"),
+    );
+    expect(isSymlinkFileDiff(changed)).toBe(true);
+    const added = parseSingleFile(
+      [
+        "diff --git a/link b/link",
+        "new file mode 120000",
+        "index 0000000..2222222",
+        "--- /dev/null",
+        "+++ b/link",
+        "@@ -0,0 +1 @@",
+        "+target",
+        "\\ No newline at end of file",
+        "",
+      ].join("\n"),
+    );
+    expect(isSymlinkFileDiff(added)).toBe(true);
+  });
+
+  it("treats regular files as editable", () => {
+    const regular = parseSingleFile(
+      [
+        "diff --git a/src/one.ts b/src/one.ts",
+        "index 1111111..2222222 100644",
+        "--- a/src/one.ts",
+        "+++ b/src/one.ts",
+        "@@ -1,1 +1,1 @@",
+        "-const one = 1;",
+        "+const one = 2;",
+        "",
+      ].join("\n"),
+    );
+    expect(isSymlinkFileDiff(regular)).toBe(false);
   });
 });
 

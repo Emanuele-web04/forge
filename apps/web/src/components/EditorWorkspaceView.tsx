@@ -794,8 +794,11 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
           setConfirmedLeaveEdit(pendingLeaveEdit);
         }}
       />
-      {inEditMode && (editDirty || editSaving) ? (
-        <EditorDirtyRouteGuard enabled saving={editSaving} />
+      {/* Stays mounted for the whole edit session: a confirmed exit deferred
+          behind a save must still reach proceed() after the save clears the
+          dirty flag, which would otherwise unmount the guard first. */}
+      {inEditMode ? (
+        <EditorDirtyRouteGuard enabled={editDirty || editSaving} saving={editSaving} />
       ) : null}
     </div>
   );
