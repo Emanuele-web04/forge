@@ -85,9 +85,8 @@ export function nestSidebarEntriesByDepth<T extends { depth: number }>(
 
 export interface SidebarThreadHierarchyBranchRenderSlot {
   /**
-   * Fixed-width subagent slot, always present: the numeric toggle when
-   * directChildCount > 0, otherwise an empty spacer of the same width so
-   * every title truncates at the same boundary.
+   * Subagent disclosure when directChildCount > 0. Classic rows reserve an
+   * empty trailing slot otherwise; Activity rows omit the empty title control.
    */
   branchControl: ReactNode;
   /** True for every row with logical depth greater than zero. */

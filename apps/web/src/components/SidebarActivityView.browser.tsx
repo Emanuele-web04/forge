@@ -307,7 +307,7 @@ describe("SidebarActivityView", () => {
     );
 
     const unseenRowButton = page.getByTestId(`activity-thread-${unseen.id}`).element();
-    const unseenWrapper = unseenRowButton.parentElement!;
+    const unseenWrapper = unseenRowButton.closest("[data-thread-item]")!;
     const completedDot = unseenWrapper.querySelector('[aria-label="Unread completion"]');
     expect(completedDot).not.toBeNull();
     // The status glyph lives inline in the row's second line (next to PR/branch),
@@ -319,11 +319,16 @@ describe("SidebarActivityView", () => {
 
     const pinnedRow = page.getByTestId(`activity-thread-${pinned.id}`).element();
     pinnedRow.focus();
-    pinnedRow.parentElement?.querySelector<HTMLButtonElement>('button[aria-label="Undo"]')?.click();
+    pinnedRow
+      .closest("[data-thread-item]")
+      ?.querySelector<HTMLButtonElement>('button[aria-label="Undo"]')
+      ?.click();
     expect(onSetThreadSettled).toHaveBeenCalledWith(pinned.id, false);
 
     const resumedRow = page.getByTestId(`activity-thread-${resumedSettled.id}`).element();
-    expect(resumedRow.parentElement?.querySelector('button[aria-label="Undo"]')).not.toBeNull();
+    expect(
+      resumedRow.closest("[data-thread-item]")?.querySelector('button[aria-label="Undo"]'),
+    ).not.toBeNull();
 
     page.getByTestId(`activity-thread-${unseen.id}`).element().focus();
     await vi.waitFor(() => {
@@ -421,13 +426,15 @@ describe("SidebarActivityView", () => {
       page
         .getByTestId(`activity-thread-${pinnedUnread.id}`)
         .element()
-        .parentElement?.querySelector('[aria-label="Unread completion"]'),
+        .closest("[data-thread-item]")
+        ?.querySelector('[aria-label="Unread completion"]'),
     ).not.toBeNull();
     expect(
       page
         .getByTestId(`activity-thread-${openThread.id}`)
         .element()
-        .parentElement?.querySelector('[aria-label="Unread completion"]'),
+        .closest("[data-thread-item]")
+        ?.querySelector('[aria-label="Unread completion"]'),
     ).toBeNull();
     await mounted.unmount();
   });
@@ -450,7 +457,8 @@ describe("SidebarActivityView", () => {
       page
         .getByTestId(`activity-thread-${running.id}`)
         .element()
-        .parentElement?.querySelector('[role="img"][aria-label="Working"]'),
+        .closest("[data-thread-item]")
+        ?.querySelector('[role="img"][aria-label="Working"]'),
     ).not.toBeNull();
     await mounted.unmount();
   });
@@ -632,7 +640,7 @@ describe("SidebarActivityView compact hierarchy", () => {
     await page.getByRole("button", { name: "Show 15 more" }).click();
 
     // Children are full two-line activity rows: provider icon + title on the
-    // first line, project · slot · branch · time on the second — identical to
+    // first line, project · branch · time on the second — identical to
     // the root row, only indented under the thread line.
     const rootRow = page
       .getByTestId(`activity-thread-${root.id}`)
@@ -647,7 +655,7 @@ describe("SidebarActivityView compact hierarchy", () => {
       expect(nav.querySelector("svg, [data-slot=central-icon]")).not.toBeNull();
       expect(row.querySelectorAll('[class*="bg-border"]')).toHaveLength(0);
       expect(row.querySelector(`[aria-label="${title} in Project A"]`)).not.toBeNull();
-      expect(row.querySelector("[data-thread-branch-slot]")).not.toBeNull();
+      expect(row.querySelector("[data-thread-branch-slot]")).toBeNull();
     }
     // Children sit inside the parent's thread line, to the right of the root.
     const childList = rootRow.parentElement!.querySelector<HTMLElement>(
@@ -826,7 +834,7 @@ describe("SidebarActivityView compact hierarchy", () => {
     await mounted.unmount();
   });
 
-  it("keeps root titles full-width with the toggle on the metadata line", async () => {
+  it("groups the disclosure before the parent title and keeps metadata aligned", async () => {
     const {
       root: parent,
       children,
@@ -841,44 +849,49 @@ describe("SidebarActivityView compact hierarchy", () => {
       </div>,
     );
 
-    // A01: no control, gutter, or new line on the childless root.
-    const titleOf = (id: ThreadId) =>
-      page.getByTestId(`activity-thread-${id}`).element().querySelector("span.truncate")!;
-    const plainRect = titleOf(plain.id).getBoundingClientRect();
+    const titleButton = (id: ThreadId) => page.getByTestId(`activity-thread-${id}`).element();
+    const rowOf = (id: ThreadId) => titleButton(id).closest("[data-thread-item]")!;
+    const titleOf = (id: ThreadId) => titleButton(id).querySelector("span.truncate")!;
+    const toggle = rowOf(parent.id).querySelector<HTMLElement>("[data-thread-branch-slot]")!;
+    const toggleRect = toggle.getBoundingClientRect();
     const parentRect = titleOf(parent.id).getBoundingClientRect();
-    await expect.element(page.getByTestId(`activity-thread-${plain.id}`)).toBeVisible();
-    expect(plainRect.width).toBeGreaterThan(0);
-    expect(Math.abs(plainRect.left - parentRect.left)).toBeLessThanOrEqual(1);
-    expect(Math.abs(plainRect.width - parentRect.width)).toBeLessThanOrEqual(1);
-    const plainTitleLine = titleOf(plain.id).parentElement!;
-    // Action space is already reserved before pointer or keyboard interaction.
-    expect(parseFloat(getComputedStyle(plainTitleLine).paddingRight)).toBeGreaterThanOrEqual(68);
-    await page.getByTestId(`activity-thread-${plain.id}`).hover();
-    expect(titleOf(plain.id).getBoundingClientRect().width).toBeCloseTo(plainRect.width, 0);
-    page.getByTestId(`activity-thread-${plain.id}`).element().focus();
-    expect(titleOf(plain.id).getBoundingClientRect().width).toBeCloseTo(plainRect.width, 0);
-    // The meta line reserves the same 40px slot on both rows, so the branch and
-    // time columns align whether or not the row has children.
-    const slotOf = (id: ThreadId) =>
-      page
-        .getByTestId(`activity-thread-${id}`)
-        .element()
-        .closest("[data-thread-item]")!
-        .querySelector<HTMLElement>("[data-thread-branch-slot]")!
-        .getBoundingClientRect();
-    const plainSlot = slotOf(plain.id);
-    const parentSlot = slotOf(parent.id);
-    expect(plainSlot.width).toBeCloseTo(40, 0);
-    expect(parentSlot.width).toBeCloseTo(40, 0);
-    expect(Math.abs(plainSlot.left - parentSlot.left)).toBeLessThanOrEqual(1);
-    const timeOf = (id: ThreadId) =>
-      page
-        .getByTestId(`activity-thread-${id}`)
-        .element()
-        .closest("[data-thread-item]")!
+    const plainRect = titleOf(plain.id).getBoundingClientRect();
+
+    expect(rowOf(plain.id).querySelector("[data-thread-branch-slot]")).toBeNull();
+    expect(toggle.parentElement).toBe(titleButton(parent.id).parentElement);
+    expect(toggle.closest("button")).toBe(toggle);
+    expect(toggleRect.right).toBeLessThanOrEqual(
+      titleButton(parent.id).getBoundingClientRect().left,
+    );
+    expect(
+      Math.abs(toggleRect.top + toggleRect.height / 2 - (parentRect.top + parentRect.height / 2)),
+    ).toBeLessThanOrEqual(1);
+    expect(toggleRect.width).toBeGreaterThanOrEqual(40);
+    expect(toggleRect.height).toBeGreaterThanOrEqual(28);
+    expect(parentRect.width).toBeGreaterThan(0);
+    expect(plainRect.width).toBeGreaterThan(parentRect.width);
+    expect(parseFloat(getComputedStyle(toggle.parentElement!).paddingRight)).toBeGreaterThanOrEqual(
+      68,
+    );
+
+    // Showing actions must not shift the disclosure or truncate the title further.
+    await page.getByTestId(`activity-thread-${parent.id}`).hover();
+    expect(titleOf(parent.id).getBoundingClientRect().width).toBeCloseTo(parentRect.width, 0);
+    expect(toggle.getBoundingClientRect().left).toBeCloseTo(toggleRect.left, 0);
+    titleButton(parent.id).focus();
+    expect(titleOf(parent.id).getBoundingClientRect().width).toBeCloseTo(parentRect.width, 0);
+    for (const action of rowOf(parent.id).querySelectorAll<HTMLButtonElement>("button")) {
+      if (action === toggle || action === titleButton(parent.id)) continue;
+      const rect = action.getBoundingClientRect();
+      if (rect.top < toggleRect.bottom && rect.bottom > toggleRect.top) {
+        expect(rect.left).toBeGreaterThanOrEqual(parentRect.right);
+      }
+    }
+    const branchOf = (id: ThreadId) =>
+      rowOf(id)
         .querySelector<HTMLElement>("[data-activity-branch-column]")!
         .getBoundingClientRect();
-    expect(Math.abs(timeOf(plain.id).left - timeOf(parent.id).left)).toBeLessThanOrEqual(1);
+    expect(branchOf(plain.id).left).toBeCloseTo(branchOf(parent.id).left, 0);
     await mounted.unmount();
   });
 

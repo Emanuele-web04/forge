@@ -125,9 +125,9 @@ const ACTIVITY_ACTION_TONE_CLASS_NAME = "text-muted-foreground/42";
 const ACTIVITY_ROW_PADDING_X_PX = 10;
 /**
  * Meta line columns. Every row — root or descendant — lays out the same fixed
- * columns so the slot, branch, status and time align down the list:
- * project (flex 1) · subagent slot (40px) · branch (150px) · status (12px) · time (34px).
- * Slot, status and time are rigid. Project and branch both grow from a zero
+ * columns so the branch, status and time align down the list:
+ * project (flex 1) · branch (150px) · status (12px) · time (34px).
+ * Status and time are rigid. Project and branch both grow from a zero
  * basis, so on a narrow sidebar they split the remaining width evenly and the
  * branch column stops at 150px once the row is wide enough — the column edges
  * depend only on the row width, never on a row's own content, so rows align.
@@ -225,7 +225,7 @@ function ActivityThreadRow({
   onRenamePointerUp: (event: ReactPointerEvent<HTMLElement>, threadId: ThreadId) => void;
   onContextMenu: (threadId: ThreadId, position: SidebarRowContextMenuPosition) => void;
   renderHoverCard: (anchorId: string) => ReactNode;
-  /** Fixed-width subagent slot: the numeric toggle, or an empty spacer of the same width. */
+  /** Leading title disclosure; childless activity rows do not reserve a slot. */
   branchControl: ReactNode;
 }) {
   const provider = thread.session?.provider ?? thread.modelSelection.provider;
@@ -279,24 +279,25 @@ function ActivityThreadRow({
           />
         }
       >
-        <button
-          type="button"
-          onClick={onOpen}
-          data-testid={`activity-thread-${thread.id}`}
-          aria-label={thread.title}
-          aria-current={isActive ? "page" : undefined}
+        <div
           className={cn(
-            "flex w-full min-w-0 cursor-pointer flex-col gap-1 rounded-lg px-2.5 pt-2 pb-1 text-left select-none",
-            SIDEBAR_ROW_FOCUS_CLASS_NAME,
+            "mr-2.5 flex min-w-0 items-center gap-1.5 pt-1 pb-1 pl-2.5",
+            // Reserve actions at rest too; longer shortcuts require more room.
+            threadJumpLabelParts.length > 2
+              ? resolveJumpHintReserveClass(0, threadJumpLabelParts.length)
+              : "pr-[4.25rem]",
           )}
         >
-          <span
+          {branchControl}
+          <button
+            type="button"
+            onClick={onOpen}
+            data-testid={`activity-thread-${thread.id}`}
+            aria-label={thread.title}
+            aria-current={isActive ? "page" : undefined}
             className={cn(
-              "flex min-w-0 items-center gap-1.5 overflow-hidden",
-              // Reserve actions at rest too; longer shortcuts require more room.
-              threadJumpLabelParts.length > 2
-                ? resolveJumpHintReserveClass(0, threadJumpLabelParts.length)
-                : "pr-[4.25rem]",
+              "flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md py-1 text-left select-none",
+              SIDEBAR_ROW_FOCUS_CLASS_NAME,
             )}
           >
             <ProviderIcon
@@ -314,8 +315,8 @@ function ActivityThreadRow({
             >
               {isNativeSubagent ? <SidebarSubagentLabel thread={thread} /> : thread.title}
             </span>
-          </span>
-        </button>
+          </button>
+        </div>
         {/* Meta line starts under the title text (icon + gap), as fixed columns. */}
         <span className="flex min-w-0 items-center gap-2 pr-2.5 pb-2 pl-7">
           <button
@@ -336,7 +337,6 @@ function ActivityThreadRow({
               {resolveThreadProjectLabel(project)}
             </span>
           </button>
-          {branchControl}
           {/* The PR chip belongs to the branch it was opened from, so it leads
               the branch column instead of breaking the grid with its own. */}
           <span className={ACTIVITY_META_BRANCH_COLUMN_CLASS_NAME} data-activity-branch-column>

@@ -1,7 +1,6 @@
 // FILE: SidebarThreadBranchControl.tsx
-// Purpose: Fixed-width subagent slot shared by every sidebar surface: the numeric
-//          branch toggle when a row has children, an empty spacer of the same width
-//          when it has none, so titles truncate at one boundary and nothing moves on hover.
+// Purpose: Shared subagent disclosure. Classic rows reserve a trailing slot;
+//          Activity rows place a compact control before the parent title.
 // Layer: Sidebar UI primitive
 // Exports: SidebarThreadBranchControl, SidebarThreadBranchSlot, SidebarBranchSlotLayout,
 //          formatSubagentCounter, formatBranchCount
@@ -27,22 +26,21 @@ import { DisclosureChevron } from "./ui/DisclosureChevron";
 
 /**
  * Classic one-line rows (Projects, Chats, Studio, Pinned) reserve 44px; the
- * Activity meta line reserves 40px with an 11px chevron. Both are `min-w` so the
+ * Activity title uses a 40px control. Both are `min-w` so the
  * slot only grows when the hidden-attention aggregate (icon + count) is present;
  * the chevron and count stay right-aligned and never move.
  */
 export type SidebarBranchSlotLayout = "classic" | "activity";
 
-// The coarse-pointer height applies to classic rows only: the Activity meta line
-// is a text line and must not grow to a touch target.
+// Activity uses the title line height; both layouts expand for coarse pointers.
 const SLOT_LAYOUT_CLASS: Record<SidebarBranchSlotLayout, string> = {
   classic: "min-w-11 pointer-coarse:min-h-11",
-  activity: "min-w-10",
+  activity: "min-w-10 min-h-7 justify-center self-center px-1 pointer-coarse:min-h-11",
 };
 
 const SLOT_CHEVRON_CLASS: Record<SidebarBranchSlotLayout, string> = {
   classic: "size-3",
-  activity: "size-[11px]",
+  activity: "size-3",
 };
 
 const SLOT_BASE_CLASS =
@@ -63,8 +61,9 @@ function stopBranchControlPropagation(event: SyntheticEvent): void {
   event.stopPropagation();
 }
 
-/** Empty reserved slot for rows without children; same width as the control. */
+/** Classic rows keep their trailing columns aligned; Activity has no empty control. */
 export function SidebarThreadBranchSlot(props: { layout: SidebarBranchSlotLayout }) {
+  if (props.layout === "activity") return null;
   return (
     <span
       aria-hidden="true"
@@ -170,7 +169,10 @@ export function SidebarThreadBranchControl(props: {
       className={cn(
         SLOT_BASE_CLASS,
         SLOT_LAYOUT_CLASS[layout],
-        "cursor-pointer rounded-md text-[length:var(--app-font-size-ui,11px)] hover:bg-transparent focus-visible:outline-2 focus-visible:-outline-offset-2 active:bg-transparent",
+        "cursor-pointer rounded-md text-[length:var(--app-font-size-ui,11px)] focus-visible:outline-2 focus-visible:-outline-offset-2",
+        layout === "activity"
+          ? "bg-foreground/5 hover:bg-foreground/10 active:bg-foreground/15"
+          : "hover:bg-transparent active:bg-transparent",
         hiddenSummary?.containsActiveThread === true
           ? "text-[var(--color-text-accent)] hover:text-[var(--color-text-accent)] active:text-[var(--color-text-accent)]"
           : "text-muted-foreground/79 hover:text-foreground active:text-foreground",
