@@ -2103,9 +2103,9 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       ),
     );
 
-    it.effect("returns ready when Antigravity lists authenticated models", () =>
+    it.effect("checks Antigravity version and models without background auto-updates", () =>
       Effect.gen(function* () {
-        const status = yield* checkAntigravityProviderStatus();
+        const status = yield* checkAntigravityProviderStatus("/custom/bin/agy");
         assert.strictEqual(status.provider, "antigravity");
         assert.strictEqual(status.status, "ready");
         assert.strictEqual(status.available, true);
@@ -2113,8 +2113,9 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(status.version, "1.1.2");
       }).pipe(
         Effect.provide(
-          mockSpawnerLayer((args, command) => {
-            assert.strictEqual(command, "agy");
+          mockSpawnerLayer((args, command, env) => {
+            assert.strictEqual(command, "/custom/bin/agy");
+            assert.strictEqual(env?.AGY_CLI_DISABLE_AUTO_UPDATE, "true");
             const joined = args.join(" ");
             if (joined === "--version") {
               return { stdout: "Antigravity CLI 1.1.2\n", stderr: "", code: 0 };
