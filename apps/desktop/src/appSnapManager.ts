@@ -46,7 +46,6 @@ const CAPTURE_WINDOW_TIMEOUT_MS = 20_000;
 // Late helper answers to a timed-out capture request are dropped instead of
 // being consumed as unsolicited hotkey captures. Entries are unique UUIDs and
 // self-expire so the map stays bounded.
-const CAPTURE_REQUEST_TOMBSTONE_TTL_MS = 60_000;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 type AppSnapHelperProcess = ChildProcess.ChildProcessByStdio<Writable | null, Readable, Readable>;
@@ -424,7 +423,7 @@ export class DesktopAppSnapManager {
   #registeredAccelerator: string | null = null;
   #pendingWindowRequests = new Map<string, PendingAppSnapRequest<DesktopAppSnapWindowEntry[]>>();
   #pendingCaptureRequests = new Map<string, PendingAppSnapRequest<DesktopAppSnapCapture>>();
-  #timedOutCaptureRequestIds = new Map<string, NodeJS.Timeout>();
+  #timedOutCaptureRequestIds = new Set<string>();
   #guideProcess: AppSnapHelperProcess | null = null;
   #guideOutputLines: Readline.Interface | null = null;
   #lastGuideState: DesktopAppSnapPermissionGuideState | null = null;
@@ -711,12 +710,11 @@ export class DesktopAppSnapManager {
       request.reject(new Error("The AppSnap helper returned no capture."));
     }
   }
+  // Timed-out request ids are tombstoned for the lifetime of the manager: a
+  // late capture for them must always be dropped, never consumed as a hotkey
+  // capture. The set stays tiny (timeouts are rare) and is cleared on dispose.
   #tombstoneCaptureRequest(requestId: string): void {
-    clearTimeout(this.#timedOutCaptureRequestIds.get(requestId));
-    const timer = setTimeout(() => {
-      this.#timedOutCaptureRequestIds.delete(requestId);
-    }, CAPTURE_REQUEST_TOMBSTONE_TTL_MS);
-    this.#timedOutCaptureRequestIds.set(requestId, timer);
+    this.#timedOutCaptureRequestIds.add(requestId);
   }
 
   async #dropLateRequestCapture(
@@ -752,9 +750,6 @@ export class DesktopAppSnapManager {
     this.#permissionProcess?.kill("SIGTERM");
     this.#permissionProcess = null;
     this.#pendingCaptures = [];
-    for (const timer of this.#timedOutCaptureRequestIds.values()) {
-      clearTimeout(timer);
-    }
     this.#timedOutCaptureRequestIds.clear();
   }
 
@@ -1236,6 +1231,9 @@ export class DesktopAppSnapManager {
       this.#inputMonitoringPermission = message.inputMonitoring;
       this.#screenRecordingPermission = message.screenRecording;
       this.#emitState();
+      // A revocation must stop the helper and flip the picker off; a grant
+      // must start it. Reconcile so the UI follows the live permission state.
+      void this.#reconcileWatchProcess();
       return;
     }
     if (message.type === "triggered") {
