@@ -1272,7 +1272,10 @@ export function withOrchestrationEventSequence(
   activity: OrchestrationThreadActivity,
   sequence: number,
 ): OrchestrationThreadActivity {
-  return { ...activity, sequence };
+  // Match the read-model projection: runtime journal activity sequences and
+  // orchestration envelope sequences are different counters. Overwriting the
+  // former only on live updates reorders snapshot history into the new turn.
+  return { ...activity, sequence: activity.sequence ?? sequence };
 }
 
 /**

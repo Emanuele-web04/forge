@@ -1518,14 +1518,14 @@ describe("store event reducer", () => {
     expect(threadsOf(batched)[0]?.updatedAt).toBe("2026-07-09T00:00:02.000Z");
   });
 
-  it("replaces provider-local activity sequences with durable orchestration sequences", () => {
+  it("preserves canonical activity sequences in sequential and batched live updates", () => {
     const threadId = ThreadId.makeUnsafe("thread-1");
     const events = [
       makeDomainEvent(
         "thread.activity-appended",
         {
           threadId,
-          activity: makeActivity({ id: "activity-before-restart", sequence: 99 }),
+          activity: makeActivity({ id: "activity-first", sequence: 99 }),
         },
         { sequence: 40 },
       ),
@@ -1533,7 +1533,7 @@ describe("store event reducer", () => {
         "thread.activity-appended",
         {
           threadId,
-          activity: makeActivity({ id: "activity-after-restart", sequence: 0 }),
+          activity: makeActivity({ id: "activity-second", sequence: 100 }),
         },
         { sequence: 41 },
       ),
@@ -1547,10 +1547,10 @@ describe("store event reducer", () => {
     const batched = applyOrchestrationEventsHotPath(initialState, events);
 
     expect(threadsOf(sequential)[0]?.activities.map((activity) => activity.sequence)).toEqual([
-      40, 41,
+      99, 100,
     ]);
     expect(threadsOf(batched)[0]?.activities.map((activity) => activity.sequence)).toEqual([
-      40, 41,
+      99, 100,
     ]);
   });
 
