@@ -793,7 +793,10 @@ layer("agent gateway memory tools", (it) => {
 
 describe("memory tool guidance surface", () => {
   it("carries the standing orders in the tool descriptions, not the harness policy", () => {
-    const tools = makeAgentGatewayMemoryTools({ mindService: null as never, requireThreadShell: null as never });
+    const tools = makeAgentGatewayMemoryTools({
+      mindService: null as never,
+      requireThreadShell: null as never,
+    });
 
     const descriptions = new Map(
       Object.values(tools).map((entry) => [entry.definition.name, entry.definition.description]),
