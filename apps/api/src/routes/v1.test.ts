@@ -14,10 +14,14 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import type { WorkosApiConfig } from "../config";
 import { createDb } from "../db";
 import { runMigrations } from "../db/migrate";
-import { profiles, usageModelStats, usageSkillStats } from "../db/schema";
-import { createDeviceCredentialStore } from "../identity/deviceCredentialStore";
-import { createEnvironmentRegistry } from "../identity/environmentRegistry";
+import { hosts, profiles, usageModelStats, usageSkillStats } from "../db/schema";
+import { createDeviceRegistry } from "../identity/deviceRegistry";
+import { createHostGrantIssuer } from "../identity/grantIssuer";
+import { createHostKeyRegistry } from "../identity/hostKeyRegistry";
+import { createHostSecretStore } from "../identity/hostSecretStore";
 import { clearOrgCache } from "../identity/orgProvisioning";
+import { createRevocationLog } from "../identity/revocationLog";
+import { createApiSigningService, type ApiSigningService } from "../identity/signing";
 import { createWorkosIdentityProvider } from "../identity/workos";
 import type { AvatarStorage } from "../avatarStorage";
 import { startFakeWorkos, type FakeWorkos } from "../testing/fakeWorkos";
@@ -46,22 +50,12 @@ function postJson(app: Hono, path: string, body: unknown, clientIp: string) {
   });
 }
 
-function registerHostBody(environmentId: string, overrides: Record<string, unknown> = {}) {
-  return {
-    environmentId,
-    name: "Dylan's Mac",
-    platform: "darwin" as const,
-    kind: "local" as const,
-    endpoints: [{ url: "http://192.168.1.5:4830", transport: "lan" as const }],
-    ...overrides,
-  };
-}
-
 describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
   const databaseUrl = TEST_DATABASE_URL as string;
   let pool: Awaited<ReturnType<typeof createDb>>["pool"];
   let workos: FakeWorkos;
   let config: WorkosApiConfig;
+  let testSigning: ApiSigningService;
 
   /**
    * A signed-in user acting inside their own organization — the state the CLI
@@ -139,8 +133,13 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     return createV1Routes({
       verifier,
       grants,
-      deviceCredentials: createDeviceCredentialStore(db),
-      environments: createEnvironmentRegistry(db),
+      signing: testSigning,
+      hostKeys: createHostKeyRegistry(db, forConfig.apiPublicUrl),
+      devices: createDeviceRegistry(db, forConfig.apiPublicUrl),
+      hostGrants: createHostGrantIssuer(testSigning),
+      hostSecrets: createHostSecretStore(db),
+      accountBaseUrl: forConfig.baseUrl,
+      relayServiceToken: forConfig.relayServiceToken,
       db,
       trustedProxyHops: options.trustedProxyHops ?? 1,
       ...(options.avatarStorage !== undefined ? { avatarStorage: options.avatarStorage } : {}),
@@ -164,6 +163,10 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     await runMigrations(databaseUrl);
     workos = await startFakeWorkos();
     config = workos.config({ databaseUrl });
+    testSigning = await createApiSigningService({
+      issuer: config.apiPublicUrl,
+      seed: config.apiSigningKey,
+    });
     pool = createDb(databaseUrl).pool;
   });
 
@@ -287,326 +290,15 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     }
   });
 
-  // M4: the membership cache is a read-path convenience with a ≤60s staleness
-  // SLA — it must never be the authorization answer for a mutation. A member
-  // removed after priming the cache may still read, but registering a host
-  // (mutating, credential-minting) resolves membership live and is refused.
-  it("refuses a mutating op for a member revoked after the cache was primed", async () => {
-    const { app } = buildApp();
-    const { token, userId, orgId } = await signIn();
-
-    // Prime the cache with a read.
-    const primed = await app.request("/api/v1/hosts", { headers: authHeaders(token) });
-    expect(primed.status).toBe(200);
-
-    workos.removeMembership(orgId, userId);
-
-    // The read path may still serve the cached membership within the TTL.
-    const readAfter = await app.request("/api/v1/hosts", { headers: authHeaders(token) });
-    expect(readAfter.status).toBe(200);
-
-    // The mutating path must not: fresh membership, immediate refusal.
-    const registerRes = await app.request("/api/v1/hosts", {
-      method: "POST",
-      headers: authHeaders(token),
-      body: JSON.stringify(registerHostBody(randomUUID())),
-    });
-    expect(registerRes.status).toBe(403);
-    expect(await registerRes.json()).toMatchObject({ error: "organization_required" });
-  });
-
-  it("registers a host and lists it back", async () => {
+  it("does not expose the removed legacy POST /hosts registration surface", async () => {
     const { app } = buildApp();
     const { token } = await signIn();
-    const environmentId = randomUUID();
-
-    const registerRes = await app.request("/api/v1/hosts", {
+    const response = await app.request("/api/v1/hosts", {
       method: "POST",
       headers: authHeaders(token),
-      body: JSON.stringify(registerHostBody(environmentId)),
+      body: JSON.stringify({ environmentId: randomUUID() }),
     });
-    expect(registerRes.status).toBe(201);
-    const registerBody = (await registerRes.json()) as {
-      host: { id: string; environmentId: string };
-      hostToken: string;
-    };
-    expect(registerBody.host.environmentId).toBe(environmentId);
-    expect(registerBody.hostToken).toMatch(/^synhost_/);
-
-    const listRes = await app.request("/api/v1/hosts", { headers: authHeaders(token) });
-    expect(listRes.status).toBe(200);
-    const listBody = (await listRes.json()) as { hosts: Array<{ id: string }> };
-    expect(listBody.hosts).toHaveLength(1);
-    expect(listBody.hosts[0]?.id).toBe(registerBody.host.id);
-  });
-
-  it("rotates the host token when the same environment re-registers", async () => {
-    const { app } = buildApp();
-    const { token } = await signIn();
-    const environmentId = randomUUID();
-
-    const firstRes = await app.request("/api/v1/hosts", {
-      method: "POST",
-      headers: authHeaders(token),
-      body: JSON.stringify(registerHostBody(environmentId)),
-    });
-    const firstBody = (await firstRes.json()) as { host: { id: string }; hostToken: string };
-
-    const secondRes = await app.request("/api/v1/hosts", {
-      method: "POST",
-      headers: authHeaders(token),
-      body: JSON.stringify(registerHostBody(environmentId, { name: "Renamed Mac" })),
-    });
-    expect(secondRes.status).toBe(200);
-    const secondBody = (await secondRes.json()) as {
-      host: { id: string; name: string };
-      hostToken: string;
-    };
-    expect(secondBody.host.id).toBe(firstBody.host.id);
-    expect(secondBody.host.name).toBe("Renamed Mac");
-    expect(secondBody.hostToken).not.toBe(firstBody.hostToken);
-
-    // Old host token is revoked.
-    const oldTokenPatch = await app.request(`/api/v1/hosts/${firstBody.host.id}`, {
-      method: "PATCH",
-      headers: authHeaders(firstBody.hostToken),
-      body: JSON.stringify({ name: "Should not apply" }),
-    });
-    expect(oldTokenPatch.status).toBe(403);
-    expect(await oldTokenPatch.json()).toMatchObject({ error: "token_revoked" });
-
-    // New host token works.
-    const newTokenPatch = await app.request(`/api/v1/hosts/${firstBody.host.id}`, {
-      method: "PATCH",
-      headers: authHeaders(secondBody.hostToken),
-      body: JSON.stringify({ name: "Via new token" }),
-    });
-    expect(newTokenPatch.status).toBe(200);
-    const newTokenPatchBody = (await newTokenPatch.json()) as { host: { name: string } };
-    expect(newTokenPatchBody.host.name).toBe("Via new token");
-  });
-
-  it("updates endpoints and bumps lastSeenAt via PATCH with the host token", async () => {
-    const { app } = buildApp();
-    const { token } = await signIn();
-    const environmentId = randomUUID();
-
-    const registerRes = await app.request("/api/v1/hosts", {
-      method: "POST",
-      headers: authHeaders(token),
-      body: JSON.stringify(registerHostBody(environmentId)),
-    });
-    const registerBody = (await registerRes.json()) as {
-      host: { id: string; lastSeenAt: string };
-      hostToken: string;
-    };
-
-    await new Promise((resolve) => setTimeout(resolve, 10));
-
-    const newEndpoints = [{ url: "https://example.tailnet.ts.net:4830", transport: "tailscale" }];
-    const patchRes = await app.request(`/api/v1/hosts/${registerBody.host.id}`, {
-      method: "PATCH",
-      headers: authHeaders(registerBody.hostToken),
-      body: JSON.stringify({ endpoints: newEndpoints }),
-    });
-    expect(patchRes.status).toBe(200);
-    const patchBody = (await patchRes.json()) as {
-      host: { endpoints: Array<{ url: string }>; lastSeenAt: string };
-    };
-    expect(patchBody.host.endpoints).toEqual(newEndpoints);
-    expect(new Date(patchBody.host.lastSeenAt).getTime()).toBeGreaterThan(
-      new Date(registerBody.host.lastSeenAt).getTime(),
-    );
-  });
-
-  it("rejects PATCH with another host's token", async () => {
-    const { app } = buildApp();
-    const { token } = await signIn();
-
-    const hostARes = await app.request("/api/v1/hosts", {
-      method: "POST",
-      headers: authHeaders(token),
-      body: JSON.stringify(registerHostBody(randomUUID())),
-    });
-    const hostA = (await hostARes.json()) as { host: { id: string }; hostToken: string };
-
-    const hostBRes = await app.request("/api/v1/hosts", {
-      method: "POST",
-      headers: authHeaders(token),
-      body: JSON.stringify(registerHostBody(randomUUID())),
-    });
-    const hostB = (await hostBRes.json()) as { host: { id: string }; hostToken: string };
-
-    const crossPatch = await app.request(`/api/v1/hosts/${hostA.host.id}`, {
-      method: "PATCH",
-      headers: authHeaders(hostB.hostToken),
-      body: JSON.stringify({ name: "Nope" }),
-    });
-    expect(crossPatch.status).toBe(401);
-    expect(await crossPatch.json()).toMatchObject({ error: "unauthorized" });
-  });
-
-  it("isolates hosts across organizations: list is empty and delete 404s", async () => {
-    const { app } = buildApp();
-    const ownerToken = (await signIn()).token;
-    const otherToken = (await signIn()).token;
-
-    const registerRes = await app.request("/api/v1/hosts", {
-      method: "POST",
-      headers: authHeaders(ownerToken),
-      body: JSON.stringify(registerHostBody(randomUUID())),
-    });
-    const registerBody = (await registerRes.json()) as { host: { id: string } };
-
-    const otherList = await app.request("/api/v1/hosts", { headers: authHeaders(otherToken) });
-    const otherListBody = (await otherList.json()) as { hosts: unknown[] };
-    expect(otherListBody.hosts).toHaveLength(0);
-
-    const otherDelete = await app.request(`/api/v1/hosts/${registerBody.host.id}`, {
-      method: "DELETE",
-      headers: authHeaders(otherToken),
-    });
-    expect(otherDelete.status).toBe(404);
-    expect(await otherDelete.json()).toMatchObject({ error: "host_not_found" });
-
-    // The owner still has it: the delete was refused, not silently applied.
-    const ownerList = await app.request("/api/v1/hosts", { headers: authHeaders(ownerToken) });
-    expect(((await ownerList.json()) as { hosts: unknown[] }).hosts).toHaveLength(1);
-  });
-
-  // Two members of one organization share its hosts. This is the whole point
-  // of keying on the org: adding a teammate is a membership, not a migration.
-  it("shares hosts between two members of the same organization", async () => {
-    const { app } = buildApp();
-    const owner = await signIn();
-    const teammate = workos.addUser({ first_name: "Team", last_name: "Mate" });
-    workos.addMembership(owner.orgId, teammate.id);
-    const teammateToken = await workos.signAccessToken({
-      sub: teammate.id,
-      sid: `session_${randomUUID()}`,
-      orgId: owner.orgId,
-    });
-
-    const registerRes = await app.request("/api/v1/hosts", {
-      method: "POST",
-      headers: authHeaders(owner.token),
-      body: JSON.stringify(registerHostBody(randomUUID())),
-    });
-    const registered = (await registerRes.json()) as { host: { id: string } };
-
-    const teammateList = await app.request("/api/v1/hosts", {
-      headers: authHeaders(teammateToken),
-    });
-    const listBody = (await teammateList.json()) as { hosts: Array<{ id: string }> };
-    expect(listBody.hosts.map((h) => h.id)).toContain(registered.host.id);
-  });
-
-  // The unique index moved from (user, environment) to (org, environment).
-  // One machine linked from two workspaces is now an ordinary thing to do.
-  it("lets two organizations register the same environment id", async () => {
-    const { app } = buildApp();
-    const first = await signIn();
-    const second = await signIn();
-    const environmentId = randomUUID();
-
-    const firstRes = await app.request("/api/v1/hosts", {
-      method: "POST",
-      headers: authHeaders(first.token),
-      body: JSON.stringify(registerHostBody(environmentId)),
-    });
-    expect(firstRes.status).toBe(201);
-
-    const secondRes = await app.request("/api/v1/hosts", {
-      method: "POST",
-      headers: authHeaders(second.token),
-      body: JSON.stringify(registerHostBody(environmentId)),
-    });
-    expect(secondRes.status).toBe(201);
-
-    const firstBody = (await firstRes.json()) as { host: { id: string } };
-    const secondBody = (await secondRes.json()) as { host: { id: string } };
-    expect(secondBody.host.id).not.toBe(firstBody.host.id);
-  });
-
-  it("stamps the registering user on the host without granting them access", async () => {
-    const { app } = buildApp();
-    const owner = await signIn();
-
-    const registerRes = await app.request("/api/v1/hosts", {
-      method: "POST",
-      headers: authHeaders(owner.token),
-      body: JSON.stringify(registerHostBody(randomUUID())),
-    });
-    const body = (await registerRes.json()) as { host: { registeredByUserId: string } };
-    expect(body.host.registeredByUserId).toBe(owner.userId);
-
-    // Same user, a different organization: the audit stamp is not a key, so
-    // the host they registered is out of reach from anywhere else.
-    const elsewhere = workos.addOrganization({ name: "Elsewhere" });
-    workos.addMembership(elsewhere.id, owner.userId);
-    clearOrgCache();
-    const elsewhereToken = await workos.signAccessToken({
-      sub: owner.userId,
-      sid: `session_${randomUUID()}`,
-      orgId: elsewhere.id,
-    });
-
-    const list = await app.request("/api/v1/hosts", { headers: authHeaders(elsewhereToken) });
-    expect(((await list.json()) as { hosts: unknown[] }).hosts).toHaveLength(0);
-  });
-
-  it("deletes a host and its token with the device token", async () => {
-    const { app } = buildApp();
-    const { token } = await signIn();
-
-    const registerRes = await app.request("/api/v1/hosts", {
-      method: "POST",
-      headers: authHeaders(token),
-      body: JSON.stringify(registerHostBody(randomUUID())),
-    });
-    const registerBody = (await registerRes.json()) as {
-      host: { id: string };
-      hostToken: string;
-    };
-
-    const deleteRes = await app.request(`/api/v1/hosts/${registerBody.host.id}`, {
-      method: "DELETE",
-      headers: authHeaders(token),
-    });
-    expect(deleteRes.status).toBe(204);
-
-    const listRes = await app.request("/api/v1/hosts", { headers: authHeaders(token) });
-    const listBody = (await listRes.json()) as { hosts: unknown[] };
-    expect(listBody.hosts).toHaveLength(0);
-
-    // The cascaded host token no longer authorizes anything.
-    const patchAfterDelete = await app.request(`/api/v1/hosts/${registerBody.host.id}`, {
-      method: "PATCH",
-      headers: authHeaders(registerBody.hostToken),
-      body: JSON.stringify({ name: "Ghost" }),
-    });
-    expect(patchAfterDelete.status).toBe(401);
-  });
-
-  it("allows a host to delete itself with its own host token", async () => {
-    const { app } = buildApp();
-    const { token } = await signIn();
-
-    const registerRes = await app.request("/api/v1/hosts", {
-      method: "POST",
-      headers: authHeaders(token),
-      body: JSON.stringify(registerHostBody(randomUUID())),
-    });
-    const registerBody = (await registerRes.json()) as {
-      host: { id: string };
-      hostToken: string;
-    };
-
-    const deleteRes = await app.request(`/api/v1/hosts/${registerBody.host.id}`, {
-      method: "DELETE",
-      headers: authHeaders(registerBody.hostToken),
-    });
-    expect(deleteRes.status).toBe(204);
+    expect(response.status).toBe(404);
   });
 
   describe("email OTP authentication", () => {
@@ -2662,6 +2354,24 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
   });
 
   describe("organization rename", () => {
+    it("reports the bounded organization member count", async () => {
+      const { app } = buildApp();
+      const { token, orgId } = await signIn();
+      const teammate = workos.addUser({ first_name: "Team", last_name: "Mate" });
+      workos.addMembership(orgId, teammate.id);
+      // The membership cache is process-wide and other suites now warm it
+      // (host linking consults member count for ADR 0002 consent), so a
+      // count taken before this teammate existed could still be cached.
+      clearOrgCache();
+
+      const res = await app.request("/api/v1/organization/member-count", {
+        headers: authHeaders(token),
+      });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ organizationMemberCount: 2 });
+    });
+
     it("renames the workspace and reports the new name", async () => {
       const { app } = buildApp();
       const { token, orgId } = await signIn();
@@ -2732,8 +2442,13 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
           // The revoked-mid-request race, made deterministic: membership
           // resolution still succeeds, the count then answers 0.
           grants: { ...grants, countOrganizationMembers: async () => 0, renameOrganization },
-          deviceCredentials: createDeviceCredentialStore(db),
-          environments: createEnvironmentRegistry(db),
+          signing: testSigning,
+          hostKeys: createHostKeyRegistry(db, config.apiPublicUrl),
+          devices: createDeviceRegistry(db, config.apiPublicUrl),
+          hostGrants: createHostGrantIssuer(testSigning),
+          hostSecrets: createHostSecretStore(db),
+          accountBaseUrl: config.baseUrl,
+          relayServiceToken: config.relayServiceToken,
           db,
         }),
       );
@@ -2837,12 +2552,16 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     // A stale org id must not reach data, not merely be reported on. Asserted
     // separately because the 403 above says nothing about the query.
     it("does not expose another organization's hosts to a stale token", async () => {
-      const { app } = buildApp();
+      const { app, db } = buildApp();
       const owner = await signIn();
-      await app.request("/api/v1/hosts", {
-        method: "POST",
-        headers: authHeaders(owner.token),
-        body: JSON.stringify(registerHostBody(randomUUID())),
+      await db.insert(hosts).values({
+        ownerOrgId: owner.orgId,
+        ownerUserId: owner.userId,
+        environmentId: randomUUID(),
+        name: "Owner host",
+        platform: "darwin",
+        kind: "local",
+        endpoints: [],
       });
 
       const intruder = workos.addUser({});
@@ -2867,10 +2586,15 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       const me = await app.request("/api/v1/me", { headers: authHeaders(token) });
       expect(me.status).toBe(403);
 
-      const register = await app.request("/api/v1/hosts", {
+      const register = await app.request("/api/v1/hosts/link/start", {
         method: "POST",
         headers: authHeaders(token),
-        body: JSON.stringify(registerHostBody(randomUUID())),
+        body: JSON.stringify({
+          environmentId: randomUUID(),
+          name: "Host",
+          platform: "darwin",
+          kind: "local",
+        }),
       });
       expect(register.status).toBe(403);
 

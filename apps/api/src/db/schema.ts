@@ -1,6 +1,8 @@
+import type { DevicePublicKeyJwk, HostPublicKeyJwk, SyncKeyWrap } from "@synara/contracts";
 import { sql } from "drizzle-orm";
 import {
   bigint,
+  bigserial,
   boolean,
   index,
   integer,
@@ -12,33 +14,217 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 
-export type HostEndpoint = { url: string; transport: "lan" | "tailscale" | "public" };
+export type HostEndpoint = { url: string; transport: "lan" | "tailscale" };
 
 export const hosts = pgTable(
   "hosts",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    // WorkOS organization id, and the only key authorization is decided on: a
-    // caller reaches a host exactly when their token is scoped to this org.
+    // WorkOS organization id. Owner-or-discoverable authorization combines
+    // this membership scope with ownerUserId below.
     // Identity and membership live in WorkOS, so there is no local table to
     // reference; orphaned rows are tolerated until WorkOS webhook cleanup is
     // built (future work).
     ownerOrgId: text("owner_org_id").notNull(),
-    // WorkOS user id of whoever ran the registration. Audit only — it must
-    // never be read as an access check, or a user who left the organization
-    // would keep reaching the hosts they happened to register.
-    registeredByUserId: text("registered_by_user_id").notNull(),
+    // The user who owns and authorizes access to this host.
+    ownerUserId: text("owner_user_id").notNull(),
     environmentId: text("environment_id").notNull(),
     name: text("name").notNull(),
     platform: text("platform", { enum: ["darwin", "linux", "windows"] }).notNull(),
     kind: text("kind", { enum: ["local", "ssh-managed"] }).notNull(),
     endpoints: jsonb("endpoints").$type<HostEndpoint[]>().notNull().default([]),
     appVersion: text("app_version"),
+    discoverable: boolean("discoverable").notNull().default(true),
+    publicKeyJwk: jsonb("public_key_jwk").$type<HostPublicKeyJwk>(),
+    keyGeneration: integer("key_generation").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     uniqueIndex("hosts_owner_org_environment_unique").on(table.ownerOrgId, table.environmentId),
+    index("hosts_owner_user_idx").on(table.ownerUserId),
+    // completeLink sweeps same-environment rows by (environment_id,
+    // owner_user_id); without this the sweep seq-scans hosts inside the
+    // linking critical section.
+    index("hosts_environment_idx").on(table.environmentId),
+  ],
+);
+
+export const devices = pgTable(
+  "devices",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id").notNull(),
+    publicKeyJwk: jsonb("public_key_jwk").$type<DevicePublicKeyJwk>().notNull(),
+    jkt: text("jkt").notNull(),
+    displayName: text("display_name").notNull(),
+    platform: text("platform", {
+      enum: ["darwin", "ios", "linux", "windows", "web"],
+    }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("devices_user_jkt_active_unique")
+      .on(table.userId, table.jkt)
+      .where(sql`${table.revokedAt} IS NULL`),
+  ],
+);
+
+export const linkChallenges = pgTable(
+  "link_challenges",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    nonce: text("nonce").notNull(),
+    ownerUserId: text("owner_user_id"),
+    ownerOrgId: text("owner_org_id"),
+    // Deliberately no FK. Complete consumes challenge -> host, while host
+    // deletion otherwise locks host -> challenge for ON DELETE SET NULL and
+    // the inverse order can deadlock. A missing host is resolved explicitly.
+    hostId: uuid("host_id"),
+    environmentId: text("environment_id"),
+    deviceCodeHash: text("device_code_hash"),
+    userCode: text("user_code"),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("link_challenges_device_code_hash_unique").on(table.deviceCodeHash),
+    // Expired challenges are deleted before issuance. This unique index then
+    // reserves every code still present, which is at least as strict as
+    // uniqueness among unexpired rows without relying on volatile now() in
+    // a Postgres partial-index predicate.
+    uniqueIndex("link_challenges_user_code_unique").on(table.userCode),
+    index("link_challenges_expires_at_idx").on(table.expiresAt),
+  ],
+);
+
+export const revocationEvents = pgTable(
+  "revocation_events",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    // Deliberately no foreign key: unlink/delete events must outlive the host.
+    hostId: uuid("host_id").notNull(),
+    kind: text("kind", {
+      enum: ["discoverability_off", "org_departure", "device_revoked", "host_unlinked"],
+    }).notNull(),
+    subject: text("subject"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("revocation_events_created_at_idx").on(table.createdAt)],
+);
+
+/**
+ * One host's end-to-end encrypted configuration — SSH destination, launcher
+ * config, host-key verification policy (ADR 0004). The service stores opaque
+ * bytes and is deliberately incapable of reading them: it enforces ownership
+ * and versioning and nothing else.
+ *
+ * `host_id` is the primary key with NO foreign key, mirroring
+ * `revocation_events`: host deletion must never destroy the secrets by
+ * cascade order. Deletion is explicit and owner-driven (the host DELETE route
+ * removes the row in the same transaction), so a host row disappearing for
+ * any other reason — a future cleanup job, a manual fix — leaves the
+ * ciphertext recoverable rather than silently gone.
+ *
+ * `owner_user_id` is stored rather than joined for the same reason: the
+ * authorization check must not depend on a `hosts` row that may not exist,
+ * and the owner id is bound into the ciphertext's AAD client-side, so the
+ * column is also what a client needs to open the blob it gets back.
+ */
+export const hostSecrets = pgTable(
+  "host_secrets",
+  {
+    hostId: uuid("host_id").primaryKey(),
+    ownerUserId: text("owner_user_id").notNull(),
+    // base64url as produced by sealHostSecret. Stored as text, not bytea:
+    // the client codec is base64url on both sides, and decoding to bytes here
+    // would introduce a second, divergent codec at exactly the layer that
+    // must not interpret the value. The bytes round-trip verbatim.
+    ciphertext: text("ciphertext").notNull(),
+    iv: text("iv").notNull(),
+    // Monotonic per host and the compare-and-swap key. Also bound into the
+    // ciphertext's AAD, so the column and the blob cannot drift apart
+    // undetected.
+    version: integer("version").notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("host_secrets_owner_user_idx").on(table.ownerUserId)],
+);
+
+/**
+ * Bounded history of superseded Host Secret versions — recovery from a bad
+ * write (spec §3), not an audit log. Trimmed to the last
+ * HOST_SECRET_HISTORY_LIMIT per host on every write, so one host's history
+ * can never grow without bound however often its config is edited.
+ *
+ * No foreign key to `host_secrets` for the same reason that table has none to
+ * `hosts`: the history's whole purpose is to outlive a write that destroyed
+ * the current row's usefulness.
+ */
+export const hostSecretVersions = pgTable(
+  "host_secret_versions",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    hostId: uuid("host_id").notNull(),
+    ownerUserId: text("owner_user_id").notNull(),
+    ciphertext: text("ciphertext").notNull(),
+    iv: text("iv").notNull(),
+    version: integer("version").notNull(),
+    // When this row was the CURRENT secret, carried over from host_secrets so
+    // a restore reports when the config it recovers was actually written.
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+    supersededAt: timestamp("superseded_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // Unique, and the only index this table needs: archiving the same
+    // (host, version) twice would mean two different ciphertexts claiming to
+    // be the same version, which is precisely the corruption the history
+    // exists to recover FROM. It also serves the trim's cut-point lookup and
+    // the newest-first read, both of which scan (host_id, version) — a
+    // separate non-unique index on the same columns would be dead weight on
+    // every write.
+    uniqueIndex("host_secret_versions_host_version_unique").on(table.hostId, table.version),
+  ],
+);
+
+/**
+ * A wrapped Sync Key in flight between two of ONE user's devices during
+ * pairing (ADR 0004). The service relays it and cannot open it — the wrap is
+ * under a key derived from an ECDH shared secret whose private halves never
+ * leave the devices.
+ *
+ * Keyed by recipient device: a device has at most one wrap waiting, and a
+ * second upload replaces it rather than queueing, so a stalled pairing cannot
+ * accumulate rows and a retry always delivers the newest attempt.
+ *
+ * Single delivery: the recipient's fetch DELETEs the row in the same
+ * statement. `owner_user_id` is stored so the delivery check never needs the
+ * `devices` row, and no foreign key exists for the reason the other tables
+ * here have none — deletion order must not destroy data mid-pairing.
+ */
+export const syncKeyWraps = pgTable(
+  "sync_key_wraps",
+  {
+    recipientDeviceId: uuid("recipient_device_id").primaryKey(),
+    ownerUserId: text("owner_user_id").notNull(),
+    // The opaque WrappedSyncKey blob (both public JWKs plus the AES-KW
+    // output). jsonb rather than three columns: it is one indivisible
+    // cryptographic transcript, and splitting it would invite a partial write.
+    wrap: jsonb("wrap").$type<SyncKeyWrap>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    // Undelivered wraps are swept at this bound. A pairing that never
+    // completes must not leave a wrap addressable forever: the blob is
+    // useless without the recipient's private key, but an unbounded table of
+    // them is still a liability nobody is watching.
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    index("sync_key_wraps_owner_user_idx").on(table.ownerUserId),
+    index("sync_key_wraps_expires_at_idx").on(table.expiresAt),
   ],
 );
 
@@ -160,28 +346,5 @@ export const usageSkillStats = pgTable(
       table.kind,
     ),
     index("usage_skill_stats_user_minute").on(table.userId, table.minute),
-  ],
-);
-
-export const hostTokens = pgTable(
-  "host_tokens",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    hostId: uuid("host_id")
-      .notNull()
-      .references(() => hosts.id, { onDelete: "cascade" }),
-    tokenHash: text("token_hash").notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
-    revokedAt: timestamp("revoked_at", { withTimezone: true }),
-  },
-  (table) => [
-    // One live credential per host, enforced by the database rather than by
-    // rotation happening to run alone: rotation is revoke-then-insert, and
-    // without this a race (or a bug) could leave a host with two valid
-    // tokens. Partial over `revoked_at IS NULL` so history rows are exempt.
-    uniqueIndex("host_tokens_one_active_per_host")
-      .on(table.hostId)
-      .where(sql`${table.revokedAt} IS NULL`),
   ],
 );

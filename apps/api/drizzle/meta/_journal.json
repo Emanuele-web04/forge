@@ -57,6 +57,27 @@
       "when": 1786541443592,
       "tag": "0007_profile_avatars",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1786617850245,
+      "tag": "0008_modern_norrin_radd",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1786646298283,
+      "tag": "0009_narrow_energizer",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1786657633307,
+      "tag": "0010_host_secrets_sync",
+      "breakpoints": true
     }
   ]
 }

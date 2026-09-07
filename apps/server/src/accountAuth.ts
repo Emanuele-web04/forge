@@ -35,7 +35,15 @@ import { withCredentialFileLock } from "./accountCredentialLock";
 import { createFileStringExclusively, writeFileStringAtomically } from "./atomicWrite";
 import { deriveServerPaths } from "./config";
 import { PRIVATE_FILE_MODE } from "./privatePathPermissions";
+import {
+  deleteHostIdentity,
+  generateAndPersistHostIdentity,
+  mintHostLinkProof,
+  mintHostProof,
+  readHostIdentity,
+} from "./hostIdentity";
 import { isLoopbackHost, isWildcardHost } from "./startupAccess";
+import { resolveTailscaleEndpoint } from "./tailscaleEndpoint";
 import serverPackageJson from "../package.json" with { type: "json" };
 
 // Re-exported so CLI wiring keeps naming the variable through the module that
@@ -43,6 +51,11 @@ import serverPackageJson from "../package.json" with { type: "json" };
 export { ACCOUNT_URL_ENV_NAME };
 
 const CREDENTIALS_FILE_NAME = "account-credentials.json";
+
+/** Exact Slice A issuer/audience derived from the root URL used by AccountClient. */
+export function accountApiIssuer(accountUrl: string): string {
+  return `${accountUrl.replace(/\/+$/, "")}/api/v1`;
+}
 
 /** What the user sees when a rotated refresh token can no longer be redeemed. */
 export const SESSION_EXPIRED_MESSAGE = "Session expired — sign in again from the Synara app.";
@@ -52,12 +65,9 @@ export const WORKSPACE_CHANGED_MESSAGE =
   "Your workspace access changed — sign in again from the Synara app.";
 
 /**
- * The stored account file (v3). The user session (`accessToken`/
- * `refreshToken`/`organizationId`) and the host registration (`hostToken`/
- * `hostId`) have independent lifetimes: a WorkOS refresh token can be spent or
- * revoked while the host token this machine registered with stays valid, so
- * the two halves are optional separately and an expired session leaves the
- * host fields in place.
+ * The stored account file. The user session and the public-key host link have
+ * independent lifetimes: an expired user session leaves the host link intact.
+ * The private host key lives separately under the private secrets directory.
  *
  * `organizationId` is part of the session, not an extra: hosts belong to
  * organizations, and every refresh must name the same one or the renewed token
@@ -77,8 +87,19 @@ export interface StoredAccountFile {
   readonly userId?: string;
   readonly accessToken?: string;
   readonly refreshToken?: string;
-  readonly hostToken?: string;
+  /** The active account row for this shell's device signing key. */
+  readonly deviceId?: string;
+  /** RFC 7638 thumbprint of the device key retained in the private secrets directory. */
+  readonly deviceJkt?: string;
   readonly hostId?: string;
+  readonly hostOwnerUserId?: string;
+  readonly hostKeyGeneration?: number;
+  /**
+   * Owner answers to the discoverability consent prompt, keyed by host id.
+   * This is machine-local for now; a future slice may move it to the account
+   * service so another owner device knows the question was already answered.
+   */
+  readonly discoverabilityAcknowledgedByHostId?: Readonly<Record<string, true>>;
 }
 
 /** A {@link StoredAccountFile} that carries a usable user session. */
@@ -130,6 +151,22 @@ export async function readAccountFile(baseDir: string): Promise<StoredAccountFil
     ) {
       return undefined;
     }
+    const hasLinkedHost =
+      typeof record.hostId === "string" &&
+      typeof record.hostOwnerUserId === "string" &&
+      Number.isSafeInteger(record.hostKeyGeneration) &&
+      Number(record.hostKeyGeneration) >= 0;
+    const hasRegisteredDevice =
+      typeof record.deviceId === "string" && typeof record.deviceJkt === "string";
+    const discoverabilityAcknowledgedByHostId =
+      typeof record.discoverabilityAcknowledgedByHostId === "object" &&
+      record.discoverabilityAcknowledgedByHostId !== null
+        ? Object.fromEntries(
+            Object.entries(record.discoverabilityAcknowledgedByHostId).filter(
+              ([hostId, acknowledged]) => hostId.trim().length > 0 && acknowledged === true,
+            ),
+          )
+        : undefined;
     return {
       accountUrl: record.accountUrl,
       workosClientId: record.workosClientId,
@@ -140,8 +177,20 @@ export async function readAccountFile(baseDir: string): Promise<StoredAccountFil
       ...(typeof record.userId === "string" ? { userId: record.userId } : {}),
       ...(typeof record.accessToken === "string" ? { accessToken: record.accessToken } : {}),
       ...(typeof record.refreshToken === "string" ? { refreshToken: record.refreshToken } : {}),
-      ...(typeof record.hostToken === "string" ? { hostToken: record.hostToken } : {}),
-      ...(typeof record.hostId === "string" ? { hostId: record.hostId } : {}),
+      ...(hasRegisteredDevice
+        ? { deviceId: record.deviceId as string, deviceJkt: record.deviceJkt as string }
+        : {}),
+      ...(hasLinkedHost
+        ? {
+            hostId: record.hostId as string,
+            hostOwnerUserId: record.hostOwnerUserId as string,
+            hostKeyGeneration: record.hostKeyGeneration as number,
+          }
+        : {}),
+      ...(discoverabilityAcknowledgedByHostId &&
+      Object.keys(discoverabilityAcknowledgedByHostId).length > 0
+        ? { discoverabilityAcknowledgedByHostId }
+        : {}),
     };
   } catch {
     return undefined;
@@ -186,6 +235,60 @@ export async function writeAccountCredentials(
 
 export async function deleteAccountCredentials(baseDir: string): Promise<void> {
   await fs.rm(accountCredentialsPath(baseDir), { force: true });
+}
+
+export interface UnlinkLocalAccountHostOptions {
+  readonly baseDir: string;
+  readonly client?: AccountClient;
+}
+
+/**
+ * Unlinks only this machine's host key while preserving the signed-in user
+ * session. The remote mutation and local credential rewrite share the same
+ * lock so a concurrent refresh or re-link cannot restore the old host fields.
+ */
+export async function unlinkLocalAccountHost(
+  options: UnlinkLocalAccountHostOptions,
+): Promise<void> {
+  await withLockedAccountFile(options.baseDir, async () => {
+    const stored = await readAccountFile(options.baseDir);
+    if (!stored?.hostId || stored.hostKeyGeneration === undefined) return;
+
+    const { hostIdentityPath } = await runWithPath(deriveServerPaths(options.baseDir, undefined));
+    const identity = await readHostIdentity(hostIdentityPath);
+    if (!identity) {
+      throw new Error("The local host identity is missing, so this machine cannot prove unlinking");
+    }
+    const environmentId = await resolveEnvironmentId(options.baseDir);
+    const hostProof = await mintHostProof({
+      identity,
+      apiIssuer: accountApiIssuer(stored.accountUrl),
+      environmentId,
+      hostId: stored.hostId,
+      keyGeneration: stored.hostKeyGeneration,
+    });
+    await clientFor(stored.accountUrl, options.client).unlinkHost(hostProof, stored.hostId);
+
+    const {
+      hostId: _hostId,
+      hostOwnerUserId: _hostOwnerUserId,
+      hostKeyGeneration: _hostKeyGeneration,
+      discoverabilityAcknowledgedByHostId,
+      ...session
+    } = stored;
+    const remainingAcknowledgements = Object.fromEntries(
+      Object.entries(discoverabilityAcknowledgedByHostId ?? {}).filter(
+        ([acknowledgedHostId]) => acknowledgedHostId !== stored.hostId,
+      ),
+    ) as Record<string, true>;
+    await writeAccountCredentials(options.baseDir, {
+      ...session,
+      ...(Object.keys(remainingAcknowledgements).length > 0
+        ? { discoverabilityAcknowledgedByHostId: remainingAcknowledgements }
+        : {}),
+    });
+    await deleteHostIdentity(hostIdentityPath);
+  });
 }
 
 /** Deletes the credentials file, reporting whether there was one to delete. */
@@ -287,8 +390,15 @@ export async function resolveLanEndpoints(
     return [];
   }
   const host = typeof state.host === "string" ? state.host : undefined;
-  if (!host || isWildcardHost(host) || isLoopbackHost(host)) return [];
-  return typeof state.origin === "string" ? [{ url: state.origin, transport: "lan" }] : [];
+  const endpoints: AccountHostEndpoint[] = [];
+  if (host && !isWildcardHost(host) && !isLoopbackHost(host) && typeof state.origin === "string") {
+    endpoints.push({ url: state.origin, transport: "lan" });
+  }
+  if (typeof state.port === "number" && Number.isInteger(state.port)) {
+    const tailscale = await resolveTailscaleEndpoint(state.port);
+    if (tailscale) endpoints.push(tailscale);
+  }
+  return endpoints;
 }
 
 function describeError(error: unknown): string {
@@ -305,6 +415,7 @@ export interface AccountFlowOptions {
   readonly platform?: NodeJS.Platform | string;
   readonly hostname?: string;
   readonly appVersion?: string;
+  readonly devicePollDelayMs?: number;
 }
 
 function clientFor(accountUrl: string, injected: AccountClient | undefined): AccountClient {
@@ -383,6 +494,13 @@ export interface WithFreshAccessTokenOptions {
   readonly client: AccountClient;
   /** Delay before the one transient-refresh retry; injectable for tests. */
   readonly refreshRetryDelayMs?: number;
+  /**
+   * Lets a caller preserve domain-specific 401/403 answers. Most account
+   * routes use those statuses for authentication, but a host grant also uses
+   * 403 for a revoked device key, which must repair the device registration
+   * instead of rotating an unrelated WorkOS token.
+   */
+  readonly shouldRefreshAccessToken?: (error: unknown) => boolean;
 }
 
 /** Strips the session half of a stored file, keeping the host registration. */
@@ -405,6 +523,11 @@ function withoutSession(credentials: StoredAccountFile): StoredAccountFile {
  */
 export function withLockedAccountFile<A>(baseDir: string, fn: () => Promise<A>): Promise<A> {
   return withCredentialFileLock(accountCredentialsPath(baseDir), fn);
+}
+
+/** Every host-link key writer shares the credential lock with the final CAS. */
+function generateHostIdentityForLink(baseDir: string, hostIdentityPath: string) {
+  return withLockedAccountFile(baseDir, () => generateAndPersistHostIdentity(hostIdentityPath));
 }
 
 /**
@@ -557,7 +680,12 @@ export async function withFreshAccessToken<A>(
       await clearStoredSessionIfCurrent(baseDir, credentials.refreshToken);
       throw new WorkspaceAccessChangedError();
     }
-    if (!isUnauthorized(error)) throw error;
+    if (
+      !isUnauthorized(error) ||
+      (options.shouldRefreshAccessToken && !options.shouldRefreshAccessToken(error))
+    ) {
+      throw error;
+    }
 
     const renewal = await renewSession(
       baseDir,
@@ -597,15 +725,15 @@ export async function selectOrganization(
 }
 
 /**
- * Registers this machine against the stored session and records the host
- * fields, leaving the session half of the file exactly as it found it.
+ * Links this machine against the stored session and records the host fields,
+ * leaving the session half of the file exactly as it found it.
  *
  * The credentials are re-read from disk after the call rather than merged into
  * a captured copy: `withFreshAccessToken` may have rotated and persisted a new
  * token pair on the way through, and writing a stale pair back over it would
  * spend the user's session for nothing.
  */
-async function registerThisHost(
+async function linkThisHost(
   options: AccountFlowOptions,
   client: AccountClient,
   stdout: Stdout,
@@ -620,59 +748,133 @@ async function registerThisHost(
 
   const environmentId = await resolveEnvironmentId(options.baseDir, options.devUrl);
   const name = options.hostname ?? OS.hostname();
-  const endpoints = await resolveLanEndpoints(options.baseDir, options.devUrl);
   const appVersion = options.appVersion ?? serverPackageJson.version;
+  const { hostIdentityPath } = await runWithPath(
+    deriveServerPaths(options.baseDir, options.devUrl),
+  );
 
-  let registered;
+  let linked;
+  let linkedPublicKeyPem: string | undefined;
   try {
-    registered = await withFreshAccessToken({ baseDir: options.baseDir, client }, (accessToken) =>
-      client.registerHost(accessToken, {
-        environmentId: EnvironmentId.makeUnsafe(environmentId),
-        name,
-        platform,
-        kind: "local",
-        endpoints,
-        appVersion,
-      }),
+    const challenge = await withFreshAccessToken(
+      { baseDir: options.baseDir, client },
+      (accessToken) =>
+        client.startHostLink(accessToken, {
+          environmentId: EnvironmentId.makeUnsafe(environmentId),
+          name,
+          platform,
+          kind: "local",
+        }),
     );
+    // Every link attempt is a key rotation. Persist before completing so the
+    // account can never accept a public key this process did not durably keep.
+    const identity = await generateHostIdentityForLink(options.baseDir, hostIdentityPath);
+    linkedPublicKeyPem = identity.publicKeyPem;
+    const proof = await mintHostLinkProof({
+      identity,
+      apiIssuer: accountApiIssuer(options.accountUrl),
+      environmentId,
+      challengeId: challenge.challengeId,
+      nonce: challenge.nonce,
+      name,
+      platform,
+      appVersion,
+    });
+    linked = await client.completeHostLink({ challengeId: challenge.challengeId, proof });
   } catch (error) {
     stdout(
-      `Signed in, but registering this host failed: ${describeError(error)}\nRun \`synara auth\` to try again.\n`,
+      `Signed in, but linking this host failed: ${describeError(error)}\nRun \`synara auth\` to try again.\n`,
     );
     return;
   }
 
-  // Read-modify-write under the credential lock, so a concurrent session
-  // rotation or sign-out cannot interleave between the read and the write.
-  // The file can be gone if something removed it mid-flight (a concurrent
-  // `synara auth logout`, say). The account now has a host this machine has no
-  // token for, so saying "registered" would be a lie the user acts on.
+  const endpoints = await resolveLanEndpoints(options.baseDir, options.devUrl);
   const saved = await withLockedAccountFile(options.baseDir, async () => {
     const current = await readAccountFile(options.baseDir);
-    if (!current) return false;
+    if (!current) return "missing" as const;
+    const persistedIdentity = await readHostIdentity(hostIdentityPath);
+    if (!persistedIdentity || persistedIdentity.publicKeyPem !== linkedPublicKeyPem) {
+      return "superseded" as const;
+    }
     await writeAccountCredentials(options.baseDir, {
       ...current,
-      hostToken: registered.hostToken,
-      hostId: registered.host.id,
+      hostId: linked.host.id,
+      hostOwnerUserId: linked.host.ownerUserId,
+      hostKeyGeneration: linked.host.keyGeneration,
     });
-    return true;
+    return "saved" as const;
   });
-  if (!saved) {
+  if (saved === "missing") {
     stdout(
-      `Registered this host as "${registered.host.name}" (${registered.host.id}), but the local credentials file disappeared before the host token could be saved.\nRun \`synara auth\` again; remove the stale host if it lingers.\n`,
+      `Linked this host as "${linked.host.name}" (${linked.host.id}), but the local credentials file disappeared before the link could be saved.\nRun \`synara auth\` again; unlink the stale host if it lingers.\n`,
     );
     return;
+  }
+  if (saved === "superseded") {
+    stdout(
+      "Another host link completed with a newer local key, so this link result was not stored.\n",
+    );
+    return;
+  }
+
+  if (endpoints.length > 0) {
+    try {
+      const { hostIdentityPath } = await runWithPath(
+        deriveServerPaths(options.baseDir, options.devUrl),
+      );
+      const identity = await readHostIdentity(hostIdentityPath);
+      if (identity) {
+        const hostProof = await mintHostProof({
+          identity,
+          apiIssuer: accountApiIssuer(options.accountUrl),
+          environmentId,
+          hostId: linked.host.id,
+          keyGeneration: linked.host.keyGeneration,
+        });
+        await client.replaceHostEndpoints(hostProof, linked.host.id, endpoints);
+      }
+    } catch {
+      // Endpoint reporting is startup-refreshed and must not invalidate a
+      // successfully persisted link.
+    }
   }
 
   stdout(
     [
       `Signed in to ${options.accountUrl}.`,
-      `Registered this host as "${registered.host.name}" (${registered.host.platform}, ${registered.host.id}).`,
+      `Linked this host as "${linked.host.name}" (${linked.host.platform}, ${linked.host.id}).`,
       endpoints.length === 0
         ? "No reachable endpoint was advertised — start the server on a LAN address to make this host reachable."
         : `Advertising ${endpoints.map((endpoint) => endpoint.url).join(", ")}.`,
       "",
     ].join("\n"),
+  );
+}
+
+/**
+ * ADR 0015's primary Desktop path: link the bundled local host when the
+ * signed-in session does not already have a complete, usable local link.
+ * `linkThisHost` deliberately leaves sign-in usable when the account service
+ * is unavailable; a later status read retries this idempotent guard.
+ */
+export async function ensureLocalAccountHostLinked(options: AccountFlowOptions): Promise<void> {
+  const existing = await readAccountCredentials(options.baseDir);
+  if (!existing) return;
+  const { hostIdentityPath } = await runWithPath(
+    deriveServerPaths(options.baseDir, options.devUrl),
+  );
+  if (
+    existing.hostId &&
+    existing.hostOwnerUserId &&
+    existing.hostKeyGeneration !== undefined &&
+    (await readHostIdentity(hostIdentityPath))
+  ) {
+    return;
+  }
+  await linkThisHost(
+    options,
+    clientFor(existing.accountUrl, options.client),
+    options.stdout ?? (() => {}),
   );
 }
 
@@ -720,16 +922,89 @@ export async function runAuthLogin(options: AccountFlowOptions): Promise<void> {
     return;
   }
 
-  if (existing.hostToken && existing.hostId) {
+  const { hostIdentityPath } = await runWithPath(
+    deriveServerPaths(options.baseDir, options.devUrl),
+  );
+  if (
+    existing.hostId &&
+    existing.hostOwnerUserId &&
+    existing.hostKeyGeneration !== undefined &&
+    (await readHostIdentity(hostIdentityPath))
+  ) {
     stdout(
-      `Already signed in to ${existing.accountUrl} and this host is registered.\nRun \`synara auth logout\` first to link as someone else.\n`,
+      `Already signed in to ${existing.accountUrl} and this host is linked.\nRun \`synara auth logout\` first to link as someone else.\n`,
     );
     return;
   }
 
   const client = clientFor(options.accountUrl, options.client);
-  stdout("Signed in — completing host registration.\n");
-  await registerThisHost(options, client, stdout);
+  stdout("Signed in — completing host link.\n");
+  await linkThisHost(options, client, stdout);
+}
+
+/** Links a headless host through the account service's device-code approval flow. */
+export async function runDeviceCodeHostLink(options: AccountFlowOptions): Promise<void> {
+  const stdout = options.stdout ?? defaultStdout;
+  const client = clientFor(options.accountUrl, options.client);
+  const platform = toAccountHostPlatform(options.platform ?? process.platform);
+  if (!platform)
+    throw new Error(`Unsupported host platform: ${options.platform ?? process.platform}`);
+  const code = await client.startDeviceHostLink();
+  stdout(`Open ${code.verificationUri} and enter code ${code.userCode}.\nWaiting for approval…\n`);
+  const expiresAt = new Date(code.expiresAt).getTime();
+  let challenge: Awaited<ReturnType<AccountClient["exchangeDeviceHostLink"]>>;
+  while (true) {
+    if (Date.now() >= expiresAt) throw new Error("The device link code expired");
+    try {
+      challenge = await client.exchangeDeviceHostLink({ deviceCode: code.deviceCode });
+      break;
+    } catch (error) {
+      if (!(error instanceof AccountApiError) || error.code !== "approval_pending") throw error;
+      await new Promise<void>((resolve) =>
+        setTimeout(resolve, options.devicePollDelayMs ?? code.interval * 1_000),
+      );
+    }
+  }
+  const environmentId = await resolveEnvironmentId(options.baseDir, options.devUrl);
+  const name = options.hostname ?? OS.hostname();
+  const { hostIdentityPath } = await runWithPath(
+    deriveServerPaths(options.baseDir, options.devUrl),
+  );
+  const identity = await generateHostIdentityForLink(options.baseDir, hostIdentityPath);
+  const proof = await mintHostLinkProof({
+    identity,
+    apiIssuer: accountApiIssuer(options.accountUrl),
+    environmentId,
+    challengeId: challenge.challengeId,
+    nonce: challenge.nonce,
+    name,
+    platform,
+    appVersion: options.appVersion ?? serverPackageJson.version,
+  });
+  const linked = await client.completeHostLink({ challengeId: challenge.challengeId, proof });
+  const instance = await client.instance();
+  await withLockedAccountFile(options.baseDir, async () => {
+    const persistedIdentity = await readHostIdentity(hostIdentityPath);
+    if (!persistedIdentity || persistedIdentity.publicKeyPem !== identity.publicKeyPem) {
+      throw new Error("Another host link superseded this device-code link with a newer local key");
+    }
+    const previous = await readAccountFile(options.baseDir);
+    await writeAccountCredentials(options.baseDir, {
+      ...(previous?.accountUrl === options.accountUrl ? previous : {}),
+      accountUrl: options.accountUrl,
+      workosClientId: instance.clientId,
+      workosApiUrl: instance.workosApiUrl,
+      hostId: linked.host.id,
+      hostOwnerUserId: linked.host.ownerUserId,
+      hostKeyGeneration: linked.host.keyGeneration,
+    });
+  });
+  await refreshHostRegistration({
+    baseDir: options.baseDir,
+    client,
+    ...(options.devUrl ? { devUrl: options.devUrl } : {}),
+  });
+  stdout(`Linked this host as "${linked.host.name}" (${linked.host.id}).\n`);
 }
 
 /** A scoped session: tokens that name a workspace, which one, and whose. */
@@ -823,18 +1098,26 @@ export interface RefreshHostRegistrationOptions {
 export async function refreshHostRegistration(
   options: RefreshHostRegistrationOptions,
 ): Promise<void> {
-  // The host token authenticates this call, not the user session, so an
-  // expired session must not stop a running server from advertising itself.
   const credentials = await readAccountFile(options.baseDir);
-  if (!credentials?.hostToken || !credentials.hostId) return;
+  if (!credentials?.hostId || credentials.hostKeyGeneration === undefined) return;
 
   const client = clientFor(credentials.accountUrl, options.client);
   const endpoints = await resolveLanEndpoints(options.baseDir, options.devUrl);
   try {
-    await client.updateHost(credentials.hostToken, credentials.hostId, {
-      endpoints,
-      appVersion: options.appVersion ?? serverPackageJson.version,
+    const environmentId = await resolveEnvironmentId(options.baseDir, options.devUrl);
+    const { hostIdentityPath } = await runWithPath(
+      deriveServerPaths(options.baseDir, options.devUrl),
+    );
+    const identity = await readHostIdentity(hostIdentityPath);
+    if (!identity) return;
+    const hostProof = await mintHostProof({
+      identity,
+      apiIssuer: accountApiIssuer(credentials.accountUrl),
+      environmentId,
+      hostId: credentials.hostId,
+      keyGeneration: credentials.hostKeyGeneration,
     });
+    await client.replaceHostEndpoints(hostProof, credentials.hostId, endpoints);
   } catch {
     // Intentionally silent: no retry, no log noise on every offline start.
   }
@@ -858,7 +1141,7 @@ export async function runAuthLogout(options: LogoutOptions): Promise<void> {
   // concurrent slow refresh (or a host-registration save) that read the file
   // before the deletion write its result afterwards, silently recreating the
   // credentials logout just reported deleted. Ordering inside the lock
-  // matters too: the host token is re-read and the remote host deleted
+  // matters too: the host link is re-read and the remote host unlinked
   // *inside* the critical section, so the host torn down is the one on disk
   // at that moment (a racing registration or rotation commits either before
   // this section — and its result is what gets torn down — or after the file
@@ -888,12 +1171,26 @@ export async function runAuthLogout(options: LogoutOptions): Promise<void> {
     // network can never sign out.
     const client = clientFor(credentials.accountUrl, options.client);
 
-    if (credentials.hostToken && credentials.hostId) {
+    if (credentials.hostId && credentials.hostKeyGeneration !== undefined) {
       try {
-        await client.deleteHost(credentials.hostToken, credentials.hostId);
-        stdout(`Removed host ${credentials.hostId} from the account.\n`);
+        const environmentId = await resolveEnvironmentId(options.baseDir);
+        const { hostIdentityPath } = await runWithPath(
+          deriveServerPaths(options.baseDir, undefined),
+        );
+        const identity = await readHostIdentity(hostIdentityPath);
+        if (identity) {
+          const hostProof = await mintHostProof({
+            identity,
+            apiIssuer: accountApiIssuer(credentials.accountUrl),
+            environmentId,
+            hostId: credentials.hostId,
+            keyGeneration: credentials.hostKeyGeneration,
+          });
+          await client.unlinkHost(hostProof, credentials.hostId);
+          stdout(`Unlinked host ${credentials.hostId} from the account.\n`);
+        }
       } catch (error) {
-        stdout(`Could not remove host ${credentials.hostId}: ${describeError(error)}\n`);
+        stdout(`Could not unlink host ${credentials.hostId}: ${describeError(error)}\n`);
       }
     }
 
@@ -901,6 +1198,8 @@ export async function runAuthLogout(options: LogoutOptions): Promise<void> {
     // WorkOS owns sessions, and the access token is short-lived. Dropping the
     // local credentials is what sign-out means here.
     await deleteAccountCredentials(options.baseDir);
+    const { hostIdentityPath } = await runWithPath(deriveServerPaths(options.baseDir, undefined));
+    await deleteHostIdentity(hostIdentityPath);
     stdout(
       `Signed out of ${credentials.accountUrl}. Local credentials deleted.\nThe browser session at the identity provider expires on its own.\n`,
     );

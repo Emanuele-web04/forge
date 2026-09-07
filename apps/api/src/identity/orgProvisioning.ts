@@ -55,7 +55,8 @@ const cache = new Map<string, CacheEntry>();
  * rather than broken. V1 runs single-instance; a durable claim (a unique row
  * keyed by user id) is what a multi-instance deployment would need.
  */
-const provisioningInFlight = new Map<string, Promise<OrganizationRef[]>>();
+type ProvisioningFlight = { promise: Promise<OrganizationRef[]>; fresh: boolean };
+const provisioningInFlight = new Map<string, ProvisioningFlight>();
 
 /** Drops every cached membership list. Exported for tests. */
 export function clearOrgCache(): void {
@@ -102,6 +103,18 @@ async function readMemberships(
   const memberships = await deps.listUserOrganizationMemberships(userId);
   cache.set(userId, { memberships, fetchedAt: clock() });
   return memberships;
+}
+
+/** Cached membership read without personal-workspace provisioning side effects. */
+export async function listUserOrganizations(
+  deps: OrgProvisioningDeps,
+  userId: string,
+  options?: { fresh?: boolean },
+): Promise<OrganizationRef[]> {
+  const clock = deps.now ?? Date.now;
+  const cached = options?.fresh ? undefined : cache.get(userId);
+  if (cached && clock() - cached.fetchedAt < CACHE_TTL_MS) return cached.memberships;
+  return readMemberships(deps, userId, clock);
 }
 
 /**
@@ -173,11 +186,19 @@ export async function ensurePersonalOrg(
     return cached.memberships;
   }
 
-  const inFlight = provisioningInFlight.get(userId);
-  if (inFlight) return inFlight;
+  while (true) {
+    const inFlight = provisioningInFlight.get(userId);
+    if (!inFlight) break;
+    if (!options?.fresh || inFlight.fresh) return inFlight.promise;
+    // A privileged caller may not inherit the membership snapshot of an
+    // ordinary read that began before revocation. Let that flight settle and
+    // retry the map: exactly one fresh waiter will claim the next flight; the
+    // rest share it, preserving the single-flight provisioning guarantee.
+    await inFlight.promise.catch(() => undefined);
+  }
 
   const pending = provisionPersonalOrg(deps, userId, email, clock);
-  provisioningInFlight.set(userId, pending);
+  provisioningInFlight.set(userId, { promise: pending, fresh: options?.fresh === true });
   try {
     return await pending;
   } catch (error) {
@@ -189,6 +210,8 @@ export async function ensurePersonalOrg(
   } finally {
     // Evicted on failure as well as success: a single failed attempt must not
     // become the permanent answer for this user.
-    if (provisioningInFlight.get(userId) === pending) provisioningInFlight.delete(userId);
+    if (provisioningInFlight.get(userId)?.promise === pending) {
+      provisioningInFlight.delete(userId);
+    }
   }
 }

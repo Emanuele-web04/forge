@@ -1,0 +1,29 @@
+{
+  "name": "@synara/relay",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --hot src/index.ts",
+    "start": "bun run src/index.ts",
+    "build": "echo 'no build step'",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.14.0",
+    "@synara/contracts": "workspace:*",
+    "@synara/relay-protocol": "workspace:*",
+    "effect": "catalog:",
+    "hono": "^4.7.0",
+    "jose": "^6.1.0",
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@types/bun": "catalog:",
+    "@types/node": "catalog:",
+    "@types/ws": "^8.18.1",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

@@ -158,6 +158,10 @@ it.layer(testLayer)("server CLI command", (it) => {
         "--no-browser",
         "--auth-token",
         "auth-secret",
+        "--relay-url",
+        "https://relay.flag.test",
+        "--ssh-forward-port",
+        "4778",
       ]);
 
       assert.equal(start.mock.calls.length, 1);
@@ -169,6 +173,8 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(resolvedConfig?.devUrl?.toString(), "http://127.0.0.1:5173/");
       assert.equal(resolvedConfig?.noBrowser, true);
       assert.equal(resolvedConfig?.authToken, "auth-secret");
+      assert.equal(resolvedConfig?.relayUrl?.toString(), "https://relay.flag.test/");
+      assert.equal(resolvedConfig?.sshForwardPort, 4778);
       assert.equal(resolvedConfig?.publicUrl, undefined);
       assert.equal(resolvedConfig?.allowInsecureRemote, false);
       assert.equal(resolvedConfig?.autoBootstrapProjectFromCwd, false);
@@ -377,6 +383,8 @@ it.layer(testLayer)("server CLI command", (it) => {
         SYNARA_AUTH_TOKEN: "env-token",
         SYNARA_DESKTOP_SHUTDOWN_TOKEN: "shutdown-token",
         SYNARA_MIGRATION_DIVERGENCE_CONSENT: "migration-consent",
+        SYNARA_RELAY_URL: "https://relay.example.test",
+        SYNARA_SSH_FORWARD_PORT: "4777",
       });
 
       assert.equal(start.mock.calls.length, 1);
@@ -390,6 +398,11 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(resolvedConfig?.authToken, "env-token");
       assert.equal(resolvedConfig?.desktopShutdownToken, "shutdown-token");
       assert.equal(resolvedConfig?.migrationDivergenceConsent, "migration-consent");
+      // Parsed from the environment AND carried into the config the host
+      // connectivity layer reads: a linked host with these unset never dials
+      // the relay, and revocations silently degrade to the credential TTL.
+      assert.equal(resolvedConfig?.relayUrl?.toString(), "https://relay.example.test/");
+      assert.equal(resolvedConfig?.sshForwardPort, 4777);
       assert.equal(resolvedConfig?.autoBootstrapProjectFromCwd, false);
       assert.equal(resolvedConfig?.logProviderEvents, false);
       assert.equal(resolvedConfig?.logWebSocketEvents, false);
@@ -936,8 +949,8 @@ it.layer(testLayer)("server CLI command", (it) => {
 
   // With a stored session and NO explicit URL anywhere, `synara auth` resolves
   // the persisted accountUrl instead of failing "not configured". The session
-  // here is already registered, so the command answers locally — succeeding
-  // at all proves the URL requirement was satisfied from the file.
+  // proves the URL requirement is satisfied from the file even when the host
+  // link still needs to be completed.
   it.effect("lets `synara auth` use the persisted accountUrl with no env or flag", () =>
     Effect.gen(function* () {
       const homeDir = makeTempHome("synara-main-auth-persisted-");
@@ -950,8 +963,9 @@ it.layer(testLayer)("server CLI command", (it) => {
           organizationId: "org_1",
           accessToken: "access-1",
           refreshToken: "refresh-1",
-          hostToken: "host-token",
           hostId: "host_1",
+          hostOwnerUserId: "user_1",
+          hostKeyGeneration: 1,
         }),
       );
 

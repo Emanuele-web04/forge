@@ -51,6 +51,30 @@
         "wait-on": "^8.0.2",
       },
     },
+    "apps/e2e": {
+      "name": "@synara/e2e",
+      "version": "0.0.1",
+      "dependencies": {
+        "@effect/platform-node": "catalog:",
+        "@hono/node-server": "^1.14.0",
+        "@synara/contracts": "workspace:*",
+        "@synara/relay-protocol": "workspace:*",
+        "@synara/shared": "workspace:*",
+        "effect": "catalog:",
+        "hono": "^4.7.0",
+        "jose": "^6.1.0",
+        "pg": "^8.16.0",
+        "ws": "^8.21.0",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "@types/node": "catalog:",
+        "@types/pg": "^8.15.0",
+        "@types/ws": "^8.18.1",
+        "typescript": "catalog:",
+        "vitest": "catalog:",
+      },
+    },
     "apps/marketing": {
       "name": "@synara/marketing",
       "version": "0.1.0",
@@ -107,6 +131,26 @@
         "wrangler": "^4.122.0",
       },
     },
+    "apps/relay": {
+      "name": "@synara/relay",
+      "version": "0.0.1",
+      "dependencies": {
+        "@hono/node-server": "^1.14.0",
+        "@synara/contracts": "workspace:*",
+        "@synara/relay-protocol": "workspace:*",
+        "effect": "catalog:",
+        "hono": "^4.7.0",
+        "jose": "^6.1.0",
+        "ws": "^8.21.0",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "@types/node": "catalog:",
+        "@types/ws": "^8.18.1",
+        "typescript": "catalog:",
+        "vitest": "catalog:",
+      },
+    },
     "apps/server": {
       "name": "@synara/cli",
       "version": "0.8.1",
@@ -125,8 +169,10 @@
         "@effect/sql-sqlite-bun": "catalog:",
         "@opencode-ai/sdk": "^1.15.13",
         "@pierre/diffs": "^1.2.12",
+        "@synara/relay-protocol": "workspace:*",
         "@xterm/headless": "^6.0.0",
         "effect": "catalog:",
+        "jose": "^6.1.0",
         "node-pty": "^1.1.0",
         "open": "^10.1.0",
         "tree-kill": "^1.2.2",
@@ -163,6 +209,7 @@
         "@pierre/diffs": "^1.2.12",
         "@synara/contracts": "workspace:*",
         "@synara/profile-ui": "workspace:*",
+        "@synara/relay-protocol": "workspace:*",
         "@synara/shared": "workspace:*",
         "@tabler/icons-react": "^3.44.0",
         "@tanstack/react-pacer": "^0.19.4",
@@ -248,12 +295,26 @@
         "react": "^19.0.0",
       },
     },
+    "packages/relay-protocol": {
+      "name": "@synara/relay-protocol",
+      "version": "0.0.1",
+      "dependencies": {
+        "@synara/contracts": "workspace:*",
+        "effect": "catalog:",
+      },
+      "devDependencies": {
+        "@types/node": "catalog:",
+        "typescript": "catalog:",
+        "vitest": "catalog:",
+      },
+    },
     "packages/shared": {
       "name": "@synara/shared",
       "version": "0.0.0-alpha.1",
       "dependencies": {
         "@synara/contracts": "workspace:*",
         "effect": "catalog:",
+        "jose": "^6.1.0",
       },
       "devDependencies": {
         "@effect/language-service": "catalog:",
@@ -1320,11 +1381,17 @@
 
     "@synara/desktop": ["@synara/desktop@workspace:apps/desktop"],
 
+    "@synara/e2e": ["@synara/e2e@workspace:apps/e2e"],
+
     "@synara/marketing": ["@synara/marketing@workspace:apps/marketing"],
 
     "@synara/profile-ui": ["@synara/profile-ui@workspace:packages/profile-ui"],
 
     "@synara/profiles": ["@synara/profiles@workspace:apps/profiles"],
+
+    "@synara/relay": ["@synara/relay@workspace:apps/relay"],
+
+    "@synara/relay-protocol": ["@synara/relay-protocol@workspace:packages/relay-protocol"],
 
     "@synara/scripts": ["@synara/scripts@workspace:scripts"],
 

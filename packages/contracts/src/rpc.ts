@@ -3,6 +3,7 @@ import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
 import {
+  AccountHost,
   AccountAuthenticateOtpInput,
   AccountBeginSsoInput,
   AccountBeginSsoResult,
@@ -15,6 +16,7 @@ import {
   AccountUpdateProfileInput,
   AccountUploadAvatarInput,
 } from "./account";
+import { GrantResponse, ListDevicesResponse } from "./hostAuth";
 import { AccountUsageSummaryInput, UsageSummary } from "./accountUsage";
 import {
   AutomationCancelRunInput,
@@ -248,7 +250,27 @@ import {
   StatsGetProfileTokenStatsInput,
   StatsGetProfileTokenStatsResult,
 } from "./stats";
-import { WS_METHODS } from "./ws";
+import {
+  HostsEnrollmentResult,
+  HostsHostInput,
+  HostsRevokeDeviceInput,
+  HostsUpdateInput,
+  WS_METHODS,
+} from "./ws";
+import { LinkDeviceApproveRequest } from "./hostAuth";
+import { EndHostSessionInput, ListHostSessionsResponse } from "./hostSessions";
+import {
+  HostConnection,
+  HostsConnectInput,
+  HostsDisconnectInput,
+  ListHostConnectionsResponse,
+} from "./hostConnection";
+import {
+  ConfirmSyncKeyPairingRequest,
+  SyncKeyPairingCode,
+  SyncKeyPairingRequest,
+} from "./hostSecrets";
+import { ListHostsResponse } from "./account";
 import {
   WS_BOOTSTRAP_METHOD,
   WsBootstrapNegotiateInput,
@@ -262,6 +284,8 @@ export class WsRpcError extends Schema.TaggedErrorClass<WsRpcError>()("WsRpcErro
   code: Schema.optional(Schema.String),
   retryable: Schema.optional(Schema.Boolean),
   retryAfterMs: Schema.optional(Schema.Number),
+  /** Present only for the capped Sync-Key verification flow. */
+  remainingAttempts: Schema.optional(Schema.Number),
 }) {}
 
 export const WsBootstrapNegotiateRpc = Rpc.make(WS_BOOTSTRAP_METHOD, {
@@ -1266,6 +1290,114 @@ export const WsAccountOpenVerificationUrlRpc = Rpc.make(WS_METHODS.accountOpenVe
   error: WsRpcError,
 });
 
+export const WsHostsListRpc = Rpc.make(WS_METHODS.hostsList, {
+  payload: Schema.Struct({}),
+  success: ListHostsResponse,
+  error: WsRpcError,
+});
+
+export const WsHostsUpdateRpc = Rpc.make(WS_METHODS.hostsUpdate, {
+  payload: HostsUpdateInput,
+  success: AccountHost,
+  error: WsRpcError,
+});
+
+export const WsHostsDeleteRpc = Rpc.make(WS_METHODS.hostsDelete, {
+  payload: HostsHostInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsHostsListDevicesRpc = Rpc.make(WS_METHODS.hostsListDevices, {
+  payload: Schema.Struct({}),
+  success: ListDevicesResponse,
+  error: WsRpcError,
+});
+
+export const WsHostsRevokeDeviceRpc = Rpc.make(WS_METHODS.hostsRevokeDevice, {
+  payload: HostsRevokeDeviceInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsHostsApproveDeviceLinkRpc = Rpc.make(WS_METHODS.hostsApproveDeviceLink, {
+  payload: LinkDeviceApproveRequest,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsHostsRequestGrantRpc = Rpc.make(WS_METHODS.hostsRequestGrant, {
+  payload: HostsHostInput,
+  success: GrantResponse,
+  error: WsRpcError,
+});
+
+export const WsHostsEnrollmentRpc = Rpc.make(WS_METHODS.hostsEnrollment, {
+  payload: Schema.Struct({}),
+  success: HostsEnrollmentResult,
+  error: WsRpcError,
+});
+
+export const WsHostsUnlinkLocalHostRpc = Rpc.make(WS_METHODS.hostsUnlinkLocalHost, {
+  payload: Schema.Struct({}),
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsHostsListSessionsRpc = Rpc.make(WS_METHODS.hostsListSessions, {
+  payload: Schema.Struct({}),
+  success: ListHostSessionsResponse,
+  error: WsRpcError,
+});
+
+export const WsHostsEndSessionRpc = Rpc.make(WS_METHODS.hostsEndSession, {
+  payload: EndHostSessionInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsHostsBeginSyncKeyPairingRpc = Rpc.make(WS_METHODS.hostsBeginSyncKeyPairing, {
+  payload: Schema.Struct({}),
+  success: SyncKeyPairingRequest,
+  error: WsRpcError,
+});
+
+export const WsHostsOfferSyncKeyRpc = Rpc.make(WS_METHODS.hostsOfferSyncKey, {
+  payload: SyncKeyPairingRequest,
+  success: SyncKeyPairingCode,
+  error: WsRpcError,
+});
+
+export const WsHostsReceiveSyncKeyRpc = Rpc.make(WS_METHODS.hostsReceiveSyncKey, {
+  payload: Schema.Struct({}),
+  success: SyncKeyPairingCode,
+  error: WsRpcError,
+});
+
+export const WsHostsConfirmSyncKeyRpc = Rpc.make(WS_METHODS.hostsConfirmSyncKey, {
+  payload: ConfirmSyncKeyPairingRequest,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsHostsConnectRpc = Rpc.make(WS_METHODS.hostsConnect, {
+  payload: HostsConnectInput,
+  success: HostConnection,
+  error: WsRpcError,
+});
+
+export const WsHostsDisconnectRpc = Rpc.make(WS_METHODS.hostsDisconnect, {
+  payload: HostsDisconnectInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsHostsListConnectionsRpc = Rpc.make(WS_METHODS.hostsListConnections, {
+  payload: Schema.Struct({}),
+  success: ListHostConnectionsResponse,
+  error: WsRpcError,
+});
+
 export const WsAutomationListRpc = Rpc.make(WS_METHODS.automationList, {
   payload: AutomationListInput,
   success: AutomationListResult,
@@ -1459,6 +1591,24 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsAccountDeleteAvatarRpc,
   WsAccountSignOutRpc,
   WsAccountOpenVerificationUrlRpc,
+  WsHostsListRpc,
+  WsHostsUpdateRpc,
+  WsHostsDeleteRpc,
+  WsHostsListDevicesRpc,
+  WsHostsRevokeDeviceRpc,
+  WsHostsApproveDeviceLinkRpc,
+  WsHostsRequestGrantRpc,
+  WsHostsEnrollmentRpc,
+  WsHostsUnlinkLocalHostRpc,
+  WsHostsListSessionsRpc,
+  WsHostsEndSessionRpc,
+  WsHostsBeginSyncKeyPairingRpc,
+  WsHostsOfferSyncKeyRpc,
+  WsHostsReceiveSyncKeyRpc,
+  WsHostsConfirmSyncKeyRpc,
+  WsHostsConnectRpc,
+  WsHostsDisconnectRpc,
+  WsHostsListConnectionsRpc,
   WsAutomationListRpc,
   WsAutomationGetMemoryRpc,
   WsAutomationCreateRpc,

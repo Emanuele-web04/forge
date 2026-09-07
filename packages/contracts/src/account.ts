@@ -1,6 +1,11 @@
 import { Schema } from "effect";
 
-import { boundedTrimmedNonEmptyString, EnvironmentId, TrimmedNonEmptyString } from "./baseSchemas";
+import {
+  boundedTrimmedNonEmptyString,
+  EnvironmentId,
+  NonNegativeInt,
+  TrimmedNonEmptyString,
+} from "./baseSchemas";
 
 // ── Request field bounds ─────────────────────────────────────────────
 //
@@ -30,7 +35,7 @@ const AccountEmailString = boundedTrimmedNonEmptyString(ACCOUNT_EMAIL_MAX_LENGTH
 const AccountAuthTokenString = boundedTrimmedNonEmptyString(ACCOUNT_AUTH_TOKEN_MAX_LENGTH);
 const AccountAppVersionString = boundedTrimmedNonEmptyString(ACCOUNT_APP_VERSION_MAX_LENGTH);
 
-export const AccountHostTransport = Schema.Literals(["lan", "tailscale", "public"]);
+export const AccountHostTransport = Schema.Literals(["lan", "tailscale"]);
 export type AccountHostTransport = typeof AccountHostTransport.Type;
 
 export const AccountHostEndpoint = Schema.Struct({
@@ -64,9 +69,16 @@ export const AccountHost = Schema.Struct({
   kind: AccountHostKind,
   endpoints: Schema.Array(AccountHostEndpoint),
   appVersion: Schema.optional(TrimmedNonEmptyString),
-  /** WorkOS user id of whoever ran the registration. Audit only — the
-   * organization owns the host, so this grants no access of its own. */
-  registeredByUserId: TrimmedNonEmptyString,
+  /** Authorization owner. */
+  ownerUserId: TrimmedNonEmptyString,
+  /** Whether non-owner members of the owning organization may see and use it. */
+  discoverable: Schema.Boolean,
+  /** Whether a host public key is currently linked. */
+  linked: Schema.Boolean,
+  /** Monotonic key epoch; host proofs bind to this value. */
+  keyGeneration: NonNegativeInt,
+  /** Set by list reads to distinguish an owner row from an org-visible row. */
+  mine: Schema.optional(Schema.Boolean),
   createdAt: TrimmedNonEmptyString,
   lastSeenAt: TrimmedNonEmptyString,
 });
@@ -191,26 +203,19 @@ export const UpdateOrganizationRequest = Schema.Struct({
 });
 export type UpdateOrganizationRequest = typeof UpdateOrganizationRequest.Type;
 
-export const RegisterHostRequest = Schema.Struct({
-  environmentId: EnvironmentId,
-  name: AccountNameString,
-  platform: AccountHostPlatform,
-  kind: AccountHostKind,
-  endpoints: Schema.Array(AccountHostEndpoint).check(
-    Schema.isMaxLength(ACCOUNT_HOST_ENDPOINTS_MAX),
-  ),
-  appVersion: Schema.optional(AccountAppVersionString),
+/**
+ * The bounded count used by the host-enrollment consent decision. The account
+ * API may stop at two because clients only distinguish a personal workspace
+ * from a workspace with more than one member.
+ */
+export const OrganizationMemberCountResponse = Schema.Struct({
+  organizationMemberCount: NonNegativeInt,
 });
-export type RegisterHostRequest = typeof RegisterHostRequest.Type;
-
-export const RegisterHostResponse = Schema.Struct({
-  host: AccountHost,
-  hostToken: TrimmedNonEmptyString,
-});
-export type RegisterHostResponse = typeof RegisterHostResponse.Type;
+export type OrganizationMemberCountResponse = typeof OrganizationMemberCountResponse.Type;
 
 export const UpdateHostRequest = Schema.Struct({
   name: Schema.optional(AccountNameString),
+  discoverable: Schema.optional(Schema.Boolean),
   endpoints: Schema.optional(
     Schema.Array(AccountHostEndpoint).check(Schema.isMaxLength(ACCOUNT_HOST_ENDPOINTS_MAX)),
   ),
@@ -251,6 +256,30 @@ export const AccountErrorCode = Schema.Literals([
   "token_revoked",
   "organization_required",
   "environment_already_linked",
+  "not_host_owner",
+  "host_not_linked",
+  "device_revoked",
+  "device_not_registered",
+  "challenge_expired",
+  "challenge_consumed",
+  /**
+   * A Host Secrets write whose `expectedVersion` no longer matches the stored
+   * row — a rotation and a concurrent edit raced, and this one lost. The
+   * client re-reads and re-seals; the body carries the current version so it
+   * does not have to guess. CAS makes the loss visible rather than silent
+   * (ADR 0004, spec slice E §3).
+   */
+  "host_secret_version_conflict",
+  /**
+   * No wrapped Sync Key is waiting for this device. Deliberately ONE code for
+   * every reason — never uploaded, already delivered (wraps are single
+   * delivery), expired, or addressed to a device the caller does not own — so
+   * the endpoint cannot be probed for which device ids exist or which
+   * pairings are in flight.
+   */
+  "sync_key_wrap_not_found",
+  "approval_pending",
+  "bad_proof",
   "handle_taken",
   /**
    * The identity provider will not authenticate this account until its email

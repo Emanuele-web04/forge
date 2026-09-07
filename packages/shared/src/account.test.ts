@@ -31,6 +31,158 @@ function refreshedResponse(): Response {
 }
 
 describe("createAccountClient", () => {
+  describe("remote hosts", () => {
+    it("registers, lists, and revokes devices, requests a device-bound grant, and reads member count", async () => {
+      const device = {
+        id: "00000000-0000-4000-8000-000000000001",
+        publicKeyJwk: { kty: "EC", crv: "P-256", x: "eA", y: "eQ" },
+        jkt: "device-thumbprint",
+        displayName: "Ada's Mac",
+        platform: "darwin",
+        createdAt: "2026-08-14T12:00:00.000Z",
+        lastUsedAt: null,
+        revokedAt: null,
+      };
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse({ device }, { status: 201 }))
+        .mockResolvedValueOnce(jsonResponse({ devices: [] }))
+        .mockResolvedValueOnce(emptyResponse(204))
+        .mockResolvedValueOnce(jsonResponse({ grant: "grant-token" }))
+        .mockResolvedValueOnce(jsonResponse({ organizationMemberCount: 2 }));
+      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
+
+      await expect(client.registerDevice("access-token", "signed-device-proof")).resolves.toEqual({
+        device,
+      });
+      await expect(client.listDevices("access-token")).resolves.toEqual({ devices: [] });
+      await expect(
+        client.revokeDevice("access-token", "00000000-0000-4000-8000-000000000001"),
+      ).resolves.toBeUndefined();
+      await expect(
+        client.requestGrant("access-token", "host_1", "device-thumbprint"),
+      ).resolves.toEqual({ grant: "grant-token" });
+      await expect(client.countOrganizationMembers("access-token")).resolves.toBe(2);
+
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        1,
+        `${BASE_URL}/api/v1/devices`,
+        expect.objectContaining({
+          method: "POST",
+          headers: expect.objectContaining({
+            authorization: "Bearer access-token",
+            "content-type": "application/json",
+          }),
+          body: JSON.stringify({ proof: "signed-device-proof" }),
+        }),
+      );
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        2,
+        `${BASE_URL}/api/v1/devices`,
+        expect.objectContaining({
+          method: "GET",
+          headers: expect.objectContaining({ authorization: "Bearer access-token" }),
+        }),
+      );
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        3,
+        `${BASE_URL}/api/v1/devices/00000000-0000-4000-8000-000000000001`,
+        expect.objectContaining({ method: "DELETE" }),
+      );
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        4,
+        `${BASE_URL}/api/v1/hosts/host_1/grant`,
+        expect.objectContaining({ body: JSON.stringify({ deviceJkt: "device-thumbprint" }) }),
+      );
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        5,
+        `${BASE_URL}/api/v1/organization/member-count`,
+        expect.objectContaining({ method: "GET" }),
+      );
+    });
+
+    it("reads and CAS-writes opaque host secrets and relays Sync-Key wraps", async () => {
+      const envelope = { ciphertext: "Y2lwaGVydGV4dA", iv: "AAAAAAAAAAAAAAAA", version: 4 };
+      const point = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+      const wrap = {
+        ephemeralPublicJwk: { kty: "EC" as const, crv: "P-256" as const, x: point, y: point },
+        recipientPublicJwk: { kty: "EC" as const, crv: "P-256" as const, x: point, y: point },
+        wrapped: "d3JhcHBlZA",
+      };
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          jsonResponse({ secret: { ...envelope, updatedAt: "2026-08-14T12:00:00.000Z" } }),
+        )
+        .mockResolvedValueOnce(
+          jsonResponse({ secret: { ...envelope, updatedAt: "2026-08-14T12:01:00.000Z" } }),
+        )
+        .mockResolvedValueOnce(
+          jsonResponse(
+            {
+              recipientDeviceId: "00000000-0000-4000-8000-000000000001",
+              createdAt: "2026-08-14T12:00:00.000Z",
+              expiresAt: "2026-08-14T12:10:00.000Z",
+            },
+            { status: 201 },
+          ),
+        )
+        .mockResolvedValueOnce(jsonResponse({ wrap, createdAt: "2026-08-14T12:00:00.000Z" }));
+      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
+
+      await expect(client.getHostSecret("access-token", "host / one")).resolves.toMatchObject({
+        secret: envelope,
+      });
+      await expect(
+        client.putHostSecret("access-token", "host / one", {
+          expectedVersion: 3,
+          envelope,
+        }),
+      ).resolves.toMatchObject({ secret: envelope });
+      await expect(
+        client.putSyncKeyWrap("access-token", {
+          recipientDeviceId: "00000000-0000-4000-8000-000000000001",
+          wrap,
+        }),
+      ).resolves.toMatchObject({
+        recipientDeviceId: "00000000-0000-4000-8000-000000000001",
+      });
+      await expect(
+        client.takeSyncKeyWrap("access-token", "00000000-0000-4000-8000-000000000001"),
+      ).resolves.toMatchObject({ wrap });
+
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        1,
+        `${BASE_URL}/api/v1/hosts/host%20%2F%20one/secrets`,
+        expect.objectContaining({ method: "GET" }),
+      );
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        2,
+        `${BASE_URL}/api/v1/hosts/host%20%2F%20one/secrets`,
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({ expectedVersion: 3, envelope }),
+        }),
+      );
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        3,
+        `${BASE_URL}/api/v1/sync-key-wraps`,
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({
+            recipientDeviceId: "00000000-0000-4000-8000-000000000001",
+            wrap,
+          }),
+        }),
+      );
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        4,
+        `${BASE_URL}/api/v1/sync-key-wraps/00000000-0000-4000-8000-000000000001`,
+        expect.objectContaining({ method: "GET" }),
+      );
+    });
+  });
+
   describe("instance", () => {
     it("decodes a valid instance info response", async () => {
       const fetchMock = vi.fn().mockResolvedValue(
@@ -209,12 +361,11 @@ describe("createAccountClient", () => {
         OrganizationRequiredError,
       );
       await expect(
-        client.registerHost("t", {
+        client.startHostLink("t", {
           environmentId: ENVIRONMENT_ID,
           name: "Mac",
           platform: "darwin",
           kind: "local",
-          endpoints: [],
         }),
       ).rejects.toBeInstanceOf(OrganizationRequiredError);
     });
@@ -266,7 +417,10 @@ describe("createAccountClient", () => {
         platform: "darwin",
         kind: "local",
         endpoints: [{ url: "http://localhost:1234", transport: "lan" }],
-        registeredByUserId: "user_1",
+        ownerUserId: "user_1",
+        discoverable: true,
+        linked: true,
+        keyGeneration: 1,
         createdAt: "2026-01-01T00:00:00.000Z",
         lastSeenAt: "2026-01-01T00:00:00.000Z",
       };
@@ -279,22 +433,33 @@ describe("createAccountClient", () => {
     });
   });
 
-  describe("registerHost", () => {
-    it("posts the request body and decodes host + hostToken", async () => {
+  describe("host link and HostProof routes", () => {
+    it("starts and completes the nonce-row link flow without a challenge JWT", async () => {
       const host = {
-        id: "h1",
+        id: "550e8400-e29b-41d4-a716-446655440000",
         environmentId: "env-1",
         name: "my-mac",
         platform: "darwin",
         kind: "local",
-        endpoints: [{ url: "http://localhost:1234", transport: "lan" }],
-        registeredByUserId: "user_1",
+        endpoints: [],
+        ownerUserId: "user_1",
+        discoverable: true,
+        linked: true,
+        keyGeneration: 1,
         createdAt: "2026-01-01T00:00:00.000Z",
         lastSeenAt: "2026-01-01T00:00:00.000Z",
       };
       const fetchMock = vi
         .fn()
-        .mockResolvedValue(jsonResponse({ host, hostToken: "synhost_abc" }, { status: 201 }));
+        .mockResolvedValueOnce(
+          jsonResponse({
+            challengeId: "550e8400-e29b-41d4-a716-446655440001",
+            nonce: "nonce",
+            hostId: host.id,
+            expiresAt: "2026-01-01T00:10:00.000Z",
+          }),
+        )
+        .mockResolvedValueOnce(jsonResponse({ host }));
       const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
 
       const request = {
@@ -302,14 +467,18 @@ describe("createAccountClient", () => {
         name: "my-mac",
         platform: "darwin" as const,
         kind: "local" as const,
-        endpoints: [{ url: "http://localhost:1234", transport: "lan" as const }],
       };
-      const result = await client.registerHost("device-token-1", request);
+      const started = await client.startHostLink("device-token-1", request);
+      const result = await client.completeHostLink({
+        challengeId: started.challengeId,
+        proof: "signed-host-link-proof",
+      });
 
-      expect(result).toEqual({ host, hostToken: "synhost_abc" });
+      expect(started).not.toHaveProperty("challengeJwt");
+      expect(result).toEqual({ host });
       const call = fetchMock.mock.calls[0];
       if (call === undefined) throw new Error("expected fetch to have been called");
-      expect(call[0]).toBe(`${BASE_URL}/api/v1/hosts`);
+      expect(call[0]).toBe(`${BASE_URL}/api/v1/hosts/link/start`);
       expect(call[1]).toMatchObject({
         method: "POST",
         headers: expect.objectContaining({
@@ -318,33 +487,87 @@ describe("createAccountClient", () => {
         }),
       });
       expect(JSON.parse(call[1].body as string)).toEqual(request);
+      expect(fetchMock.mock.calls[1]?.[0]).toBe(`${BASE_URL}/api/v1/hosts/link/complete`);
+      expect(fetchMock.mock.calls[1]?.[1]).not.toHaveProperty("headers.authorization");
     });
 
-    it("throws AccountApiError with code environment_already_linked on 409", async () => {
+    it("supports the complete device-code challenge flow", async () => {
       const fetchMock = vi
         .fn()
-        .mockResolvedValue(
-          jsonResponse(
-            { error: "environment_already_linked", message: "already linked" },
-            { status: 409 },
-          ),
+        .mockResolvedValueOnce(
+          jsonResponse({
+            deviceCode: "device_code",
+            userCode: "ABCDEFGH",
+            verificationUri: "https://app.example/link",
+            expiresAt: "2026-01-01T00:10:00.000Z",
+            interval: 5,
+          }),
+        )
+        .mockResolvedValueOnce(emptyResponse(204))
+        .mockResolvedValueOnce(
+          jsonResponse({
+            challengeId: "550e8400-e29b-41d4-a716-446655440001",
+            nonce: "nonce",
+          }),
         );
       const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
 
-      await expect(
-        client.registerHost("device-token-1", {
-          environmentId: ENVIRONMENT_ID,
-          name: "my-mac",
-          platform: "darwin",
-          kind: "local",
-          endpoints: [],
-        }),
-      ).rejects.toMatchObject({ code: "environment_already_linked", status: 409 });
+      const device = await client.startDeviceHostLink();
+      await client.approveDeviceHostLink("session-token", { userCode: device.userCode });
+      const challenge = await client.exchangeDeviceHostLink({ deviceCode: device.deviceCode });
+
+      expect(challenge.nonce).toBe("nonce");
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+        `${BASE_URL}/api/v1/hosts/link/device`,
+        `${BASE_URL}/api/v1/hosts/link/approve`,
+        `${BASE_URL}/api/v1/hosts/link/device/token`,
+      ]);
+    });
+
+    it("uses HostProof authentication for host lifecycle calls", async () => {
+      const host = {
+        id: "550e8400-e29b-41d4-a716-446655440000",
+        environmentId: "env-1",
+        name: "renamed",
+        platform: "darwin",
+        kind: "local",
+        endpoints: [],
+        ownerUserId: "user_1",
+        discoverable: true,
+        linked: true,
+        keyGeneration: 1,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        lastSeenAt: "2026-01-01T00:00:00.000Z",
+      };
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse({ host }))
+        .mockResolvedValueOnce(jsonResponse({ ticket: "relay-ticket" }))
+        .mockResolvedValueOnce(
+          jsonResponse({
+            discoverable: true,
+            ownerUserId: "user_1",
+            orgId: "org_1",
+            ownerInOrg: true,
+            revokedDeviceJkts: [],
+          }),
+        )
+        .mockResolvedValueOnce(jsonResponse({ host }));
+      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
+
+      await client.replaceHostEndpoints("proof", host.id, []);
+      await client.requestRelayTicket("proof", host.id);
+      await client.getHostAuthorization("proof", host.id);
+      await client.unlinkHost("proof", host.id);
+
+      for (const [, init] of fetchMock.mock.calls) {
+        expect(init.headers).toEqual(expect.objectContaining({ authorization: "HostProof proof" }));
+      }
     });
   });
 
   describe("updateHost", () => {
-    it("patches with the host token and returns the updated host", async () => {
+    it("patches with an owner session and returns the updated host", async () => {
       const host = {
         id: "h1",
         environmentId: "env-1",
@@ -352,52 +575,39 @@ describe("createAccountClient", () => {
         platform: "darwin",
         kind: "local",
         endpoints: [],
-        registeredByUserId: "user_1",
+        ownerUserId: "user_1",
+        discoverable: true,
+        linked: true,
+        keyGeneration: 1,
         createdAt: "2026-01-01T00:00:00.000Z",
         lastSeenAt: "2026-01-01T00:00:00.000Z",
       };
       const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ host }));
       const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
 
-      const result = await client.updateHost("synhost_abc", "h1", { name: "renamed" });
-
-      expect(result).toEqual(host);
+      expect(await client.updateHost("session-token", "h1", { name: "renamed" })).toEqual(host);
       expect(fetchMock).toHaveBeenCalledWith(
         `${BASE_URL}/api/v1/hosts/h1`,
         expect.objectContaining({
           method: "PATCH",
-          headers: expect.objectContaining({ authorization: "Bearer synhost_abc" }),
+          headers: expect.objectContaining({ authorization: "Bearer session-token" }),
         }),
       );
     });
   });
 
   describe("deleteHost", () => {
-    it("sends whichever token it's given as a bearer header", async () => {
+    it("uses the owner session as a bearer header", async () => {
       const fetchMock = vi.fn().mockResolvedValue(emptyResponse(204));
       const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
 
-      await client.deleteHost("synhost_abc", "h1");
+      await client.deleteHost("session-token", "h1");
 
       expect(fetchMock).toHaveBeenCalledWith(
         `${BASE_URL}/api/v1/hosts/h1`,
         expect.objectContaining({
           method: "DELETE",
-          headers: expect.objectContaining({ authorization: "Bearer synhost_abc" }),
-        }),
-      );
-    });
-
-    it("works with a device token too", async () => {
-      const fetchMock = vi.fn().mockResolvedValue(emptyResponse(204));
-      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
-
-      await client.deleteHost("device-token-1", "h1");
-
-      expect(fetchMock).toHaveBeenCalledWith(
-        `${BASE_URL}/api/v1/hosts/h1`,
-        expect.objectContaining({
-          headers: expect.objectContaining({ authorization: "Bearer device-token-1" }),
+          headers: expect.objectContaining({ authorization: "Bearer session-token" }),
         }),
       );
     });

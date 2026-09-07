@@ -1,7 +1,15 @@
 import { Schema, Struct } from "effect";
-import { NonNegativeInt, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas";
+import {
+  boundedTrimmedNonEmptyString,
+  NonNegativeInt,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas";
 
 import {
+  ACCOUNT_NAME_MAX_LENGTH,
+  AccountHost,
   AccountAuthenticateOtpInput,
   AccountBeginSsoInput,
   AccountCompleteSsoInput,
@@ -10,6 +18,10 @@ import {
   AccountUpdateProfileInput,
   AccountUploadAvatarInput,
 } from "./account";
+import { LinkDeviceApproveRequest } from "./hostAuth";
+import { EndHostSessionInput } from "./hostSessions";
+import { HostsConnectInput, HostsDisconnectInput } from "./hostConnection";
+import { ConfirmSyncKeyPairingRequest, SyncKeyPairingRequest } from "./hostSecrets";
 import { AccountUsageSummaryInput } from "./accountUsage";
 import {
   AutomationCancelRunInput,
@@ -170,6 +182,28 @@ import {
   GitHubProjectProvisionProgressEvent,
 } from "./githubProjectProvisioning";
 
+const HostsEntityId = boundedTrimmedNonEmptyString(256);
+
+export const HostsUpdateInput = Schema.Struct({
+  hostId: HostsEntityId,
+  discoverable: Schema.optional(Schema.Boolean),
+  name: Schema.optional(boundedTrimmedNonEmptyString(ACCOUNT_NAME_MAX_LENGTH)),
+});
+export type HostsUpdateInput = typeof HostsUpdateInput.Type;
+
+export const HostsHostInput = Schema.Struct({ hostId: HostsEntityId });
+export type HostsHostInput = typeof HostsHostInput.Type;
+
+export const HostsRevokeDeviceInput = Schema.Struct({ deviceId: HostsEntityId });
+export type HostsRevokeDeviceInput = typeof HostsRevokeDeviceInput.Type;
+
+export const HostsEnrollmentResult = Schema.Struct({
+  host: Schema.NullOr(AccountHost),
+  organizationMemberCount: Schema.NullOr(NonNegativeInt),
+  discoverabilityAcknowledged: Schema.Boolean,
+});
+export type HostsEnrollmentResult = typeof HostsEnrollmentResult.Type;
+
 // ── WebSocket RPC Method Names ───────────────────────────────────────
 
 export const WS_METHODS = {
@@ -301,6 +335,26 @@ export const WS_METHODS = {
   accountDeleteAvatar: "account.deleteAvatar",
   accountSignOut: "account.signOut",
   accountOpenVerificationUrl: "account.openVerificationUrl",
+
+  // Hosts (owner-only account state brokered by the server)
+  hostsList: "hosts.list",
+  hostsUpdate: "hosts.update",
+  hostsDelete: "hosts.delete",
+  hostsListDevices: "hosts.listDevices",
+  hostsRevokeDevice: "hosts.revokeDevice",
+  hostsApproveDeviceLink: "hosts.approveDeviceLink",
+  hostsRequestGrant: "hosts.requestGrant",
+  hostsEnrollment: "hosts.enrollment",
+  hostsUnlinkLocalHost: "hosts.unlinkLocalHost",
+  hostsListSessions: "hosts.listSessions",
+  hostsEndSession: "hosts.endSession",
+  hostsBeginSyncKeyPairing: "hosts.beginSyncKeyPairing",
+  hostsOfferSyncKey: "hosts.offerSyncKey",
+  hostsReceiveSyncKey: "hosts.receiveSyncKey",
+  hostsConfirmSyncKey: "hosts.confirmSyncKey",
+  hostsConnect: "hosts.connect",
+  hostsDisconnect: "hosts.disconnect",
+  hostsListConnections: "hosts.listConnections",
 
   // Automation methods
   automationList: "automation.list",
@@ -517,6 +571,26 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.accountDeleteAvatar, Schema.Struct({})),
   tagRequestBody(WS_METHODS.accountSignOut, Schema.Struct({})),
   tagRequestBody(WS_METHODS.accountOpenVerificationUrl, AccountOpenVerificationUrlInput),
+
+  // Hosts
+  tagRequestBody(WS_METHODS.hostsList, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.hostsUpdate, HostsUpdateInput),
+  tagRequestBody(WS_METHODS.hostsDelete, HostsHostInput),
+  tagRequestBody(WS_METHODS.hostsListDevices, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.hostsRevokeDevice, HostsRevokeDeviceInput),
+  tagRequestBody(WS_METHODS.hostsApproveDeviceLink, LinkDeviceApproveRequest),
+  tagRequestBody(WS_METHODS.hostsRequestGrant, HostsHostInput),
+  tagRequestBody(WS_METHODS.hostsEnrollment, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.hostsUnlinkLocalHost, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.hostsListSessions, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.hostsEndSession, EndHostSessionInput),
+  tagRequestBody(WS_METHODS.hostsBeginSyncKeyPairing, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.hostsOfferSyncKey, SyncKeyPairingRequest),
+  tagRequestBody(WS_METHODS.hostsReceiveSyncKey, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.hostsConfirmSyncKey, ConfirmSyncKeyPairingRequest),
+  tagRequestBody(WS_METHODS.hostsConnect, HostsConnectInput),
+  tagRequestBody(WS_METHODS.hostsDisconnect, HostsDisconnectInput),
+  tagRequestBody(WS_METHODS.hostsListConnections, Schema.Struct({})),
 
   // Automation methods
   tagRequestBody(WS_METHODS.automationList, AutomationListInput),

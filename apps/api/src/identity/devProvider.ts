@@ -52,6 +52,9 @@ export async function createDevIdentityProvider(): Promise<{
     // they exist because the adapter's config shape requires them.
     databaseUrl: "unused://dev-identity",
     baseUrl: "http://localhost",
+    apiPublicUrl: "http://localhost/api/v1",
+    apiSigningKey: Buffer.alloc(32, 1).toString("base64url"),
+    relayServiceToken: "unused-dev-relay-token",
     port: 0,
     trustedProxyHops: 0,
     workosApiKey: fake.apiKey,

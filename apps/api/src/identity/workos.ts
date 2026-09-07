@@ -23,7 +23,11 @@ import {
   type IdentityUser,
   type OrganizationRef,
 } from "./interfaces";
-import { ensurePersonalOrg, invalidateOrgCacheForOrganization } from "./orgProvisioning";
+import {
+  ensurePersonalOrg,
+  invalidateOrgCacheForOrganization,
+  listUserOrganizations,
+} from "./orgProvisioning";
 
 type WorkosUserResponse = {
   id: string;
@@ -101,6 +105,7 @@ type WorkosMembershipWire = {
 
 type WorkosMembershipListWire = {
   data?: unknown;
+  list_metadata?: unknown;
 };
 
 type WorkosOrganizationWire = {
@@ -108,12 +113,7 @@ type WorkosOrganizationWire = {
   name?: unknown;
 };
 
-/**
- * How many memberships one listing request asks for. WorkOS caps the page at
- * 100 and this service does not paginate: a user in more than 100
- * organizations would see the rest omitted, which is a limit worth raising
- * only once teams exist at all.
- */
+/** How many memberships one listing request asks for. WorkOS caps it at 100. */
 const MEMBERSHIP_PAGE_LIMIT = 100;
 
 /**
@@ -512,17 +512,36 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
   }
 
   async function listUserOrganizationMemberships(userId: string): Promise<OrganizationRef[]> {
-    const response = (await workosFetch(
-      `/user_management/organization_memberships?user_id=${encodeURIComponent(userId)}&limit=${MEMBERSHIP_PAGE_LIMIT}`,
-    )) as WorkosMembershipListWire;
-    // A 200 without a `data` array is not an empty membership list, it is an
-    // answer this service does not understand — and reading it as "no
-    // organizations" would both hide the caller's hosts and provision them a
-    // second personal workspace.
-    if (!Array.isArray(response.data)) {
-      throw new IdentityProviderError(502, "WorkOS membership listing returned no data array");
-    }
-    return response.data.map(toOrganization);
+    const memberships: OrganizationRef[] = [];
+    let after: string | undefined;
+    const seenCursors = new Set<string>();
+    do {
+      const response = (await workosFetch(
+        `/user_management/organization_memberships?user_id=${encodeURIComponent(userId)}&limit=${MEMBERSHIP_PAGE_LIMIT}${after ? `&after=${encodeURIComponent(after)}` : ""}`,
+      )) as WorkosMembershipListWire;
+      // A 200 without a `data` array is not an empty membership list, it is an
+      // answer this service does not understand — and reading it as "no
+      // organizations" would both hide the caller's hosts and provision them
+      // a second personal workspace.
+      if (!Array.isArray(response.data)) {
+        throw new IdentityProviderError(502, "WorkOS membership listing returned no data array");
+      }
+      memberships.push(...response.data.map(toOrganization));
+      const metadata = response.list_metadata;
+      if (typeof metadata !== "object" || metadata === null) {
+        throw new IdentityProviderError(502, "WorkOS membership listing returned no metadata");
+      }
+      const next = (metadata as { after?: unknown }).after;
+      if (next !== null && next !== undefined && typeof next !== "string") {
+        throw new IdentityProviderError(502, "WorkOS membership listing returned a bad cursor");
+      }
+      after = typeof next === "string" && next.length > 0 ? next : undefined;
+      if (after && seenCursors.has(after)) {
+        throw new IdentityProviderError(502, "WorkOS membership listing repeated a cursor");
+      }
+      if (after) seenCursors.add(after);
+    } while (after);
+    return memberships;
   }
 
   // Organizations live on the top-level Organizations API, not under
@@ -790,6 +809,14 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
         orgId: response.id,
         orgName: typeof response.name === "string" && response.name ? response.name : name,
       };
+    },
+
+    listUserOrganizations(userId, options) {
+      return listUserOrganizations(
+        { listUserOrganizationMemberships, createOrganization, createOrganizationMembership },
+        userId,
+        options?.freshMembership ? { fresh: true } : undefined,
+      );
     },
   };
 

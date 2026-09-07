@@ -141,6 +141,10 @@ import {
   type WsConnectionSession,
 } from "./wsConnectionSessions";
 import { makeAccountRpcHandlers } from "./wsAccountRpc";
+import { makeHostsRpcHandlers } from "./wsHostsRpc";
+import { RemoteSessionRegistryService } from "./remoteSessions/sessionRegistry";
+import { HostConnectionRegistryService } from "./hostConnections/registry";
+import { makeHostConnectionsPort } from "./hostConnections/port";
 import { isOwnerRole, requireOwnerRole } from "./wsOwnerOnly";
 import {
   negotiateWsCompatibility,
@@ -374,6 +378,7 @@ const makeWsRpcHandlersLayer = () =>
       const workspaceEntries = yield* WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem;
       const threadDiagnostics = yield* ThreadDiagnosticsQuery;
+      const remoteSessions = yield* RemoteSessionRegistryService;
       // Optional so route-level tests and non-macOS builds can mount the RPC
       // group without a device engine; the handlers below then refuse cleanly
       // with the same unsupported-platform answer the backend would give.
@@ -844,6 +849,16 @@ const makeWsRpcHandlersLayer = () =>
       const accountRpcHandlers = makeAccountRpcHandlers({
         accountSession,
         openBrowser: (url) => open.openBrowser(url),
+      });
+      const hostConnectionRegistry = yield* HostConnectionRegistryService;
+      const hostsRpcHandlers = makeHostsRpcHandlers({
+        accountSession,
+        remoteSessions,
+        hostConnections: makeHostConnectionsPort({
+          accountSession,
+          registry: hostConnectionRegistry,
+          relayUrl: config.relayUrl?.toString(),
+        }),
       });
 
       const toProjectProvisionRpcError = (cause: unknown) =>
@@ -1989,6 +2004,7 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.providerListAgents]: (input) =>
           rpcEffect(providerDiscoveryService.listAgents(input), "Failed to list agents"),
         ...accountRpcHandlers,
+        ...hostsRpcHandlers,
         [WS_METHODS.automationList]: (input) =>
           rpcEffect(automationService.list(input), "Failed to list automations"),
         [WS_METHODS.automationGetMemory]: ({ automationId }) =>

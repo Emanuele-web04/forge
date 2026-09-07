@@ -280,6 +280,22 @@ describe("organizations", () => {
     expect(workos.requests[before]?.path).toBe("/user_management/organization_memberships");
   });
 
+  it("paginates membership authorization inputs beyond WorkOS's 100-row cap", async () => {
+    const auth = createWorkosAuth(workos.config());
+    const user = workos.addUser({});
+    for (let index = 0; index < 101; index += 1) {
+      const organization = workos.addOrganization({ name: `Org ${index}` });
+      workos.addMembership(organization.id, user.id);
+    }
+    const before = workos.requests.length;
+    await expect(auth.listUserOrganizationMemberships(user.id)).resolves.toHaveLength(101);
+    expect(
+      workos.requests
+        .slice(before)
+        .filter((request) => request.path === "/user_management/organization_memberships"),
+    ).toHaveLength(2);
+  });
+
   it("returns an empty list for a user in no organizations", async () => {
     const auth = createWorkosAuth(workos.config());
     await expect(auth.listUserOrganizationMemberships(workos.addUser({}).id)).resolves.toEqual([]);

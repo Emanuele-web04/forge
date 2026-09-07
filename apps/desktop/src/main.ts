@@ -3538,6 +3538,13 @@ function backendEnv(): NodeJS.ProcessEnv {
     SYNARA_HOME: BASE_DIR,
     SYNARA_AUTH_TOKEN: backendAuthToken,
     SYNARA_DESKTOP_SHUTDOWN_TOKEN: DESKTOP_BACKEND_SHUTDOWN_TOKEN,
+    // Remote-host wiring is operator configuration, not app state: the account
+    // service to sign in against and the relay the bundled host dials. Passed
+    // through only when set so a plain launch keeps the defaults.
+    ...(process.env.SYNARA_ACCOUNT_URL
+      ? { SYNARA_ACCOUNT_URL: process.env.SYNARA_ACCOUNT_URL }
+      : {}),
+    ...(process.env.SYNARA_RELAY_URL ? { SYNARA_RELAY_URL: process.env.SYNARA_RELAY_URL } : {}),
   };
   // The backend runs the same login-shell probe at startup and does not begin listening
   // until it returns, so an unmarked child serializes a second ~1s hydration behind ours.

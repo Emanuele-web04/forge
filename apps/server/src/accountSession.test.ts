@@ -2,17 +2,20 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
-import type { AccountMe } from "@synara/contracts";
+import { EnvironmentId, type AccountMe, type DevicePublicKeyJwk } from "@synara/contracts";
 import {
   AccountApiError,
   OrganizationRequiredError,
   type AccountClient,
 } from "@synara/shared/account";
+import { deviceThumbprint } from "@synara/shared/deviceKey";
+import { decodeJwt } from "jose";
 
 import { accountCredentialsPath, readAccountFile, writeAccountCredentials } from "./accountAuth.ts";
 import { createAccountSession } from "./accountSession.ts";
+import { generateAndPersistHostIdentity } from "./hostIdentity";
 
 const temporaryDirectories: string[] = [];
 
@@ -54,7 +57,16 @@ function makeClient(overrides: Partial<AccountClient>): AccountClient {
     deleteAvatar: unimplemented("deleteAvatar"),
     updateOrganization: unimplemented("updateOrganization"),
     listHosts: unimplemented("listHosts"),
-    registerHost: unimplemented("registerHost"),
+    startHostLink: unimplemented("startHostLink"),
+    completeHostLink: unimplemented("completeHostLink"),
+    startDeviceHostLink: unimplemented("startDeviceHostLink"),
+    approveDeviceHostLink: unimplemented("approveDeviceHostLink"),
+    exchangeDeviceHostLink: unimplemented("exchangeDeviceHostLink"),
+    getApiJwks: unimplemented("getApiJwks"),
+    replaceHostEndpoints: unimplemented("replaceHostEndpoints"),
+    requestRelayTicket: unimplemented("requestRelayTicket"),
+    getHostAuthorization: unimplemented("getHostAuthorization"),
+    unlinkHost: unimplemented("unlinkHost"),
     updateHost: unimplemented("updateHost"),
     deleteHost: unimplemented("deleteHost"),
     requestAuthorizeUrl: unimplemented("requestAuthorizeUrl"),
@@ -87,6 +99,28 @@ function credentials(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+const linkedHostFields = {
+  hostId: "host_1",
+  hostOwnerUserId: "user_1",
+  hostKeyGeneration: 1,
+} as const;
+
+const linkedHost = {
+  id: "host_1",
+  environmentId: EnvironmentId.makeUnsafe("env_1"),
+  name: "Ada's Mac",
+  platform: "darwin" as const,
+  kind: "local" as const,
+  endpoints: [],
+  ownerUserId: "user_1",
+  discoverable: false,
+  linked: true,
+  keyGeneration: 1,
+  mine: true,
+  createdAt: "2026-08-14T12:00:00.000Z",
+  lastSeenAt: "2026-08-14T12:00:00.000Z",
+};
 
 function sessionFor(baseDir: string, client: AccountClient) {
   return createAccountSession({ baseDir, accountUrl: ACCOUNT_URL, client });
@@ -140,7 +174,7 @@ describe("status", () => {
   // raising a failed RPC over.
   it("reports signed out when the refresh token can no longer be redeemed", async () => {
     const baseDir = makeBaseDir();
-    await writeAccountCredentials(baseDir, credentials({ hostToken: "host-token" }));
+    await writeAccountCredentials(baseDir, credentials(linkedHostFields));
     const session = sessionFor(
       baseDir,
       makeClient({
@@ -157,7 +191,7 @@ describe("status", () => {
 
     expect(await session.status()).toEqual({ state: "signed-out" });
     // The host registration is not part of the session and must survive it.
-    expect(await readAccountFile(baseDir)).toMatchObject({ hostToken: "host-token" });
+    expect(await readAccountFile(baseDir)).toMatchObject(linkedHostFields);
   });
 
   // An unreachable account is not a signed-out one: reporting it that way
@@ -248,6 +282,62 @@ describe("OTP sign-in", () => {
     });
   });
 
+  it("automatically registers the device and links the bundled local host after sign-in", async () => {
+    const baseDir = makeBaseDir();
+    const registerDevice = vi.fn(async (_token: string, proof: string) => {
+      const claims = decodeJwt(proof) as {
+        publicKeyJwk: DevicePublicKeyJwk;
+        displayName: string;
+        platform: "darwin" | "linux" | "windows";
+      };
+      return {
+        device: {
+          id: "00000000-0000-4000-8000-000000000001",
+          publicKeyJwk: claims.publicKeyJwk,
+          jkt: await deviceThumbprint(claims.publicKeyJwk),
+          displayName: claims.displayName,
+          platform: claims.platform,
+          createdAt: "2026-08-14T12:00:00.000Z",
+          lastUsedAt: null,
+          revokedAt: null,
+        },
+      };
+    });
+    const startHostLink = vi.fn(() =>
+      Promise.resolve({
+        challengeId: "2f1f9dd7-56a5-45cf-b847-12e6658f3720",
+        nonce: "bm9uY2U",
+        expiresAt: "2026-08-14T12:05:00.000Z",
+      }),
+    );
+    const completeHostLink = vi.fn(() => Promise.resolve({ host: linkedHost }));
+    const session = sessionFor(
+      baseDir,
+      otpClient({
+        registerDevice,
+        startHostLink,
+        completeHostLink,
+      }),
+    );
+
+    await session.authenticateOtp(OTP_INPUT);
+
+    expect(registerDevice).toHaveBeenCalledWith("access-1", expect.stringMatching(/^eyJ/));
+    expect(startHostLink).toHaveBeenCalledWith(
+      "access-1",
+      expect.objectContaining({ kind: "local" }),
+    );
+    expect(completeHostLink).toHaveBeenCalledWith({
+      challengeId: "2f1f9dd7-56a5-45cf-b847-12e6658f3720",
+      proof: expect.stringMatching(/^eyJ/),
+    });
+    expect(await readAccountFile(baseDir)).toMatchObject({
+      ...linkedHostFields,
+      deviceId: "00000000-0000-4000-8000-000000000001",
+      deviceJkt: expect.any(String),
+    });
+  });
+
   // e.g. the file an expired session left behind: same account, same
   // workspace, so the registration still describes this machine's link.
   it("keeps an existing host registration when the sign-in lands on the same account and workspace", async () => {
@@ -257,15 +347,13 @@ describe("OTP sign-in", () => {
       workosClientId: CLIENT_ID,
       workosApiUrl: WORKOS_API_URL,
       organizationId: ORGANIZATION.id,
-      hostToken: "host-token",
-      hostId: "host_1",
+      ...linkedHostFields,
     });
     const session = sessionFor(baseDir, otpClient());
 
     await session.authenticateOtp(OTP_INPUT);
     expect(await readAccountFile(baseDir)).toMatchObject({
-      hostToken: "host-token",
-      hostId: "host_1",
+      ...linkedHostFields,
     });
   });
 
@@ -279,14 +367,13 @@ describe("OTP sign-in", () => {
       workosClientId: CLIENT_ID,
       workosApiUrl: WORKOS_API_URL,
       organizationId: "org_other_user",
-      hostToken: "host-token",
-      hostId: "host_1",
+      ...linkedHostFields,
     });
     const session = sessionFor(baseDir, otpClient());
 
     await session.authenticateOtp(OTP_INPUT);
     const stored = await readAccountFile(baseDir);
-    expect(stored?.hostToken).toBeUndefined();
+    expect(stored?.hostId).toBeUndefined();
     expect(stored?.hostId).toBeUndefined();
     expect(stored).toMatchObject({ organizationId: ORGANIZATION.id });
   });
@@ -298,14 +385,13 @@ describe("OTP sign-in", () => {
       workosClientId: CLIENT_ID,
       workosApiUrl: WORKOS_API_URL,
       organizationId: ORGANIZATION.id,
-      hostToken: "host-token",
-      hostId: "host_1",
+      ...linkedHostFields,
     });
     const session = sessionFor(baseDir, otpClient());
 
     await session.authenticateOtp(OTP_INPUT);
     const stored = await readAccountFile(baseDir);
-    expect(stored?.hostToken).toBeUndefined();
+    expect(stored?.hostId).toBeUndefined();
     expect(stored?.hostId).toBeUndefined();
     expect(stored).toMatchObject({ accountUrl: ACCOUNT_URL });
   });
@@ -766,21 +852,19 @@ describe("avatar", () => {
 });
 
 describe("signOut", () => {
-  it("drops the session and keeps the host registration", async () => {
+  it("unlinks local account state, including the host link", async () => {
     const baseDir = makeBaseDir();
-    await writeAccountCredentials(
-      baseDir,
-      credentials({ hostToken: "host-token", hostId: "host_1" }),
+    await writeAccountCredentials(baseDir, credentials(linkedHostFields));
+    await generateAndPersistHostIdentity(
+      path.join(baseDir, "userdata", "secrets", "host-identity.json"),
     );
-    const session = sessionFor(baseDir, makeClient({}));
+    const unlinkHost = vi.fn(() => Promise.resolve(linkedHost));
+    const session = sessionFor(baseDir, makeClient({ unlinkHost }));
 
     await session.signOut();
 
-    const stored = await readAccountFile(baseDir);
-    expect(stored).toMatchObject({ hostToken: "host-token", hostId: "host_1" });
-    expect(stored?.accessToken).toBeUndefined();
-    expect(stored?.refreshToken).toBeUndefined();
-    expect(stored?.organizationId).toBeUndefined();
+    expect(unlinkHost).toHaveBeenCalledWith(expect.stringMatching(/^eyJ/), "host_1");
+    expect(await readAccountFile(baseDir)).toBeUndefined();
     expect(await session.status()).toEqual({ state: "signed-out" });
   });
 

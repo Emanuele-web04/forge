@@ -6,6 +6,7 @@ const devEnv = {
   IDENTITY_PROVIDER: "dev",
   DATABASE_URL: "postgres://u:p@localhost:5432/db",
   ACCOUNT_BASE_URL: "http://localhost:8788",
+  API_PUBLIC_URL: "http://localhost:8788/api/v1",
 };
 
 afterEach(() => {
@@ -45,6 +46,7 @@ describe("the dev identity safety gate", () => {
       identityProvider: "dev",
       databaseUrl: devEnv.DATABASE_URL,
       baseUrl: devEnv.ACCOUNT_BASE_URL,
+      apiPublicUrl: devEnv.API_PUBLIC_URL,
     });
   });
 

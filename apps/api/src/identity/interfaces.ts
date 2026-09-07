@@ -8,12 +8,27 @@
 // Depends on: @synara/contracts (shared wire types) only.
 
 import type {
+  AccountDevice,
+  AccountErrorCode,
   AccountHost,
+  AccountHostEndpoint,
   AccountSsoProvider,
+  DevicePublicKeyJwk,
+  HostPublicKeyJwk,
+  HostSecretEnvelope,
   InstanceInfo,
-  RegisterHostRequest,
-  UpdateHostRequest,
+  LinkCompleteRequest,
+  LinkCompleteResponse,
+  LinkDeviceStartResponse,
+  LinkDeviceTokenResponse,
+  LinkStartRequest,
+  LinkStartResponse,
+  RevocationEvent,
+  RevocationKind,
+  StoredHostSecret,
+  SyncKeyWrap,
 } from "@synara/contracts";
+import type { ApiSigningService } from "./signing";
 
 /** The subset of a user this service surfaces (see /me). */
 export type IdentityUser = {
@@ -300,79 +315,156 @@ export type EnvironmentGrantIssuer = {
    * they cannot answer rather than degrade to a guess.
    */
   countOrganizationMembers(orgId: string, atLeast: number): Promise<number>;
+  /** Membership list for authorization decisions about an arbitrary user. */
+  listUserOrganizations(
+    userId: string,
+    options?: { freshMembership?: boolean },
+  ): Promise<OrganizationRef[]>;
 };
 
-export type DeviceCredentialAuthResult =
-  | { ok: true; hostId: string }
-  | { ok: false; status: 401; error: "unauthorized" }
-  | { ok: false; status: 403; error: "token_revoked" };
-
-/**
- * Mints, verifies, and revokes the long-lived credentials machines hold —
- * today the `synhost_` host tokens, hashed at rest, one active per host.
- * The future device-bound PoP credentials (maintainer step 10) slot in here.
- */
-export type DeviceCredentialStore = {
-  /**
-   * Revokes every active credential for `hostId` and mints a fresh one,
-   * returning the only copy of the plaintext token that will ever exist.
-   * On a freshly registered host there is nothing to revoke and this is
-   * simply the first mint.
-   */
-  rotate(hostId: string): Promise<string>;
-  /** Resolves an Authorization header to its owning host, or a typed failure. */
-  authenticate(authorizationHeader: string | undefined | null): Promise<DeviceCredentialAuthResult>;
-  /** Whether the header carries a device credential (vs. a user access token). */
-  isDeviceCredential(authorizationHeader: string | undefined | null): boolean;
-};
-
-/**
- * A registration refused because the environment is already linked to another
- * host record in the same organization.
- */
-export class EnvironmentAlreadyLinkedError extends Error {
-  constructor() {
-    super("This environment is already linked to another host record");
-    this.name = "EnvironmentAlreadyLinkedError";
+export class HostAuthDomainError extends Error {
+  constructor(
+    readonly status: 400 | 401 | 403 | 404 | 409 | 428 | 502,
+    readonly code: AccountErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = "HostAuthDomainError";
   }
 }
 
-/**
- * The directory of environments (hosts) an organization owns — the registry
- * half of the control plane. Speaks contract types on the way out so callers
- * never touch storage rows.
- */
-export type EnvironmentRegistry = {
-  list(orgId: string): Promise<AccountHost[]>;
-  /**
-   * Registers an environment, or refreshes its record when the organization
-   * already linked this `environmentId`. `registeredByUserId` is audit only
-   * and must never be consulted for access. Rejects with
-   * {@link EnvironmentAlreadyLinkedError} when the environment is linked to a
-   * different host record.
-   */
-  register(
-    orgId: string,
-    registeredByUserId: string,
-    request: RegisterHostRequest,
-  ): Promise<{ host: AccountHost; created: boolean }>;
-  /** Applies a host's self-reported update, bumping lastSeenAt. Undefined when unknown. */
-  update(hostId: string, request: UpdateHostRequest): Promise<AccountHost | undefined>;
-  /** Owner removal: scoped to the organization. False when nothing matched. */
-  deleteForOrg(hostId: string, orgId: string): Promise<boolean>;
-  /** Self-removal by the host itself, already authenticated by its credential. */
-  deleteById(hostId: string): Promise<void>;
+export type HostRecord = {
+  id: string;
+  ownerUserId: string;
+  ownerOrgId: string;
+  environmentId: string;
+  publicKeyJwk: HostPublicKeyJwk | null;
+  keyGeneration: number;
+  discoverable: boolean;
+};
+
+export type HostKeyRegistry = {
+  startLink(
+    owner: { userId: string; orgId: string },
+    request: LinkStartRequest,
+  ): Promise<LinkStartResponse>;
+  completeLink(request: LinkCompleteRequest): Promise<LinkCompleteResponse>;
+  startDeviceLink(verificationUri: string): Promise<LinkDeviceStartResponse>;
+  approveDeviceLink(owner: { userId: string; orgId: string }, userCode: string): Promise<void>;
+  exchangeDeviceCode(deviceCode: string): Promise<LinkDeviceTokenResponse>;
+  withAuthenticatedHost<T>(
+    authorization: string | undefined | null,
+    expectedHostId: string,
+    action: (host: HostRecord) => Promise<T>,
+  ): Promise<T>;
+  replaceEndpoints(
+    authorization: string | undefined | null,
+    hostId: string,
+    endpoints: readonly AccountHostEndpoint[],
+  ): Promise<AccountHost>;
+  unlink(hostId: string): Promise<AccountHost>;
+  unlinkWithProof(authorization: string | undefined | null, hostId: string): Promise<AccountHost>;
+};
+
+export type DeviceRegistry = {
+  register(userId: string, proof: string): Promise<AccountDevice>;
+  list(userId: string): Promise<AccountDevice[]>;
+  revoke(
+    userId: string,
+    deviceId: string,
+    affectedOrgIds: readonly string[],
+  ): Promise<AccountDevice | undefined>;
+};
+
+export type HostGrantIssuer = {
+  issueGrant(input: { userId: string; host: HostRecord; deviceJkt: string }): Promise<string>;
+  issueRelayTicket(host: HostRecord): Promise<string>;
+};
+
+export type RevocationLog = {
+  record(hostId: string, kind: RevocationKind, subject?: string): Promise<void>;
+  read(after: number): Promise<{ events: RevocationEvent[]; watermark: number }>;
 };
 
 /**
- * The four adapters, built together by the factory so wiring stays in one
+ * The outcome of a compare-and-swap write. A refusal carries the version the
+ * store actually holds, because the client's only recovery is to re-read and
+ * re-seal, and making it guess would turn a lost write into a poll loop.
+ */
+export type HostSecretWriteResult =
+  | { ok: true; secret: StoredHostSecret }
+  | { ok: false; currentVersion: number };
+
+/**
+ * Storage for end-to-end encrypted Host Secrets and the pairing wraps that
+ * deliver the Sync Key (ADR 0004).
+ *
+ * Every method here moves opaque bytes. `version` is the ONLY field any
+ * implementation may interpret, and only to compare — an implementation that
+ * could open an envelope would break the invariant the whole workstream
+ * exists to hold, that the cloud is a directory and a pipe.
+ *
+ * Ownership is a parameter on every call rather than something the store
+ * infers: the route resolves who the caller is, and passing the owner down
+ * means a query can never return a row the caller was not scoped to, even if
+ * a future route forgets its own check.
+ */
+export type HostSecretStore = {
+  /** The current secret for a host the caller owns, or null when none exists. */
+  read(hostId: string, ownerUserId: string): Promise<StoredHostSecret | null>;
+  /**
+   * Compare-and-swap the current secret, archiving the superseded version.
+   * `expectedVersion` is 0 to claim the row does not exist yet, so create and
+   * update are one path and a first-write race has exactly one winner.
+   */
+  write(input: {
+    hostId: string;
+    ownerUserId: string;
+    expectedVersion: number;
+    envelope: HostSecretEnvelope;
+  }): Promise<HostSecretWriteResult>;
+  /**
+   * Retained superseded versions, newest first, bounded by the trim on write.
+   * The recovery path for a bad write (spec §3): no route serves this yet —
+   * restoring a clobbered config is an operator action today — but it is the
+   * only reader of the history the write path is already paying to maintain.
+   */
+  history(hostId: string, ownerUserId: string): Promise<StoredHostSecret[]>;
+  /**
+   * Publishes a wrapped Sync Key addressed to one of the owner's devices,
+   * replacing any wrap already waiting for it. Callers must have verified the
+   * recipient device belongs to `ownerUserId`.
+   */
+  putWrap(input: {
+    recipientDeviceId: string;
+    ownerUserId: string;
+    wrap: SyncKeyWrap;
+  }): Promise<{ expiresAt: string }>;
+  /**
+   * Fetches and CONSUMES the wrap waiting for a device — single delivery, so
+   * a second call returns null. Implementations must make the read and the
+   * delete one statement; a select-then-delete would deliver twice under
+   * concurrency, which is the one property pairing must not have.
+   */
+  takeWrap(
+    recipientDeviceId: string,
+    ownerUserId: string,
+  ): Promise<{ wrap: SyncKeyWrap; createdAt: string } | null>;
+};
+
+/**
+ * The adapters, built together by the factory so wiring stays in one
  * place. `close` releases whatever the provider holds open (the dev provider
  * runs an in-process endpoint); for the hosted provider it is a no-op.
  */
 export type IdentityAdapters = {
   verifier: AccountIdentityVerifier;
   grants: EnvironmentGrantIssuer;
-  deviceCredentials: DeviceCredentialStore;
-  environments: EnvironmentRegistry;
+  signing: ApiSigningService;
+  hostKeys: HostKeyRegistry;
+  devices: DeviceRegistry;
+  hostGrants: HostGrantIssuer;
+  revocations: RevocationLog;
+  hostSecrets: HostSecretStore;
   close(): Promise<void>;
 };

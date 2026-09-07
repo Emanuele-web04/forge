@@ -1,0 +1,150 @@
+// FILE: queries.test.ts
+// Purpose: The remote-host queries fail with a nameable error on an old
+//          server, stay disabled while signed out, and do not poll.
+// Layer: Web remote-access feature tests.
+
+import { describe, expect, it, vi } from "vitest";
+
+const nativeApiMock: { current: unknown } = { current: null };
+vi.mock("~/nativeApi", () => ({
+  ensureNativeApi: () => nativeApiMock.current,
+  readNativeApi: () => nativeApiMock.current,
+}));
+
+const queriesModule = await import("./queries");
+const {
+  HostsUnsupportedError,
+  devicesQueryOptions,
+  remoteHostEnrollmentQueryOptions,
+  remoteHostQueryKeys,
+  hostsQueryOptions,
+} = queriesModule;
+
+describe("remoteHostQueryKeys", () => {
+  it("nests every key under one prefix so an identity change can drop them all", () => {
+    for (const key of [
+      remoteHostQueryKeys.hosts(),
+      remoteHostQueryKeys.devices(),
+      remoteHostQueryKeys.enrollment(),
+    ]) {
+      expect(key[0]).toBe(remoteHostQueryKeys.all[0]);
+    }
+  });
+
+  it("keeps hosts, devices, and enrollment on distinct keys", () => {
+    const keys = [
+      remoteHostQueryKeys.hosts(),
+      remoteHostQueryKeys.devices(),
+      remoteHostQueryKeys.enrollment(),
+    ].map((key) => key.join("/"));
+
+    expect(new Set(keys).size).toBe(3);
+  });
+});
+
+describe("query options", () => {
+  it("exposes a live-session query with bounded polling", () => {
+    const sessionsQueryOptions = (
+      queriesModule as typeof queriesModule & {
+        sessionsQueryOptions?: (input?: { enabled?: boolean }) => {
+          enabled: boolean;
+          refetchInterval: number;
+          queryFn: () => Promise<unknown>;
+        };
+      }
+    ).sessionsQueryOptions;
+    expect(sessionsQueryOptions, "sessionsQueryOptions export").toBeTypeOf("function");
+    if (!sessionsQueryOptions) return;
+
+    expect(sessionsQueryOptions({ enabled: false }).enabled).toBe(false);
+    expect(sessionsQueryOptions().refetchInterval).toBeGreaterThanOrEqual(2_000);
+    expect(sessionsQueryOptions().refetchInterval).toBeLessThanOrEqual(10_000);
+  });
+
+  it("is disabled when the caller says so (signed out)", () => {
+    expect(hostsQueryOptions({ enabled: false }).enabled).toBe(false);
+    expect(devicesQueryOptions({ enabled: false }).enabled).toBe(false);
+    expect(remoteHostEnrollmentQueryOptions({ enabled: false }).enabled).toBe(false);
+  });
+
+  it("is enabled by default", () => {
+    expect(hostsQueryOptions().enabled).toBe(true);
+  });
+
+  // ADR 0010: there is no live state to poll for. A refetch interval here
+  // would be a presence system built by accident.
+  it("does not poll", () => {
+    for (const options of [
+      hostsQueryOptions(),
+      devicesQueryOptions(),
+      remoteHostEnrollmentQueryOptions(),
+    ]) {
+      expect(options).not.toHaveProperty("refetchInterval");
+    }
+  });
+
+  // "Your server is too old" is actionable; a generic failure is not.
+  it("fails with a nameable error when the shell has no hosts namespace", async () => {
+    nativeApiMock.current = { account: {} };
+
+    for (const options of [
+      hostsQueryOptions(),
+      devicesQueryOptions(),
+      remoteHostEnrollmentQueryOptions(),
+    ]) {
+      await expect((options.queryFn as () => Promise<unknown>)()).rejects.toBeInstanceOf(
+        HostsUnsupportedError,
+      );
+    }
+  });
+
+  it("unwraps the list responses", async () => {
+    const hosts = [{ id: "host_1" }];
+    const devices = [{ id: "device_1" }];
+    const enrollment = {
+      host: null,
+      organizationMemberCount: 1,
+      discoverabilityAcknowledged: true,
+    };
+    nativeApiMock.current = {
+      hosts: {
+        listHosts: vi.fn().mockResolvedValue({ hosts }),
+        updateHost: vi.fn(),
+        deleteHost: vi.fn(),
+        listDevices: vi.fn().mockResolvedValue({ devices }),
+        revokeDevice: vi.fn(),
+        approveDeviceLink: vi.fn(),
+        requestGrant: vi.fn(),
+        enrollment: vi.fn().mockResolvedValue(enrollment),
+        unlinkLocalHost: vi.fn(),
+        listSessions: vi.fn(),
+        endSession: vi.fn(),
+        beginSyncKeyPairing: vi.fn(),
+        offerSyncKey: vi.fn(),
+        receiveSyncKey: vi.fn(),
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        listConnections: vi.fn(),
+        confirmSyncKey: vi.fn(),
+      },
+    };
+
+    await expect((hostsQueryOptions().queryFn as () => Promise<unknown>)()).resolves.toEqual(hosts);
+    await expect((devicesQueryOptions().queryFn as () => Promise<unknown>)()).resolves.toEqual(
+      devices,
+    );
+    await expect(
+      (remoteHostEnrollmentQueryOptions().queryFn as () => Promise<unknown>)(),
+    ).resolves.toEqual(enrollment);
+  });
+
+  // A namespace missing even one method is a partial implementation, and
+  // calling into it fails deep inside a query instead of at the boundary.
+  it("treats an incomplete hosts namespace as unsupported", async () => {
+    nativeApiMock.current = { hosts: { listHosts: vi.fn() } };
+
+    await expect((hostsQueryOptions().queryFn as () => Promise<unknown>)()).rejects.toBeInstanceOf(
+      HostsUnsupportedError,
+    );
+  });
+});

@@ -57,6 +57,7 @@ import { requireHttpExternalUrl } from "./lib/externalUrl";
 import { WsTransport, type WsThreadStreamFailure } from "./wsTransport";
 import { emitWsCompatibilityIssue, emitWsTransportState } from "./wsTransportEvents";
 import { resolveWsHttpUrl } from "./lib/wsHttpUrl";
+import type { HostsApi } from "./lib/hosts/api";
 
 export type { WsThreadStreamFailure } from "./wsTransport";
 
@@ -482,7 +483,7 @@ export function createWsNativeApi(): NativeApi {
   transport.onThreadStreamFailure((failure) => {
     threadStreamFailureListeners.emit(failure);
   });
-  const api: NativeApi = {
+  const api: NativeApi & { hosts: HostsApi } = {
     dialogs: {
       pickFolder: async () => {
         if (!window.desktopBridge) return null;
@@ -826,6 +827,28 @@ export function createWsNativeApi(): NativeApi {
       signOut: () => transport.request(WS_METHODS.accountSignOut),
       openVerificationUrl: (input) =>
         transport.request(WS_METHODS.accountOpenVerificationUrl, input),
+    },
+    hosts: {
+      listHosts: () => transport.request(WS_METHODS.hostsList),
+      updateHost: (input) => transport.request(WS_METHODS.hostsUpdate, input),
+      deleteHost: (input) => transport.request(WS_METHODS.hostsDelete, input),
+      listDevices: () => transport.request(WS_METHODS.hostsListDevices),
+      revokeDevice: (input) => transport.request(WS_METHODS.hostsRevokeDevice, input),
+      approveDeviceLink: (input) => transport.request(WS_METHODS.hostsApproveDeviceLink, input),
+      requestGrant: (input) => transport.request(WS_METHODS.hostsRequestGrant, input),
+      enrollment: () => transport.request(WS_METHODS.hostsEnrollment),
+      unlinkLocalHost: () => transport.request(WS_METHODS.hostsUnlinkLocalHost),
+      listSessions: () => transport.request(WS_METHODS.hostsListSessions),
+      endSession: (input) => transport.request(WS_METHODS.hostsEndSession, input),
+      beginSyncKeyPairing: () => transport.request(WS_METHODS.hostsBeginSyncKeyPairing),
+      offerSyncKey: (input) => transport.request(WS_METHODS.hostsOfferSyncKey, input),
+      receiveSyncKey: () => transport.request(WS_METHODS.hostsReceiveSyncKey),
+      confirmSyncKey: (input) => transport.request(WS_METHODS.hostsConfirmSyncKey, input),
+      // Dialing races several transports with a 3s deadline and then does a
+      // two-round-trip handshake; the default RPC deadline is too tight.
+      connect: (input) => transport.request(WS_METHODS.hostsConnect, input, { timeoutMs: 30_000 }),
+      disconnect: (input) => transport.request(WS_METHODS.hostsDisconnect, input),
+      listConnections: () => transport.request(WS_METHODS.hostsListConnections),
     },
     automation: {
       list: (input) => transport.request(WS_METHODS.automationList, input),

@@ -8,7 +8,12 @@ import { AccountApiError } from "@synara/shared/account";
 import { Cause } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { toAccountWsRpcError, toSensitiveWsRpcError } from "./accountRpcErrors";
+import {
+  toAccountWsRpcError,
+  toPairingVerificationWsRpcError,
+  toSensitiveWsRpcError,
+} from "./accountRpcErrors";
+import { PairingVerificationError } from "./hostSecrets/coordinator";
 
 const apiError = new AccountApiError({
   code: "handle_taken",
@@ -67,6 +72,19 @@ describe("toSensitiveWsRpcError", () => {
     const mapped = toSensitiveWsRpcError(original, "fallback");
     expect(mapped.message).toBe("mapped");
     expect(mapped.code).toBe("invalid_verification_code");
+    expect(mapped.cause).toBeUndefined();
+  });
+});
+
+describe("toPairingVerificationWsRpcError", () => {
+  it("surfaces only the safe attempt count from a pairing mismatch", () => {
+    const mapped = toPairingVerificationWsRpcError(
+      new Cause.UnknownError(new PairingVerificationError(2, "That code does not match.")),
+      "fallback",
+    );
+
+    expect(mapped.message).toBe("That code does not match.");
+    expect(mapped.remainingAttempts).toBe(2);
     expect(mapped.cause).toBeUndefined();
   });
 });
