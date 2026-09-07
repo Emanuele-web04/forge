@@ -624,14 +624,24 @@ function looksLikeInlineMath(content: string): boolean {
   if (INLINE_MATH_HINT_REGEX.test(trimmed)) {
     return true;
   }
-  return /^[A-Za-z][A-Za-z0-9]{0,15}$/.test(trimmed);
+  return /^(?:\d+(?:\.\d+)?)?[A-Za-z][A-Za-z0-9]{0,15}$/.test(trimmed);
 }
 
 // Reject obvious literal/currency dollars before searching for a closing math delimiter.
 function canOpenInlineMath(value: string, index: number): boolean {
   const next = value[index + 1];
-  if (!next || /\s|\d/.test(next)) {
+  if (!next || /\s/.test(next)) {
     return false;
+  }
+  if (/\d/.test(next)) {
+    const closingIndex = findInlineMathClosingDollar(value, index + 1);
+    if (closingIndex === -1 || /\d/.test(value[closingIndex + 1] ?? "")) {
+      return false;
+    }
+    // A numeric prefix can be a coefficient. Require a complete expression
+    // on this line; do not pair prices across lines or consume `$5-$10`.
+    const content = value.slice(index + 1, closingIndex);
+    return !/[\r\n]/.test(content) && looksLikeInlineMath(content);
   }
   return true;
 }
@@ -660,7 +670,7 @@ function findInlineMathClosingDollar(value: string, index: number): number {
   return -1;
 }
 
-function protectLiteralDollarsInPlainText(value: string): string {
+function protectLiteralDollarsInMarkdownLinks(value: string): string {
   let result = "";
   let cursor = 0;
 
@@ -668,6 +678,16 @@ function protectLiteralDollarsInPlainText(value: string): string {
     if (value[cursor] === "\\" && value[cursor + 1] === "$") {
       result += ESCAPED_DOLLAR_PLACEHOLDER;
       cursor += 2;
+      continue;
+    }
+
+    // Scan links and math together: splitting at every `[` breaks TeX such as
+    // \left[...\right] before its closing dollars can be found. A math span is
+    // consumed whole below, so brackets inside it never enter link detection.
+    const linkEnd = findInlineMarkdownLinkEnd(value, cursor);
+    if (linkEnd !== -1) {
+      result += value.slice(cursor, linkEnd).replaceAll("$", LITERAL_DOLLAR_PLACEHOLDER);
+      cursor = linkEnd;
       continue;
     }
 
@@ -771,38 +791,6 @@ function findInlineMarkdownLinkEnd(value: string, index: number): number {
 
   const parenEnd = findMarkdownParenEnd(value, bracketEnd + 1);
   return parenEnd === -1 ? -1 : parenEnd + 1;
-}
-
-function protectLiteralDollarsInMarkdownLinks(value: string): string {
-  let result = "";
-  let cursor = 0;
-
-  while (cursor < value.length) {
-    const isLinkStart =
-      value[cursor] === "[" || (value[cursor] === "!" && value[cursor + 1] === "[");
-    if (!isLinkStart) {
-      const nextLinkStart = value.indexOf("[", cursor);
-      const nextImageStart = value.indexOf("![", cursor);
-      const candidates = [nextLinkStart, nextImageStart].filter((candidate) => candidate >= 0);
-      const nextIndex = candidates.length > 0 ? Math.min(...candidates) : value.length;
-      result += protectLiteralDollarsInPlainText(value.slice(cursor, nextIndex));
-      cursor = nextIndex;
-      continue;
-    }
-
-    const linkEnd = findInlineMarkdownLinkEnd(value, cursor);
-    if (linkEnd === -1) {
-      result += protectLiteralDollarsInPlainText(value[cursor] ?? "");
-      cursor += 1;
-      continue;
-    }
-
-    // Inline links are parsed after math, so protect route params like `_chat.$threadId.tsx`.
-    result += value.slice(cursor, linkEnd).replaceAll("$", LITERAL_DOLLAR_PLACEHOLDER);
-    cursor = linkEnd;
-  }
-
-  return result;
 }
 
 // Tighten single-dollar math so currency and escaped dollars stay literal without touching code spans.

@@ -105,6 +105,49 @@ describe("ChatMarkdown", () => {
     expect(markup.match(/class="katex"/g) ?? []).toHaveLength(1);
   });
 
+  it("keeps bracketed display formulas intact without swallowing subsequent prose and tables", async () => {
+    const markup = await renderMarkdown(String.raw`- **Decay gate**:
+
+$$
+\alpha_t
+=
+\exp\left[-\exp(A)\operatorname{softplus}(W_\alpha x_t+b_\alpha)\right],
+$$
+
+正常正文 **仍然加粗**。
+
+$$
+o_t
+=
+W_o\left[\sigma(W_zx_t)\odot\operatorname{RMSNorm}(y_t)\right].
+$$
+
+| Operation | FLOPs |
+|---|---:|
+| Read | $d_kd_v$ |
+
+[route](/src/_chat.$threadId.tsx)`);
+
+    expect(markup.match(/class="katex-display"/g) ?? []).toHaveLength(2);
+    expect(markup).not.toContain("katex-error");
+    expect(markup).not.toMatch(/<h[12][ >]/);
+    expect(markup).toContain("<strong>仍然加粗</strong>");
+    expect(markup).toContain("<table>");
+    expect(markup).toContain('href="/src/_chat.$threadId.tsx"');
+  });
+
+  it("preserves brackets inside inline math and ordinary prose beside links", async () => {
+    const markup = await renderMarkdown(
+      String.raw`[note] $x[0]+y[1]$ and $\left[f(x)\right]$; [route](/src/$id.tsx). Price $5.`,
+    );
+
+    expect(markup.match(/class="katex"/g) ?? []).toHaveLength(2);
+    expect(markup).not.toContain("katex-error");
+    expect(markup).toContain("[note]");
+    expect(markup).toContain('href="/src/$id.tsx"');
+    expect(markup).toContain("Price $5.");
+  });
+
   it("renders external assistant links with the shared favicon icon slot", async () => {
     const markup = await renderMarkdown(
       "Closest source: [OpenAI benchmark](https://openai.com/research).",
@@ -154,6 +197,31 @@ describe("ChatMarkdown", () => {
     expect(markup).toContain("$USD$");
     expect(markup).toContain("$PATH$");
     expect(markup).not.toContain('class="katex"');
+  });
+
+  it("renders numeric coefficients in every table row", async () => {
+    const markup = await renderMarkdown(String.raw`| Operation | FLOPs |
+|---|---:|
+| Decay | $d_kd_v$ |
+| Read | $2d_kd_v$ |
+| Write | $2d_kd_v$ |
+| Output | $2d_kd_v$ |`);
+    expect(markup.match(/class="katex"/g) ?? []).toHaveLength(4);
+    expect(markup).not.toContain("katex-error");
+    expect(markup).not.toContain("$2d_kd_v$");
+  });
+
+  it("renders numeric expressions while keeping prices and code literal", async () => {
+    const markup = await renderMarkdown(
+      String.raw`Prices $5, $5 to $10, $5-$10 and $29.470. Math $2x$, $2.5x$, $2 + 3 = 5$, $2^{10}$ and $2\pi$.` +
+        " Code `$2d_kd_v$`.",
+    );
+    expect(markup.match(/class="katex"/g) ?? []).toHaveLength(5);
+    expect(markup).not.toContain("katex-error");
+    expect(markup).toContain("$5 to $10");
+    expect(markup).toContain("$5-$10");
+    expect(markup).toContain("$29.470");
+    expect(markup).toContain("<code>$2d_kd_v$</code>");
   });
 
   it("renders a table whose delimiter row is missing cells", async () => {
