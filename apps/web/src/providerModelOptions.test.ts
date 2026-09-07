@@ -46,6 +46,21 @@ describe("Claude model selections", () => {
 });
 
 describe("formatProviderModelOptionName", () => {
+  it("uses branded humanized labels for qualified Pi model slugs", () => {
+    expect(
+      formatProviderModelOptionName({
+        provider: "pi",
+        slug: "zai/glm-5.3-flash",
+      }),
+    ).toBe("GLM 5.3 Flash");
+    expect(
+      formatProviderModelOptionName({
+        provider: "pi",
+        slug: "deepseek/deepseek-v4-flash",
+      }),
+    ).toBe("DeepSeek V4 Flash");
+  });
+
   it("humanizes unknown OpenCode runtime model slugs using the model identifier", () => {
     expect(
       formatProviderModelOptionName({
@@ -75,6 +90,19 @@ describe("formatProviderModelOptionName", () => {
 });
 
 describe("mergeDynamicModelOptions", () => {
+  it("normalizes slug-shaped Pi display names", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "pi",
+        staticOptions: [],
+        dynamicModels: [
+          { slug: "zai/glm-5.3-flash", name: "GLM-5.3-Flash" },
+          { slug: "deepseek/deepseek-v4-flash", name: "Deepseek V4 Flash" },
+        ],
+      }).map((option) => option.name),
+    ).toEqual(["GLM 5.3 Flash", "DeepSeek V4 Flash"]);
+  });
+
   it("does not offer Pi Anthropic models when discovery only returns local models", () => {
     expect(
       mergeDynamicModelOptions({

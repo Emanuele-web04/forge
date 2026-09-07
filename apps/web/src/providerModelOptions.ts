@@ -46,6 +46,12 @@ export interface ProviderModelOptionGroup {
   options: ProviderModelOption[];
 }
 
+// Catalog names that differ from their model id only by separators or casing
+// are still id-derived labels rather than intentional presentation metadata.
+function modelDisplayIdentity(value: string): string {
+  return value.trim().toLowerCase().replace(/[-_\s]+/gu, "");
+}
+
 /**
  * Returns the provider provenance shown when a model is detached from its
  * normal upstream-provider group (for example, inside Favourites).
@@ -162,6 +168,11 @@ export function mergeDynamicModelOptions(input: {
 
     const normalizedSlug = normalizeDynamicModelSlug(input.provider, dynamicModel.slug);
     const rawSlug = dynamicModel.slug.trim().toLowerCase();
+    const modelIdentifier = normalizedSlug.includes("/")
+      ? normalizedSlug.slice(normalizedSlug.lastIndexOf("/") + 1)
+      : normalizedSlug;
+    const rawNameIsIdentifier =
+      rawName.length > 0 && modelDisplayIdentity(rawName) === modelDisplayIdentity(modelIdentifier);
     const displayNameFallback = formatProviderModelOptionName({
       provider: input.provider,
       slug: normalizedSlug,
@@ -176,7 +187,8 @@ export function mergeDynamicModelOptions(input: {
         staticNameBySlug.get(normalizedSlug) ??
         (rawName.length > 0 &&
         rawName.toLowerCase() !== rawSlug &&
-        rawName.toLowerCase() !== normalizedSlug.toLowerCase()
+        rawName.toLowerCase() !== normalizedSlug.toLowerCase() &&
+        !rawNameIsIdentifier
           ? rawName
           : displayNameFallback),
       ...(dynamicModel.description?.trim() ? { description: dynamicModel.description.trim() } : {}),

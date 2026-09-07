@@ -743,11 +743,17 @@ describe("formatModelDisplayName", () => {
     expect(formatModelDisplayName("gpt-5.3-codex")).toBe("GPT-5.3 Codex");
     expect(formatModelDisplayName("claude-sonnet-5")).toBe("Claude Sonnet 5");
     expect(formatModelDisplayName("claude-opus-5")).toBe("Claude Opus 5");
+    expect(formatModelDisplayName("glm-5.2")).toBe("GLM 5.2");
   });
 
   it("humanizes unknown GPT model slugs", () => {
     expect(formatModelDisplayName("gpt-5.1-codex-max")).toBe("GPT-5.1 Codex Max");
     expect(formatModelDisplayName("gpt-5.1-codex-mini")).toBe("GPT-5.1 Codex Mini");
+  });
+
+  it("restores known model-family casing while humanizing non-GPT slugs", () => {
+    expect(formatModelDisplayName("glm-5.3-flash")).toBe("GLM 5.3 Flash");
+    expect(formatModelDisplayName("deepseek-v4-flash")).toBe("DeepSeek V4 Flash");
   });
 
   it("leaves non-GPT custom slugs unchanged", () => {

@@ -1,10 +1,14 @@
 import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@synara/contracts";
-import { page } from "vitest/browser";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { page } from "vitest/browser";
 import { render } from "vitest-browser-react";
 
 import { ProviderModelPicker } from "./ProviderModelPicker";
-import type { ProviderModelOption } from "../../providerModelOptions";
+import {
+  mergeDynamicModelOptions,
+  type ProviderModelOption,
+} from "../../providerModelOptions";
 import { FAVORITE_MODEL_STORAGE_KEYS } from "../../lib/modelFavorites";
 
 const MODEL_OPTIONS_BY_PROVIDER = {
@@ -145,6 +149,25 @@ const PI_FAVORITE_SORT_MODELS = [
   },
 ] satisfies ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>;
 
+const PI_BRANDED_MODELS = mergeDynamicModelOptions({
+  provider: "pi",
+  staticOptions: [],
+  dynamicModels: [
+    {
+      slug: "zai/glm-5.3-flash",
+      name: "GLM-5.3-Flash",
+      upstreamProviderId: "zai",
+      upstreamProviderName: "Z.AI",
+    },
+    {
+      slug: "deepseek/deepseek-v4-flash",
+      name: "Deepseek V4 Flash",
+      upstreamProviderId: "deepseek",
+      upstreamProviderName: "DeepSeek",
+    },
+  ],
+}) satisfies ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>;
+
 async function mountPicker(props: {
   provider: ProviderKind;
   model: ModelSlug;
@@ -266,6 +289,40 @@ describe("ProviderModelPicker", () => {
       );
     } finally {
       await mounted.cleanup();
+    }
+  });
+
+  it("keeps branded Pi model labels stable after selection", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+
+    function ControlledPiPicker() {
+      const [model, setModel] = useState<ModelSlug>("deepseek/deepseek-v4-flash");
+      return (
+        <ProviderModelPicker
+          provider="pi"
+          model={model}
+          lockedProvider="pi"
+          modelOptionsByProvider={{
+            ...MODEL_OPTIONS_BY_PROVIDER,
+            pi: PI_BRANDED_MODELS,
+          }}
+          onProviderModelChange={(_provider, nextModel) => setModel(nextModel)}
+        />
+      );
+    }
+
+    const screen = await render(<ControlledPiPicker />, { container: host });
+    try {
+      await expect.element(page.getByRole("button", { name: /DeepSeek V4 Flash/u })).toBeVisible();
+      await page.getByRole("button", { name: /DeepSeek V4 Flash/u }).click();
+      await page.getByRole("menuitemradio", { name: "GLM 5.3 Flash" }).click();
+
+      await expect.element(page.getByRole("button", { name: /GLM 5.3 Flash/u })).toBeVisible();
+      expect(document.body.textContent ?? "").not.toContain("Glm 5.3 Flash");
+    } finally {
+      await screen.unmount();
+      host.remove();
     }
   });
 

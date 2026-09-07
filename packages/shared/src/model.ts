@@ -79,19 +79,32 @@ const MODEL_NAME_BY_SLUG = new Map(
     .map((option) => [option.slug.toLowerCase(), option.name] as const),
 );
 
+const MODEL_TOKEN_DISPLAY_NAMES: Readonly<Record<string, string>> = {
+  deepseek: "DeepSeek",
+  glm: "GLM",
+};
+
+function humanizeModelToken(token: string): string {
+  return (
+    MODEL_TOKEN_DISPLAY_NAMES[token.toLowerCase()] ??
+    token.charAt(0).toUpperCase() + token.slice(1)
+  );
+}
+
 // Turns a raw model slug into a readable label when no built-in name exists.
 // GPT slugs keep their canonical "GPT-x" casing; provider-scoped custom ids
-// ("vendor/model") stay verbatim; everything else is title-cased on -/_ .
+// ("vendor/model") stay verbatim; everything else is title-cased on -/_ with
+// known model-family brands restored to their canonical casing.
 export function humanizeModelSlug(slug: string): string {
   if (slug.toLowerCase().startsWith("gpt-")) {
     const [, version, ...rest] = slug.split("-");
     if (rest.length === 0) return `GPT-${version}`;
-    return `GPT-${version} ${rest.map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join(" ")}`;
+    return `GPT-${version} ${rest.map(humanizeModelToken).join(" ")}`;
   }
   if (slug.includes("/")) {
     return slug;
   }
-  return slug.replace(/[-_]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+  return slug.split(/[-_]+/g).map(humanizeModelToken).join(" ");
 }
 
 export function formatModelDisplayName(model: string | null | undefined): string | undefined {
