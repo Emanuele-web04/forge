@@ -10,7 +10,7 @@ const SHELL_ENV_NAME_PATTERN = /^[A-Z0-9_]+$/;
 type ExecFileSyncLike = (
   file: string,
   args: ReadonlyArray<string>,
-  options: { encoding: "utf8"; timeout: number },
+  options: { encoding: "utf8"; timeout: number; windowsHide?: boolean },
 ) => string;
 
 function trimNonEmpty(value: string | null | undefined): string | undefined {
