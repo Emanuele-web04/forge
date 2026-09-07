@@ -6,5 +6,5 @@
     "noEmit": true,
     "allowImportingTsExtensions": true
   },
-  "include": ["src", "vitest.config.ts"]
+  "include": ["src", "docker", "vitest.config.ts"]
 }

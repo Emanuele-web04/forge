@@ -6,7 +6,8 @@
   "scripts": {
     "build": "echo 'no build step'",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --maxWorkers=1 --no-file-parallelism"
+    "test": "vitest run --maxWorkers=1 --no-file-parallelism",
+    "test:docker": "bun docker/run.ts"
   },
   "dependencies": {
     "@effect/platform-node": "catalog:",
