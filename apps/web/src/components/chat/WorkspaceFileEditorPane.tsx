@@ -20,6 +20,7 @@ export interface WorkspaceFileEditorPaneProps {
   resolvedTheme: "light" | "dark";
   onClose: () => void;
   onDirtyChange?: ((dirty: boolean) => void) | undefined;
+  onSavingChange?: ((saving: boolean) => void) | undefined;
 }
 
 export function WorkspaceFileEditorPane(props: WorkspaceFileEditorPaneProps) {
@@ -31,6 +32,7 @@ export function WorkspaceFileEditorPane(props: WorkspaceFileEditorPaneProps) {
     surfaceRef: paneRef,
     onClose: props.onClose,
     onDirtyChange: props.onDirtyChange,
+    onSavingChange: props.onSavingChange,
   });
   const historyControlsRef = useRef<CodeEditHistoryControls | null>(null);
   const [history, setHistory] = useState(INITIAL_CODE_EDIT_HISTORY_STATE);

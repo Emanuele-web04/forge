@@ -6,15 +6,27 @@
 // Exports: EditorDirtyRouteGuard
 
 import { useBlocker } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
 
 import { WorkspaceFileEditorDiscardDialog } from "./chat/WorkspaceFileEditorChrome";
 
-export function EditorDirtyRouteGuard(props: { enabled: boolean }) {
+export function EditorDirtyRouteGuard(props: { enabled: boolean; saving: boolean }) {
   const blocker = useBlocker({
     shouldBlockFn: () => props.enabled,
     withResolver: true,
   });
   const blocked = blocker.status === "blocked" ? blocker : null;
+  // A confirmed exit during an in-flight save proceeds only once the write
+  // has settled; the RPC cannot be cancelled, so leaving earlier would let it
+  // land after the user was told the changes were discarded.
+  const [proceedAfterSave, setProceedAfterSave] = useState(false);
+  useEffect(() => {
+    if (!proceedAfterSave || props.saving || blocked === null) {
+      return;
+    }
+    setProceedAfterSave(false);
+    blocked.proceed();
+  }, [blocked, proceedAfterSave, props.saving]);
 
   return (
     <WorkspaceFileEditorDiscardDialog
@@ -24,10 +36,15 @@ export function EditorDirtyRouteGuard(props: { enabled: boolean }) {
       confirmLabel="Discard changes and leave"
       onOpenChange={(open) => {
         if (!open && blocker.status === "blocked") {
+          setProceedAfterSave(false);
           blocker.reset();
         }
       }}
       onConfirm={() => {
+        if (props.saving) {
+          setProceedAfterSave(true);
+          return;
+        }
         blocked?.proceed();
       }}
     />

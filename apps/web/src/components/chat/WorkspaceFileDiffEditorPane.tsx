@@ -28,6 +28,7 @@ export interface WorkspaceFileDiffEditorPaneProps {
   resolvedTheme: "light" | "dark";
   onClose: () => void;
   onDirtyChange?: ((dirty: boolean) => void) | undefined;
+  onSavingChange?: ((saving: boolean) => void) | undefined;
 }
 
 export function WorkspaceFileDiffEditorPane(props: WorkspaceFileDiffEditorPaneProps) {
@@ -42,6 +43,7 @@ export function WorkspaceFileDiffEditorPane(props: WorkspaceFileDiffEditorPanePr
     surfaceRef: paneRef,
     onClose: props.onClose,
     onDirtyChange: props.onDirtyChange,
+    onSavingChange: props.onSavingChange,
   });
   const originalQuery = useQuery(
     gitReadFileAtRevQueryOptions({

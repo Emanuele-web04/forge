@@ -23,8 +23,9 @@ export function useWorkspaceFileEditorSession(input: {
   surfaceRef: RefObject<HTMLElement | null>;
   onClose: () => void;
   onDirtyChange?: ((dirty: boolean) => void) | undefined;
+  onSavingChange?: ((saving: boolean) => void) | undefined;
 }): WorkspaceFileEditorSession {
-  const { cwd, enabled, filePath, onClose, onDirtyChange, surfaceRef } = input;
+  const { cwd, enabled, filePath, onClose, onDirtyChange, onSavingChange, surfaceRef } = input;
   const controller = useWorkspaceFileEditor({ cwd, filePath, enabled });
   const [pendingDiscard, setPendingDiscard] = useState<WorkspaceFileEditorDiscardIntent | null>(
     null,
@@ -58,6 +59,12 @@ export function useWorkspaceFileEditorSession(input: {
     onDirtyChangeRef.current?.(dirty);
     return () => onDirtyChangeRef.current?.(false);
   }, [dirty]);
+  const onSavingChangeRef = useRef(onSavingChange);
+  onSavingChangeRef.current = onSavingChange;
+  useEffect(() => {
+    onSavingChangeRef.current?.(saving);
+    return () => onSavingChangeRef.current?.(false);
+  }, [saving]);
 
   const requestClose = useCallback(() => {
     if (saving) {

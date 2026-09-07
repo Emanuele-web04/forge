@@ -401,7 +401,11 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
   const { centerMode, onCenterModeChange } = props;
   const centerFamily = editorCenterModeFamily(centerMode);
   const [editDirty, setEditDirty] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
   const [pendingLeaveEdit, setPendingLeaveEdit] = useState<{ run: () => void } | null>(null);
+  // An exit requested during an in-flight save waits for it: the write cannot
+  // be cancelled, so "discard" must not be offered until the outcome is known.
+  const [leaveAfterSave, setLeaveAfterSave] = useState<{ run: () => void } | null>(null);
   // A confirmed in-editor exit runs only once the dirty flag has cleared and
   // the route-level guard has unmounted; running it synchronously would let
   // the still-registered guard intercept the already-confirmed navigation.
@@ -414,7 +418,22 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
     setConfirmedLeaveEdit(null);
     confirmedLeaveEdit.run();
   }, [confirmedLeaveEdit, editDirty]);
+  useEffect(() => {
+    if (leaveAfterSave === null || editSaving) {
+      return;
+    }
+    setLeaveAfterSave(null);
+    if (editDirty) {
+      setPendingLeaveEdit(leaveAfterSave);
+      return;
+    }
+    leaveAfterSave.run();
+  }, [editDirty, editSaving, leaveAfterSave]);
   const guardLeavingEdit = (run: () => void) => {
+    if (inEditMode && editSaving) {
+      setLeaveAfterSave({ run });
+      return;
+    }
     if (inEditMode && editDirty) {
       setPendingLeaveEdit({ run });
       return;
@@ -687,6 +706,7 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
                   resolvedTheme={editorResolvedTheme}
                   onClose={props.onCloseEdit}
                   onDirtyChange={setEditDirty}
+                  onSavingChange={setEditSaving}
                 />
               </div>
             ) : props.centerMode === "diffEdit" && props.editFilePath !== null ? (
@@ -699,6 +719,7 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
                   resolvedTheme={editorResolvedTheme}
                   onClose={props.onCloseEdit}
                   onDirtyChange={setEditDirty}
+                  onSavingChange={setEditSaving}
                 />
               </div>
             ) : props.centerMode === "file" ? (
@@ -773,7 +794,9 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
           setConfirmedLeaveEdit(pendingLeaveEdit);
         }}
       />
-      {inEditMode && editDirty ? <EditorDirtyRouteGuard enabled /> : null}
+      {inEditMode && (editDirty || editSaving) ? (
+        <EditorDirtyRouteGuard enabled saving={editSaving} />
+      ) : null}
     </div>
   );
 }

@@ -3,7 +3,10 @@
 // Layer: Diff panel UI
 
 import type { FileDiffMetadata } from "@pierre/diffs/react";
-import { isSupportedLocalImagePath } from "@synara/shared/localPreviewFiles";
+import {
+  isSupportedLocalImagePath,
+  isSupportedLocalPreviewFilePath,
+} from "@synara/shared/localPreviewFiles";
 import { type MouseEvent as ReactMouseEvent } from "react";
 import { useCopyPathToClipboard } from "~/hooks/useCopyToClipboard";
 import {
@@ -136,9 +139,11 @@ const DiffPanelFileRow = function DiffPanelFileRow(props: {
   const filePath = resolveFileDiffPath(props.fileDiff);
   const fileKey = buildFileDiffRenderKey(props.fileDiff);
   const { chatActions, isCollapsed } = props;
-  // A deleted file no longer exists in the working tree, so editing it can
-  // only produce a load error in the editor pane.
-  const canEditFile = props.fileDiff.type !== "deleted";
+  // A deleted file no longer exists in the working tree, and binary previews
+  // (images, PDFs) are rejected by the text read, so editing either can only
+  // produce a load error in the editor pane.
+  const canEditFile =
+    props.fileDiff.type !== "deleted" && !isSupportedLocalPreviewFilePath(filePath);
   // Renames keep the base-side content under the old path.
   const basePath = resolveFileDiffPrevPath(props.fileDiff);
   const shouldPreviewImage =
