@@ -22,7 +22,6 @@ import {
   applyScheduleToForm,
   applyAutomationEvent,
   automationDefinitionUpdateMutationOptions,
-  automationAttentionCount,
   automationAttentionLabel,
   automationFastIntervalLimitMessage,
   automationListRowIcon,
@@ -49,7 +48,6 @@ import {
   scheduleFromForm,
   updateWeeklyScheduleDay,
   updateWeeklyScheduleTime,
-  unresolvedTriageRuns,
 } from "./-automations.shared";
 
 describe("automation definition update ordering", () => {
@@ -341,7 +339,7 @@ describe("automation shared route helpers", () => {
     expect(automationListRowIcon(definition, run).name).toBe(icon);
   });
 
-  it("counts only unread unarchived triage runs", () => {
+  it("flags only unread unarchived or badly-ended runs for triage", () => {
     const unresolved = runWith({ id: runId("run-unresolved") });
     const read = runWith({
       id: runId("run-read"),
@@ -358,16 +356,14 @@ describe("automation shared route helpers", () => {
       result: null,
     });
 
-    const runs = [unresolved, read, archived, noResult, failedWithoutResult];
-
-    expect(unresolvedTriageRuns(runs).map((run) => run.id)).toEqual([
-      "run-unresolved",
-      "run-failed-no-result",
-    ]);
-    expect(automationAttentionCount(runs)).toBe(2);
+    expect(isTriageRun(unresolved)).toBe(true);
+    expect(isTriageRun(read)).toBe(false);
+    expect(isTriageRun(archived)).toBe(false);
+    expect(isTriageRun(noResult)).toBe(false);
+    expect(isTriageRun(failedWithoutResult)).toBe(true);
   });
 
-  it("keeps silent successful runs in history without counting them for attention", () => {
+  it("does not flag silent successful runs for triage", () => {
     const silent = runWith({
       id: runId("run-silent"),
       result: {
@@ -377,8 +373,7 @@ describe("automation shared route helpers", () => {
       },
     });
 
-    expect(unresolvedTriageRuns([silent])).toEqual([]);
-    expect(automationAttentionCount([silent])).toBe(0);
+    expect(isTriageRun(silent)).toBe(false);
   });
 
   it("does not surface a reported result before its run finishes", () => {
@@ -393,7 +388,6 @@ describe("automation shared route helpers", () => {
     });
 
     expect(isTriageRun(running)).toBe(false);
-    expect(unresolvedTriageRuns([running])).toEqual([]);
   });
 
   it("allows cancelling active and waiting runs only", () => {
