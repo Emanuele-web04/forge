@@ -561,6 +561,18 @@ const makeMindService = Effect.gen(function* () {
       return { memories, count: memories.length, cap: MIND_MEMORY_PROJECT_CAP };
     });
 
+  // Global list for the project-agnostic Mind view: every memory across all
+  // projects, so rows whose project left the projection stay reachable.
+  const listAll = (): Effect.Effect<MindListResult, MindServiceError> =>
+    Effect.gen(function* () {
+      const nowIso = yield* nowIsoNow;
+      const rows = yield* repository.listAll();
+      const memories = rows
+        .map((row) => toMindMemory(row, nowIso))
+        .toSorted((a, b) => b.weight - a.weight || a.memoryId.localeCompare(b.memoryId));
+      return { memories, count: memories.length, cap: MIND_MEMORY_PROJECT_CAP };
+    });
+
   const setPinned = (input: MindSetPinnedRequest): Effect.Effect<MindMemory, MindServiceError> =>
     Effect.gen(function* () {
       const existing = yield* repository.getById({ memoryId: input.memoryId });
@@ -617,6 +629,7 @@ const makeMindService = Effect.gen(function* () {
     forget,
     status,
     list,
+    listAll,
     setPinned,
   };
   return shape;

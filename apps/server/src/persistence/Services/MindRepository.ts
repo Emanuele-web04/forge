@@ -174,6 +174,11 @@ export interface MindRepositoryShape {
     input: ListMindMemoriesInput,
   ) => Effect.Effect<ReadonlyArray<MindMemoryRow>, MindRepositoryError>;
   /**
+   * Every memory across all projects, newest-access first. Backs the global
+   * Mind list: memories whose project rows left the projection stay reachable.
+   */
+  readonly listAll: () => Effect.Effect<ReadonlyArray<MindMemoryRow>, MindRepositoryError>;
+  /**
    * FTS5 candidate fetch: joins `mind_memories` against `mind_memories_fts`
    * and returns rows with their raw bm25 rank (best first). The match
    * expression must come from {@link buildMindFtsMatchExpr}; it is always a

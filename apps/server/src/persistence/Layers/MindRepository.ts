@@ -513,6 +513,35 @@ const makeMindRepository = Effect.gen(function* () {
       Effect.flatMap((rows) => Effect.forEach(rows, toMemory, { concurrency: "unbounded" })),
     );
 
+  const listAllMemoryRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: MindMemoryDbRow,
+    execute: () =>
+      sql`
+        SELECT
+          id AS "memoryId",
+          project_id AS "projectId",
+          text,
+          type,
+          text_hash AS "textHash",
+          peak_weight AS "peakWeight",
+          access_count AS "accessCount",
+          pinned,
+          created_at AS "createdAt",
+          last_accessed_at AS "lastAccessedAt",
+          provenance_kind AS "provenanceKind",
+          source_thread_id AS "sourceThreadId",
+          source_provider AS "sourceProvider"
+        FROM mind_memories
+      `,
+  });
+
+  const listAll: MindRepositoryShape["listAll"] = () =>
+    listAllMemoryRows(undefined).pipe(
+      Effect.mapError(toPersistenceSqlError("MindRepository.listAll:query")),
+      Effect.flatMap((rows) => Effect.forEach(rows, toMemory, { concurrency: "unbounded" })),
+    );
+
   const searchCandidates: MindRepositoryShape["searchCandidates"] = (input) => {
     // An empty match expression is not valid FTS5 syntax; no tokens means no candidates.
     if (input.matchExpr.trim() === "") {
@@ -575,6 +604,7 @@ const makeMindRepository = Effect.gen(function* () {
     findByTextHash,
     getById,
     listByProject,
+    listAll,
     searchCandidates,
     applyConfirm,
     setPinned,

@@ -139,6 +139,7 @@ export interface MindServiceShape {
   readonly status: (input: MindStatusRequest) => Effect.Effect<MindStatusResult, MindServiceError>;
   /** Full project list for the UI, effective weights computed, weight-desc. */
   readonly list: (input: MindListRequest) => Effect.Effect<MindListResult, MindServiceError>;
+  readonly listAll: () => Effect.Effect<MindListResult, MindServiceError>;
   /** Pin/unpin pass-through; journals `pin`/`unpin`. Pinned rows never decay or prune. */
   readonly setPinned: (input: MindSetPinnedRequest) => Effect.Effect<MindMemory, MindServiceError>;
 }

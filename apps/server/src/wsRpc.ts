@@ -2052,22 +2052,19 @@ const makeWsRpcHandlersLayer = () =>
             input.projectId !== undefined
               ? mindService.list({ projectId: input.projectId })
               : Effect.gen(function* () {
-                  // The Mind view is project-agnostic: sweep+list every active
-                  // project and merge into one weight-desc page. The merged array
-                  // stays inside the contracts' cap by keeping only the top slice;
-                  // `count` stays the true total so the UI can tell when the page
-                  // is truncated.
-                  const shell = yield* projectionReadModelQuery.getShellSnapshot();
-                  const perProject = yield* Effect.all(
-                    shell.projects.map((project) => mindService.list({ projectId: project.id })),
-                  );
-                  const memories = perProject
-                    .flatMap((result) => result.memories)
+                  // The Mind view is project-agnostic: list every memory across
+                  // all projects (including projects no longer in the
+                  // projection) merged into one weight-desc page. The merged
+                  // array stays inside the contracts' cap by keeping only the
+                  // top slice; `count` stays the true total so the UI can tell
+                  // when the page is truncated.
+                  const all = yield* mindService.listAll();
+                  const memories = all.memories
                     .toSorted((a, b) => b.weight - a.weight || a.memoryId.localeCompare(b.memoryId))
                     .slice(0, MIND_MEMORY_PROJECT_CAP);
                   return {
                     memories,
-                    count: perProject.reduce((total, result) => total + result.count, 0),
+                    count: all.count,
                     cap: MIND_MEMORY_PROJECT_CAP,
                   };
                 }),
