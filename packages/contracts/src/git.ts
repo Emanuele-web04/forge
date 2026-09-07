@@ -142,12 +142,21 @@ export const GitHubRepositoryInput = Schema.Struct({
 });
 export type GitHubRepositoryInput = typeof GitHubRepositoryInput.Type;
 
+const GIT_REV_MAX_LENGTH = 256;
+
+// A revision names a commit, never a flag: rejecting option-like values here
+// keeps client-supplied revisions from being parsed as git options.
+const GitRevisionArgumentSchema = TrimmedNonEmptyStringSchema.check(
+  Schema.isMaxLength(GIT_REV_MAX_LENGTH),
+  Schema.isPattern(/^[^-]/),
+);
+
 export const GitReadWorkingTreeDiffInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   scope: Schema.optional(
     Schema.Literals(["workingTree", "unstaged", "staged", "branch", "ref"]),
   ).pipe(Schema.withConstructorDefault(() => Option.some("workingTree" as const))),
-  compareRef: Schema.optional(TrimmedNonEmptyStringSchema),
+  compareRef: Schema.optional(GitRevisionArgumentSchema),
 });
 export type GitReadWorkingTreeDiffInput = typeof GitReadWorkingTreeDiffInput.Type;
 
@@ -155,7 +164,7 @@ export const GitBlameLineInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   filePath: TrimmedNonEmptyStringSchema,
   line: PositiveInt,
-  rev: Schema.optional(TrimmedNonEmptyStringSchema),
+  rev: Schema.optional(GitRevisionArgumentSchema),
 });
 export type GitBlameLineInput = typeof GitBlameLineInput.Type;
 
@@ -166,14 +175,13 @@ export type GitPullInput = typeof GitPullInput.Type;
 
 export const GIT_READ_FILE_AT_REV_MAX_BYTES = 1_000_000;
 const GIT_READ_FILE_AT_REV_PATH_MAX_LENGTH = 2048;
-const GIT_REV_MAX_LENGTH = 256;
 
 export const GitReadFileAtRevInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   filePath: TrimmedNonEmptyStringSchema.check(
     Schema.isMaxLength(GIT_READ_FILE_AT_REV_PATH_MAX_LENGTH),
   ),
-  rev: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(GIT_REV_MAX_LENGTH))),
+  rev: Schema.optional(GitRevisionArgumentSchema),
   /** Read the file at the base the branch diff uses: the upstream or fallback merge base. */
   base: Schema.optional(Schema.Literal("branch")),
   maxBytes: Schema.optional(

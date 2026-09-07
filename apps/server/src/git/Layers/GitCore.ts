@@ -30,6 +30,7 @@ import * as nodePath from "node:path";
 import {
   DEFAULT_GIT_RECENT_COMMIT_LIMIT,
   GIT_READ_FILE_AT_REV_MAX_BYTES,
+  type GitBlameLineResult,
   type GitRecentCommit,
 } from "@synara/contracts";
 import { isTemporaryWorktreeBranch } from "@synara/shared/git";
@@ -118,6 +119,15 @@ export function makeStatusUpstreamRefreshCacheTimeToLive() {
 const DEFAULT_BASE_BRANCH_CANDIDATES = ["main", "master"] as const;
 const EMPTY_TREE_OBJECT_ID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const RECENT_COMMIT_FIELD_SEPARATOR = "\u001f";
+const UNCOMMITTED_BLAME_RESULT: GitBlameLineResult = {
+  sha: "0".repeat(40),
+  shortSha: "",
+  author: "",
+  authorEmail: "",
+  authorTime: "",
+  summary: "",
+  uncommitted: true,
+};
 const WORKING_TREE_DIFF_TIMEOUT_MS = 15_000;
 const BLAME_LINE_TIMEOUT_MS = 10_000;
 const MAX_UNTRACKED_DIFF_CONCURRENCY = 4;
@@ -1899,23 +1909,73 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         };
       });
 
+    const resolveCommitObjectId = (cwd: string, rev: string, operation: string) =>
+      Effect.gen(function* () {
+        if (rev.startsWith("-")) {
+          return yield* createGitCommandError(
+            operation,
+            cwd,
+            ["rev-parse", "--verify", "--quiet", rev],
+            `"${rev}" is not a valid revision.`,
+          );
+        }
+        const verified = yield* executeGit(
+          operation,
+          cwd,
+          ["rev-parse", "--verify", "--quiet", "--end-of-options", `${rev}^{commit}`],
+          { allowNonZeroExit: true },
+        );
+        const objectId = verified.stdout.trim();
+        if (verified.code !== 0 || objectId.length === 0) {
+          return yield* createGitCommandError(
+            operation,
+            cwd,
+            ["rev-parse", "--verify", "--quiet", "--end-of-options", `${rev}^{commit}`],
+            `Cannot resolve "${rev}" to a commit in this repository.`,
+          );
+        }
+        return objectId;
+      });
+
     const blameLine: GitCoreShape["blameLine"] = (input) =>
       Effect.gen(function* () {
+        // The revision comes from the client, so it is resolved to an object ID
+        // before it is placed on the blame command line; an option-like value
+        // would otherwise be parsed as a blame flag rather than a revision.
+        const requestedRev = input.rev?.trim() ?? "";
+        const resolvedRev =
+          requestedRev.length === 0
+            ? null
+            : yield* resolveCommitObjectId(input.cwd, requestedRev, "GitCore.blameLine.revParse");
         const args = [
           "blame",
           "--porcelain",
           "-L",
           `${input.line},${input.line}`,
-          ...(input.rev ? [input.rev] : []),
+          ...(resolvedRev ? [resolvedRev] : []),
           "--",
           input.filePath,
         ];
-        const stdout = yield* executeGit("GitCore.blameLine", input.cwd, args, {
+        const result = yield* executeGit("GitCore.blameLine", input.cwd, args, {
           timeoutMs: BLAME_LINE_TIMEOUT_MS,
-          fallbackErrorMessage: "git blame failed",
-        }).pipe(Effect.map((result) => result.stdout));
+          allowNonZeroExit: true,
+        });
+        if (result.code !== 0) {
+          // A working-tree line in a file HEAD does not know (untracked or
+          // newly staged) has no history yet: report it as uncommitted rather
+          // than failing the popover.
+          if (resolvedRev === null && /no such path/i.test(result.stderr)) {
+            return UNCOMMITTED_BLAME_RESULT;
+          }
+          return yield* createGitCommandError(
+            "GitCore.blameLine",
+            input.cwd,
+            args,
+            result.stderr.trim() || "git blame failed",
+          );
+        }
 
-        const parsed = parseGitBlamePorcelain(stdout);
+        const parsed = parseGitBlamePorcelain(result.stdout);
         if (!parsed) {
           return yield* createGitCommandError(
             "GitCore.blameLine",

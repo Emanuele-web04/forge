@@ -184,6 +184,60 @@ it.layer(TestLayer)("git integration", (it) => {
     );
   });
 
+  describe("blameLine", () => {
+    it.effect("attributes a committed line at a resolved revision", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const sha = yield* git(tmp, ["rev-parse", "HEAD"]);
+
+        const result = yield* core.blameLine({
+          cwd: tmp,
+          filePath: "README.md",
+          line: 1,
+          rev: "HEAD",
+        });
+
+        expect(result.sha).toBe(sha);
+        expect(result.uncommitted).toBe(false);
+      }),
+    );
+
+    it.effect("rejects an option-like revision before invoking blame", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+
+        const error = yield* core
+          .blameLine({
+            cwd: tmp,
+            filePath: "README.md",
+            line: 1,
+            rev: "--contents=/etc/passwd",
+          })
+          .pipe(Effect.flip);
+
+        expect(error.message).toContain("not a valid revision");
+      }),
+    );
+
+    it.effect("reports working-tree lines of a file HEAD does not know as uncommitted", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "untracked.ts"), "fresh\n");
+
+        const result = yield* core.blameLine({ cwd: tmp, filePath: "untracked.ts", line: 1 });
+
+        expect(result.uncommitted).toBe(true);
+        expect(result.shortSha).toBe("");
+      }),
+    );
+  });
+
   describe("readFileAtRev", () => {
     it.effect("reads the committed blob, not the working tree copy", () =>
       Effect.gen(function* () {
