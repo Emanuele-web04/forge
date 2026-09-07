@@ -43,9 +43,14 @@ export function ThemeStep() {
   const selectPack = (codeThemeId: string) => {
     for (const variant of THEME_VARIANTS) setCodeThemeId(variant, codeThemeId);
   };
+  // A single-variant pack (chosen earlier in Settings) is not in this list; fall back to
+  // the first option as the roving tab stop so the group stays reachable by keyboard.
+  const rovingValue = ONBOARDING_THEME_PACK_IDS.includes(selectedPackId)
+    ? selectedPackId
+    : (ONBOARDING_THEME_PACK_IDS[0] ?? selectedPackId);
   const radioItemProps = useRadioGroupKeyboardNav({
     values: ONBOARDING_THEME_PACK_IDS,
-    value: selectedPackId,
+    value: rovingValue,
     onValueChange: selectPack,
   });
 

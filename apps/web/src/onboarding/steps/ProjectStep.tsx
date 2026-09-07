@@ -6,7 +6,7 @@
 // Layer: Web UI component
 
 import type { ProjectId } from "@synara/contracts";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 
 import { useAppSettings } from "~/appSettings";
 import { Button } from "~/components/ui/button";
@@ -33,6 +33,8 @@ const FIELD_CONTROL_CLASS_NAME = "h-9 rounded-lg border-foreground/12";
 export function ProjectStep(props: {
   results: ReadonlyArray<OnboardingProjectResult>;
   onResult: (result: OnboardingProjectResult) => void;
+  /** Project creation is not abortable; the dialog blocks navigation while it runs. */
+  onBusyChange: (busy: boolean) => void;
 }) {
   const { settings } = useAppSettings();
   const homeDir = useWorkspacePathsStore((store) => store.homeDir);
@@ -41,6 +43,13 @@ export function ProjectStep(props: {
   const [picking, setPicking] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const { onBusyChange } = props;
+  const busy = picking || submitting;
+  useEffect(() => {
+    onBusyChange(busy);
+  }, [busy, onBusyChange]);
+  useEffect(() => () => onBusyChange(false), [onBusyChange]);
 
   const addProject = async (rawPath: string) => {
     const api = readNativeApi();
@@ -82,6 +91,8 @@ export function ProjectStep(props: {
       if (picked) {
         await addProject(picked);
       }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not open the folder picker.");
     } finally {
       setPicking(false);
     }

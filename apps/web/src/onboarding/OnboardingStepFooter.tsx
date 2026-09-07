@@ -20,6 +20,8 @@ export function OnboardingStepFooter(props: {
   onPrimary: () => void;
   primaryDisabled?: boolean;
   primaryBusy?: boolean;
+  /** Blocks Back and Skip as well as the primary (a non-abortable operation is running). */
+  navigationLocked?: boolean;
   /** Optional secondary action rendered next to the primary (e.g. "Skip for now"). */
   secondaryLabel?: string;
   onSecondary?: () => void;
@@ -58,7 +60,8 @@ export function OnboardingStepFooter(props: {
         {showSkip ? (
           <button
             type="button"
-            className="text-[length:var(--app-font-size-ui,12px)] text-muted-foreground transition-colors hover:text-foreground motion-reduce:transition-none"
+            disabled={props.navigationLocked}
+            className="text-[length:var(--app-font-size-ui,12px)] text-muted-foreground transition-colors hover:text-foreground disabled:opacity-60 motion-reduce:transition-none"
             onClick={props.onSkip}
           >
             Skip setup
@@ -70,6 +73,7 @@ export function OnboardingStepFooter(props: {
           variant="ghost"
           shape="capsule"
           className={FOOTER_BUTTON_CLASS_NAME}
+          disabled={props.navigationLocked}
           onClick={props.onBack}
         >
           Back
@@ -89,7 +93,7 @@ export function OnboardingStepFooter(props: {
         variant="prominent"
         shape="capsule"
         className={cn(FOOTER_BUTTON_CLASS_NAME, "hover:scale-100")}
-        disabled={props.primaryDisabled || props.primaryBusy}
+        disabled={props.primaryDisabled || props.primaryBusy || props.navigationLocked}
         onClick={props.onPrimary}
       >
         {props.primaryBusy ? "Working…" : props.primaryLabel}

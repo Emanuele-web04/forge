@@ -15,7 +15,7 @@ import { ProviderIcon } from "~/components/ProviderIcon";
 import { Checkbox } from "~/components/ui/checkbox";
 import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
-import { RefreshCwIcon } from "~/lib/icons";
+import { RefreshCwIcon, XIcon } from "~/lib/icons";
 import {
   findProviderStatus,
   normalizeProviderStatusForLocalConfig,
@@ -79,15 +79,18 @@ function useDisabledProvidersDraft(): {
     () => new Set(settings.disabledProviders),
   );
   const draftRef = useRef(draft);
-  const pendingWritesRef = useRef(0);
+  // State, not a ref: a rejected write refetches settings *before* the count drops, so the
+  // resync must run again once the final write settles or the draft would stay rolled
+  // forward on the rejected value.
+  const [pendingWrites, setPendingWrites] = useState(0);
   const serverDisabledProviders = settings.disabledProviders;
 
   useEffect(() => {
-    if (pendingWritesRef.current > 0) return;
+    if (pendingWrites > 0) return;
     const next = new Set(serverDisabledProviders);
     draftRef.current = next;
     setDraft(next);
-  }, [serverDisabledProviders]);
+  }, [pendingWrites, serverDisabledProviders]);
 
   const setProviderDisabled = (provider: ProviderKind, disabled: boolean) => {
     const next = new Set(draftRef.current);
@@ -98,9 +101,9 @@ function useDisabledProvidersDraft(): {
     }
     draftRef.current = next;
     setDraft(next);
-    pendingWritesRef.current += 1;
+    setPendingWrites((count) => count + 1);
     void updateSettingsAndWait({ disabledProviders: [...next] }).finally(() => {
-      pendingWritesRef.current -= 1;
+      setPendingWrites((count) => count - 1);
     });
   };
 
@@ -118,7 +121,7 @@ export function ProvidersStep() {
   const refresh = async () => {
     setRefreshing(true);
     try {
-      await refreshProviderStatuses({ silent: true });
+      await refreshProviderStatuses();
     } finally {
       setRefreshing(false);
     }
@@ -148,14 +151,28 @@ export function ProvidersStep() {
     : undefined;
   const connectingSignInCommand = connecting?.descriptor.usage?.signInCommand;
 
+  const finishConnect = () => {
+    setConnectingProvider(null);
+    void refreshProviderStatuses({ silent: true });
+  };
   const toggleConnect = (provider: ProviderKind) => {
     if (connectingProvider === provider) {
-      setConnectingProvider(null);
-      void refresh();
+      finishConnect();
       return;
     }
     setConnectingProvider(provider);
   };
+
+  // The terminal mounts below the provider grid in a fixed-height dialog; bring it into
+  // view so the sign-in prompt is not left under the scroll fold.
+  const terminalRegionRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!connectingProvider) return;
+    const frame = window.requestAnimationFrame(() => {
+      terminalRegionRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [connectingProvider]);
 
   return (
     <div className="flex flex-col gap-3">
@@ -248,12 +265,30 @@ export function ProvidersStep() {
 
       <DisclosureRegion open={connecting !== undefined}>
         {connecting && connectingSignInCommand !== undefined && homeDir !== null ? (
-          <ProviderConnectTerminal
-            key={connecting.descriptor.kind}
-            provider={connecting.descriptor.kind}
-            signInCommand={connectingSignInCommand}
-            cwd={homeDir}
-          />
+          <div ref={terminalRegionRef} className="flex flex-col gap-1.5">
+            {/* Always-available close: the card's "Done" link disappears once the
+                provider is detected as connected, but the terminal stays mounted. */}
+            <div className="flex items-center justify-between text-[length:var(--app-font-size-ui,12px)] text-muted-foreground">
+              <span>
+                Signing in to {connecting.descriptor.displayName} ·{" "}
+                <code className="text-foreground/80">{connectingSignInCommand}</code>
+              </span>
+              <button
+                type="button"
+                className="inline-flex cursor-pointer items-center gap-1 text-foreground/70 transition-colors hover:text-foreground motion-reduce:transition-none"
+                onClick={finishConnect}
+              >
+                <XIcon className="size-3.5" aria-hidden />
+                Done
+              </button>
+            </div>
+            <ProviderConnectTerminal
+              key={connecting.descriptor.kind}
+              provider={connecting.descriptor.kind}
+              signInCommand={connectingSignInCommand}
+              cwd={homeDir}
+            />
+          </div>
         ) : null}
       </DisclosureRegion>
     </div>

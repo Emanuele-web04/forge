@@ -6,6 +6,7 @@ import {
   isOnboardingSetupStep,
   nextOnboardingStep,
   previousOnboardingStep,
+  resolveLocalOnboardingCompletion,
   resolveOnboardingCompletionToReconcile,
   resolveOnboardingGate,
   summarizeProviderSetup,
@@ -75,6 +76,29 @@ describe("resolveOnboardingGate", () => {
   it("is re-evaluated, not latched: a later non-empty snapshot flips show to hidden", () => {
     expect(resolveOnboardingGate(GATE_BASE)).toBe("show");
     expect(resolveOnboardingGate({ ...GATE_BASE, projectCount: 2 })).toBe("hidden");
+  });
+});
+
+describe("resolveLocalOnboardingCompletion", () => {
+  it("returns nothing without a local marker", () => {
+    expect(
+      resolveLocalOnboardingCompletion({ completedAt: null, installationKey: "/a" }, "/a"),
+    ).toBeNull();
+  });
+
+  it("only counts a marker recorded against the current installation", () => {
+    const local = { completedAt: COMPLETED_AT, installationKey: "/home/a/.synara/worktrees" };
+    expect(resolveLocalOnboardingCompletion(local, "/home/a/.synara/worktrees")).toBe(COMPLETED_AT);
+    expect(resolveLocalOnboardingCompletion(local, "/home/b/.synara/worktrees")).toBeNull();
+  });
+
+  it("falls back to the marker when either installation identity is unknown", () => {
+    expect(
+      resolveLocalOnboardingCompletion({ completedAt: COMPLETED_AT, installationKey: "/a" }, null),
+    ).toBe(COMPLETED_AT);
+    expect(
+      resolveLocalOnboardingCompletion({ completedAt: COMPLETED_AT, installationKey: null }, "/a"),
+    ).toBe(COMPLETED_AT);
   });
 });
 

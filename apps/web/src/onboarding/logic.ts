@@ -2,8 +2,8 @@
 // Purpose: Pure step, gate, and provider-classification rules for the first-run welcome tour.
 // Layer: Web domain helper (no React, no I/O)
 // Exports: ONBOARDING_STEPS, nextOnboardingStep, previousOnboardingStep, resolveOnboardingGate,
-//          resolveOnboardingCompletionToReconcile, classifyProviderSetup, summarizeProviderSetup,
-//          toggleSelection
+//          resolveOnboardingCompletionToReconcile, resolveLocalOnboardingCompletion,
+//          classifyProviderSetup, summarizeProviderSetup, toggleSelection
 
 import type { ProviderKind, ServerProviderStatus } from "@synara/contracts";
 
@@ -32,6 +32,32 @@ export function isOnboardingSetupStep(step: OnboardingStep): boolean {
   return step !== "welcome" && step !== "tour";
 }
 
+export interface LocalOnboardingCompletion {
+  readonly completedAt: string | null;
+  /**
+   * Identity of the server installation the completion was recorded against (its
+   * worktrees directory). A browser origin can be pointed at a different server state or
+   * home directory later; a marker from another installation must not hide its tour.
+   */
+  readonly installationKey: string | null;
+}
+
+/**
+ * The local marker is a pending write for one installation, not unconditional completion.
+ * It only counts when it was recorded against the current server (or when the server's
+ * identity is unknown because its config could not be read).
+ */
+export function resolveLocalOnboardingCompletion(
+  local: LocalOnboardingCompletion,
+  currentInstallationKey: string | null,
+): string | null {
+  if (local.completedAt === null) return null;
+  if (currentInstallationKey === null || local.installationKey === null) {
+    return local.completedAt;
+  }
+  return local.installationKey === currentInstallationKey ? local.completedAt : null;
+}
+
 export type OnboardingGate = "pending" | "show" | "hidden";
 
 export interface OnboardingGateInputs {
@@ -42,6 +68,7 @@ export interface OnboardingGateInputs {
   /** Count of ordinary (non-container) projects. */
   readonly projectCount: number;
   readonly serverCompletedAt: string | null;
+  /** Already scoped to this installation via `resolveLocalOnboardingCompletion`. */
   readonly localCompletedAt: string | null;
 }
 

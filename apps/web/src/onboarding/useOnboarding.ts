@@ -1,9 +1,9 @@
 // FILE: useOnboarding.ts
 // Purpose: Decide when the welcome tour opens (first run with no ordinary projects), keep that
 //          decision revisable until authoritative data lands, and persist completion to the
-//          server with a local fallback that is reconciled on later launches.
+//          server with an installation-scoped local fallback reconciled on later launches.
 // Layer: Web hook
-// Depends on: app settings, server settings query, orchestration store, spaces membership rule.
+// Depends on: app settings, server settings/config queries, orchestration store, spaces rule.
 
 import { useQuery } from "@tanstack/react-query";
 import { Schema } from "effect";
@@ -11,21 +11,27 @@ import { useEffect, useRef } from "react";
 
 import { useAppSettings } from "../appSettings";
 import { useLocalStorage } from "../hooks/useLocalStorage";
-import { serverSettingsQueryOptions } from "../lib/serverReactQuery";
+import { serverConfigQueryOptions, serverSettingsQueryOptions } from "../lib/serverReactQuery";
 import { isOrdinarySpaceProject } from "../lib/spaces";
 import { useStore } from "../store";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
-import { resolveOnboardingCompletionToReconcile, resolveOnboardingGate } from "./logic";
+import {
+  resolveLocalOnboardingCompletion,
+  resolveOnboardingCompletionToReconcile,
+  resolveOnboardingGate,
+  type LocalOnboardingCompletion,
+} from "./logic";
 import { useOnboardingDialogStore } from "./onboardingDialogStore";
 
-const ONBOARDING_STORAGE_KEY = "synara:onboarding:v1";
+// v2: the marker carries the installation it was recorded against.
+const ONBOARDING_STORAGE_KEY = "synara:onboarding:v2";
 
 const OnboardingStorageSchema = Schema.Struct({
   completedAt: Schema.NullOr(Schema.String),
+  installationKey: Schema.NullOr(Schema.String),
 });
-type OnboardingStorage = typeof OnboardingStorageSchema.Type;
 
-const INITIAL_STORAGE: OnboardingStorage = { completedAt: null };
+const INITIAL_STORAGE: LocalOnboardingCompletion = { completedAt: null, installationKey: null };
 
 export interface UseOnboardingResult {
   readonly isOpen: boolean;
@@ -42,6 +48,13 @@ export function useOnboarding(): UseOnboardingResult {
   );
   const { updateSettingsAndWait } = useAppSettings();
   const settingsQuery = useQuery(serverSettingsQueryOptions());
+  // The worktrees directory lives under the server's state directory, so it identifies
+  // the installation this browser is currently talking to.
+  const installationKeyQuery = useQuery({
+    ...serverConfigQueryOptions(),
+    select: (config) => config.worktreesDir,
+  });
+  const installationKey = installationKeyQuery.data ?? null;
   const threadsHydrated = useStore((store) => store.threadsHydrated);
   const homeDir = useWorkspacePathsStore((store) => store.homeDir);
   const chatWorkspaceRoot = useWorkspacePathsStore((store) => store.chatWorkspaceRoot);
@@ -59,11 +72,12 @@ export function useOnboarding(): UseOnboardingResult {
   const engaged = useOnboardingDialogStore((store) => store.engaged);
   const openStore = useOnboardingDialogStore((store) => store.open);
   const closeStore = useOnboardingDialogStore((store) => store.close);
+  const markStartupGateSettled = useOnboardingDialogStore((store) => store.markStartupGateSettled);
 
   const settingsSettled = settingsQuery.isSuccess || settingsQuery.isError;
   const settingsAvailable = settingsQuery.isSuccess;
   const serverCompletedAt = settingsQuery.data?.onboardingCompletedAt ?? null;
-  const localCompletedAt = storage.completedAt;
+  const localCompletedAt = resolveLocalOnboardingCompletion(storage, installationKey);
 
   const gate = resolveOnboardingGate({
     threadsHydrated,
@@ -78,6 +92,8 @@ export function useOnboarding(): UseOnboardingResult {
   // startup snapshot, and an errored settings query can recover with a server marker), but
   // only while the user is still reading the intro/tour and has made no setup choices.
   useEffect(() => {
+    if (gate === "pending") return;
+    markStartupGateSettled();
     if (gate === "show" && !isOpen) {
       openStore("first-run");
       return;
@@ -85,7 +101,7 @@ export function useOnboarding(): UseOnboardingResult {
     if (gate === "hidden" && isOpen && openReason === "first-run" && !engaged) {
       closeStore();
     }
-  }, [closeStore, engaged, gate, isOpen, openReason, openStore]);
+  }, [closeStore, engaged, gate, isOpen, markStartupGateSettled, openReason, openStore]);
 
   // Reconcile the server marker once per session: a completion whose write failed, or an
   // installation that predates the tour. Failures leave the local marker in place so the
@@ -111,7 +127,7 @@ export function useOnboarding(): UseOnboardingResult {
     const completedAt = new Date().toISOString();
     // Local first so the gate flips to hidden synchronously; the server write is awaited
     // through the settings mutation queue and, if it fails, reconciled on the next launch.
-    setStorage({ completedAt });
+    setStorage({ completedAt, installationKey });
     closeStore();
     if (serverCompletedAt === null) {
       void updateSettingsAndWait({ onboardingCompletedAt: completedAt });

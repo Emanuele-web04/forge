@@ -70,7 +70,11 @@ function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-function OnboardingFlow(props: { onComplete: () => void }) {
+function OnboardingFlow(props: {
+  onComplete: () => void;
+  projectBusy: boolean;
+  onProjectBusyChange: (busy: boolean) => void;
+}) {
   const [step, setStep] = useState<OnboardingStep>("welcome");
   const [projectResults, setProjectResults] = useState<ReadonlyArray<OnboardingProjectResult>>([]);
   const { settings } = useAppSettings();
@@ -172,6 +176,7 @@ function OnboardingFlow(props: { onComplete: () => void }) {
         {step === "project" ? (
           <ProjectStep
             results={projectResults}
+            onBusyChange={props.onProjectBusyChange}
             onResult={(result) =>
               setProjectResults((current) =>
                 current.some((entry) => entry.projectId === result.projectId)
@@ -189,6 +194,8 @@ function OnboardingFlow(props: { onComplete: () => void }) {
         onSkip={props.onComplete}
         primaryLabel={primaryAction.label}
         onPrimary={primaryAction.onPrimary}
+        primaryBusy={step === "project" && props.projectBusy}
+        navigationLocked={props.projectBusy}
       />
     </div>
   );
@@ -199,11 +206,24 @@ export function OnboardingDialog(props: {
   onOpenChange: (open: boolean) => void;
   onComplete: () => void;
 }) {
+  // Project creation cannot be aborted: closing the tour mid-create would report a skip
+  // while a project still appears afterwards, so dismissal waits for it to settle.
+  const [projectBusy, setProjectBusy] = useState(false);
+  const handleOpenChange = (open: boolean) => {
+    if (!open && projectBusy) return;
+    props.onOpenChange(open);
+  };
   return (
-    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+    <Dialog open={props.open} onOpenChange={handleOpenChange}>
       <DialogPopup showCloseButton className="h-[540px] max-h-full max-w-[800px]">
         {/* Remount per open so a replay from Settings starts at the first step. */}
-        {props.open ? <OnboardingFlow onComplete={props.onComplete} /> : null}
+        {props.open ? (
+          <OnboardingFlow
+            onComplete={props.onComplete}
+            projectBusy={projectBusy}
+            onProjectBusyChange={setProjectBusy}
+          />
+        ) : null}
       </DialogPopup>
     </Dialog>
   );

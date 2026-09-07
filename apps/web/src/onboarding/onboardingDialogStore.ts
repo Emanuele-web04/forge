@@ -9,6 +9,11 @@ export type OnboardingOpenReason = "first-run" | "replay";
 
 interface OnboardingDialogStore {
   isOpen: boolean;
+  /**
+   * True once the first-run gate has produced a non-pending answer at least once. Other
+   * startup dialogs (AppSnap's announcement) wait for this so two modals never stack.
+   */
+  startupGateSettled: boolean;
   /** Why the dialog is open; null when closed. */
   openReason: OnboardingOpenReason | null;
   /**
@@ -23,14 +28,17 @@ interface OnboardingDialogStore {
   openDialog: () => void;
   close: () => void;
   markEngaged: () => void;
+  markStartupGateSettled: () => void;
 }
 
 export const useOnboardingDialogStore = create<OnboardingDialogStore>((set) => ({
   isOpen: false,
+  startupGateSettled: false,
   openReason: null,
   engaged: false,
   open: (reason) => set({ isOpen: true, openReason: reason, engaged: false }),
   openDialog: () => set({ isOpen: true, openReason: "replay", engaged: false }),
   close: () => set({ isOpen: false, openReason: null, engaged: false }),
   markEngaged: () => set({ engaged: true }),
+  markStartupGateSettled: () => set({ startupGateSettled: true }),
 }));
