@@ -217,7 +217,10 @@ import {
   createThreadHoverCardAnchor,
 } from "./sidebarHoverCardAnchors";
 import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "./ui/preview-card";
-import { hasUnreadActivity as hasUnreadActivityOutsideActiveThread } from "./SidebarActivityView.logic";
+import {
+  buildActivityFamilies,
+  collectUnreadActivityFamilyThreads,
+} from "./SidebarActivityView.logic";
 import { SidebarActivityView } from "./SidebarActivityView";
 import { SidebarIconButton, sidebarIconButtonSlotClass } from "./SidebarIconButton";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
@@ -1986,8 +1989,9 @@ export default function Sidebar() {
       () => partitionSidebarThreadsByProjectIds(sidebarTreeThreads, studioProjectIdSet),
       [sidebarTreeThreads, studioProjectIdSet],
     );
-  // Activity view + unread bell read the same visibility-filtered list, so the
-  // bell can never point at a row the Activity list is hiding.
+  // Activity view + unread bell read the same visibility-filtered tree list, so the
+  // bell can never point at a row the Activity list is hiding. Tree source keeps
+  // child (subagent/batch) threads so families nest; orphans stay hidden in both.
   const visibleNonStudioSidebarThreads = useMemo(
     () =>
       nonStudioSidebarThreads.filter((thread) =>
@@ -1995,12 +1999,28 @@ export default function Sidebar() {
       ),
     [hideAutomationRunThreads, nonStudioSidebarThreads],
   );
-  // Drives the unread dot on the header Activity bell.
-  const hasUnreadActivity = useMemo(
+  const visibleNonStudioSidebarTreeThreads = useMemo(
     () =>
-      hasUnreadActivityOutsideActiveThread(visibleNonStudioSidebarThreads, activeSidebarThreadId),
-    [activeSidebarThreadId, visibleNonStudioSidebarThreads],
+      nonStudioSidebarTreeThreads.filter((thread) =>
+        isSidebarThreadVisible(thread, { hideAutomationRunThreads }),
+      ),
+    [hideAutomationRunThreads, nonStudioSidebarTreeThreads],
   );
+  // Drives the unread dot on the header Activity bell (family-aware so closed
+  // branches and hidden orphans never leak into the dot).
+  const hasUnreadActivity = useMemo(() => {
+    const families = buildActivityFamilies({
+      threads: visibleNonStudioSidebarTreeThreads,
+      sortOrder: appSettings.sidebarThreadSortOrder,
+    });
+    return collectUnreadActivityFamilyThreads(families).some(
+      (thread) => thread.id !== activeSidebarThreadId,
+    );
+  }, [
+    activeSidebarThreadId,
+    appSettings.sidebarThreadSortOrder,
+    visibleNonStudioSidebarTreeThreads,
+  ]);
   const dismissThreadStatus = useCallback(
     (threadId: ThreadId, statusKey: string | null | undefined) => {
       if (!statusKey) {
@@ -5281,7 +5301,11 @@ export default function Sidebar() {
     edgeKind?: ThreadHierarchyEdgeKind | undefined;
   };
 
-  function renderHierarchyChildPaging(parentId: ThreadId, totalChildCount: number, renderedDirectCount: number) {
+  function renderHierarchyChildPaging(
+    parentId: ThreadId,
+    totalChildCount: number,
+    renderedDirectCount: number,
+  ) {
     const extraPages = childExtraPagesByParentId.get(parentId) ?? 0;
     const hiddenCount = Math.max(0, totalChildCount - renderedDirectCount);
     if (hiddenCount <= 0 && extraPages <= 0) {
@@ -5315,7 +5339,11 @@ export default function Sidebar() {
               event.stopPropagation();
               showLessHierarchyChildren(parentId);
             }}
-            className={hiddenCount > 0 ? "h-6 flex-none rounded-md px-2 text-left text-[length:var(--app-font-size-ui,11px)] text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground" : "h-6 flex-1 truncate rounded-md pl-8 text-left text-[length:var(--app-font-size-ui,11px)] text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"}
+            className={
+              hiddenCount > 0
+                ? "h-6 flex-none rounded-md px-2 text-left text-[length:var(--app-font-size-ui,11px)] text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"
+                : "h-6 flex-1 truncate rounded-md pl-8 text-left text-[length:var(--app-font-size-ui,11px)] text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"
+            }
           >
             Show less
           </button>
@@ -5363,7 +5391,9 @@ export default function Sidebar() {
   ): ReactNode {
     return (
       <>
-        {nestSidebarEntriesByDepth(entries).map((node) => renderNestedHierarchyNode(node, renderRow, surface))}
+        {nestSidebarEntriesByDepth(entries).map((node) =>
+          renderNestedHierarchyNode(node, renderRow, surface),
+        )}
       </>
     );
   }
@@ -5378,7 +5408,11 @@ export default function Sidebar() {
           <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>Pinned</span>
         </div>
         <div className="flex flex-col gap-0.5">
-          {renderNestedHierarchyList(pinnedHierarchyRows, (thread) => renderPinnedThreadRow(thread), "pinned")}
+          {renderNestedHierarchyList(
+            pinnedHierarchyRows,
+            (thread) => renderPinnedThreadRow(thread),
+            "pinned",
+          )}
         </div>
       </div>
     );
@@ -5934,8 +5968,9 @@ export default function Sidebar() {
         <div className={disclosureShellClassName(open)}>
           <div className={DISCLOSURE_INNER_CLASS}>
             <div className={cn("pl-5", disclosureContentClassName(open))}>
-              {renderNestedHierarchyList(entries, (thread, depth) =>
-                renderThreadRow(thread, orderedProjectThreadIds, depth, false),
+              {renderNestedHierarchyList(
+                entries,
+                (thread, depth) => renderThreadRow(thread, orderedProjectThreadIds, depth, false),
                 "project",
               )}
             </div>
@@ -6259,8 +6294,10 @@ export default function Sidebar() {
                 ),
               )}
               {rootVisibleEntries.length > 0
-                ? renderNestedHierarchyList(rootVisibleEntries, (thread, depth) =>
-                    renderThreadRow(thread, orderedProjectThreadIds, depth, false),
+                ? renderNestedHierarchyList(
+                    rootVisibleEntries,
+                    (thread, depth) =>
+                      renderThreadRow(thread, orderedProjectThreadIds, depth, false),
                     "project",
                   )
                 : null}
@@ -7294,8 +7331,10 @@ export default function Sidebar() {
                   )}
                   <SidebarMenu ref={attachProjectListAutoAnimateRef} className="gap-1">
                     {studioChatThreadRows.length > 0 ? (
-                      renderNestedHierarchyList(studioChatThreadRows, (thread, depth) =>
-                        renderThreadRow(thread, studioChatThreadIds, depth, true),
+                      renderNestedHierarchyList(
+                        studioChatThreadRows,
+                        (thread, depth) =>
+                          renderThreadRow(thread, studioChatThreadIds, depth, true),
                         "studio",
                       )
                     ) : (
@@ -7308,7 +7347,7 @@ export default function Sidebar() {
               ) : activityViewEnabled ? (
                 <SidebarGroup className="px-1.5 py-1.5">
                   <SidebarActivityView
-                    threads={visibleNonStudioSidebarThreads}
+                    threads={visibleNonStudioSidebarTreeThreads}
                     projectById={projectById}
                     activeThreadId={visualActiveSidebarThreadId}
                     pinnedThreadIdSet={pinnedThreadIdSet}
@@ -7339,6 +7378,13 @@ export default function Sidebar() {
                     }
                     onCreateChat={handlePrimaryNewThread}
                     onAddProject={handleStartAddProject}
+                    expandedThreadIds={expandedThreadIdSet}
+                    collapsedThreadIds={collapsedThreadIds}
+                    childExtraPagesByParentId={childExtraPagesByParentId}
+                    onToggleBranch={toggleHierarchyBranch}
+                    onShowMoreChildren={showMoreHierarchyChildren}
+                    onShowLessChildren={showLessHierarchyChildren}
+                    sortOrder={appSettings.sidebarThreadSortOrder}
                   />
                 </SidebarGroup>
               ) : (

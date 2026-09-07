@@ -1,11 +1,21 @@
 // FILE: SidebarActivityView.logic.ts
 // Purpose: Pure grouping/sorting model for the sidebar Activity view (threads as tasks).
-// Exports: eligibility, status-group resolution, settle helpers, and the view-model builder.
+// Exports: eligibility, status-group resolution, settle helpers, family model, and the view-model builder.
 
 import type { ProjectId, ThreadId } from "@synara/contracts";
+
+import { formatRelativeTime } from "~/lib/relativeTime";
+import type { SidebarThreadSortOrder, TimestampFormat } from "../appSettings";
 import { canSessionAnswerPendingRequests, isLatestTurnSettled } from "../session-logic";
+import { formatShortTimestamp } from "../timestampFormat";
 import type { SidebarThreadSummary } from "../types";
-import { hasUnseenCompletion, isThreadActivelyWorking } from "./Sidebar.logic";
+import {
+  buildProjectThreadTree,
+  hasUnseenCompletion,
+  isThreadActivelyWorking,
+  sortThreadsForSidebar,
+} from "./Sidebar.logic";
+import { buildThreadHierarchyIndex } from "./sidebarThreadHierarchy";
 
 /**
  * Task-feed ordering, top to bottom: threads that need the user (approvals,
@@ -68,13 +78,15 @@ export function resolveActivityStatusGroup(thread: SidebarThreadSummary): Activi
 }
 
 /**
- * Threads that belong in the task feed: top-level, not archived, and having run
- * at least once. Drafts stay out, but a thread whose very first turn is
+ * Threads that belong in the task feed: not archived, and having run at
+ * least once. Drafts stay out, but a thread whose very first turn is
  * starting up already counts as running work.
+ *
+ * Lote C: the parent exclusion is gone. Subagents/batches are eligible on
+ * their own; families (not individual rows) decide visibility.
  */
 export function isActivityThread(thread: SidebarThreadSummary): boolean {
   if (thread.archivedAt != null) return false;
-  if (thread.parentThreadId) return false;
   return thread.latestTurn !== null || isThreadRunningForActivity(thread);
 }
 
@@ -128,31 +140,172 @@ export function resolveActivityRecencyMs(thread: ActivityRecencyInput): number {
   return parseTimestampMs(resolveActivityRecencyIso(thread));
 }
 
-/**
- * Last resort so equal timestamps still produce one fixed order: without it the
- * rows would follow whatever order the incoming thread list happened to have on
- * that render, which is exactly the flicker this sort is meant to prevent.
- */
-function compareThreadIds(
-  left: Pick<SidebarThreadSummary, "id">,
-  right: Pick<SidebarThreadSummary, "id">,
+function compareFamilyRootIds(
+  left: Pick<ActivityFamily, "rootId">,
+  right: Pick<ActivityFamily, "rootId">,
 ): number {
-  return left.id.localeCompare(right.id);
+  return left.rootId.localeCompare(right.rootId);
 }
 
-export interface ActivityViewModel {
-  pinned: SidebarThreadSummary[];
-  active: SidebarThreadSummary[];
-  settled: SidebarThreadSummary[];
+// ---------------------------------------------------------------------------
+// Family model (Lote C)
+// ---------------------------------------------------------------------------
+
+/**
+ * One orchestrator family: the root as context plus every available
+ * descendant, even those without a turn yet. Aggregates are computed from
+ * eligible members only; no SidebarThreadSummary field is falsified.
+ */
+export interface ActivityFamily {
+  readonly rootId: ThreadId;
+  readonly rootThread: SidebarThreadSummary;
+  readonly projectId: ProjectId;
+  /** Every available (non-archived) member, root first, in sibling sort order. */
+  readonly threads: SidebarThreadSummary[];
+  /** Eligible members (isActivityThread); non-empty by construction. */
+  readonly eligibleThreads: SidebarThreadSummary[];
+  /** Highest priority among eligible: attention > unseenCompleted > running > seen. */
+  readonly statusGroup: ActivityStatusGroup;
+  /** Max resolveActivityRecencyMs among eligible. */
+  readonly recencyMs: number;
+  /** ISO behind recencyMs, for date buckets and row-time fallback. */
+  readonly recencyIso: string;
+  /** Max human interaction among eligible, for Recent/project ordering. */
+  readonly interactionMs: number;
+}
+
+function resolveFamilyStatusGroup(eligible: readonly SidebarThreadSummary[]): ActivityStatusGroup {
+  let best: ActivityStatusGroup = "seen";
+  let bestOrder = ACTIVITY_GROUP_ORDER.seen;
+  for (const thread of eligible) {
+    const group = resolveActivityStatusGroup(thread);
+    const order = ACTIVITY_GROUP_ORDER[group];
+    if (order < bestOrder) {
+      bestOrder = order;
+      best = group;
+      if (bestOrder === ACTIVITY_GROUP_ORDER.attention) break;
+    }
+  }
+  return best;
+}
+
+function resolveFamilyRecency(eligible: readonly SidebarThreadSummary[]): {
+  recencyMs: number;
+  recencyIso: string;
+} {
+  let recencyMs = 0;
+  let recencyIso = eligible[0]?.createdAt ?? new Date(0).toISOString();
+  let recencyId = eligible[0]?.id ?? "";
+  for (const thread of eligible) {
+    const ms = resolveActivityRecencyMs(thread);
+    if (ms > recencyMs || (ms === recencyMs && thread.id.localeCompare(recencyId) < 0)) {
+      recencyMs = ms;
+      recencyIso = resolveActivityRecencyIso(thread);
+      recencyId = thread.id;
+    }
+  }
+  return { recencyMs, recencyIso };
+}
+
+function resolveFamilyInteractionMs(eligible: readonly SidebarThreadSummary[]): number {
+  let best = 0;
+  for (const thread of eligible) {
+    best = Math.max(best, resolveActivityInteractionMs(thread));
+  }
+  return best;
+}
+
+function isFamilySettled(
+  eligible: readonly SidebarThreadSummary[],
+  settledOverrideByThreadId?: ReadonlyMap<ThreadId, boolean>,
+): boolean {
+  for (const thread of eligible) {
+    if (!isThreadSettledForActivity(thread, settledOverrideByThreadId)) return false;
+    if (resolveActivityStatusGroup(thread) !== "seen") return false;
+  }
+  return true;
+}
+
+function resolveFamilySettledMs(
+  eligible: readonly SidebarThreadSummary[],
+  settledOverrideByThreadId?: ReadonlyMap<ThreadId, boolean>,
+): number {
+  let best = 0;
+  for (const thread of eligible) {
+    const settledMs = parseTimestampMs(thread.settledAt) || resolveActivityRecencyMs(thread);
+    // Optimistic settle without settledAt falls back to recency (see flat sorter).
+    void settledOverrideByThreadId;
+    best = Math.max(best, settledMs);
+  }
+  return best;
 }
 
 /**
- * Splits eligible threads into the three Activity sections and orders each:
- * pinned by recency, active by status group then recency, settled by when they
- * were settled. Pinned threads live exclusively in the Pinned section, while a
- * settled non-pinned thread is promoted back to active whenever it starts working,
- * needs attention, or has an unseen completion. An optional project filter narrows
- * every section without changing the ordering rules.
+ * Build every family that enters Activity: group available (non-archived)
+ * threads by hierarchy root, keep the group when any member is eligible,
+ * expose the root as context even without a turn and include every available
+ * descendant (even not-yet-started) for the open branch.
+ *
+ * Siblings follow sortThreadsForSidebar with the user's preference so both
+ * sidebars order children identically; family order itself is decided by the
+ * view model aggregates, not by input order.
+ */
+export function buildActivityFamilies(input: {
+  threads: readonly SidebarThreadSummary[];
+  sortOrder?: SidebarThreadSortOrder | undefined;
+}): ActivityFamily[] {
+  const available = input.threads.filter((thread) => thread.archivedAt == null);
+  const sorted = input.sortOrder
+    ? sortThreadsForSidebar(available, input.sortOrder)
+    : [...available];
+  const index = buildThreadHierarchyIndex(sorted);
+  const membersByRootId = new Map<ThreadId, SidebarThreadSummary[]>();
+  for (const thread of sorted) {
+    const rootId = index.rootIdByThreadId.get(thread.id);
+    if (rootId === undefined) continue;
+    const members = membersByRootId.get(rootId);
+    if (members) members.push(thread);
+    else membersByRootId.set(rootId, [thread]);
+  }
+
+  const families: ActivityFamily[] = [];
+  for (const [rootId, members] of membersByRootId) {
+    const eligible = members.filter((thread) => isActivityThread(thread));
+    if (eligible.length === 0) continue;
+    const rootThread = index.nodesById.get(rootId);
+    if (!rootThread) continue;
+    const statusGroup = resolveFamilyStatusGroup(eligible);
+    const { recencyMs, recencyIso } = resolveFamilyRecency(eligible);
+    const interactionMs = resolveFamilyInteractionMs(eligible);
+    families.push({
+      rootId,
+      rootThread,
+      projectId: rootThread.projectId,
+      threads: [...members],
+      eligibleThreads: [...eligible],
+      statusGroup,
+      recencyMs,
+      recencyIso,
+      interactionMs,
+    });
+  }
+  return families;
+}
+
+export interface ActivityFamilyViewModel {
+  pinned: ActivityFamily[];
+  active: ActivityFamily[];
+  settled: ActivityFamily[];
+}
+
+/**
+ * Splits eligible families into the three Activity sections and orders each
+ * by family aggregates:
+ * pinned by recency, active by status group then recency, settled by when
+ * they were settled. A family appears exactly once: any pinned member moves
+ * the whole family to Pinned; a non-pinned family settles only when every
+ * eligible member is settled+seen. An optional project filter narrows every
+ * section without changing the ordering rules.
  */
 export function buildActivityViewModel(input: {
   threads: readonly SidebarThreadSummary[];
@@ -160,51 +313,47 @@ export function buildActivityViewModel(input: {
   settledOverrideByThreadId?: ReadonlyMap<ThreadId, boolean>;
   /** Project scope as a set so merged scopes (all project-less chats) filter as one. */
   projectFilterIds?: ReadonlySet<ProjectId> | null;
-}): ActivityViewModel {
+  sortOrder?: SidebarThreadSortOrder;
+}): ActivityFamilyViewModel {
   const projectFilterIds = input.projectFilterIds ?? null;
-  const pinned: SidebarThreadSummary[] = [];
-  const active: SidebarThreadSummary[] = [];
-  const settled: SidebarThreadSummary[] = [];
+  const families = buildActivityFamilies({ threads: input.threads, sortOrder: input.sortOrder });
+  const pinned: ActivityFamily[] = [];
+  const active: ActivityFamily[] = [];
+  const settled: ActivityFamily[] = [];
 
-  for (const thread of input.threads) {
-    if (!isActivityThread(thread)) continue;
-    if (projectFilterIds !== null && !projectFilterIds.has(thread.projectId)) continue;
-    if (input.pinnedThreadIdSet.has(thread.id)) {
-      pinned.push(thread);
+  for (const family of families) {
+    if (projectFilterIds !== null && !projectFilterIds.has(family.projectId)) continue;
+    const isPinned = family.threads.some((thread) => input.pinnedThreadIdSet.has(thread.id));
+    if (isPinned) {
+      pinned.push(family);
       continue;
     }
-    const statusGroup = resolveActivityStatusGroup(thread);
-    if (
-      isThreadSettledForActivity(thread, input.settledOverrideByThreadId) &&
-      statusGroup === "seen"
-    ) {
-      settled.push(thread);
+    if (isFamilySettled(family.eligibleThreads, input.settledOverrideByThreadId)) {
+      settled.push(family);
     } else {
-      active.push(thread);
+      active.push(family);
     }
   }
 
   pinned.sort(
-    (left, right) =>
-      resolveActivityRecencyMs(right) - resolveActivityRecencyMs(left) ||
-      compareThreadIds(left, right),
+    (left, right) => right.recencyMs - left.recencyMs || compareFamilyRootIds(left, right),
   );
   active.sort((left, right) => {
     const groupDelta =
-      ACTIVITY_GROUP_ORDER[resolveActivityStatusGroup(left)] -
-      ACTIVITY_GROUP_ORDER[resolveActivityStatusGroup(right)];
+      ACTIVITY_GROUP_ORDER[left.statusGroup] - ACTIVITY_GROUP_ORDER[right.statusGroup];
     if (groupDelta !== 0) return groupDelta;
-    return (
-      resolveActivityRecencyMs(right) - resolveActivityRecencyMs(left) ||
-      compareThreadIds(left, right)
-    );
+    return right.recencyMs - left.recencyMs || compareFamilyRootIds(left, right);
   });
   settled.sort((left, right) => {
-    // Optimistically settled threads have no settledAt yet; their latest
-    // activity stands in so they surface at the top of the section.
-    const leftSettledMs = parseTimestampMs(left.settledAt) || resolveActivityRecencyMs(left);
-    const rightSettledMs = parseTimestampMs(right.settledAt) || resolveActivityRecencyMs(right);
-    return rightSettledMs - leftSettledMs || compareThreadIds(left, right);
+    const leftSettledMs = resolveFamilySettledMs(
+      left.eligibleThreads,
+      input.settledOverrideByThreadId,
+    );
+    const rightSettledMs = resolveFamilySettledMs(
+      right.eligibleThreads,
+      input.settledOverrideByThreadId,
+    );
+    return rightSettledMs - leftSettledMs || compareFamilyRootIds(left, right);
   });
 
   return { pinned, active, settled };
@@ -226,22 +375,35 @@ export function resolveActivityDateBucket(
   return "earlier";
 }
 
+export function resolveActivityFamilyDateBucket(
+  family: Pick<ActivityFamily, "recencyMs">,
+  nowMs: number,
+): ActivityDateBucket {
+  const startOfToday = new Date(nowMs);
+  startOfToday.setHours(0, 0, 0, 0);
+  const startOfYesterday = new Date(startOfToday);
+  startOfYesterday.setDate(startOfYesterday.getDate() - 1);
+  if (family.recencyMs >= startOfToday.getTime()) return "today";
+  if (family.recencyMs >= startOfYesterday.getTime()) return "yesterday";
+  return "earlier";
+}
+
 /**
- * Splits an already-ordered active list into calendar sections. Ordering is
+ * Splits an already-ordered active family list into calendar sections. Ordering is
  * preserved as-is inside each bucket, so status priority keeps working within
  * a day and the Earlier section can collapse the long tail.
  */
 export function splitActivityThreadsByDateBucket(
-  threads: readonly SidebarThreadSummary[],
+  families: readonly ActivityFamily[],
   nowMs: number,
-): Record<ActivityDateBucket, SidebarThreadSummary[]> {
-  const buckets: Record<ActivityDateBucket, SidebarThreadSummary[]> = {
+): Record<ActivityDateBucket, ActivityFamily[]> {
+  const buckets: Record<ActivityDateBucket, ActivityFamily[]> = {
     today: [],
     yesterday: [],
     earlier: [],
   };
-  for (const thread of threads) {
-    buckets[resolveActivityDateBucket(thread, nowMs)].push(thread);
+  for (const family of families) {
+    buckets[resolveActivityFamilyDateBucket(family, nowMs)].push(family);
   }
   return buckets;
 }
@@ -254,18 +416,18 @@ export type ActivityProjectGroup =
       key: string;
       kind: "project";
       projectId: ProjectId;
-      threads: SidebarThreadSummary[];
+      families: ActivityFamily[];
     }
   | {
       key: "chats";
       kind: "chats";
       projectIds: ProjectId[];
-      threads: SidebarThreadSummary[];
+      families: ActivityFamily[];
     };
 
 /**
- * Groups an already-ordered active list by project, busiest-recent project
- * first. Thread order inside a group is preserved, so status priority still
+ * Groups an already-ordered active family list by project, busiest-recent project
+ * first. Family order inside a group is preserved, so status priority still
  * decides who leads each project block.
  *
  * Projects the user themselves touched in the current working day (the same
@@ -275,48 +437,48 @@ export type ActivityProjectGroup =
  * recent activity still leads.
  */
 export function groupActivityThreadsByProject(
-  threads: readonly SidebarThreadSummary[],
+  families: readonly ActivityFamily[],
   isRealProject: (projectId: ProjectId) => boolean,
   options: { nowMs: number },
 ): ActivityProjectGroup[] {
   const dayStartMs = resolveActivityDayStartMs(options.nowMs);
   const groupByKey = new Map<string, ActivityProjectGroup>();
-  for (const thread of threads) {
-    const key = isRealProject(thread.projectId) ? `project:${thread.projectId}` : "chats";
+  for (const family of families) {
+    const key = isRealProject(family.projectId) ? `project:${family.projectId}` : "chats";
     const group = groupByKey.get(key);
     if (group) {
-      group.threads.push(thread);
-      if (group.kind === "chats" && !group.projectIds.includes(thread.projectId)) {
-        group.projectIds.push(thread.projectId);
+      group.families.push(family);
+      if (group.kind === "chats" && !group.projectIds.includes(family.projectId)) {
+        group.projectIds.push(family.projectId);
       }
       continue;
     }
     groupByKey.set(
       key,
-      isRealProject(thread.projectId)
+      isRealProject(family.projectId)
         ? {
             key,
             kind: "project",
-            projectId: thread.projectId,
-            threads: [thread],
+            projectId: family.projectId,
+            families: [family],
           }
         : {
             key: "chats",
             kind: "chats",
-            projectIds: [thread.projectId],
-            threads: [thread],
+            projectIds: [family.projectId],
+            families: [family],
           },
     );
   }
   // Precomputed so the comparator stays O(1) per call instead of rescanning
-  // every thread of both groups on each comparison.
+  // every family of both groups on each comparison.
   const rankByKey = new Map<string, { touchedToday: number; recencyMs: number }>();
   for (const group of groupByKey.values()) {
     let recencyMs = 0;
     let touchedToday = 1;
-    for (const thread of group.threads) {
-      recencyMs = Math.max(recencyMs, resolveActivityRecencyMs(thread));
-      if (resolveActivityInteractionMs(thread) >= dayStartMs) touchedToday = 0;
+    for (const family of group.families) {
+      recencyMs = Math.max(recencyMs, family.recencyMs);
+      if (family.interactionMs >= dayStartMs) touchedToday = 0;
     }
     rankByKey.set(group.key, { touchedToday, recencyMs });
   }
@@ -340,30 +502,32 @@ export type ActivityScopeOption =
  * Scope menu entries: every real project with eligible activity, busiest first.
  * Project-less chats (chat/studio-kind containers) collapse into ONE "Synara"
  * entry instead of one look-alike row per hidden container project.
+ * Counts families, not rows, so a parent with subagents occupies one slot.
  */
 export function collectActivityScopeOptions(
   threads: readonly SidebarThreadSummary[],
   isRealProject: (projectId: ProjectId) => boolean,
+  sortOrder?: SidebarThreadSortOrder,
 ): ActivityScopeOption[] {
+  const families = buildActivityFamilies({ threads, sortOrder });
   const countByProjectId = new Map<ProjectId, number>();
-  for (const thread of threads) {
-    if (!isActivityThread(thread)) continue;
-    countByProjectId.set(thread.projectId, (countByProjectId.get(thread.projectId) ?? 0) + 1);
+  for (const family of families) {
+    countByProjectId.set(family.projectId, (countByProjectId.get(family.projectId) ?? 0) + 1);
   }
 
   const options: ActivityScopeOption[] = [];
   const chatProjectIds: ProjectId[] = [];
-  let chatThreadCount = 0;
-  for (const [projectId, threadCount] of countByProjectId) {
+  let chatFamilyCount = 0;
+  for (const [projectId, familyCount] of countByProjectId) {
     if (isRealProject(projectId)) {
-      options.push({ kind: "project", projectId, threadCount });
+      options.push({ kind: "project", projectId, threadCount: familyCount });
     } else {
       chatProjectIds.push(projectId);
-      chatThreadCount += threadCount;
+      chatFamilyCount += familyCount;
     }
   }
   if (chatProjectIds.length > 0) {
-    options.push({ kind: "chats", projectIds: chatProjectIds, threadCount: chatThreadCount });
+    options.push({ kind: "chats", projectIds: chatProjectIds, threadCount: chatFamilyCount });
   }
   return options.toSorted((left, right) => right.threadCount - left.threadCount);
 }
@@ -373,7 +537,7 @@ export type ActivityScopeSelection = ProjectId | "chats" | null;
 
 /**
  * The scope the feed can actually honor. A selection whose option has left the
- * menu — its last thread was archived, settled away, or moved — falls back to
+ * menu — its last family was archived, settled away, or moved — falls back to
  * "all projects" instead of filtering the feed down to nothing behind a scope
  * the user can no longer see.
  */
@@ -416,17 +580,17 @@ export function resolveActivityDayStartMs(nowMs: number): number {
  * set. `active` is already status-sorted, so both returned arrays preserve the
  * intended attention → unseen completion → running → seen ordering.
  */
-export function splitPriorityActivityThreads(active: readonly SidebarThreadSummary[]): {
-  priority: SidebarThreadSummary[];
-  seen: SidebarThreadSummary[];
+export function splitPriorityActivityThreads(active: readonly ActivityFamily[]): {
+  priority: ActivityFamily[];
+  seen: ActivityFamily[];
 } {
-  const priority: SidebarThreadSummary[] = [];
-  const seen: SidebarThreadSummary[] = [];
-  for (const thread of active) {
-    if (resolveActivityStatusGroup(thread) === "seen") {
-      seen.push(thread);
+  const priority: ActivityFamily[] = [];
+  const seen: ActivityFamily[] = [];
+  for (const family of active) {
+    if (family.statusGroup === "seen") {
+      seen.push(family);
     } else {
-      priority.push(thread);
+      priority.push(family);
     }
   }
   return { priority, seen };
@@ -448,64 +612,118 @@ export function resolveActivityInteractionMs(
 }
 
 /**
- * Pulls the user's working set out of the (already status-sorted) active list:
- * up to `limit` threads they interacted with *today*, newest interaction first.
- * The freshness window is the point of the section — without it the slots stay
- * occupied by whatever was last opened, so a thread touched days ago squats at
- * the top until it is archived. Nothing is hidden by aging out: the remainder
- * keeps its original order and falls through to the date buckets below.
+ * Pulls the user's working set out of the (already status-sorted) active family list:
+ * up to `limit` families they interacted with *today*, newest interaction first.
+ * Counts families, so five roots occupy five slots even with descendants.
+ * Nothing is hidden by aging out: the remainder keeps its original order and
+ * falls through to the date buckets below.
  */
 export function splitRecentActivityThreads(
-  active: readonly SidebarThreadSummary[],
+  active: readonly ActivityFamily[],
   options: { nowMs: number; limit?: number },
-): { recent: SidebarThreadSummary[]; rest: SidebarThreadSummary[] } {
+): { recent: ActivityFamily[]; rest: ActivityFamily[] } {
   const limit = options.limit ?? ACTIVITY_RECENT_LIMIT;
   const dayStartMs = resolveActivityDayStartMs(options.nowMs);
   const recent = active
-    .filter((thread) => resolveActivityInteractionMs(thread) >= dayStartMs)
+    .filter((family) => family.interactionMs >= dayStartMs)
     .toSorted(
       (left, right) =>
-        resolveActivityInteractionMs(right) - resolveActivityInteractionMs(left) ||
-        compareThreadIds(left, right),
+        right.interactionMs - left.interactionMs || compareFamilyRootIds(left, right),
     )
     .slice(0, limit);
-  const recentThreadIds = new Set(recent.map((thread) => thread.id));
+  const recentRootIds = new Set(recent.map((family) => family.rootId));
   return {
     recent,
-    rest: active.filter((thread) => !recentThreadIds.has(thread.id)),
+    rest: active.filter((family) => !recentRootIds.has(family.rootId)),
   };
 }
 
 /**
- * Computes the rows that are actually mounted in Activity render order. The
- * Sidebar consumes this same list for jump shortcuts, next/previous navigation,
- * prewarming, and live PR refreshes so hidden classic-project state cannot leak
- * into the Activity surface.
+ * Computes the rows that are actually mounted in Activity render order, from
+ * the same family + branch model that renders. Closed branches and closed
+ * sections are excluded even though their DOM may linger for the disclosure
+ * animation. The Sidebar consumes this same list for jump shortcuts,
+ * next/previous navigation, prewarming, and live PR refreshes so hidden
+ * classic-project state cannot leak into the Activity surface.
  */
 export function collectVisibleActivityThreadIds(input: {
   groupMode: ActivityGroupMode;
   pinnedOpen: boolean;
-  pinned: readonly SidebarThreadSummary[];
-  priority: readonly SidebarThreadSummary[];
-  recent: readonly SidebarThreadSummary[];
-  today: readonly SidebarThreadSummary[];
-  yesterday: readonly SidebarThreadSummary[];
+  pinned: readonly ActivityFamily[];
+  priority: readonly ActivityFamily[];
+  recent: readonly ActivityFamily[];
+  today: readonly ActivityFamily[];
+  yesterday: readonly ActivityFamily[];
   earlierOpen: boolean;
-  earlier: readonly SidebarThreadSummary[];
-  projectGroups: readonly (readonly SidebarThreadSummary[])[];
+  earlier: readonly ActivityFamily[];
+  projectGroups: readonly (readonly ActivityFamily[])[];
   settledOpen: boolean;
-  settled: readonly SidebarThreadSummary[];
+  settled: readonly ActivityFamily[];
+  expandedThreadIds?: ReadonlySet<ThreadId> | undefined;
+  collapsedThreadIds?: ReadonlySet<ThreadId> | undefined;
+  childExtraPagesByParentId?: ReadonlyMap<ThreadId, number> | undefined;
+  forceVisibleThreadId?: ThreadId | undefined;
 }): ThreadId[] {
-  const visible: SidebarThreadSummary[] = [];
-  if (input.pinnedOpen) visible.push(...input.pinned);
+  const orderedFamilies: ActivityFamily[] = [];
+  const pushFamilies = (families: readonly ActivityFamily[]) => {
+    for (const family of families) orderedFamilies.push(family);
+  };
+  if (input.pinnedOpen) pushFamilies(input.pinned);
   if (input.groupMode === "project") {
-    for (const group of input.projectGroups) visible.push(...group);
+    for (const group of input.projectGroups) pushFamilies(group);
   } else {
-    visible.push(...input.priority, ...input.recent, ...input.today, ...input.yesterday);
-    if (input.earlierOpen) visible.push(...input.earlier);
+    pushFamilies(input.priority);
+    pushFamilies(input.recent);
+    pushFamilies(input.today);
+    pushFamilies(input.yesterday);
+    if (input.earlierOpen) pushFamilies(input.earlier);
   }
-  if (input.settledOpen) visible.push(...input.settled);
-  return [...new Set(visible.map((thread) => thread.id))];
+  if (input.settledOpen) pushFamilies(input.settled);
+
+  const visible: ThreadId[] = [];
+  const seen = new Set<ThreadId>();
+  for (const family of orderedFamilies) {
+    const rows = buildProjectThreadTree({
+      threads: family.threads,
+      forceVisibleThreadId: input.forceVisibleThreadId,
+      expandedThreadIds: input.expandedThreadIds,
+      collapsedThreadIds: input.collapsedThreadIds,
+      childExtraPagesByParentId: input.childExtraPagesByParentId,
+    });
+    // Roots without cutting the subtree: an included family renders every
+    // visible row of its branch; closed branches contribute only the root.
+    if (rows.length === 0) {
+      if (!seen.has(family.rootId)) {
+        seen.add(family.rootId);
+        visible.push(family.rootId);
+      }
+      continue;
+    }
+    for (const row of rows) {
+      if (!seen.has(row.thread.id)) {
+        seen.add(row.thread.id);
+        visible.push(row.thread.id);
+      }
+    }
+  }
+  return visible;
+}
+
+/**
+ * Row timestamp: today's families show the exact clock time (task-feed precision,
+ * and it disambiguates same-title chats that would both read "2h"); older rows
+ * keep the coarser relative label.
+ */
+export function formatActivityRowTime(input: {
+  thread: ActivityRecencyInput;
+  nowMs: number;
+  timestampFormat: TimestampFormat;
+}): string {
+  const isoDate = resolveActivityRecencyIso(input.thread);
+  if (resolveActivityDateBucket(input.thread, input.nowMs) === "today") {
+    return formatShortTimestamp(isoDate, input.timestampFormat);
+  }
+  return formatRelativeTime(isoDate);
 }
 
 /** Threads "Mark all as read" should visit: eligible feed rows with an unseen completion. */
@@ -513,6 +731,22 @@ export function collectUnreadActivityThreads(
   threads: readonly SidebarThreadSummary[],
 ): SidebarThreadSummary[] {
   return threads.filter((thread) => isActivityThread(thread) && hasUnseenCompletion(thread));
+}
+
+/**
+ * Unread sweep for the current scope, reaching eligible members in closed
+ * branches: uses individual IDs/times so collapsing never hides work.
+ */
+export function collectUnreadActivityFamilyThreads(
+  families: readonly ActivityFamily[],
+): SidebarThreadSummary[] {
+  const unread: SidebarThreadSummary[] = [];
+  for (const family of families) {
+    for (const thread of family.eligibleThreads) {
+      if (hasUnseenCompletion(thread)) unread.push(thread);
+    }
+  }
+  return unread;
 }
 
 /** The open thread is already being read even if its visited timestamp update is one render late. */

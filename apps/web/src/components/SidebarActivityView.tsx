@@ -43,6 +43,7 @@ import { FolderClosed } from "./FolderClosed";
 import { ProviderIcon } from "./ProviderIcon";
 import { PrStateChip } from "./pullRequest/PrStateChip";
 import {
+  buildProjectThreadTree,
   createSidebarThreadHoverAnchorId,
   resolveJumpHintReserveClass,
   resolveSidebarThreadListPaging,
@@ -54,7 +55,7 @@ import {
 import {
   buildActivityViewModel,
   collectActivityScopeOptions,
-  collectUnreadActivityThreads,
+  collectUnreadActivityFamilyThreads,
   collectVisibleActivityThreadIds,
   formatActivityRowTime,
   groupActivityThreadsByProject,
@@ -63,12 +64,23 @@ import {
   splitActivityThreadsByDateBucket,
   splitPriorityActivityThreads,
   splitRecentActivityThreads,
+  type ActivityFamily,
   type ActivityGroupMode,
   type ActivityProjectGroup,
   type ActivityScopeOption,
   type ActivityScopeSelection,
 } from "./SidebarActivityView.logic";
-import { DEFAULT_TIMESTAMP_FORMAT, type TimestampFormat } from "../appSettings";
+import {
+  DEFAULT_TIMESTAMP_FORMAT,
+  type SidebarThreadSortOrder,
+  type TimestampFormat,
+} from "../appSettings";
+import { SIDEBAR_THREAD_HIERARCHY_CHILD_PAGE_SIZE } from "./sidebarThreadHierarchy";
+import {
+  nestSidebarEntriesByDepth,
+  SidebarThreadHierarchyBranch,
+  type NestedSidebarEntry,
+} from "./SidebarThreadBranch";
 import { SIDEBAR_TRAILING_ICON_CLASS, sidebarGlyphClass } from "./sidebarGlyphs";
 import { SIDEBAR_HOVER_CARD_TRIGGER_PROPS } from "./sidebarHoverCardStyles";
 import {
@@ -97,6 +109,42 @@ import { Tooltip, TooltipTrigger } from "./ui/tooltip";
 const ACTIVITY_LIST_BASE_LIMIT = 20;
 const ACTIVITY_LIST_PAGE_SIZE = 20;
 const EMPTY_PROJECT_GROUPS: ActivityProjectGroup[] = [];
+const EMPTY_EXPANDED_THREAD_IDS: ReadonlySet<ThreadId> = new Set();
+const EMPTY_COLLAPSED_THREAD_IDS: ReadonlySet<ThreadId> = new Set();
+const EMPTY_CHILD_EXTRA_PAGES: ReadonlyMap<ThreadId, number> = new Map();
+const DEFAULT_ACTIVITY_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
+
+type ActivityHierarchyEntry = {
+  thread: SidebarThreadSummary;
+  depth: number;
+  directChildCount?: number | undefined;
+  edgeKind?: import("./sidebarThreadHierarchy").ThreadHierarchyEdgeKind | undefined;
+};
+
+/** Roots paged before they expand: families count, children never consume root slots. */
+function getVisibleFamiliesForPreview(input: {
+  families: readonly ActivityFamily[];
+  activeThreadId: ThreadId | null;
+  familyByThreadId: ReadonlyMap<ThreadId, ActivityFamily>;
+  previewLimit: number;
+}): { visibleFamilies: ActivityFamily[]; hasHiddenFamilies: boolean } {
+  const { families, activeThreadId, familyByThreadId, previewLimit } = input;
+  if (families.length <= previewLimit) {
+    return { visibleFamilies: [...families], hasHiddenFamilies: false };
+  }
+  const previewFamilies = families.slice(0, previewLimit);
+  const previewRootIds = new Set(previewFamilies.map((family) => family.rootId));
+  if (activeThreadId !== null) {
+    const activeFamily = familyByThreadId.get(activeThreadId);
+    if (activeFamily && !previewRootIds.has(activeFamily.rootId)) {
+      return {
+        visibleFamilies: [...previewFamilies, activeFamily],
+        hasHiddenFamilies: true,
+      };
+    }
+  }
+  return { visibleFamilies: previewFamilies, hasHiddenFamilies: true };
+}
 
 /** Keeps a row action (pin, archive, done) from also opening the thread. */
 function stopRowActivation(event: MouseEvent) {
@@ -572,6 +620,13 @@ export function SidebarActivityView({
   onCreateChat,
   onAddProject,
   timestampFormat: timestampFormatProp,
+  expandedThreadIds: expandedThreadIdsProp,
+  collapsedThreadIds: collapsedThreadIdsProp,
+  childExtraPagesByParentId: childExtraPagesByParentIdProp,
+  onToggleBranch,
+  onShowMoreChildren,
+  onShowLessChildren,
+  sortOrder: sortOrderProp,
 }: {
   threads: readonly SidebarThreadSummary[];
   projectById: ReadonlyMap<ProjectId, Project>;
@@ -605,10 +660,22 @@ export function SidebarActivityView({
   onAddProject: () => void;
   /** Clock format for row timestamps; defaults to the app locale setting. */
   timestampFormat?: TimestampFormat;
+  /** Shared branch expansion (same set as the normal sidebar). */
+  expandedThreadIds?: ReadonlySet<ThreadId>;
+  collapsedThreadIds?: ReadonlySet<ThreadId>;
+  childExtraPagesByParentId?: ReadonlyMap<ThreadId, number>;
+  onToggleBranch?: (threadId: ThreadId, isCurrentlyOpen: boolean) => void;
+  onShowMoreChildren?: (parentId: ThreadId) => void;
+  onShowLessChildren?: (parentId: ThreadId) => void;
+  sortOrder?: SidebarThreadSortOrder;
 }) {
   // Default resolved in the body, not the destructuring pattern: an
   // AssignmentPattern in the parameter list makes React Compiler bail out.
   const timestampFormat = timestampFormatProp ?? DEFAULT_TIMESTAMP_FORMAT;
+  const expandedThreadIds = expandedThreadIdsProp ?? EMPTY_EXPANDED_THREAD_IDS;
+  const collapsedThreadIds = collapsedThreadIdsProp ?? EMPTY_COLLAPSED_THREAD_IDS;
+  const childExtraPagesByParentId = childExtraPagesByParentIdProp ?? EMPTY_CHILD_EXTRA_PAGES;
+  const sortOrder = sortOrderProp ?? DEFAULT_ACTIVITY_SORT_ORDER;
   const [scopeSelection, setScopeSelection] = useState<ActivityScopeSelection>(null);
   const [groupMode, setGroupMode] = useState<ActivityGroupMode>("time");
   const [pinnedOpen, setPinnedOpen] = useState(true);
@@ -621,10 +688,9 @@ export function SidebarActivityView({
   );
 
   const isRealProject = (projectId: ProjectId) => projectById.get(projectId)?.kind === "project";
-  // Scope options and the unread sweep intentionally ignore the active scope:
-  // the menu must keep offering every project, and "Mark all as read" means all.
-  const scopeOptions = collectActivityScopeOptions(threads, isRealProject);
-  const unreadThreads = collectUnreadActivityThreads(threads);
+  // Scope menu counts families so a parent with subagents occupies one slot;
+  // the menu itself ignores the active scope so it keeps offering every project.
+  const scopeOptions = collectActivityScopeOptions(threads, isRealProject, sortOrder);
 
   const { scope: activeScope, projectFilterIds } = resolveActivityScope(
     scopeSelection,
@@ -639,17 +705,25 @@ export function SidebarActivityView({
     pinnedThreadIdSet,
     settledOverrideByThreadId,
     projectFilterIds,
+    sortOrder,
   });
-  const scopedPinnedThreads = model.pinned;
+  const scopedPinnedFamilies = model.pinned;
+  // Mark-all-as-read reaches eligible members in closed branches: it sweeps the
+  // current scope's families, not just mounted rows, using individual IDs/times.
+  const unreadThreads = collectUnreadActivityFamilyThreads([
+    ...model.pinned,
+    ...model.active,
+    ...model.settled,
+  ]);
   const nowMs = Date.now();
-  const { priority: priorityThreads, seen: seenThreads } = splitPriorityActivityThreads(
+  const { priority: priorityFamilies, seen: seenFamilies } = splitPriorityActivityThreads(
     model.active,
   );
-  const { recent: recentThreads, rest: remainingActiveThreads } = splitRecentActivityThreads(
-    seenThreads,
+  const { recent: recentFamilies, rest: remainingActiveFamilies } = splitRecentActivityThreads(
+    seenFamilies,
     { nowMs },
   );
-  const dateBuckets = splitActivityThreadsByDateBucket(remainingActiveThreads, nowMs);
+  const dateBuckets = splitActivityThreadsByDateBucket(remainingActiveFamilies, nowMs);
   const projectGroups =
     groupMode === "project"
       ? groupActivityThreadsByProject(model.active, isRealProject, { nowMs })
@@ -667,51 +741,102 @@ export function SidebarActivityView({
     pageSize: ACTIVITY_LIST_PAGE_SIZE,
     requestedExtraPages: settledExtraPages,
   });
+  const familyByThreadId = useMemo(() => {
+    const byThreadId = new Map<ThreadId, ActivityFamily>();
+    for (const family of [...model.pinned, ...model.active, ...model.settled]) {
+      for (const thread of family.threads) {
+        if (!byThreadId.has(thread.id)) byThreadId.set(thread.id, family);
+      }
+    }
+    return byThreadId;
+  }, [model.active, model.pinned, model.settled]);
+
+  // Transient section reveal: navigating to a child hidden by a closed
+  // Activity section opens that section without changing the chosen scope.
+  // A manual close afterwards stays valid until the active thread changes.
+  useEffect(() => {
+    if (activeThreadId === null) return;
+    const family = familyByThreadId.get(activeThreadId);
+    if (!family) return;
+    const isIn = (families: readonly ActivityFamily[]) =>
+      families.some((entry) => entry.rootId === family.rootId);
+    if (isIn(model.pinned) && !pinnedOpen) setPinnedOpen(true);
+    if (isIn(dateBuckets.earlier) && !earlierOpen) setEarlierOpen(true);
+    if (isIn(model.settled) && !settledOpen) setSettledOpen(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeThreadId]);
+
   const pagedProjectGroups = projectGroups.map((group) => {
     const paging = resolveSidebarThreadListPaging({
-      totalCount: group.threads.length,
+      totalCount: group.families.length,
       baseLimit: ACTIVITY_LIST_BASE_LIMIT,
       pageSize: ACTIVITY_LIST_PAGE_SIZE,
       requestedExtraPages: projectExtraPagesByKey.get(group.key) ?? 0,
     });
+    const { visibleFamilies } = getVisibleFamiliesForPreview({
+      families: group.families,
+      activeThreadId,
+      familyByThreadId,
+      previewLimit: paging.previewLimit,
+    });
     return {
       group,
       paging,
-      threads: group.threads.slice(0, paging.previewLimit),
+      families: visibleFamilies,
+      hasHiddenFamilies: visibleFamilies.length < group.families.length || paging.canShowMore,
     };
   });
+
+  const visibleEarlierFamilies = getVisibleFamiliesForPreview({
+    families: dateBuckets.earlier,
+    activeThreadId,
+    familyByThreadId,
+    previewLimit: earlierPaging.previewLimit,
+  }).visibleFamilies;
+  const visibleSettledFamilies = getVisibleFamiliesForPreview({
+    families: model.settled,
+    activeThreadId,
+    familyByThreadId,
+    previewLimit: settledPaging.previewLimit,
+  }).visibleFamilies;
 
   const visibleThreadIds = useMemo(
     () =>
       collectVisibleActivityThreadIds({
         groupMode,
         pinnedOpen,
-        pinned: scopedPinnedThreads,
-        priority: priorityThreads,
-        recent: recentThreads,
+        pinned: scopedPinnedFamilies,
+        priority: priorityFamilies,
+        recent: recentFamilies,
         today: dateBuckets.today,
         yesterday: dateBuckets.yesterday,
         earlierOpen,
-        earlier: dateBuckets.earlier.slice(0, earlierPaging.previewLimit),
-        projectGroups: pagedProjectGroups.map((group) => group.threads),
+        earlier: visibleEarlierFamilies,
+        projectGroups: pagedProjectGroups.map((group) => group.families),
         settledOpen,
-        settled: model.settled.slice(0, settledPaging.previewLimit),
+        settled: visibleSettledFamilies,
+        expandedThreadIds,
+        collapsedThreadIds,
+        childExtraPagesByParentId,
+        forceVisibleThreadId: activeThreadId ?? undefined,
       }),
     [
-      dateBuckets.earlier,
+      activeThreadId,
+      childExtraPagesByParentId,
+      collapsedThreadIds,
       dateBuckets.today,
       dateBuckets.yesterday,
       earlierOpen,
-      earlierPaging.previewLimit,
+      expandedThreadIds,
       groupMode,
-      model.settled,
       pagedProjectGroups,
       pinnedOpen,
-      priorityThreads,
-      recentThreads,
-      scopedPinnedThreads,
+      priorityFamilies,
+      recentFamilies,
+      scopedPinnedFamilies,
       settledOpen,
-      settledPaging.previewLimit,
+      visibleEarlierFamilies,
+      visibleSettledFamilies,
     ],
   );
   const visibleThreadIdsFingerprint = visibleThreadIds.join("\0");
@@ -770,14 +895,126 @@ export function SidebarActivityView({
       renderHoverCard={(anchorId) => renderThreadHoverCard(thread, anchorId)}
     />
   );
-  const renderActiveRow = (thread: SidebarThreadSummary) =>
-    renderRow(thread, isThreadSettledForActivity(thread, settledOverrideByThreadId));
+  function renderBranchChildPaging(
+    parentId: ThreadId,
+    totalChildCount: number,
+    renderedDirectCount: number,
+  ) {
+    const extraPages = childExtraPagesByParentId.get(parentId) ?? 0;
+    const hiddenCount = Math.max(0, totalChildCount - renderedDirectCount);
+    if (hiddenCount <= 0 && extraPages <= 0) return null;
+    const showCount = Math.min(SIDEBAR_THREAD_HIERARCHY_CHILD_PAGE_SIZE, hiddenCount);
+    const buttonClassName =
+      "h-6 cursor-pointer rounded-md text-left text-[length:var(--app-font-size-ui,11px)] text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground";
+    return (
+      <div className="flex w-full min-w-0 items-center gap-1 py-0.5 pr-2">
+        {hiddenCount > 0 ? (
+          <button
+            type="button"
+            data-thread-selection-safe
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onShowMoreChildren?.(parentId);
+            }}
+            className={`${buttonClassName} flex-1 truncate pl-8`}
+          >
+            Show {showCount} more
+          </button>
+        ) : null}
+        {extraPages > 0 ? (
+          <button
+            type="button"
+            data-thread-selection-safe
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onShowLessChildren?.(parentId);
+            }}
+            className={
+              hiddenCount > 0
+                ? `${buttonClassName} flex-none px-2`
+                : `${buttonClassName} flex-1 truncate pl-8`
+            }
+          >
+            Show less
+          </button>
+        ) : null}
+      </div>
+    );
+  }
+
+  function renderNestedFamilyNode(
+    node: NestedSidebarEntry<ActivityHierarchyEntry>,
+    isSettledRow: (thread: SidebarThreadSummary) => boolean,
+  ): ReactNode {
+    const { entry } = node;
+    const totalChildCount = entry.directChildCount ?? 0;
+    const isOpen = node.children.length > 0;
+    const threadId = entry.thread.id;
+    return (
+      <SidebarThreadHierarchyBranch
+        key={threadId}
+        threadId={threadId}
+        title={entry.thread.title}
+        depth={entry.depth}
+        directChildCount={totalChildCount}
+        edgeKind={entry.edgeKind}
+        expanded={isOpen}
+        onToggle={(id) => onToggleBranch?.(id, isOpen)}
+        row={renderRow(entry.thread, isSettledRow(entry.thread))}
+        childPaging={
+          isOpen
+            ? renderBranchChildPaging(threadId, totalChildCount, node.children.length)
+            : undefined
+        }
+        surface="activity"
+      >
+        {node.children.map((child) => renderNestedFamilyNode(child, isSettledRow))}
+      </SidebarThreadHierarchyBranch>
+    );
+  }
+
+  function renderFamilyBranches(
+    families: readonly ActivityFamily[],
+    isSettledRow: (thread: SidebarThreadSummary) => boolean,
+  ): ReactNode {
+    return (
+      <ul className="flex w-full min-w-0 flex-col gap-0.5">
+        {families.flatMap((family) => {
+          const rows = buildProjectThreadTree({
+            threads: family.threads,
+            forceVisibleThreadId: activeThreadId ?? undefined,
+            expandedThreadIds,
+            collapsedThreadIds,
+            childExtraPagesByParentId,
+          });
+          const entries: ActivityHierarchyEntry[] = rows.map((row) => ({
+            thread: row.thread,
+            depth: row.depth,
+            directChildCount: row.directChildCount,
+            edgeKind: row.edgeKind,
+          }));
+          return nestSidebarEntriesByDepth(entries).map((node) =>
+            renderNestedFamilyNode(node, isSettledRow),
+          );
+        })}
+      </ul>
+    );
+  }
+
+  const renderActiveFamilyBranches = (families: readonly ActivityFamily[]) =>
+    renderFamilyBranches(families, (thread) =>
+      isThreadSettledForActivity(thread, settledOverrideByThreadId),
+    );
 
   // The placeholder speaks for the whole surface, so it may only appear when no
   // section has rows — a feed with nothing active but a populated Pinned or Done
   // section is not empty.
   const isEmpty =
-    model.active.length === 0 && model.settled.length === 0 && scopedPinnedThreads.length === 0;
+    model.active.length === 0 && model.settled.length === 0 && scopedPinnedFamilies.length === 0;
   const emptyLabel =
     activeScope === null
       ? "No activity yet"
@@ -787,14 +1024,14 @@ export function SidebarActivityView({
 
   return (
     <div className="flex flex-col gap-3">
-      {scopedPinnedThreads.length > 0 ? (
+      {scopedPinnedFamilies.length > 0 ? (
         <ActivityCollapsibleSection
           label="Pinned"
           open={pinnedOpen}
           onToggle={() => setPinnedOpen((open) => !open)}
         >
-          {scopedPinnedThreads.map((thread) =>
-            renderRow(thread, isThreadSettledForActivity(thread, settledOverrideByThreadId)),
+          {renderFamilyBranches(scopedPinnedFamilies, (thread) =>
+            isThreadSettledForActivity(thread, settledOverrideByThreadId),
           )}
         </ActivityCollapsibleSection>
       ) : null}
@@ -837,7 +1074,7 @@ export function SidebarActivityView({
           {threadsHydrated ? emptyLabel : "Loading activity..."}
         </div>
       ) : groupMode === "project" ? (
-        pagedProjectGroups.map(({ group, paging, threads: visibleThreads }) => (
+        pagedProjectGroups.map(({ group, paging, families: visibleFamilies }) => (
           <div key={group.key}>
             <ActivitySectionLabel
               label={
@@ -853,11 +1090,11 @@ export function SidebarActivityView({
                 : {})}
             />
             <div className="flex flex-col gap-0.5">
-              {visibleThreads.map(renderActiveRow)}
+              {renderActiveFamilyBranches(visibleFamilies)}
               <ActivityShowMoreRow
                 canShowMore={paging.canShowMore}
                 canShowLess={paging.canShowLess}
-                hiddenCount={group.threads.length - paging.previewLimit}
+                hiddenCount={group.families.length - paging.previewLimit}
                 pageSize={ACTIVITY_LIST_PAGE_SIZE}
                 onShowMore={() => {
                   setProjectExtraPagesByKey((current) => {
@@ -881,26 +1118,28 @@ export function SidebarActivityView({
         ))
       ) : (
         <>
-          {priorityThreads.length > 0 || recentThreads.length > 0 ? (
+          {priorityFamilies.length > 0 || recentFamilies.length > 0 ? (
             <div>
               <ActivitySectionLabel label="Recent" />
               <div className="flex flex-col gap-0.5">
-                {priorityThreads.map(renderActiveRow)}
-                {recentThreads.map(renderActiveRow)}
+                {renderActiveFamilyBranches(priorityFamilies)}
+                {renderActiveFamilyBranches(recentFamilies)}
               </div>
             </div>
           ) : null}
           {dateBuckets.today.length > 0 ? (
             <div>
               <ActivitySectionLabel label="Today" />
-              <div className="flex flex-col gap-0.5">{dateBuckets.today.map(renderActiveRow)}</div>
+              <div className="flex flex-col gap-0.5">
+                {renderActiveFamilyBranches(dateBuckets.today)}
+              </div>
             </div>
           ) : null}
           {dateBuckets.yesterday.length > 0 ? (
             <div>
               <ActivitySectionLabel label="Yesterday" />
               <div className="flex flex-col gap-0.5">
-                {dateBuckets.yesterday.map(renderActiveRow)}
+                {renderActiveFamilyBranches(dateBuckets.yesterday)}
               </div>
             </div>
           ) : null}
@@ -910,7 +1149,7 @@ export function SidebarActivityView({
               open={earlierOpen}
               onToggle={() => setEarlierOpen((open) => !open)}
             >
-              {dateBuckets.earlier.slice(0, earlierPaging.previewLimit).map(renderActiveRow)}
+              {renderActiveFamilyBranches(visibleEarlierFamilies)}
               <ActivityShowMoreRow
                 canShowMore={earlierPaging.canShowMore}
                 canShowLess={earlierPaging.canShowLess}
@@ -932,9 +1171,7 @@ export function SidebarActivityView({
           open={settledOpen}
           onToggle={() => setSettledOpen((open) => !open)}
         >
-          {model.settled
-            .slice(0, settledPaging.previewLimit)
-            .map((thread) => renderRow(thread, true))}
+          {renderFamilyBranches(visibleSettledFamilies, () => true)}
           <ActivityShowMoreRow
             canShowMore={settledPaging.canShowMore}
             canShowLess={settledPaging.canShowLess}
