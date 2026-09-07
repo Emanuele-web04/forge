@@ -1844,20 +1844,25 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         }
 
         const maxBytes = input.maxBytes ?? GIT_READ_FILE_AT_REV_MAX_BYTES;
+        // The index is not a commit: its blob is addressed as `:<path>`.
         const baseRev =
-          input.base === "branch"
-            ? yield* resolveBranchMergeBase(input.cwd)
-            : input.rev?.trim() || "HEAD";
+          input.base === "index"
+            ? null
+            : input.base === "branch"
+              ? yield* resolveBranchMergeBase(input.cwd)
+              : input.rev?.trim() || "HEAD";
 
         const resolvedRev =
-          (yield* executeGit(
-            "GitCore.readFileAtRev.revParse",
-            input.cwd,
-            ["rev-parse", "--verify", "--quiet", `${baseRev}^{commit}`],
-            { allowNonZeroExit: true },
-          ).pipe(Effect.map((result) => result.stdout.trim()))) || baseRev;
+          baseRev === null
+            ? "index"
+            : (yield* executeGit(
+                "GitCore.readFileAtRev.revParse",
+                input.cwd,
+                ["rev-parse", "--verify", "--quiet", `${baseRev}^{commit}`],
+                { allowNonZeroExit: true },
+              ).pipe(Effect.map((result) => result.stdout.trim()))) || baseRev;
 
-        const blobRef = `${resolvedRev}:${filePath}`;
+        const blobRef = baseRev === null ? `:${filePath}` : `${resolvedRev}:${filePath}`;
         const sizeResult = yield* executeGit(
           "GitCore.readFileAtRev.size",
           input.cwd,

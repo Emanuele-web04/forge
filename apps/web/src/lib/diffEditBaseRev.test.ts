@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveDiffEditBaseRev } from "./diffEditBaseRev";
+import { resolveDiffEditBaseRev, resolveDiffFileEditMode } from "./diffEditBaseRev";
 
 describe("resolveDiffEditBaseRev", () => {
-  it("compares working-tree style scopes against HEAD", () => {
+  it("compares the working tree and staged scopes against HEAD", () => {
     expect(resolveDiffEditBaseRev("workingTree", null)).toEqual({ rev: "HEAD" });
-    expect(resolveDiffEditBaseRev("unstaged", null)).toEqual({ rev: "HEAD" });
     expect(resolveDiffEditBaseRev("staged", null)).toEqual({ rev: "HEAD" });
+  });
+
+  it("compares the unstaged scope against the index", () => {
+    expect(resolveDiffEditBaseRev("unstaged", null)).toEqual({ base: "index" });
   });
 
   it("lets the server resolve the branch scope base", () => {
@@ -22,5 +25,19 @@ describe("resolveDiffEditBaseRev", () => {
   it("falls back to HEAD when the ref scope has no ref", () => {
     expect(resolveDiffEditBaseRev("ref", null)).toEqual({ rev: "HEAD" });
     expect(resolveDiffEditBaseRev("ref", "")).toEqual({ rev: "HEAD" });
+  });
+});
+
+describe("resolveDiffFileEditMode", () => {
+  it("opens a diff editor for working-tree-backed repo scopes", () => {
+    expect(resolveDiffFileEditMode("repo", "workingTree")).toBe("diff");
+    expect(resolveDiffFileEditMode("repo", "unstaged")).toBe("diff");
+    expect(resolveDiffFileEditMode("repo", "branch")).toBe("diff");
+    expect(resolveDiffFileEditMode("repo", "ref")).toBe("diff");
+  });
+
+  it("opens the plain editor where the diff editor cannot represent the scope", () => {
+    expect(resolveDiffFileEditMode("repo", "staged")).toBe("file");
+    expect(resolveDiffFileEditMode("turn", "workingTree")).toBe("file");
   });
 });

@@ -3,11 +3,13 @@ import type { RepoDiffScope } from "~/repoDiffScopeStore";
 export type DiffEditBaseScope = RepoDiffScope;
 
 /**
- * Base side of an editable diff. The branch scope defers to the server so the
- * editor compares against exactly the base the branch diff itself used
- * (upstream merge base, or the fallback base when the branch has no upstream).
+ * Base side of an editable diff. Server-resolved bases keep the editor on
+ * exactly the tree the diff itself compared against: the branch diff's
+ * upstream or fallback merge base, or the index for unstaged changes.
  */
-export type DiffEditBaseRev = { rev: string } | { base: "branch" };
+export type DiffEditBaseRev = { rev: string } | { base: "branch" | "index" };
+
+export type DiffFileEditMode = "diff" | "file";
 
 export interface DiffFileEditRequest {
   filePath: string;
@@ -16,7 +18,7 @@ export interface DiffFileEditRequest {
    * holds the file under its old name, so the base-side read must use it.
    */
   basePath?: string | undefined;
-  mode: "diff" | "file";
+  mode: DiffFileEditMode;
   baseRev: DiffEditBaseRev;
 }
 
@@ -31,5 +33,20 @@ export function resolveDiffEditBaseRev(
   if (scope === "branch") {
     return { base: "branch" };
   }
+  if (scope === "unstaged") {
+    return { base: "index" };
+  }
   return { rev: "HEAD" };
+}
+
+/**
+ * The diff editor always edits the working tree. Turn diffs (checkpoint
+ * snapshots) and the staged scope (whose modified side is the index) cannot
+ * be represented that way, so they open the plain file editor instead.
+ */
+export function resolveDiffFileEditMode(
+  viewKind: "repo" | "turn",
+  scope: DiffEditBaseScope,
+): DiffFileEditMode {
+  return viewKind === "turn" || scope === "staged" ? "file" : "diff";
 }

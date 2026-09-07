@@ -182,8 +182,11 @@ export const GitReadFileAtRevInput = Schema.Struct({
     Schema.isMaxLength(GIT_READ_FILE_AT_REV_PATH_MAX_LENGTH),
   ),
   rev: Schema.optional(GitRevisionArgumentSchema),
-  /** Read the file at the base the branch diff uses: the upstream or fallback merge base. */
-  base: Schema.optional(Schema.Literal("branch")),
+  /**
+   * Read the file at a base the server resolves: the branch diff's upstream or
+   * fallback merge base, or the index (stage 0) for unstaged-scope diffs.
+   */
+  base: Schema.optional(Schema.Literals(["branch", "index"])),
   maxBytes: Schema.optional(
     PositiveInt.check(Schema.isLessThanOrEqualTo(GIT_READ_FILE_AT_REV_MAX_BYTES)),
   ),

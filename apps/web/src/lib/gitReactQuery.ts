@@ -64,7 +64,7 @@ export const gitQueryKeys = {
     cwd: string | null,
     filePath: string | null,
     rev: string | null,
-    base: "branch" | null,
+    base: "branch" | "index" | null,
   ) => ["git", "file-at-rev", cwd, filePath, rev, base] as const,
   diffSummary: (
     cacheScope: string | null,
@@ -552,7 +552,7 @@ export function gitReadFileAtRevQueryOptions(input: {
   cwd: string | null;
   filePath: string | null;
   rev?: string | undefined;
-  base?: "branch" | undefined;
+  base?: "branch" | "index" | undefined;
   enabled?: boolean;
 }) {
   const { cwd, filePath, base, rev } = input;

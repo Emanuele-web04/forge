@@ -45,7 +45,11 @@ import {
   buildWhyChangedPrompt,
   normalizeSelectionSnippet,
 } from "../lib/chatReferences";
-import { resolveDiffEditBaseRev, type DiffFileEditRequest } from "../lib/diffEditBaseRev";
+import {
+  resolveDiffEditBaseRev,
+  resolveDiffFileEditMode,
+  type DiffFileEditRequest,
+} from "../lib/diffEditBaseRev";
 import { resolveDiffEnvironmentState } from "../lib/threadEnvironment";
 import { disclosureWidthClassName } from "../lib/disclosureMotion";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
@@ -1044,7 +1048,7 @@ export default function DiffPanel({
             onEditFile({
               filePath,
               ...(options?.basePath ? { basePath: options.basePath } : {}),
-              mode: diffViewKind === "turn" ? "file" : "diff",
+              mode: resolveDiffFileEditMode(diffViewKind, repoDiffScope),
               baseRev: resolveDiffEditBaseRev(repoDiffScope, repoDiffCompareRef),
             });
           }

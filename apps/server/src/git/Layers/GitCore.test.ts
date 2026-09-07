@@ -297,6 +297,26 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("reads the staged blob when the base is the index", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "src.ts"), "committed\n");
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "add src"]);
+        yield* writeTextFile(path.join(tmp, "src.ts"), "staged\n");
+        yield* git(tmp, ["add", "src.ts"]);
+        yield* writeTextFile(path.join(tmp, "src.ts"), "working tree\n");
+
+        const result = yield* core.readFileAtRev({ cwd: tmp, filePath: "src.ts", base: "index" });
+
+        expect(result.contents).toBe("staged\n");
+        expect(result.resolvedRev).toBe("index");
+        expect(result.missing).toBe(false);
+      }),
+    );
+
     it.effect("reads the branch base from the fallback base when there is no upstream", () =>
       Effect.gen(function* () {
         const core = yield* GitCore;
