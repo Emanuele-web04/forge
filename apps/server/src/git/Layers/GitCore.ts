@@ -1980,10 +1980,10 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           allowNonZeroExit: true,
         });
         if (result.code !== 0) {
-          // A working-tree line in a file HEAD does not know (untracked or
-          // newly staged) has no history yet: report it as uncommitted rather
-          // than failing the popover.
-          if (resolvedRev === null && /no such path/i.test(result.stderr)) {
+          // A working-tree line in a file HEAD does not know (untracked, newly
+          // staged, or any file in a repository without commits) has no history
+          // yet: report it as uncommitted rather than failing the popover.
+          if (resolvedRev === null && /no such (?:path|ref)/i.test(result.stderr)) {
             return UNCOMMITTED_BLAME_RESULT;
           }
           return yield* createGitCommandError(

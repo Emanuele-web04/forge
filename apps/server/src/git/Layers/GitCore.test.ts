@@ -246,6 +246,19 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("reports lines in a repository without commits as uncommitted", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* core.initRepo({ cwd: tmp });
+        yield* writeTextFile(path.join(tmp, "first.ts"), "fresh\n");
+
+        const result = yield* core.blameLine({ cwd: tmp, filePath: "first.ts", line: 1 });
+
+        expect(result.uncommitted).toBe(true);
+      }),
+    );
+
     it.effect("reports working-tree lines of a file HEAD does not know as uncommitted", () =>
       Effect.gen(function* () {
         const core = yield* GitCore;

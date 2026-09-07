@@ -1,6 +1,6 @@
 import { parseDiffFromFile } from "@pierre/diffs";
 import { FileDiff } from "@pierre/diffs/react";
-import { useMemo, useRef, type RefObject } from "react";
+import { useMemo, useRef, useState, type RefObject } from "react";
 
 import { buildDiffPanelUnsafeCSS, resolveDiffThemeName } from "~/lib/diffRendering";
 import { cn } from "~/lib/utils";
@@ -33,21 +33,30 @@ export function CodeDiffEditorPane(props: CodeDiffEditorPaneProps) {
   originalRef.current = props.original;
   const modifiedRef = useRef(props.modified);
   modifiedRef.current = props.modified;
+  // A layout switch remounts FileDiff (below), and the remount must start from
+  // the buffer as it is now, not from the snapshot parsed at the last load or
+  // reload. Bump a parse generation whenever the layout changes so the memo
+  // re-reads the current contents for the new instance.
+  const layout = props.renderSideBySide ? "split" : "unified";
+  const [parseGeneration, setParseGeneration] = useState({ layout, version: 0 });
+  if (parseGeneration.layout !== layout) {
+    setParseGeneration({ layout, version: parseGeneration.version + 1 });
+  }
   const fileDiff = useMemo(
     () =>
       parseDiffFromFile(
         {
           name: props.fileName,
           contents: originalRef.current,
-          cacheKey: `diff-edit:${props.fileName}:old:${props.originalVersion}`,
+          cacheKey: `diff-edit:${props.fileName}:old:${props.originalVersion}:${parseGeneration.version}`,
         },
         {
           name: props.fileName,
           contents: modifiedRef.current,
-          cacheKey: `diff-edit:${props.fileName}:new:${props.modifiedVersion}`,
+          cacheKey: `diff-edit:${props.fileName}:new:${props.modifiedVersion}:${parseGeneration.version}`,
         },
       ),
-    [props.fileName, props.modifiedVersion, props.originalVersion],
+    [props.fileName, props.modifiedVersion, props.originalVersion, parseGeneration.version],
   );
   const editorOptions = useCodeEditorSessionOptions({
     onChange: props.onChange,
@@ -77,7 +86,7 @@ export function CodeDiffEditorPane(props: CodeDiffEditorPaneProps) {
         {/* diffStyle is effectively mount-time config on FileDiff, so a layout
             switch must remount the instance (same treatment as the diff panel). */}
         <FileDiff
-          key={props.renderSideBySide ? "split" : "unified"}
+          key={layout}
           fileDiff={fileDiff}
           options={options}
           edit={!(props.readOnly ?? false)}
