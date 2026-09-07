@@ -354,6 +354,35 @@ describe("git query invalidation", () => {
     for (const unsubscribe of unsubscribes) unsubscribe();
   });
 
+  it("refetches mounted blame and base-blob reads after a repository change", async () => {
+    const queryClient = new QueryClient();
+    const cwd = "/repo/revision-dependent";
+    const calls: string[] = [];
+    const observe = (queryKey: readonly unknown[], label: string) => {
+      queryClient.setQueryData(queryKey, {});
+      const observer = new QueryObserver(queryClient, {
+        queryKey,
+        queryFn: async () => {
+          calls.push(label);
+          return {};
+        },
+        staleTime: Number.POSITIVE_INFINITY,
+      });
+      return observer.subscribe(() => undefined);
+    };
+    const unsubscribes = [
+      observe(gitQueryKeys.status(cwd), "status"),
+      observe(gitQueryKeys.blameLine(cwd, "src/a.ts", 3, null), "blame"),
+      observe(gitQueryKeys.fileAtRev(cwd, "src/a.ts", "HEAD", null), "file-at-rev"),
+    ];
+
+    await refreshGitQueriesForCwd(queryClient, cwd);
+
+    expect(calls).toContain("blame");
+    expect(calls).toContain("file-at-rev");
+    for (const unsubscribe of unsubscribes) unsubscribe();
+  });
+
   it("prioritizes an availability refresh between active detail reads", async () => {
     const queryClient = new QueryClient();
     const cwd = "/repo/prioritized";

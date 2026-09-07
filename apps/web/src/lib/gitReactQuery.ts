@@ -205,8 +205,10 @@ function activeGitDetailQueries(queryClient: QueryClient, cwd: string) {
       type: "active",
     }),
     ...queryCache.findAll({ queryKey: gitQueryKeys.pullRequest(cwd), type: "active" }),
-    // A mounted diff editor keeps showing a base blob until refetched.
+    // A mounted diff editor keeps showing a base blob, and an open blame
+    // popover its attribution, until refetched.
     ...queryCache.findAll({ queryKey: ["git", "file-at-rev", cwd] as const, type: "active" }),
+    ...queryCache.findAll({ queryKey: ["git", "blame-line", cwd] as const, type: "active" }),
   ];
   const uniqueQueries = [...new Map(queries.map((query) => [query.queryHash, query])).values()];
   return uniqueQueries.toSorted((left, right) => {
