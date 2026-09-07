@@ -164,3 +164,83 @@ describe("turn and conversation usage", () => {
     expect(metrics([event("turn.completed", {})])).toEqual([]);
   });
 });
+
+describe("turn throughput", () => {
+  const messages = [
+    { role: "user" as const, createdAt: "2026-09-05T00:00:00.000Z" },
+    { role: "assistant" as const, turnId: turn, createdAt: "2026-09-05T00:00:02.000Z" },
+    { role: "assistant" as const, turnId: turn, createdAt: "2026-09-05T00:00:09.000Z" },
+  ];
+  const completed = {
+    ...event("turn.completed", {}),
+    createdAt: "2026-09-05T00:00:10.000Z",
+  };
+  it("uses full-turn output and wall time, without adding session TPS", () => {
+    const usage = deriveConversationUsage([codex(1000, 250, 900), completed], messages);
+    expect(values(usage.byTurnId.get(turn)!).TPS).toBe("25.0 tok/s");
+    expect(values(usage.cumulative).TPS).toBeUndefined();
+    expect(usage.byTurnId.get(turn)!.find((metric) => metric.label === "TPS")?.detail).toContain(
+      "including thinking, tools and waiting",
+    );
+  });
+  it("uses cumulative deltas for follow-up turns", () => {
+    const next = TurnId.makeUnsafe("next");
+    const usage = deriveConversationUsage(
+      [
+        codex(1000, 250, 900),
+        completed,
+        codex(2000, 350, 1800, next),
+        { ...completed, turnId: next, createdAt: "2026-09-05T00:01:05.000Z" },
+      ],
+      [
+        ...messages,
+        { role: "user", createdAt: "2026-09-05T00:01:00.000Z" },
+        { role: "assistant", turnId: next, createdAt: "2026-09-05T00:01:02.000Z" },
+      ],
+    );
+    expect(values(usage.byTurnId.get(next)!).TPS).toBe("20.0 tok/s");
+  });
+  it.each(["claude-code", "antigravity"])("supports %s output totals", (provider) => {
+    const payload =
+      provider === "antigravity"
+        ? { provider, usage: { inputTokens: 100, outputTokens: 300 } }
+        : {
+            modelUsage: {
+              a: { inputTokens: 100, outputTokens: 100 },
+              b: { inputTokens: 100, outputTokens: 200 },
+            },
+          };
+    const usage = deriveConversationUsage([{ ...completed, payload }], messages);
+    expect(values(usage.byTurnId.get(turn)!).TPS).toBe("30.0 tok/s");
+  });
+  it("omits speed for incomplete and legacy accounting", () => {
+    expect(
+      values(deriveConversationUsage([codex(100, 20, 50)], messages).byTurnId.get(turn)!).TPS,
+    ).toBeUndefined();
+    expect(
+      values(deriveConversationUsage([codex(100, 20, 50), completed]).byTurnId.get(turn)!).TPS,
+    ).toBeUndefined();
+    const legacy = event("context-window.updated", {
+      provider: "codex",
+      inputTokens: 100,
+      outputTokens: 20,
+    });
+    expect(
+      values(deriveConversationUsage([legacy, completed], messages).byTurnId.get(turn)!).TPS,
+    ).toBeUndefined();
+  });
+  it.each(["invalid", "2026-09-05T00:00:00.000Z", "2026-09-04T00:00:00.000Z"])(
+    "omits invalid elapsed time: %s",
+    (createdAt) => {
+      const usage = deriveConversationUsage(
+        [codex(100, 20, 50), { ...completed, createdAt }],
+        messages,
+      );
+      expect(values(usage.byTurnId.get(turn)!).TPS).toBeUndefined();
+    },
+  );
+  it("preserves reported zero output", () => {
+    const usage = deriveConversationUsage([codex(100, 0, 50), completed], messages);
+    expect(values(usage.byTurnId.get(turn)!).TPS).toBe("0.0 tok/s");
+  });
+});

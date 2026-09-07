@@ -1973,9 +1973,10 @@ export default function ChatView({
   const activeLatestTurnState = activeLatestTurn?.state ?? null;
   const activeLatestTurnCompletedAt = activeLatestTurn?.completedAt ?? null;
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
+  const usageMessages = activeThread?.messages ?? EMPTY_MESSAGES;
   const { byTurnId: usageByTurnId, cumulative: conversationUsage } = useMemo(
-    () => deriveConversationUsage(threadActivities),
-    [threadActivities],
+    () => deriveConversationUsage(threadActivities, usageMessages),
+    [threadActivities, usageMessages],
   );
   const hasLiveTurnTail = hasLiveTurnTailWork({
     latestTurn: activeLatestTurn,

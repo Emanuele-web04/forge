@@ -8,6 +8,7 @@ const names: Record<string, string> = {
   R: "Cache read",
   W: "Cache write",
   CH: "Cache hit",
+  TPS: "Average output speed",
 };
 
 export function MessageUsage({
@@ -88,6 +89,9 @@ export function MessageUsage({
         <div className="space-y-1.5 border-t border-border/50 bg-muted/20 px-4 py-3 text-[11px] leading-relaxed text-muted-foreground">
           <p>Input includes cache reads and writes. Cache hit = reads ÷ input.</p>
           <p>— means the provider did not report this metric.</p>
+          {metrics.some((metric) => metric.label === "TPS") ? (
+            <p>TPS = output ÷ turn wall time, including thinking, tools and waiting.</p>
+          ) : null}
           {context ? (
             <p>
               Context: {context.usedTokens.toLocaleString("en-US")} tokens

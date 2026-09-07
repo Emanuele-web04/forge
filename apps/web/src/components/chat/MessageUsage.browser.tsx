@@ -3,7 +3,7 @@ import "../../index.css";
 import { EventId, MessageId, TurnId, type OrchestrationThreadActivity } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import { render } from "vitest-browser-react";
-import { deriveMessageUsageByTurnId } from "~/lib/messageUsage";
+import { deriveConversationUsage, deriveMessageUsageByTurnId } from "~/lib/messageUsage";
 import { MessageUsage } from "./MessageUsage";
 import { MessagesTimeline } from "./MessagesTimeline";
 import type { TimelineEntry } from "../../session-logic";
@@ -105,4 +105,38 @@ describe("message usage footer", () => {
       .element(screen.getByRole("button", { name: "Message usage details" }))
       .not.toBeInTheDocument();
   });
+});
+
+it("shows turn TPS with units and its wall-time explanation at narrow widths", async () => {
+  const usage = deriveConversationUsage(
+    [
+      {
+        ...fixture(1000)[0]!,
+        kind: "turn.completed",
+        payload: {
+          provider: "antigravity",
+          usage: { inputTokens: 2000, outputTokens: 25 },
+        },
+      },
+    ],
+    [
+      { role: "user", createdAt: "2026-09-05T00:00:00.000Z" },
+      { role: "assistant", turnId, createdAt: "2026-09-05T00:00:00.500Z" },
+    ],
+  );
+  const screen = await render(
+    <div style={{ width: 280 }}>
+      <MessageUsage metrics={usage.byTurnId.get(turnId)!} />
+    </div>,
+  );
+  const button = screen.getByRole("button", { name: "Message usage details" });
+  await expect.element(button).toHaveTextContent(/TPS\s*25\.0 tok\/s/);
+  const element = document.querySelector('[aria-label="Message usage details"]')!;
+  expect(element.scrollWidth).toBeLessThanOrEqual(element.clientWidth);
+  await button.click();
+  await expect
+    .element(
+      screen.getByText("TPS = output ÷ turn wall time, including thinking, tools and waiting."),
+    )
+    .toBeVisible();
 });

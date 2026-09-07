@@ -1,4 +1,5 @@
 import type { OrchestrationThreadActivity, TurnId } from "@synara/contracts";
+import type { ChatMessage } from "~/types";
 import { formatContextWindowTokens } from "./contextWindow";
 
 export interface MessageUsageMetric {
@@ -91,7 +92,18 @@ function metrics(tokens: Tokens, scope: string): MessageUsageMetric[] {
 }
 
 /** One accounting pass feeds both footers. Never sum context-window snapshots. */
-export function deriveConversationUsage(activities: readonly OrchestrationThreadActivity[]) {
+export function deriveConversationUsage(
+  activities: readonly OrchestrationThreadActivity[],
+  messages: readonly Pick<ChatMessage, "role" | "turnId" | "createdAt">[] = [],
+) {
+  // Preserve the first user boundary even when a turn has intermediate replies.
+  const starts = new Map<TurnId, number>();
+  let userStartedAt: number | undefined;
+  for (const message of messages) {
+    if (message.role === "user") userStartedAt = Date.parse(message.createdAt);
+    if (message.turnId && userStartedAt !== undefined && !starts.has(message.turnId))
+      starts.set(message.turnId, userStartedAt);
+  }
   const grouped = new Map<TurnId, OrchestrationThreadActivity[]>();
   for (const activity of activities) {
     if (!activity.turnId || !["context-window.updated", "turn.completed"].includes(activity.kind))
@@ -109,7 +121,8 @@ export function deriveConversationUsage(activities: readonly OrchestrationThread
     const raw = record(
       events.findLast((event) => event.kind === "context-window.updated")?.payload,
     );
-    const completion = record(events.findLast((event) => event.kind === "turn.completed")?.payload);
+    const completed = events.findLast((event) => event.kind === "turn.completed");
+    const completion = record(completed?.payload);
     const models = Object.values(record(completion.modelUsage)).map(record);
     let tokens = empty();
     let scope = "This turn";
@@ -155,6 +168,21 @@ export function deriveConversationUsage(activities: readonly OrchestrationThread
       seenSessions.add(session);
     }
     const values = metrics(tokens, scope);
+    const start = starts.get(turnId);
+    const seconds =
+      completed && start !== undefined ? (Date.parse(completed.createdAt) - start) / 1000 : NaN;
+    if (
+      scope === "This turn" &&
+      tokens.output !== null &&
+      Number.isFinite(seconds) &&
+      seconds > 0
+    ) {
+      values.push({
+        label: "TPS",
+        value: `${(tokens.output / seconds).toFixed(1)} tok/s`,
+        detail: `This turn · Average output throughput: ${tokens.output.toLocaleString("en-US")} tokens / ${seconds.toFixed(1)} seconds. Wall time from sending the message to turn completion, including thinking, tools and waiting; not decode-only speed.`,
+      });
+    }
     if (values.length) byTurnId.set(turnId, values);
     if (contribution && keys.some((key) => contribution![key] !== null))
       accounted.push(contribution);
