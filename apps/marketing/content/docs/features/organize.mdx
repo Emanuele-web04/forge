@@ -37,6 +37,18 @@ The primary sidebar destinations can also be dragged into your preferred order. 
 
 The editor workspace opens a file tree and syntax-highlighted editor next to the conversation, and can move file references straight into prompts. For bigger edits, open-in launchers hand the project to VS Code, Cursor, Zed, JetBrains IDEs, Xcode, Ghostty, Terminal, and others.
 
+## File preview updates
+
+Open text, image, PDF, and diff views revalidate when workspace files change. Unsaved text edits are protected from background replacement. Check the task's checkout before treating an updated preview as evidence from a particular branch.
+
+Choose **Split diff** or **Stacked diff** in Diff options. Synara remembers this choice when you reopen the panel and after an app restart. Split is the default until you save a preference.
+
+## Rename and retain your layout
+
+Use `/rename <title>` for a direct title change or bare `/rename` to generate one from the conversation. The [command reference](/docs/reference/slash-commands) explains empty drafts and concurrent title changes.
+
+Expanded and collapsed sidebar projects remain saved after a restart. Read state is retained too. While a response streams, scrolling up keeps your position instead of letting unrelated tool activity pull you to the bottom.
+
 ## Search files and source
 
 Press `mod+p` to find workspace files by name. Press `mod+shift+f` for grep-style source search across the active project.

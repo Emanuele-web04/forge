@@ -26,6 +26,41 @@ runs:
         key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
         restore-keys: |
           ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}-
+    # Phase 1c/3: node_modules survives across jobs keyed on the lockfile.
+    # bun install --frozen-lockfile still runs below (correctness), but a warm
+    # cache turns resolve + download into link. The key is scoped by the
+    # electron input: Install Electron test runtime extracts the binary into
+    # apps/desktop/node_modules/electron/dist INSIDE node_modules, so the
+    # electron lane's tree differs from other lanes and must not share a blob.
+    - name: Cache node_modules
+      uses: actions/cache@v5
+      with:
+        path: |
+          node_modules
+          apps/*/node_modules
+          packages/*/node_modules
+          scripts/node_modules
+        key: ${{ runner.os }}-bun-node-modules-electron-${{ inputs.electron }}-${{ hashFiles('bun.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-bun-node-modules-electron-${{ inputs.electron }}-
+
+    # Phase 3h: persist Turbo's local cache store so cacheable build outputs
+    # survive across jobs. Turbo verifies its own fingerprints on hit, so a
+    # broad key is safe: stale entries simply miss inside turbo. test and
+    # typecheck stay cache:false in turbo.json (inputs not proven airtight).
+    # GitHub caches are immutable: each job/shard saves new results per commit
+    # and restores its previous snapshot before falling back to other lanes.
+    - name: Cache Turbo outputs
+      uses: actions/cache@v5
+      with:
+        path: |
+          .turbo
+          node_modules/.cache/turbo
+        key: ${{ runner.os }}-turbo-${{ hashFiles('bun.lock') }}-${{ hashFiles('.github/workflows/ci.yml') }}-${{ github.job }}-${{ strategy.job-index || 0 }}-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-turbo-${{ hashFiles('bun.lock') }}-${{ hashFiles('.github/workflows/ci.yml') }}-${{ github.job }}-${{ strategy.job-index || 0 }}-
+          ${{ runner.os }}-turbo-${{ hashFiles('bun.lock') }}-
+          ${{ runner.os }}-turbo-
 
     - name: Cache Electron runtime
       if: ${{ inputs.electron == 'true' }}

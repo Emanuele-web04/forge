@@ -277,3 +277,19 @@ Key source paths checked:
 **Decision:** Current provider, feature, troubleshooting, and workflow guides now describe
 the 0.8.0 release. Historical Kilo Code references remain only inside older release notes;
 current provider navigation and marketing surfaces point to Devin CLI.
+
+## Synara v0.8.2 — 2026-09-06
+
+Release-range audit: `v0.8.1..6edbd1b1a9a8d947f06a3d7f6b2e0f28654ae9a4` (43 commits). Product behavior was checked against this source head; the release commit adds version metadata and documentation to that source.
+
+- Rename: `apps/web/src/hooks/useComposerSlashCommands.ts`, `apps/web/src/lib/threadRename.ts`, and `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts`.
+- Simulator preference and ownership: `apps/web/src/routes/_chat.settings.tsx`, `appSettings.ts`, `components/chat/SingleChatSurface.tsx`, and `hooks/useDeviceEventBridge.ts`.
+- Claude Auto/200k/1M: `packages/contracts/src/model.ts`, `packages/shared/src/model.ts`, and `apps/server/src/provider/Layers/ClaudeAdapter.ts`. Auto is distinct from explicit overrides; commit titles describing earlier default behavior are not the final contract.
+- Model discovery and provider recovery: `apps/server/src/provider/Layers/PiAdapter.ts`, `DevinAdapter.ts`, `providerModelDiscoveryCache.ts`, and `apps/server/src/providerUsage/providers/droid.ts`.
+- File revalidation: `apps/server/src/workspaceFileChanges.ts` and `apps/web/src/components/WorkspaceFilePreview.tsx`; checkpoint initialization: `apps/server/src/orchestration/Layers/CheckpointReactor.ts`.
+- Performance numbers are scoped to checked-in reports under `docs/performance/2026-09-05-concurrent-threads` and `docs/performance/2026-09-06`, not a new full-release comparison.
+- Updated existing indexed guides and their cross-links; no new disconnected guide or navigation entry was needed.
+
+## 0.8.3 hotfix audit
+
+Source range: v0.8.2 through 1ff70e178 (the complete code changes included in v0.8.3). Provider recovery is grounded in apps/server/package.json and commit c34389ae8; packaged validation in apps/server/src/runtimeDependencySmoke.ts and scripts/verify-packaged-desktop-startup.ts. Persistent diff layout is grounded in apps/web/src/components/DiffPanel.tsx and its browser regression test. Existing organize and provider-troubleshooting guides were updated with focused contract coverage; no new navigation entries or external links were needed.

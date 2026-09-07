@@ -207,3 +207,9 @@ git reflog -20
 - [ ] The final head will be tested after conflict resolution
 
 Continue with [Worktrees](/docs/workflows/worktrees) for normal operation or [Report a problem](/docs/troubleshooting/report-a-problem) when Synara’s managed-worktree state disagrees with Git.
+
+## Repository created during a task
+
+A task can start in a plain directory and initialize Git during its turn. Synara no longer reports the unavailable pre-initialization checkpoint baseline as a capture failure, but it cannot recreate a historical Git baseline that never existed. Review the available checkpoint and diff before reverting.
+
+Repeated failing remote-status refreshes back off, with the failure count reset after a successful refresh. This reduces repeated requests and warnings; it does not repair authentication or connectivity.

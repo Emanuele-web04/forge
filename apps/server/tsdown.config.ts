@@ -22,11 +22,8 @@ const migrationRuntimeSourceDigest = createHash("sha256")
   .digest("hex");
 
 export default defineConfig({
-  entry: ["src/index.ts", "src/restoreMigrationBackup.ts"],
-  format: ["esm", "cjs"],
-  checks: {
-    legacyCjs: false,
-  },
+  entry: ["src/index.ts", "src/restoreMigrationBackup.ts", "src/runtimeDependencySmoke.ts"],
+  format: ["esm"],
   outDir: "dist",
   // Bun builtins only resolve at runtime under Bun; MigrationBackup.ts guards
   // the import behind a `process.versions.bun` check.

@@ -1,0 +1,55 @@
+# Nightly quarantine: pixel/font/layout comparisons tracked explicitly in
+# apps/web/BROWSER_TEST_QUARANTINE.md while their Linux rendering is fixed.
+# Moved out of the blocking CI lane (CI speedup Phase 1a) so the PR gate stays
+# green and fast. Steps are UNCHANGED from the old CI quarantine step, still
+# continue-on-error here so flakes never page anyone.
+name: CI Nightly
+
+on:
+  schedule:
+    # 02:00 UTC daily.
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+# Unlike CI (which spares main), nightly always cancels stale runs, including
+# scheduled main runs: only the newest quarantine signal matters.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  browser-geometry:
+    name: Browser Tests (Linux geometry quarantine)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup workspace
+        uses: ./.github/actions/setup-workspace
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('bun.lock') }}
+
+      # Run the workspace-local playwright binary directly: bunx stalled after
+      # the chromium download on hosted runners. The step timeout stops any
+      # remaining apt/download stalls from eating the whole job budget.
+      - name: Install browser test runtime
+        timeout-minutes: 15
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          cd apps/web
+          ./node_modules/.bin/playwright install --with-deps chromium
+
+      # All untagged browser tests run in the blocking stable shards in CI.
+      - name: Browser test (Linux geometry quarantine)
+        continue-on-error: true
+        timeout-minutes: 10
+        run: bun run --cwd apps/web test:browser:geometry

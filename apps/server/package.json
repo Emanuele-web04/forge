@@ -1,6 +1,6 @@
 {
   "name": "@synara/cli",
-  "version": "0.8.1",
+  "version": "0.8.3",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -42,7 +42,8 @@
     "node-pty": "^1.1.0",
     "open": "^10.1.0",
     "tree-kill": "^1.2.2",
-    "ws": "^8.21.0"
+    "ws": "^8.21.0",
+    "zod": "4.3.6"
   },
   "devDependencies": {
     "@effect/language-service": "catalog:",
@@ -55,8 +56,7 @@
     "@types/ws": "^8.5.13",
     "tsdown": "catalog:",
     "typescript": "catalog:",
-    "vitest": "catalog:",
-    "zod": "4.3.6"
+    "vitest": "catalog:"
   },
   "engines": {
     "node": "^22.19 || ^23.11 || >=24.10"

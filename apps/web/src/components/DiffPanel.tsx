@@ -6,6 +6,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { ThreadId, type TurnId } from "@synara/contracts";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
+import * as Schema from "effect/Schema";
 import { Columns2Icon, CopyIcon, EllipsisIcon, FolderIcon, Rows3Icon, XIcon } from "~/lib/icons";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
@@ -23,6 +24,7 @@ import {
 import { stripDiffSearchParams } from "../diffRouteSearch";
 import { useTheme } from "../hooks/useTheme";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
+import { useLocalStorage } from "../hooks/useLocalStorage";
 import {
   buildFileDiffRenderKey,
   getRenderablePatch,
@@ -103,6 +105,7 @@ import { formatShortTimestamp } from "../timestampFormat";
 import type { TurnDiffSummary } from "../types";
 
 const EDITOR_DIFF_OPTIONS_MENU_ICON_CLASS_NAME = "size-3.5 shrink-0 text-muted-foreground";
+const DiffRenderModeSchema = Schema.Literals(["stacked", "split"]);
 
 function EditorDiffOptionsCountBadge(props: { count: number | undefined }) {
   if (typeof props.count !== "number" || props.count <= 0) {
@@ -391,7 +394,11 @@ export default function DiffPanel({
   const navigate = useNavigate();
   const { resolvedTheme } = useTheme();
   const { settings } = useAppSettings();
-  const [diffRenderMode, setDiffRenderMode] = useState<DiffRenderMode>("split");
+  const [diffRenderMode, setDiffRenderMode] = useLocalStorage(
+    "synara:diff-render-mode:v1",
+    "split",
+    DiffRenderModeSchema,
+  );
   const [diffWordWrap, setDiffWordWrap] = useState(settings.diffWordWrap);
   const [diffIgnoreWhitespace, setDiffIgnoreWhitespace] = useState(true);
   const [scopePickerOpen, setScopePickerOpen] = useState(false);
@@ -1119,6 +1126,7 @@ export default function DiffPanel({
       selectRepoScope,
       selectTurn,
       selectedTurnId,
+      setDiffRenderMode,
       settings.timestampFormat,
       toggleCollapseAll,
     ],
@@ -1230,6 +1238,7 @@ export default function DiffPanel({
       selectTurn,
       selectedFilePath,
       selectedTurnId,
+      setDiffRenderMode,
       settings.timestampFormat,
       showDiffToolbar,
       toggleCollapseAll,
