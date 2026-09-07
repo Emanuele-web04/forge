@@ -422,7 +422,7 @@ describe("McpToolClient", () => {
     );
 
     try {
-      await sdkClient.connect(transport);
+      await sdkClient.connect(transport as Parameters<Client["connect"]>[0]);
       const first = requestFetch.run(firstController.signal, () =>
         sdkClient.callTool({ name: "fixture_read", arguments: { call: "first" } }, undefined, {
           signal: firstController.signal,
@@ -666,11 +666,11 @@ describe("McpToolClient", () => {
     });
     const fiber = Effect.runFork(client.validate(fixtureBinding));
     await eventually(() => expect(observedSignal).not.toBeNull());
-    expect(observedSignal?.aborted).toBe(false);
+    expect((observedSignal as AbortSignal | null)?.aborted).toBe(false);
 
     await Effect.runPromise(Fiber.interrupt(fiber));
 
-    expect(observedSignal?.aborted).toBe(true);
+    expect((observedSignal as AbortSignal | null)?.aborted).toBe(true);
   });
 
   it("does not abort an external validation signal when the validate Effect is interrupted", async () => {

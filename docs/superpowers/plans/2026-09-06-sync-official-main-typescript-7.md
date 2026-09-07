@@ -23,6 +23,7 @@
 ### Task 1: Merge lineage and direct conflicts
 
 **Files:**
+
 - Modify: `apps/server/src/persistence/Migrations.ts`
 - Modify: `apps/server/src/persistence/Migrations.test.ts`
 - Move: `apps/server/src/persistence/Migrations/099_ProjectSources.ts` to `100_ProjectSources.ts`
@@ -31,6 +32,7 @@
 - Modify: the remaining files reported by `git diff --name-only --diff-filter=U`
 
 **Interfaces:**
+
 - Consumes: Effect SQL migration loader tuples `[id, name, effect]`.
 - Produces: canonical tail `99 InvalidateProjectionThreadsCursor`, `100 ProjectSources`, `101 OutboundMcpConnections`, `102 ProjectPullRequestPinProviders`.
 
@@ -64,10 +66,12 @@ bun run --cwd apps/web test src/components/Sidebar.logic.test.ts src/components/
 ### Task 2: Replay the protected local snapshot
 
 **Files:**
+
 - Modify: the 30 tracked files listed by `git stash show --name-status stash@{0}`.
 - Restore: `.agents/skills/react-doctor/SKILL.md`, `.agents/skills/react-doctor/references/explain.md`, `.agents/skills/verify/SKILL.md`, and `tasks/memory`.
 
 **Interfaces:**
+
 - Consumes: the stash whose message starts `codex: pre official-main ts7 integration`.
 - Produces: the merged tree plus every pre-merge local change and untracked file.
 
@@ -88,6 +92,7 @@ Expected: `.agents/` and `tasks/memory` are present, and the protected stash rem
 ### Task 3: Port Outbound MCP and Bitbucket to TypeScript 7
 
 **Files:**
+
 - Modify: `apps/server/src/outboundMcp/**`
 - Modify: `apps/server/src/pullRequests/**`
 - Modify: `packages/contracts/src/ws.ts`
@@ -95,6 +100,7 @@ Expected: `.agents/` and `tasks/memory` are present, and the protected stash rem
 - Test: colocated Outbound MCP, Bitbucket provider, contract, operations, and cache tests.
 
 **Interfaces:**
+
 - Consumes: MCP SDK 1.29 OAuth/HTTP transport types and provider-discriminated pull request contracts.
 - Produces: exact-optional-compatible objects whose `provider` discriminant matches their provider-specific fields.
 
@@ -125,9 +131,11 @@ bun run --cwd apps/web test src/lib/pullRequestReactQuery.action.test.ts src/lib
 ### Task 4: Dependency and final verification gate
 
 **Files:**
+
 - Modify: `bun.lock` only as produced by the merged dependency graph.
 
 **Interfaces:**
+
 - Consumes: root workspace manifests including `@typescript/native` and `effect-tsgo`.
 - Produces: a reproducible installed dependency graph and a zero-error workspace.
 

@@ -7,10 +7,7 @@ import {
 import { Schema, ServiceMap } from "effect";
 import type { Effect } from "effect";
 
-import type {
-  PersistenceDecodeError,
-  PersistenceSqlError,
-} from "../../persistence/Errors.ts";
+import type { PersistenceDecodeError, PersistenceSqlError } from "../../persistence/Errors.ts";
 
 export type OutboundMcpRepositoryError = PersistenceSqlError | PersistenceDecodeError;
 
@@ -52,9 +49,7 @@ export interface OutboundMcpRepositoryShape {
   readonly setStatus: (
     input: OutboundMcpStatusUpdate,
   ) => Effect.Effect<void, OutboundMcpRepositoryError>;
-  readonly delete: (
-    connectionId: string,
-  ) => Effect.Effect<void, OutboundMcpRepositoryError>;
+  readonly delete: (connectionId: string) => Effect.Effect<void, OutboundMcpRepositoryError>;
 }
 
 export class OutboundMcpRepository extends ServiceMap.Service<

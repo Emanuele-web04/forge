@@ -63,9 +63,7 @@ describe("EnvironmentUsageSection", () => {
     });
     await expect.element(codex).toBeVisible();
     await expect
-      .element(
-        page.getByRole("button", { name: "Claude usage: Weekly 46% remaining" }),
-      )
+      .element(page.getByRole("button", { name: "Claude usage: Weekly 46% remaining" }))
       .toBeVisible();
     await expect.element(codex.getByText("5h", { exact: true })).toBeVisible();
     await expect.element(codex.getByText("Weekly", { exact: true })).toBeVisible();

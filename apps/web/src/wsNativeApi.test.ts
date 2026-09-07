@@ -760,15 +760,10 @@ describe("wsNativeApi", () => {
     await api.server.beginOutboundMcpAuthorization({ presetId: "paraty" });
     await api.server.disconnectOutboundMcpConnection({ connectionId: "paraty" });
 
-    expect(requestMock).toHaveBeenNthCalledWith(
-      1,
-      WS_METHODS.serverListOutboundMcpConnections,
-    );
-    expect(requestMock).toHaveBeenNthCalledWith(
-      2,
-      WS_METHODS.serverBeginOutboundMcpAuthorization,
-      { presetId: "paraty" },
-    );
+    expect(requestMock).toHaveBeenNthCalledWith(1, WS_METHODS.serverListOutboundMcpConnections);
+    expect(requestMock).toHaveBeenNthCalledWith(2, WS_METHODS.serverBeginOutboundMcpAuthorization, {
+      presetId: "paraty",
+    });
     expect(requestMock).toHaveBeenNthCalledWith(
       3,
       WS_METHODS.serverDisconnectOutboundMcpConnection,

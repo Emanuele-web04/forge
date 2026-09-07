@@ -205,10 +205,7 @@ describe("pullRequestActionMutationOptions", () => {
     await Reflect.apply(options.onMutate, undefined, [input, undefined]);
 
     expect(queryClient.getQueryData(listKey)).toEqual({
-      entries: [
-        { ...github, isDraft: false },
-        bitbucket,
-      ],
+      entries: [{ ...github, isDraft: false }, bitbucket],
     });
   });
 

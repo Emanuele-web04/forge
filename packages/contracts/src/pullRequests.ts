@@ -137,7 +137,7 @@ export const LEGACY_GITHUB_PULL_REQUEST_CAPABILITIES: PullRequestCapabilities = 
   merge: true,
 };
 
-export const READ_ONLY_PULL_REQUEST_CAPABILITIES: PullRequestCapabilities = {
+export const READ_ONLY_PULL_REQUEST_CAPABILITIES = {
   detail: true,
   diff: true,
   comments: true,
@@ -146,7 +146,7 @@ export const READ_ONLY_PULL_REQUEST_CAPABILITIES: PullRequestCapabilities = {
   resolveComment: false,
   stateMutation: false,
   merge: false,
-};
+} as const satisfies PullRequestCapabilities;
 
 export const PullRequestStackEntry = Schema.Struct({
   position: PositiveInt,

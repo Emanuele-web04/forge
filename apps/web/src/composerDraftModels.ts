@@ -744,9 +744,10 @@ export function deriveEffectiveComposerModelState(input: {
 // A new chat continues the focused composer's choice, including unsent changes.
 // With no focused chat, the persisted sticky selection provides the last choice.
 export function resolveNewChatModelSelection(input: {
-  focusedDraft:
-    | Pick<ComposerThreadDraftState, "modelSelectionByProvider" | "activeProvider">
-    | null;
+  focusedDraft: Pick<
+    ComposerThreadDraftState,
+    "modelSelectionByProvider" | "activeProvider"
+  > | null;
   focusedThreadModelSelection: ModelSelection | null;
   stickyModelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>>;
   stickyActiveProvider: ProviderKind | null;

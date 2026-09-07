@@ -16,7 +16,11 @@ import {
 
 import type { PullRequestListEntry } from "@synara/contracts";
 
-function makeEntry(overrides: Partial<PullRequestListEntry> = {}): PullRequestListEntry {
+type GitHubPullRequestListEntry = Exclude<PullRequestListEntry, { provider: "bitbucket" }>;
+
+function makeEntry(
+  overrides: Partial<GitHubPullRequestListEntry> = {},
+): GitHubPullRequestListEntry {
   return {
     projectId: "project-1" as PullRequestListEntry["projectId"],
     projectTitle: "Project One",

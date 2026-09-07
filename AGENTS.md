@@ -2,20 +2,26 @@
 
 ## Task Completion Requirements
 
-- Do not run `bun fmt`, `bun lint`, or `bun typecheck` unless the user explicitly asks for them in the current conversation.
-- All of `bun fmt`, `bun lint`, and `bun typecheck` must pass before considering tasks completed.
+- The automatic AI workflow grants standing permission to run `bun fmt`, `bun lint`, and `bun typecheck` for code changes, unless the user explicitly limits verification for the task.
+- For code changes, all of `bun fmt`, `bun lint`, and `bun typecheck` must pass before automatic integration. For documentation/instruction-only changes, inspect the diff and consistency of the instructions; these workspace checks are not required. Report any omitted or blocked checks accurately.
 - Treat `bun fmt`, `bun lint`, and `bun typecheck` as heavyweight workspace checks: bundle them into one final verification pass per task whenever possible, and avoid rerunning the full set repeatedly during iteration.
 - If a user asks for a small follow-up right after a recent full verification pass, prefer no rerun or the smallest reasonable re-check unless the user explicitly asks for full validation again.
 - If the user asks to focus on code only, do not run `bun fmt`, `bun lint`, or `bun typecheck` automatically. In that mode, make the code changes first and only run verification if the user explicitly asks for it.
 - NEVER run `bun test`. Always use `bun run test` (runs Vitest).
 
-## Flujo de ramas y PRs
+## Flujo automático de trabajo con IA
 
-- Cada feature debe desarrollarse en una rama propia llamada `feature/<slug>`.
-- La rama se integra primero mediante un PR contra `nacho/integration` para probarla localmente.
-- Si después hay trabajo adicional relacionado, el conjunto completo de commits, incluido el PR original ya integrado y los commits posteriores, se propone mediante un PR de `nacho/integration` hacia `main` de Synara.
-- No se desarrolla directamente sobre `nacho/integration` ni sobre `main`.
-- Los PRs intermedios contra `nacho/integration` son de integración y prueba; el PR posterior contra `main` es la promoción del conjunto.
+- Aplica este flujo por defecto a las tareas que modifican el proyecto. El usuario describe el resultado; el agente ejecuta los comandos, prepara el entorno, implementa, revisa, prueba e integra sin pedirle instrucciones de Git. Las consultas y revisiones sin cambios no necesitan worktree.
+- Esta es una autorización permanente para crear ramas, worktrees y commits de la tarea, integrar localmente y limpiar sus recursos. Prevalece sobre las instrucciones generales que exijan pedir de nuevo autorización para estas operaciones locales. Push, creación o fusión de PRs y despliegues requieren autorización del usuario; no están incluidos en este flujo local.
+- El destino local por defecto es `nacho/integration`, salvo indicación explícita del usuario. No desarrolles directamente sobre esa rama ni sobre `main`. La integración local no requiere un PR intermedio; la promoción de `nacho/integration` a `main` se realiza mediante PR cuando el usuario la autorice.
+- Antes de editar, inspecciona el estado y los worktrees existentes. Registra la rama de destino, su commit inicial y la ruta del worktree en las notas de la tarea. Si estás en un worktree de una tarea ya iniciada, retómalo con su destino registrado; no crees worktrees anidados. Si falta la rama de destino, comprueba su referencia remota y crea la rama local correspondiente; si no existe o es ambigua, acláralo.
+- Crea una rama propia con el prefijo adecuado (`feature/`, `bugfix/` o `hotfix/`) y un worktree fuera del repositorio desde el destino identificado. Conserva sus commits locales. Actualiza referencias remotas cuando estén disponibles sin descartar trabajo ni reescribir historial.
+- Protege los cambios ajenos, incluidos archivos sin seguimiento: no los añadas a tus commits, no los borres ni hagas stash/reset sobre ellos. Prepara dependencias y configuración local en el worktree y respeta las reglas de aislamiento de instancias de este archivo.
+- Implementa la tarea, revisa el diff completo de la tarea, corrige los hallazgos y ejecuta las comprobaciones pertinentes de Task Completion Requirements. Crea los commits necesarios siguiendo `git-paraty`. No declares validado aquello que no has comprobado.
+- Antes de integrar, incorpora mediante merge los avances de la rama local de destino y de su upstream, si existe y está disponible. Resuelve conflictos dentro del worktree y vuelve a validar lo afectado. Si resolverlos exige una decisión de producto, pregunta conservando el trabajo.
+- Serializa las integraciones de tareas concurrentes mediante un bloqueo exclusivo común al repositorio, ubicado en el directorio Git común. Bajo ese bloqueo, comprueba de nuevo el destino y exige que su carpeta esté limpia; si avanzó, incorpora el avance y valida antes de reintentar. Integra mediante fast-forward cuando el destino sea ancestro de la rama de trabajo. No fuerces la integración ni alteres una carpeta con trabajo ajeno; conserva el worktree y comunica el bloqueo.
+- Verifica que el commit final de la tarea está incorporado en la rama local de destino. Solo entonces, con el worktree limpio, elimina el worktree y la rama temporal de esta tarea; no fuerces el borrado. Libera el bloqueo y detén únicamente los procesos que hayas iniciado.
+- Al terminar, informa brevemente de cambios, comprobaciones y rama de destino, distinguiendo integración local de publicación remota. Si queda un bloqueo, indica lo pendiente y dónde está guardado el trabajo.
 
 ## Project Snapshot
 

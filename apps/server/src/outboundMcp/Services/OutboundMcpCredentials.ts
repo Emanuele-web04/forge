@@ -11,9 +11,7 @@ export type OutboundMcpCredentialRecord = {
   readonly authorizationServerUrl?: string;
 };
 
-export class OutboundMcpCredentialsError extends Data.TaggedError(
-  "OutboundMcpCredentialsError",
-)<{
+export class OutboundMcpCredentialsError extends Data.TaggedError("OutboundMcpCredentialsError")<{
   readonly operation: "read" | "write" | "delete" | "clearAttemptSecrets";
   readonly category: "invalid-connection-id" | "invalid-credentials" | "filesystem";
 }> {
@@ -30,9 +28,7 @@ export interface OutboundMcpCredentialsShape {
     connectionId: string,
     credentials: OutboundMcpCredentialRecord,
   ) => Effect.Effect<void, OutboundMcpCredentialsError>;
-  readonly delete: (
-    connectionId: string,
-  ) => Effect.Effect<void, OutboundMcpCredentialsError>;
+  readonly delete: (connectionId: string) => Effect.Effect<void, OutboundMcpCredentialsError>;
   readonly clearAttemptSecrets: (
     connectionId: string,
   ) => Effect.Effect<void, OutboundMcpCredentialsError>;

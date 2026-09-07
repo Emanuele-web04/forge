@@ -22,6 +22,7 @@ import {
   PULL_REQUEST_PIN_RECOVERY_LIMIT,
   isDefinitivePullRequestNotFound,
   makePullRequestService as makeRegisteredPullRequestService,
+  type PullRequestServiceDependencies,
 } from "./PullRequestService";
 
 const now = "2026-07-15T00:00:00.000Z";
@@ -248,7 +249,8 @@ function makeDependencies(input: {
 }
 
 function makePullRequestService(
-  input: ReturnType<typeof makeDependencies> & {
+  input: Omit<ReturnType<typeof makeDependencies>, "resolveRepositories"> & {
+    readonly resolveRepositories: PullRequestServiceDependencies["resolveRepositories"];
     readonly providers?: ReadonlyArray<PullRequestProviderShape>;
   },
 ) {
@@ -423,8 +425,9 @@ describe("PullRequestService", () => {
       ),
     );
 
-    expect(result.flatMap((value) => value.entries).every((entry) => entry.provider === "github"))
-      .toBe(true);
+    expect(
+      result.flatMap((value) => value.entries).every((entry) => entry.provider === "github"),
+    ).toBe(true);
     expect(bitbucketReads).toBe(0);
   });
 
@@ -803,7 +806,11 @@ describe("PullRequestService", () => {
   });
 
   it("keeps invalid Bitbucket responses as repository errors", async () => {
-    const project = makeProject("project-invalid-bitbucket", "Invalid Bitbucket", "/tmp/invalid-bb");
+    const project = makeProject(
+      "project-invalid-bitbucket",
+      "Invalid Bitbucket",
+      "/tmp/invalid-bb",
+    );
     const result = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -1525,7 +1532,7 @@ describe("PullRequestService", () => {
     );
 
     expect(error).toBeInstanceOf(Error);
-    expect(error.message).toBe("Invalid bitbucket repository identity.");
+    expect((error as Error).message).toBe("Invalid bitbucket repository identity.");
     expect(writes).toEqual([]);
   });
 

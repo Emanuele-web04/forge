@@ -44,6 +44,7 @@
 ### Task 1: Canonical remote repository identity and discovery
 
 **Files:**
+
 - Create: `packages/shared/src/remoteRepository.ts`
 - Create: `packages/shared/src/remoteRepository.test.ts`
 - Modify: `packages/shared/package.json`
@@ -53,6 +54,7 @@
 - Create: `apps/server/src/pullRequests/projectRepositoryInventory.test.ts`
 
 **Interfaces:**
+
 - Produces: `RemoteProvider = "github" | "bitbucket"`.
 - Produces: `RemoteRepositoryRef { provider, host, owner, slug, webUrl, identityKey, displayName }`.
 - Produces: `parseRemoteRepositoryUrl(url)` and `resolveRemoteRepositories(git, cwd)`.
@@ -69,7 +71,9 @@ expect(parseRemoteRepositoryUrl("git@bitbucket.org:paraty/payment-seeker.git")).
   identityKey: "bitbucket:bitbucket.org:paraty/payment-seeker",
   displayName: "paraty/payment-seeker",
 });
-expect(parseRemoteRepositoryUrl("https://user:token@bitbucket.org/paraty/payment-seeker.git")).toBeNull();
+expect(
+  parseRemoteRepositoryUrl("https://user:token@bitbucket.org/paraty/payment-seeker.git"),
+).toBeNull();
 expect(parseRemoteRepositoryUrl("git@bitbucket.org:other/payment-seeker.git")).toBeNull();
 ```
 
@@ -123,6 +127,7 @@ git commit -m "refactor(pr): generalize repository discovery [No clickup]" -m "A
 ### Task 2: Provider-aware pull request contracts and route identity
 
 **Files:**
+
 - Modify: `packages/contracts/src/pullRequests.ts`
 - Test: `packages/contracts/src/pullRequests.test.ts`
 - Modify: `apps/server/src/pullRequests.logic.ts`
@@ -132,6 +137,7 @@ git commit -m "refactor(pr): generalize repository discovery [No clickup]" -m "A
 - Modify: `apps/web/src/lib/pullRequestCache.ts`
 
 **Interfaces:**
+
 - Produces: `PullRequestProvider`, `PullRequestViewerInvolvement`, and `PullRequestCapabilities`; repository identity remains `RemoteRepositoryRef` from Task 1.
 - Produces: `PullRequestProviderRequirement` entries in list results for eligible providers that require user connection.
 - Adds `provider` to list/detail/batch/error/detail-input/action/comment/pin identities with a GitHub decoding default.
@@ -140,20 +146,24 @@ git commit -m "refactor(pr): generalize repository discovery [No clickup]" -m "A
 - [ ] **Step 1: Write failing legacy and Bitbucket decoding tests**
 
 ```ts
-expect(Schema.decodeUnknownSync(PullRequestDetailInput)({
-  projectId,
-  repository: "owner/repo",
-  number: 12,
-}).provider).toBe("github");
+expect(
+  Schema.decodeUnknownSync(PullRequestDetailInput)({
+    projectId,
+    repository: "owner/repo",
+    number: 12,
+  }).provider,
+).toBe("github");
 
-expect(Schema.decodeUnknownSync(PullRequestListEntry)({
-  ...bitbucketFixture,
-  provider: "bitbucket",
-  capabilities: READ_ONLY_CAPABILITIES,
-  additions: null,
-  deletions: null,
-  viewerInvolvement: "unknown",
-}).capabilities.comment).toBe(false);
+expect(
+  Schema.decodeUnknownSync(PullRequestListEntry)({
+    ...bitbucketFixture,
+    provider: "bitbucket",
+    capabilities: READ_ONLY_CAPABILITIES,
+    additions: null,
+    deletions: null,
+    viewerInvolvement: "unknown",
+  }).capabilities.comment,
+).toBe(false);
 ```
 
 - [ ] **Step 2: Run contract/reference tests and observe schema failures**
@@ -233,6 +243,7 @@ git commit -m "feat(pr): add provider-aware identities [No clickup]" -m "Agents-
 ### Task 3: Provider-aware pin migration and cleanup rules
 
 **Files:**
+
 - Create: `apps/server/src/persistence/Migrations/099_ProjectPullRequestPinProviders.ts`
 - Modify: `apps/server/src/persistence/Migrations.ts`
 - Modify: `apps/server/src/persistence/Migrations.test.ts`
@@ -242,6 +253,7 @@ git commit -m "feat(pr): add provider-aware identities [No clickup]" -m "Agents-
 - Modify: `apps/server/src/pullRequests/projectRepositoryInventory.ts`
 
 **Interfaces:**
+
 - Adds `provider` to `ProjectPullRequestPin` and set/list operations.
 - Unique identity becomes `(project_id, provider, repository_key, pull_request_number)`.
 - Cleanup checks authoritative inventory for the pin's matching provider.
@@ -249,10 +261,11 @@ git commit -m "feat(pr): add provider-aware identities [No clickup]" -m "Agents-
 - [ ] **Step 1: Write a failing migration preservation test**
 
 ```ts
-yield* sql`INSERT INTO project_pull_request_pins (project_id, repository_key, pull_request_number)
+yield *
+  sql`INSERT INTO project_pull_request_pins (project_id, repository_key, pull_request_number)
            VALUES (${projectId}, 'owner/repo', 7)`;
-yield* runMigration99;
-const [pin] = yield* pins.listByProjectIds({ projectIds: [projectId] });
+yield * runMigration99;
+const [pin] = yield * pins.listByProjectIds({ projectIds: [projectId] });
 expect(pin).toMatchObject({ provider: "github", repositoryKey: "owner/repo", number: 7 });
 ```
 
@@ -322,6 +335,7 @@ git commit -m "feat(pr): scope pins by provider [No clickup]" -m "Agents-Toolkit
 ### Task 4: Pull request provider boundary and GitHub adapter
 
 **Files:**
+
 - Create: `apps/server/src/pullRequests/Services/PullRequestProvider.ts`
 - Create: `apps/server/src/pullRequests/providers/GitHubPullRequestProvider.ts`
 - Create: `apps/server/src/pullRequests/providers/GitHubPullRequestProvider.test.ts`
@@ -330,6 +344,7 @@ git commit -m "feat(pr): scope pins by provider [No clickup]" -m "Agents-Toolkit
 - Modify: `apps/server/src/pullRequests/Layers/PullRequestService.test.ts`
 
 **Interfaces:**
+
 - Produces: `PullRequestProviderShape` with `supports`, `viewer`, `list`, `detail`, `diff`, optional `action`, optional `comment`.
 - Produces: `ProviderListInput`, `ProviderListResult`, and `ProviderDetailInput` using `RemoteRepositoryRef` and project context.
 - Produces: `GitHubPullRequestProvider` that wraps `GitHubCliShape` and preserves all current GitHub behavior.
@@ -338,12 +353,14 @@ git commit -m "feat(pr): scope pins by provider [No clickup]" -m "Agents-Toolkit
 - [ ] **Step 1: Freeze existing GitHub behavior in adapter tests**
 
 ```ts
-const result = yield* provider.list({
-  repository: githubRepository,
-  state: "open",
-  involvement: "all",
-  forceRefresh: false,
-});
+const result =
+  yield *
+  provider.list({
+    repository: githubRepository,
+    state: "open",
+    involvement: "all",
+    forceRefresh: false,
+  });
 expect(result.entries[0]).toMatchObject({
   provider: "github",
   repository: "owner/repo",
@@ -369,8 +386,12 @@ export interface PullRequestProviderShape {
   readonly list: (input: ProviderListInput) => Effect.Effect<ProviderListResult, unknown>;
   readonly detail: (input: ProviderDetailInput) => Effect.Effect<PullRequestDetail, unknown>;
   readonly diff: (input: ProviderDetailInput) => Effect.Effect<PullRequestDiffResult, unknown>;
-  readonly action?: (input: PullRequestActionInput) => Effect.Effect<PullRequestActionResult, unknown>;
-  readonly comment?: (input: PullRequestCommentInput) => Effect.Effect<PullRequestActionResult, unknown>;
+  readonly action?: (
+    input: PullRequestActionInput,
+  ) => Effect.Effect<PullRequestActionResult, unknown>;
+  readonly comment?: (
+    input: PullRequestCommentInput,
+  ) => Effect.Effect<PullRequestActionResult, unknown>;
 }
 
 export type ProviderListInput = {
@@ -400,7 +421,8 @@ Move viewer, list, item, review-match, stack, and merge-capability caches with t
 
 ```ts
 const provider = providers.find((candidate) => candidate.supports(repository));
-if (!provider) return Effect.fail(new Error(`No pull request provider for ${repository.identityKey}`));
+if (!provider)
+  return Effect.fail(new Error(`No pull request provider for ${repository.identityKey}`));
 return provider.list({ repository, state, involvement, forceRefresh });
 ```
 
@@ -422,6 +444,7 @@ git commit -m "refactor(pr): isolate GitHub provider [No clickup]" -m "Agents-To
 ### Task 5: Paraty Bitbucket MCP binding and normalization
 
 **Files:**
+
 - Create: `apps/server/src/pullRequests/providers/paratyBitbucketBinding.ts`
 - Create: `apps/server/src/pullRequests/providers/paratyBitbucketSchemas.ts`
 - Create: `apps/server/src/pullRequests/providers/ParatyBitbucketPullRequestProvider.ts`
@@ -429,6 +452,7 @@ git commit -m "refactor(pr): isolate GitHub provider [No clickup]" -m "Agents-To
 - Modify: `apps/server/src/outboundMcp/presets/paraty.ts`
 
 **Interfaces:**
+
 - Consumes `McpConnectionService.invoke` from phase 1.
 - Produces operations `list`, `detail`, `diff`, and `comments` mapped only to the four approved Paraty tools.
 - Produces read-only Bitbucket `PullRequestCapabilities` and repository-scoped normalized errors.
@@ -476,14 +500,15 @@ Decode the MCP `structuredContent` when present, otherwise decode the single JSO
 - [ ] **Step 4: Bind exact tool arguments and bounded pagination**
 
 ```ts
-yield* mcp.invoke(PARATY_BITBUCKET_BINDING, "list", {
-  workspace: "paraty",
-  repository: repository.slug,
-  state: toBitbucketState(input.state),
-  page: nextPage,
-  pagelen: 50,
-  sort: "-updated_on",
-});
+yield *
+  mcp.invoke(PARATY_BITBUCKET_BINDING, "list", {
+    workspace: "paraty",
+    repository: repository.slug,
+    state: toBitbucketState(input.state),
+    page: nextPage,
+    pagelen: 50,
+    sort: "-updated_on",
+  });
 ```
 
 Stop at the existing repository batch cap, set `truncated: true` when another page exists, and preserve successfully decoded entries when one record is malformed by returning an incomplete repository error.
@@ -508,11 +533,12 @@ Set `viewerInvolvement: "unknown"`, `isDraft: false`, unavailable stats to `null
 Register a scoped connection-event listener when constructing the provider:
 
 ```ts
-yield* mcp.subscribe((event) => {
-  if (event.connectionId !== "paraty") return;
-  if (event.type === "disconnected") bitbucketCache.clear();
-  if (event.type === "connected") bitbucketCache.invalidateAll();
-});
+yield *
+  mcp.subscribe((event) => {
+    if (event.connectionId !== "paraty") return;
+    if (event.type === "disconnected") bitbucketCache.clear();
+    if (event.type === "connected") bitbucketCache.invalidateAll();
+  });
 ```
 
 Do not clear cached PR data for `credentials-invalidated`; that state drives stale data plus Reconnect.
@@ -533,6 +559,7 @@ git commit -m "feat(pr): add Paraty Bitbucket read provider [No clickup]" -m "Ag
 ### Task 6: Mixed-provider aggregation, partial failures, and read-only enforcement
 
 **Files:**
+
 - Modify: `apps/server/src/pullRequests/Layers/PullRequestService.ts`
 - Modify: `apps/server/src/pullRequests/Layers/PullRequestService.test.ts`
 - Modify: `apps/server/src/pullRequests/pullRequestOperations.ts`
@@ -541,6 +568,7 @@ git commit -m "feat(pr): add Paraty Bitbucket read provider [No clickup]" -m "Ag
 - Modify: `apps/server/src/serverLayers.ts`
 
 **Interfaces:**
+
 - Registers both GitHub and Paraty Bitbucket providers.
 - Aggregates successful repository batches while retaining provider/repository errors.
 - Rejects mutations when provider capabilities/operations do not permit them.
@@ -549,11 +577,11 @@ git commit -m "feat(pr): add Paraty Bitbucket read provider [No clickup]" -m "Ag
 - [ ] **Step 1: Write failing mixed-provider aggregate tests**
 
 ```ts
-const result = yield* service.list({ state: "open", involvement: "all" });
+const result = yield * service.list({ state: "open", involvement: "all" });
 expect(result.entries.map((entry) => entry.provider)).toEqual(["github", "bitbucket"]);
 
 bitbucket.failNext(new Error("timeout"));
-const partial = yield* service.list({ state: "open", involvement: "all", forceRefresh: true });
+const partial = yield * service.list({ state: "open", involvement: "all", forceRefresh: true });
 expect(partial.entries.some(({ provider }) => provider === "github")).toBe(true);
 expect(partial.errors).toContainEqual(expect.objectContaining({ provider: "bitbucket" }));
 ```
@@ -569,11 +597,13 @@ Expected: FAIL on mixed-provider cases.
 - [ ] **Step 3: Aggregate providers with isolated concurrency and errors**
 
 ```ts
-const batches = yield* Effect.forEach(
-  repositories,
-  ({ repository, projects }) => loadProviderBatch(repository, projects, input),
-  { concurrency: 6 },
-);
+const batches =
+  yield *
+  Effect.forEach(
+    repositories,
+    ({ repository, projects }) => loadProviderBatch(repository, projects, input),
+    { concurrency: 6 },
+  );
 return combineProviderBatches(batches, { preserveCachedFailures: true });
 ```
 
@@ -582,12 +612,14 @@ Do not use one provider's viewer value to classify the other. `reviewRequestCoun
 - [ ] **Step 4: Route detail/diff by explicit provider and validate the local remote**
 
 ```ts
-const repository = yield* validateProjectRepository(project, {
-  provider: input.provider,
-  displayName: input.repository,
-});
-const provider = yield* providerRegistry.require(input.provider, repository);
-return yield* provider.detail({ project, repository, number: input.number });
+const repository =
+  yield *
+  validateProjectRepository(project, {
+    provider: input.provider,
+    displayName: input.repository,
+  });
+const provider = yield * providerRegistry.require(input.provider, repository);
+return yield * provider.detail({ project, repository, number: input.number });
 ```
 
 Reject a fabricated Bitbucket identity if the project does not have the matching canonical local remote.
@@ -596,10 +628,15 @@ Reject a fabricated Bitbucket identity if the project does not have the matching
 
 ```ts
 if (!provider.action || !capabilities.stateMutation) {
-  return yield* Effect.fail(new PullRequestCapabilityError({
-    provider: input.provider,
-    capability: input.action === "merge" ? "merge" : "stateMutation",
-  }));
+  return (
+    yield *
+    Effect.fail(
+      new PullRequestCapabilityError({
+        provider: input.provider,
+        capability: input.action === "merge" ? "merge" : "stateMutation",
+      }),
+    )
+  );
 }
 ```
 
@@ -625,6 +662,7 @@ git commit -m "feat(pr): aggregate GitHub and Bitbucket [No clickup]" -m "Agents
 ### Task 7: Mixed-provider list UX and connection prompt
 
 **Files:**
+
 - Create: `apps/web/src/components/pullRequest/PullRequestProviderBadge.tsx`
 - Create: `apps/web/src/components/pullRequest/pullRequestCapabilities.ts`
 - Test: `apps/web/src/components/pullRequest/pullRequestCapabilities.test.ts`
@@ -638,6 +676,7 @@ git commit -m "feat(pr): aggregate GitHub and Bitbucket [No clickup]" -m "Agents
 - Modify: `apps/web/src/lib/pullRequestReactQuery.ts`
 
 **Interfaces:**
+
 - Consumes provider-aware contracts and outbound MCP status.
 - Produces accessible provider badges, provider-safe row fields, and one restrained Paraty connection prompt.
 - Keeps search/project/state filters across both providers while involvement filters exclude Bitbucket.
@@ -710,6 +749,7 @@ git commit -m "feat(pr): show Bitbucket in pull request lists [No clickup]" -m "
 ### Task 8: Read-only Bitbucket detail, comments, and diff UX
 
 **Files:**
+
 - Modify: `apps/web/src/components/pullRequest/PullRequestDetailPanel.tsx`
 - Modify: `apps/web/src/components/pullRequest/PullRequestSummaryTab.tsx`
 - Modify: `apps/web/src/components/pullRequest/PullRequestTimelineTab.tsx`
@@ -720,6 +760,7 @@ git commit -m "feat(pr): show Bitbucket in pull request lists [No clickup]" -m "
 - Test: `apps/web/src/components/pullRequest/PullRequestDetailPanel.browser.tsx`
 
 **Interfaces:**
+
 - Consumes normalized Bitbucket detail/comments/diff and capability helpers.
 - Produces summary/code/timeline tabs only when supported.
 - Omits every unsupported Bitbucket mutation control.
@@ -746,9 +787,15 @@ Expected: FAIL before capability-driven rendering.
 - [ ] **Step 3: Drive sections/actions only from effective capabilities**
 
 ```tsx
-{detail.capabilities.comment ? <PullRequestCommentComposer detail={detail} /> : null}
-{detail.capabilities.merge ? <MergeControls detail={detail} /> : null}
-{detail.capabilities.checks && detail.checks ? <ChecksSection checks={detail.checks} /> : null}
+{
+  detail.capabilities.comment ? <PullRequestCommentComposer detail={detail} /> : null;
+}
+{
+  detail.capabilities.merge ? <MergeControls detail={detail} /> : null;
+}
+{
+  detail.capabilities.checks && detail.checks ? <ChecksSection checks={detail.checks} /> : null;
+}
 ```
 
 Do not render disabled placeholders for missing capabilities. Preserve stale cached content and show Reconnect when an auth-expiry error accompanies cached Bitbucket data.
@@ -773,12 +820,14 @@ git commit -m "feat(pr): render read-only Bitbucket details [No clickup]" -m "Ag
 ### Task 9: End-to-end `payment-seeker` acceptance and final verification
 
 **Files:**
+
 - Create: `apps/server/src/pullRequests/paratyBitbucket.e2e.test.ts`
 - Create: `apps/web/src/components/pullRequest/ParatyBitbucketFlow.browser.tsx`
 - Modify: `apps/server/src/outboundMcp/testing/fakeMcpAuthority.ts`
 - Modify: `docs/superpowers/plans/2026-08-31-bitbucket-pull-request-provider.md` (check completed boxes during execution only)
 
 **Interfaces:**
+
 - Uses the phase-1 fake OAuth/MCP authority with the four Paraty-shaped tools.
 - Proves discovery of a local `payment-seeker` remote, OAuth, mixed listing, detail, comments, diff, expiry, reconnect, disconnect, and write rejection.
 
@@ -797,16 +846,19 @@ Register only `paraty_bitbucket_pr_list`, `paraty_bitbucket_pr_get`, `paraty_bit
 - [ ] **Step 2: Write the server acceptance flow**
 
 ```ts
-yield* fakeGit.configureRemote(
-  project.workspaceRoot,
-  "origin",
-  "git@bitbucket.org:paraty/payment-seeker.git",
-);
-const before = yield* pullRequests.list({ state: "open", involvement: "all" });
+yield *
+  fakeGit.configureRemote(
+    project.workspaceRoot,
+    "origin",
+    "git@bitbucket.org:paraty/payment-seeker.git",
+  );
+const before = yield * pullRequests.list({ state: "open", involvement: "all" });
 expect(before.providerRequirements).toContainEqual(expect.objectContaining({ presetId: "paraty" }));
-yield* authorizeParatyFixture();
-const after = yield* pullRequests.list({ state: "open", involvement: "all", forceRefresh: true });
-expect(after.entries).toContainEqual(expect.objectContaining({ provider: "bitbucket", number: 42 }));
+yield * authorizeParatyFixture();
+const after = yield * pullRequests.list({ state: "open", involvement: "all", forceRefresh: true });
+expect(after.entries).toContainEqual(
+  expect.objectContaining({ provider: "bitbucket", number: 42 }),
+);
 ```
 
 Load detail, comments, and diff; fabricate comment/action calls and assert capability errors plus zero write-tool invocations. Expire the token and assert cached Bitbucket + GitHub data remains. Explicitly disconnect and assert Bitbucket cache clears while GitHub remains.

@@ -128,9 +128,15 @@ function exactEncoder(
           throw inputError(operation);
         const record = input as Record<string, unknown>;
         if (Object.keys(record).some((key) => !keys.has(key))) throw inputError(operation);
-        const decoded = Schema.decodeUnknownSync(schema)(record) as Readonly<Record<string, unknown>>;
+        const decoded = Schema.decodeUnknownSync(schema)(record) as Readonly<
+          Record<string, unknown>
+        >;
         const { repository, state, ...rest } = decoded;
-        return { ...rest, repo_slug: repository, ...(state === undefined ? {} : { states: [state] }) };
+        return {
+          ...rest,
+          repo_slug: repository,
+          ...(state === undefined ? {} : { states: [state] }),
+        };
       },
       catch: () => inputError(operation),
     });
@@ -252,7 +258,14 @@ function decodePage<A>(
                     malformedCount += 1;
                   }
                 }
-                return { ...page, size: page.size ?? page.values.length, values, malformedCount };
+                const { next, ...pageWithoutNext } = page;
+                return {
+                  ...pageWithoutNext,
+                  ...(next === undefined ? {} : { next }),
+                  size: page.size ?? page.values.length,
+                  values,
+                  malformedCount,
+                };
               },
               catch: () => decodeError(operation),
             }),
@@ -263,7 +276,10 @@ function decodePage<A>(
 }
 
 export const decodeParatyBitbucketList = (result: unknown) =>
-  decodeStrict("list", ListEnvelope)(result).pipe(
+  decodeStrict(
+    "list",
+    ListEnvelope,
+  )(result).pipe(
     Effect.map((page): ParatyBitbucketPage<ParatyBitbucketPullRequest> => {
       const values: ParatyBitbucketPullRequest[] = [];
       let malformedCount = page.skipped_count;

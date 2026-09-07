@@ -46,6 +46,7 @@
 ### Task 1: Public lifecycle contracts and explicit MCP SDK dependency
 
 **Files:**
+
 - Create: `packages/contracts/src/outboundMcp.ts`
 - Modify: `packages/contracts/src/index.ts`
 - Modify: `packages/contracts/src/ipc.ts`
@@ -57,6 +58,7 @@
 - Test: `apps/web/src/wsNativeApi.test.ts`
 
 **Interfaces:**
+
 - Produces: `OutboundMcpConnection`, `OutboundMcpListResult`, `OutboundMcpBeginAuthorizationInput`, `OutboundMcpBeginAuthorizationResult`, `OutboundMcpDisconnectInput`.
 - Produces Native API methods: `listOutboundMcpConnections()`, `beginOutboundMcpAuthorization(input)`, and `disconnectOutboundMcpConnection(input)`.
 
@@ -155,6 +157,7 @@ git commit -m "feat(mcp): define outbound connection contracts [No clickup]" -m 
 ### Task 2: Non-secret connection metadata repository
 
 **Files:**
+
 - Create: `apps/server/src/persistence/Migrations/098_OutboundMcpConnections.ts`
 - Modify: `apps/server/src/persistence/Migrations.ts`
 - Modify: `apps/server/src/persistence/Migrations.test.ts`
@@ -163,6 +166,7 @@ git commit -m "feat(mcp): define outbound connection contracts [No clickup]" -m 
 - Test: `apps/server/src/outboundMcp/Layers/OutboundMcpRepository.test.ts`
 
 **Interfaces:**
+
 - Produces: `OutboundMcpRepositoryShape.list()`, `.get(connectionId)`, `.upsertMetadata(record)`, `.setStatus(input)`, `.delete(connectionId)`.
 - Produces: `OutboundMcpRepositoryError = PersistenceSqlError | PersistenceDecodeError`.
 - Stores only connection id, preset id, display name, endpoint, timestamps, validation timestamp, catalog fingerprint, status, and error category.
@@ -216,10 +220,19 @@ Append `[98, "OutboundMcpConnections", Migration0098]` and update the expected m
 
 ```ts
 export interface OutboundMcpRepositoryShape {
-  readonly list: () => Effect.Effect<ReadonlyArray<OutboundMcpConnectionRecord>, OutboundMcpRepositoryError>;
-  readonly get: (connectionId: string) => Effect.Effect<OutboundMcpConnectionRecord | null, OutboundMcpRepositoryError>;
-  readonly upsertMetadata: (record: OutboundMcpConnectionRecord) => Effect.Effect<void, OutboundMcpRepositoryError>;
-  readonly setStatus: (input: OutboundMcpStatusUpdate) => Effect.Effect<void, OutboundMcpRepositoryError>;
+  readonly list: () => Effect.Effect<
+    ReadonlyArray<OutboundMcpConnectionRecord>,
+    OutboundMcpRepositoryError
+  >;
+  readonly get: (
+    connectionId: string,
+  ) => Effect.Effect<OutboundMcpConnectionRecord | null, OutboundMcpRepositoryError>;
+  readonly upsertMetadata: (
+    record: OutboundMcpConnectionRecord,
+  ) => Effect.Effect<void, OutboundMcpRepositoryError>;
+  readonly setStatus: (
+    input: OutboundMcpStatusUpdate,
+  ) => Effect.Effect<void, OutboundMcpRepositoryError>;
   readonly delete: (connectionId: string) => Effect.Effect<void, OutboundMcpRepositoryError>;
 }
 ```
@@ -240,6 +253,7 @@ git commit -m "feat(mcp): persist outbound connection metadata [No clickup]" -m 
 ### Task 3: Private credential store and OAuth provider adapter
 
 **Files:**
+
 - Create: `apps/server/src/outboundMcp/Services/OutboundMcpCredentials.ts`
 - Create: `apps/server/src/outboundMcp/Layers/OutboundMcpCredentials.ts`
 - Create: `apps/server/src/outboundMcp/oauthProvider.ts`
@@ -250,6 +264,7 @@ git commit -m "feat(mcp): persist outbound connection metadata [No clickup]" -m 
 - Test: `apps/server/src/outboundMcp/authorizationAttempts.test.ts`
 
 **Interfaces:**
+
 - Produces: `credentialPath(homeDir, connectionId)` under `<homeDir>/mcp/connections/`.
 - Produces: `OutboundMcpCredentialsShape.read`, `.write`, `.delete`, and `.clearAttemptSecrets`.
 - Produces: `AuthorizationAttemptRegistry.create`, `.saveVerifier`, `.consume`, and `.cancel`; all state is memory-only.
@@ -276,11 +291,11 @@ Expected: FAIL because the credential service is absent.
 
 ```ts
 const directory = path.join(homeDir, "mcp", "connections");
-yield* fileSystem.makeDirectory(directory, { recursive: true, mode: 0o700 });
+yield * fileSystem.makeDirectory(directory, { recursive: true, mode: 0o700 });
 const temporary = `${target}.${randomUUID()}.tmp`;
-yield* fileSystem.writeFileString(temporary, JSON.stringify(credentials), { mode: 0o600 });
-yield* fileSystem.rename(temporary, target);
-yield* fileSystem.chmod(target, 0o600);
+yield * fileSystem.writeFileString(temporary, JSON.stringify(credentials), { mode: 0o600 });
+yield * fileSystem.rename(temporary, target);
+yield * fileSystem.chmod(target, 0o600);
 ```
 
 Validate `connectionId` against a strict slug before path joining. On Windows, store under the same profile path and surface a non-secret platform warning instead of claiming POSIX mode enforcement.
@@ -304,9 +319,9 @@ export type AuthorizationAttemptRegistry = {
   readonly cancel: (attemptId: string) => void;
 };
 
-export declare function makeAuthorizationAttemptRegistry(
-  options: { ttlMs: number },
-): AuthorizationAttemptRegistry;
+export declare function makeAuthorizationAttemptRegistry(options: {
+  ttlMs: number;
+}): AuthorizationAttemptRegistry;
 ```
 
 Generate ids and state values with `randomBytes(32)`, compare state with `timingSafeEqual`, expire attempts after ten minutes, and delete the entry on every consume attempt so replay cannot succeed.
@@ -348,6 +363,7 @@ git commit -m "feat(mcp): store outbound OAuth credentials privately [No clickup
 ### Task 4: Bounded Streamable HTTP client and consumer allowlists
 
 **Files:**
+
 - Create: `apps/server/src/outboundMcp/networkPolicy.ts`
 - Create: `apps/server/src/outboundMcp/Services/McpToolClient.ts`
 - Create: `apps/server/src/outboundMcp/Layers/McpToolClient.ts`
@@ -356,6 +372,7 @@ git commit -m "feat(mcp): store outbound OAuth credentials privately [No clickup
 - Test: `apps/server/src/outboundMcp/Layers/McpToolClient.test.ts`
 
 **Interfaces:**
+
 - Produces: `validateOutboundMcpUrl(url, purpose)` and `makeBoundedMcpFetch(policy)`.
 - Produces: `OutboundMcpNetworkPolicyError` with category and redacted origin only.
 - Produces: `McpToolClientShape.validate(binding)`, `.call(binding, tool, args, signal)`, `.invalidate(connectionId)`, `.closeAll()`.
@@ -365,7 +382,9 @@ git commit -m "feat(mcp): store outbound OAuth credentials privately [No clickup
 
 ```ts
 expect(() => validateOutboundMcpUrl(new URL("http://example.com/mcp"), "resource")).toThrow();
-expect(() => validateOutboundMcpUrl(new URL("https://user:pass@example.com/mcp"), "resource")).toThrow();
+expect(() =>
+  validateOutboundMcpUrl(new URL("https://user:pass@example.com/mcp"), "resource"),
+).toThrow();
 await expect(client.call(binding, "write_comment", {}, signal)).rejects.toThrow(
   "Tool is not allowed for this consumer",
 );
@@ -425,10 +444,15 @@ Guard connection creation and token refresh with keyed single-flight state, and 
 export type McpConsumerBinding<Operation extends string> = {
   readonly id: string;
   readonly presetIds: ReadonlySet<string>;
-  readonly operations: Readonly<Record<Operation, {
-    readonly tool: string;
-    readonly decode: (result: unknown) => Effect.Effect<unknown, OutboundMcpDecodeError>;
-  }>>;
+  readonly operations: Readonly<
+    Record<
+      Operation,
+      {
+        readonly tool: string;
+        readonly decode: (result: unknown) => Effect.Effect<unknown, OutboundMcpDecodeError>;
+      }
+    >
+  >;
 };
 ```
 
@@ -450,6 +474,7 @@ git commit -m "feat(mcp): add bounded outbound tool client [No clickup]" -m "Age
 ### Task 5: Connection lifecycle service and Paraty preset
 
 **Files:**
+
 - Create: `apps/server/src/outboundMcp/Services/McpConnectionService.ts`
 - Create: `apps/server/src/outboundMcp/Layers/McpConnectionService.ts`
 - Create: `apps/server/src/outboundMcp/presets/paraty.ts`
@@ -457,6 +482,7 @@ git commit -m "feat(mcp): add bounded outbound tool client [No clickup]" -m "Age
 - Test: `apps/server/src/outboundMcp/Layers/McpConnectionService.test.ts`
 
 **Interfaces:**
+
 - Produces: `McpConnectionServiceShape.list`, `.beginAuthorization`, `.completeAuthorization`, `.disconnect`, `.invoke`, and `.subscribe`.
 - Produces server-only `McpConnectionEvent` values `connected`, `credentials-invalidated`, and `disconnected`; no event contains credentials.
 - Produces: preset `paraty` at `https://mcp-paraty-224371693889.europe-west1.run.app/mcp`.
@@ -465,13 +491,13 @@ git commit -m "feat(mcp): add bounded outbound tool client [No clickup]" -m "Age
 - [ ] **Step 1: Write failing lifecycle-state tests**
 
 ```ts
-expect((yield* service.list())[0]?.status).toBe("disconnected");
-const attempt = yield* service.beginAuthorization({ presetId: "paraty" });
+expect((yield * service.list())[0]?.status).toBe("disconnected");
+const attempt = yield * service.beginAuthorization({ presetId: "paraty" });
 expect(new URL(attempt.authorizationUrl).protocol).toBe("https:");
-yield* service.completeAuthorization({ state, code: "code-1" });
-expect((yield* service.list())[0]?.status).toBe("connected");
-yield* service.disconnect({ connectionId: "paraty" });
-expect(yield* credentials.read("paraty")).toBeNull();
+yield * service.completeAuthorization({ state, code: "code-1" });
+expect((yield * service.list())[0]?.status).toBe("connected");
+yield * service.disconnect({ connectionId: "paraty" });
+expect(yield * credentials.read("paraty")).toBeNull();
 ```
 
 Add cases for cancellation, state mismatch, missing tools (`incompatible`), revoked refresh (`reconnect-required`), transient network failure (`temporarily-unavailable`), and explicit disconnect clearing live clients.
@@ -545,6 +571,7 @@ git commit -m "feat(mcp): orchestrate authenticated connections [No clickup]" -m
 ### Task 6: Loopback OAuth callback, authenticated RPCs, and runtime composition
 
 **Files:**
+
 - Create: `apps/server/src/outboundMcp/httpRoute.ts`
 - Test: `apps/server/src/outboundMcp/httpRoute.test.ts`
 - Modify: `apps/server/src/effectServer.ts`
@@ -554,6 +581,7 @@ git commit -m "feat(mcp): orchestrate authenticated connections [No clickup]" -m
 - Test: `apps/server/src/wsRpc.auth.test.ts`
 
 **Interfaces:**
+
 - Consumes `McpConnectionService` from Task 5.
 - Produces loopback `GET /api/mcp/outbound/oauth/callback?code=…&state=…`.
 - Produces working lifecycle WS handlers protected by the existing WS authentication/admission layer.
@@ -638,6 +666,7 @@ git commit -m "feat(mcp): expose secure outbound OAuth lifecycle [No clickup]" -
 ### Task 7: Settings information architecture and Paraty connection UI
 
 **Files:**
+
 - Create: `apps/web/src/lib/outboundMcpReactQuery.ts`
 - Create: `apps/web/src/components/settings/OutboundMcpSettingsPanel.tsx`
 - Test: `apps/web/src/components/settings/OutboundMcpSettingsPanel.test.tsx`
@@ -648,6 +677,7 @@ git commit -m "feat(mcp): expose secure outbound OAuth lifecycle [No clickup]" -
 - Test: `apps/web/src/settingsSearchIndex.test.ts`
 
 **Interfaces:**
+
 - Consumes lifecycle Native API from Task 1 and live handlers from Task 6.
 - Produces Settings groups “Services Synara uses” and “Agents connected to Synara”.
 - Produces explicit Connect, Reconnect, and confirmed Disconnect actions for `Paraty MCP`.
@@ -686,9 +716,7 @@ export const outboundMcpConnectionsQueryOptions = () =>
     queryFn: () => ensureNativeApi().server.listOutboundMcpConnections(),
     staleTime: 5_000,
     refetchInterval: (query) =>
-      query.state.data?.connections.some(({ status }) => status === "authorizing")
-        ? 1_000
-        : false,
+      query.state.data?.connections.some(({ status }) => status === "authorizing") ? 1_000 : false,
   });
 ```
 
@@ -738,23 +766,25 @@ git commit -m "feat(settings): manage outbound MCP services [No clickup]" -m "Ag
 ### Task 8: Foundation integration verification and handoff
 
 **Files:**
+
 - Create: `apps/server/src/outboundMcp/testing/fakeMcpAuthority.ts`
 - Create: `apps/server/src/outboundMcp/outboundMcp.e2e.test.ts`
 - Modify: `docs/superpowers/plans/2026-08-31-outbound-mcp-foundation.md` (check completed boxes during execution only)
 
 **Interfaces:**
+
 - Produces a deterministic local OAuth + Streamable HTTP MCP fixture used again by phase 2.
 - Proves the foundation connects, refreshes, validates tools, rejects undeclared tools, and disconnects without contacting Paraty.
 
 - [ ] **Step 1: Build a fake authority with a minimal read-only tool catalog**
 
 ```ts
-const authority = yield* makeFakeMcpAuthority({
-  tools: [
-    { name: "fixture_read", handler: () => ({ content: [{ type: "text", text: "ok" }] }) },
-  ],
-  accessTokenTtlMs: 1_000,
-});
+const authority =
+  yield *
+  makeFakeMcpAuthority({
+    tools: [{ name: "fixture_read", handler: () => ({ content: [{ type: "text", text: "ok" }] }) }],
+    accessTokenTtlMs: 1_000,
+  });
 ```
 
 The fixture publishes protected-resource and authorization-server metadata, supports PKCE code exchange and refresh rotation, records received origins/headers, and binds to `127.0.0.1` on an ephemeral port.
@@ -762,13 +792,13 @@ The fixture publishes protected-resource and authorization-server metadata, supp
 - [ ] **Step 2: Write the end-to-end Effect test**
 
 ```ts
-const attempt = yield* connections.beginAuthorization({ presetId: fixturePreset.id });
-yield* authority.authorize(attempt.authorizationUrl);
-yield* connections.completeAuthorization(authority.callbackParameters());
-expect((yield* connections.list())[0]?.status).toBe("connected");
-expect(yield* connections.invoke(fixtureBinding, "read", {})).toEqual("ok");
-yield* connections.disconnect({ connectionId: fixturePreset.id });
-expect(yield* credentials.read(fixturePreset.id)).toBeNull();
+const attempt = yield * connections.beginAuthorization({ presetId: fixturePreset.id });
+yield * authority.authorize(attempt.authorizationUrl);
+yield * connections.completeAuthorization(authority.callbackParameters());
+expect((yield * connections.list())[0]?.status).toBe("connected");
+expect(yield * connections.invoke(fixtureBinding, "read", {})).toEqual("ok");
+yield * connections.disconnect({ connectionId: fixturePreset.id });
+expect(yield * credentials.read(fixturePreset.id)).toBeNull();
 ```
 
 - [ ] **Step 3: Run the entire outbound MCP focused suite**

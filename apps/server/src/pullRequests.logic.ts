@@ -128,8 +128,7 @@ export function buildPullRequestListEntry(input: {
   isPinned: boolean;
 }): PullRequestListEntry {
   const { pullRequest } = input;
-  return {
-    ...pullRequest,
+  const localContext = {
     projectId: input.project.id,
     projectTitle: input.project.title,
     viewerReviewRequested: pullRequest.viewerInvolvement === "review-requested",
@@ -141,6 +140,13 @@ export function buildPullRequestListEntry(input: {
         isPinned: input.isPinned,
       },
     ],
+  } as const;
+  if (pullRequest.provider === "bitbucket") {
+    return { ...pullRequest, ...localContext };
+  }
+  return {
+    ...pullRequest,
+    ...localContext,
   };
 }
 
@@ -190,9 +196,9 @@ export function resolvePullRequestViewerInvolvement(
  * cannot be inferred from the individual PR's user-only review-request logins. */
 export function pullRequestMatchesInvolvement(
   pullRequest: {
-    readonly author?: PullRequestActor | null;
-    readonly reviewRequestLogins?: ReadonlyArray<string>;
-    readonly viewerInvolvement?: PullRequestViewerInvolvement;
+    readonly author?: PullRequestActor | null | undefined;
+    readonly reviewRequestLogins?: ReadonlyArray<string> | undefined;
+    readonly viewerInvolvement?: PullRequestViewerInvolvement | undefined;
   },
   involvement: PullRequestInvolvement,
   viewer: string,

@@ -68,9 +68,7 @@ type PullRequestProjectIdentityInput = PullRequestRemoteIdentityInput & {
   projectId: ProjectId;
 };
 
-export function pullRequestIdentityKey(
-  input: PullRequestProjectIdentityInput,
-): string {
+export function pullRequestIdentityKey(input: PullRequestProjectIdentityInput): string {
   return sharedPullRequestProjectIdentityKey({
     projectId: input.projectId,
     provider: normalizePullRequestProvider(input.provider),
@@ -79,9 +77,7 @@ export function pullRequestIdentityKey(
   });
 }
 
-export function pullRequestRemoteIdentityKey(
-  input: PullRequestRemoteIdentityInput,
-): string {
+export function pullRequestRemoteIdentityKey(input: PullRequestRemoteIdentityInput): string {
   return sharedPullRequestRemoteIdentityKey({
     provider: normalizePullRequestProvider(input.provider),
     repository: input.repository,

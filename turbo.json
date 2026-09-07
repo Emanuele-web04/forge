@@ -1,5 +1,6 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  "globalPassThroughEnv": ["SYNARA_DESKTOP_FLAVOR", "SYNARA_MIGRATION_DIVERGENCE_CONSENT"],
   "globalEnv": [
     "PORT",
     "VITE_WS_URL",

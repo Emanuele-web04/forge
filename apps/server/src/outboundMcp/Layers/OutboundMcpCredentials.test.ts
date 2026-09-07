@@ -7,10 +7,7 @@ import { Effect } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { OutboundMcpCredentials } from "../Services/OutboundMcpCredentials.ts";
-import {
-  credentialPath,
-  makeOutboundMcpCredentialsLive,
-} from "./OutboundMcpCredentials.ts";
+import { credentialPath, makeOutboundMcpCredentialsLive } from "./OutboundMcpCredentials.ts";
 
 const temporaryDirectories = new Set<string>();
 

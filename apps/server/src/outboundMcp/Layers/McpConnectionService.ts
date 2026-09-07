@@ -8,7 +8,7 @@ import {
   type OAuthClientProvider,
   type OAuthServerInfo,
 } from "@modelcontextprotocol/sdk/client/auth.js";
-import type { OAuthClientInformationMixed } from "@modelcontextprotocol/sdk/client/auth.js";
+import type { OAuthClientInformationMixed } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { OutboundMcpConnection, OutboundMcpConnectionStatus } from "@synara/contracts";
 import { Effect, Schema, Semaphore } from "effect";
@@ -457,9 +457,13 @@ export function makeSdkMcpConnectionOAuthLifecycle(
           state: discoveredServerInfo,
         });
         const metadata = serverInfo.authorizationServerMetadata;
-        if (metadata?.revocation_endpoint === undefined) return;
+        const revocationEndpoint =
+          metadata !== undefined && "revocation_endpoint" in metadata
+            ? metadata.revocation_endpoint
+            : undefined;
+        if (revocationEndpoint === undefined) return;
 
-        const revocationUrl = new URL(metadata.revocation_endpoint);
+        const revocationUrl = new URL(revocationEndpoint);
         const params = new URLSearchParams({
           token,
           token_type_hint:
@@ -471,7 +475,10 @@ export function makeSdkMcpConnectionOAuthLifecycle(
         });
         applyRevocationClientAuthentication({
           client,
-          supportedMethods: metadata.revocation_endpoint_auth_methods_supported ?? [],
+          supportedMethods:
+            metadata !== undefined && "revocation_endpoint_auth_methods_supported" in metadata
+              ? (metadata.revocation_endpoint_auth_methods_supported ?? [])
+              : [],
           headers,
           params,
         });

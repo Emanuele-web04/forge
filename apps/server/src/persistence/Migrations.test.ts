@@ -1219,11 +1219,16 @@ bitbucketCanaryLayer("Bitbucket MCP Canary migration lineage", (it) => {
       const pinsBefore = yield* sql`SELECT * FROM project_pull_request_pins`;
       const recorded = yield* trackerRows(sql);
       assert.deepStrictEqual(
-        planMigrationLineageAliasRepairs(new Map(recorded.map((row) => [row.migration_id, row.name]))),
+        planMigrationLineageAliasRepairs(
+          new Map(recorded.map((row) => [row.migration_id, row.name])),
+        ),
         [97, 98, 99].map((migrationId) => ({ kind: "remove", migrationId })),
       );
       const executed = yield* runMigrations();
-      assert.deepStrictEqual(executed.map(([id]) => id), [97, 98, 99, 100, 101, 102]);
+      assert.deepStrictEqual(
+        executed.map(([id]) => id),
+        [97, 98, 99, 100, 101, 102],
+      );
       assert.deepStrictEqual(yield* sql`SELECT * FROM projection_projects`, sourcesBefore);
       assert.deepStrictEqual(yield* sql`SELECT * FROM outbound_mcp_connections`, connectionsBefore);
       assert.deepStrictEqual(yield* sql`SELECT * FROM project_pull_request_pins`, pinsBefore);

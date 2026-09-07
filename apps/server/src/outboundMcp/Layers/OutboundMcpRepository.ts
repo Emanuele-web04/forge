@@ -134,10 +134,7 @@ const makeOutboundMcpRepository = Effect.gen(function* () {
     listRows(undefined).pipe(Effect.mapError(mapError("list")));
 
   const get: OutboundMcpRepositoryShape["get"] = (connectionId) =>
-    getRow({ connectionId }).pipe(
-      Effect.map(Option.getOrNull),
-      Effect.mapError(mapError("get")),
-    );
+    getRow({ connectionId }).pipe(Effect.map(Option.getOrNull), Effect.mapError(mapError("get")));
 
   const upsertMetadata: OutboundMcpRepositoryShape["upsertMetadata"] = (record) =>
     upsertRow(record).pipe(Effect.mapError(mapError("upsertMetadata")));
