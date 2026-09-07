@@ -37,6 +37,31 @@ export function readDiffFileOffsetTops(
   );
 }
 
+/**
+ * Index of the last position whose value is at or below `threshold`, or -1 when
+ * none is. Values must be non-decreasing by index; each is read at most
+ * O(log n) times, so callers can back it with layout reads.
+ */
+export function findLastIndexAtOrBelow(
+  length: number,
+  threshold: number,
+  readValue: (index: number) => number,
+): number {
+  let low = 0;
+  let high = length - 1;
+  let found = -1;
+  while (low <= high) {
+    const middle = (low + high) >>> 1;
+    if (readValue(middle) <= threshold) {
+      found = middle;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return found;
+}
+
 export function findDiffFileAnchor(
   viewport: HTMLElement | null,
   filePath: string,

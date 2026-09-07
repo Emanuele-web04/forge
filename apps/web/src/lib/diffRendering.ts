@@ -291,9 +291,13 @@ export function resolveFileDiffPath(fileDiff: FileDiffMetadata): string {
 
 // Resolve the pre-change path for a parsed file diff (the old side of a
 // rename/move), stripping the conventional `a/` patch prefix. Returns null for
-// files that were not renamed or moved.
+// files that were not renamed or moved: the parser also fills `prevName` for
+// added files, where it is `/dev/null` or a copy of the new name.
 export function resolveFileDiffPrevPath(fileDiff: FileDiffMetadata): string | null {
-  if (fileDiff.prevName === undefined) {
+  if (
+    fileDiff.prevName === undefined ||
+    (fileDiff.type !== "rename-pure" && fileDiff.type !== "rename-changed")
+  ) {
     return null;
   }
   const raw = fileDiff.prevName;

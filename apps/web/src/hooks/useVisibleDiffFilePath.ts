@@ -1,8 +1,8 @@
 import { useEffect, useState, type RefObject } from "react";
 
 import {
+  findLastIndexAtOrBelow,
   readDiffFileAnchors,
-  readDiffFileOffsetTops,
   resolveDiffRenderSurface,
 } from "../lib/diffScrollSurface";
 
@@ -13,16 +13,17 @@ export function resolveVisibleDiffFilePath(surface: HTMLElement): string | null 
   if (anchors.length === 0) {
     return null;
   }
-  const offsetTops = readDiffFileOffsetTops(surface, anchors);
+  // Anchors stack vertically in DOM order, so the file under the viewport top
+  // is found by binary search with O(log n) layout reads per scroll frame
+  // instead of measuring every file.
+  const surfaceTop = surface.getBoundingClientRect().top - surface.scrollTop;
   const threshold = surface.scrollTop + VISIBLE_DIFF_FILE_TOLERANCE_PX;
-  let visiblePath = anchors[0]?.path ?? null;
-  for (const anchor of anchors) {
-    if ((offsetTops.get(anchor.path) ?? 0) > threshold) {
-      break;
-    }
-    visiblePath = anchor.path;
-  }
-  return visiblePath;
+  const index = findLastIndexAtOrBelow(
+    anchors.length,
+    threshold,
+    (candidate) => (anchors[candidate]?.element.getBoundingClientRect().top ?? 0) - surfaceTop,
+  );
+  return anchors[Math.max(index, 0)]?.path ?? null;
 }
 
 export function useVisibleDiffFilePath(

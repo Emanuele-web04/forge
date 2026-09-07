@@ -1012,6 +1012,7 @@ export default function DiffPanel({
   useDiffChangeNavigationShortcuts({
     keybindings,
     enabled: diffQueriesEnabled && diffFilePaths.length > 0,
+    surfaceRef: patchViewportRef,
     onNavigate: goToAdjacentChange,
   });
   const changeNavigation = useMemo(
@@ -1075,9 +1076,11 @@ export default function DiffPanel({
   const closeLineBlame = useCallback(() => {
     setBlameTarget(null);
   }, []);
-  // Turn diffs render checkpoint snapshots whose line numbers need not match
-  // the working tree, so blame stays a repo-diff feature.
-  const blameEnabled = diffViewKind === "repo";
+  // Blame reads the working tree (or HEAD for deletions), so it is only offered
+  // where the diff's line numbers describe those trees: turn diffs are
+  // checkpoint snapshots, and index-backed scopes number lines by the index.
+  const blameEnabled =
+    diffViewKind === "repo" && repoDiffScope !== "staged" && repoDiffScope !== "unstaged";
   useEffect(() => {
     if (!blameEnabled) {
       setBlameTarget(null);
