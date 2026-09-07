@@ -15,6 +15,7 @@ import {
   type MindRecallResult,
   type ProjectId,
 } from "@synara/contracts";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { Clock, Effect, Layer, Option } from "effect";
 
 import {
@@ -146,6 +147,7 @@ const decodeRememberReceipt = (resultJson: string): MindRememberResult | undefin
 
 const makeMindService = Effect.gen(function* () {
   const repository = yield* MindRepository;
+  const sqlClient = yield* SqlClient.SqlClient;
 
   // In-memory sweep schedule (plan 05 §6.2 decision): the cadence is process-local
   // hygiene timing, while operation idempotency stays durable in receipts + journal.
@@ -189,6 +191,10 @@ const makeMindService = Effect.gen(function* () {
   const remember = (
     input: MindRememberRequest,
   ): Effect.Effect<MindRememberResult, MindServiceError> =>
+    // The remember path is check-then-act (receipt lookup, text-hash dedupe,
+    // cap count, insert). Serializing it in a transaction makes concurrent
+    // retries and saves race-free: one reinforcement, one cap check, one row.
+    sqlClient.withTransaction(
     Effect.gen(function* () {
       const normalized = normalizeMindText(input.text);
       if (normalized.length === 0) {
@@ -360,11 +366,11 @@ const makeMindService = Effect.gen(function* () {
         });
       }
       return result;
-    });
+    }),
+  );
 
   const recall = (input: MindRecallRequest): Effect.Effect<MindRecallResult, MindServiceError> =>
     Effect.gen(function* () {
-      yield* maybeSweep(input.projectId);
       const nowIso = yield* nowIsoNow;
       const query = input.query ?? "";
       const limit = Math.min(
@@ -521,7 +527,6 @@ const makeMindService = Effect.gen(function* () {
 
   const status = (input: MindStatusRequest): Effect.Effect<MindStatusResult, MindServiceError> =>
     Effect.gen(function* () {
-      yield* maybeSweep(input.projectId);
       const nowIso = yield* nowIsoNow;
       const rows = yield* repository.listByProject({ projectId: input.projectId });
       const digestItems = topDigestRows(rows, nowIso).map(({ row, weight }) =>
@@ -539,7 +544,6 @@ const makeMindService = Effect.gen(function* () {
 
   const list = (input: MindListRequest): Effect.Effect<MindListResult, MindServiceError> =>
     Effect.gen(function* () {
-      yield* maybeSweep(input.projectId);
       const nowIso = yield* nowIsoNow;
       const rows = yield* repository.listByProject({ projectId: input.projectId });
       const memories = rows

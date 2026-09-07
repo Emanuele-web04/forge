@@ -511,9 +511,17 @@ layer("MindService", (it) => {
           peakWeight: 0.05,
         });
 
-        // First memory operation: the sweep fires and deletes only the row
+        // First memory mutation: the sweep fires and deletes only the row
         // satisfying weight < 0.1 AND accessCount < 2 AND idle > 45 days.
-        yield* service.status({ projectId });
+        // (Read paths no longer prune; the sweep runs on mutations only.)
+        yield* service.remember({
+          projectId,
+          text: "sweep trigger",
+          type: "semantic",
+          actor: { kind: "user" },
+          threadId: null,
+          turnId: null,
+        });
         assert.isTrue(Option.isNone(yield* repository.getById({ memoryId: eligible.memoryId })));
         assert.isTrue(Option.isSome(yield* repository.getById({ memoryId: pinned.memoryId })));
         assert.isTrue(Option.isSome(yield* repository.getById({ memoryId: accessed.memoryId })));
@@ -539,12 +547,26 @@ layer("MindService", (it) => {
           createdAt: laterAged,
           lastAccessedAt: laterAged,
         });
-        yield* service.status({ projectId });
+        yield* service.remember({
+          projectId,
+          text: "sweep trigger 2",
+          type: "semantic",
+          actor: { kind: "user" },
+          threadId: null,
+          turnId: null,
+        });
         assert.isTrue(Option.isSome(yield* repository.getById({ memoryId: recent.memoryId })));
 
-        // After the 24h interval, the next operation prunes it.
+        // After the 24h interval, the next mutation prunes it.
         yield* TestClock.adjust(Duration.hours(2));
-        yield* service.status({ projectId });
+        yield* service.remember({
+          projectId,
+          text: "sweep trigger 3",
+          type: "semantic",
+          actor: { kind: "user" },
+          threadId: null,
+          turnId: null,
+        });
         assert.isTrue(Option.isNone(yield* repository.getById({ memoryId: recent.memoryId })));
       }),
   );
