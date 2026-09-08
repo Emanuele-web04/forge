@@ -265,6 +265,11 @@ describe("readWindowsPersistentEnvironment", () => {
     const result = readWindowsPersistentEnvironment(execFile);
 
     expect(execFile).toHaveBeenCalledTimes(1);
+    expect(execFile).toHaveBeenCalledWith(
+      expect.stringMatching(/powershell\.exe$/i),
+      expect.arrayContaining(["-NoProfile", "-NonInteractive", "-Command"]),
+      expect.objectContaining({ windowsHide: true }),
+    );
     expect(result.PATH).toBe("C:\\Windows\\system32;C:\\Users\\ramar\\.local\\bin");
     expect(result.CLAUDE_CONFIG_DIR).toBe("C:\\cfg");
   });

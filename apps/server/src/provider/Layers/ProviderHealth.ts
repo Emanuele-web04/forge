@@ -784,7 +784,13 @@ const runPiCommand = (args: ReadonlyArray<string>, executable = "pi") =>
   );
 
 const runAntigravityCommand = (args: ReadonlyArray<string>, executable = "agy") =>
-  runProviderCommand(executable, args, providerCommandEnv(ANTIGRAVITY_PROVIDER)).pipe(
+  runProviderCommand(executable, args, {
+    ...providerCommandEnv(ANTIGRAVITY_PROVIDER),
+    // Read-only probes must not launch agy's detached updater, which can open a
+    // Windows console despite the probe being hidden by the runtime. Explicit updates
+    // use the provider maintenance path and retain their normal behavior.
+    AGY_CLI_DISABLE_AUTO_UPDATE: "true",
+  }).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))

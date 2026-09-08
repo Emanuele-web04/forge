@@ -10,7 +10,7 @@ const SHELL_ENV_NAME_PATTERN = /^[A-Z0-9_]+$/;
 type ExecFileSyncLike = (
   file: string,
   args: ReadonlyArray<string>,
-  options: { encoding: "utf8"; timeout: number },
+  options: { encoding: "utf8"; timeout: number; windowsHide?: boolean },
 ) => string;
 
 function trimNonEmpty(value: string | null | undefined): string | undefined {
@@ -312,7 +312,7 @@ export const readWindowsPersistentEnvironment: WindowsEnvironmentReader = (
   const output = execFile(
     resolveWindowsPowerShellPath(),
     ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_ENVIRONMENT_SCRIPT],
-    { encoding: "utf8", timeout: 5000 },
+    { encoding: "utf8", timeout: 5000, windowsHide: true },
   );
 
   let parsed: {
