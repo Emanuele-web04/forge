@@ -6,6 +6,7 @@ import { IconBrandGithub, IconBrandGoogle, IconEye, IconEyeOff, IconLock } from 
 import { Link } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
 
+import { cloudAuthGateway, type CloudAuthGateway } from "~/cloudAuthApi";
 import {
   passwordStrength,
   validateCloudAuthValues,
@@ -21,11 +22,19 @@ import { Label } from "~/components/ui/label";
 
 const initialValues: CloudAuthValues = { email: "", password: "", acceptedTerms: false };
 
-export function CloudAuthPanel({ mode }: { readonly mode: CloudAuthMode }) {
+export function CloudAuthPanel({
+  mode,
+  gateway = cloudAuthGateway,
+}: {
+  readonly mode: CloudAuthMode;
+  readonly gateway?: CloudAuthGateway;
+}) {
   const [values, setValues] = useState<CloudAuthValues>(initialValues);
   const [errors, setErrors] = useState<CloudAuthErrors>({});
   const [showPassword, setShowPassword] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [noticeIsError, setNoticeIsError] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const isSignup = mode === "signup";
   const strength = passwordStrength(values.password);
 
@@ -33,19 +42,30 @@ export function CloudAuthPanel({ mode }: { readonly mode: CloudAuthMode }) {
     setValues((previous) => ({ ...previous, [key]: value }));
     setErrors((previous) => ({ ...previous, [key]: undefined }));
     setNotice(null);
+    setNoticeIsError(false);
   }
 
-  function submit(event: FormEvent<HTMLFormElement>) {
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const nextErrors = validateCloudAuthValues(mode, values);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
 
-    // Authentication is intentionally not routed through the desktop pairing API.
-    // A cloud-control deployment owns this endpoint and the secure HttpOnly session.
-    setNotice(
-      "Cloud sign-in is being connected to the control plane. Your desktop pairing session is unchanged.",
-    );
+    setSubmitting(true);
+    try {
+      await gateway.submit(mode, values);
+      setNotice(
+        isSignup
+          ? "Check your inbox to verify your email before opening your first workspace."
+          : "You are signed in. Opening your cloud workspace…",
+      );
+      setNoticeIsError(false);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Cloud sign-in could not be completed.");
+      setNoticeIsError(true);
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   const alternate = isSignup
@@ -78,10 +98,10 @@ export function CloudAuthPanel({ mode }: { readonly mode: CloudAuthMode }) {
         </div>
 
         {notice ? (
-          <Alert variant="info" className="mt-5">
+          <Alert variant={noticeIsError ? "error" : "info"} className="mt-5">
             <IconLock />
             <div>
-              <AlertTitle>Cloud control plane required</AlertTitle>
+              <AlertTitle>{noticeIsError ? "Could not sign in" : "Cloud account"}</AlertTitle>
               <AlertDescription>{notice}</AlertDescription>
             </div>
           </Alert>
@@ -152,8 +172,8 @@ export function CloudAuthPanel({ mode }: { readonly mode: CloudAuthMode }) {
               ) : null}
             </div>
           ) : null}
-          <Button className="w-full" size="lg" type="submit">
-            {isSignup ? "Create account" : "Sign in"}
+          <Button className="w-full" size="lg" type="submit" disabled={submitting}>
+            {submitting ? "Continuing…" : isSignup ? "Create account" : "Sign in"}
           </Button>
         </form>
 
@@ -163,11 +183,21 @@ export function CloudAuthPanel({ mode }: { readonly mode: CloudAuthMode }) {
           <span className="h-px flex-1 bg-border" />
         </div>
         <div className="grid grid-cols-2 gap-2">
-          <Button variant="outline" size="lg" disabled>
+          <Button
+            variant="outline"
+            size="lg"
+            disabled={submitting}
+            onClick={() => gateway.beginOAuth("google")}
+          >
             <IconBrandGoogle />
             Google
           </Button>
-          <Button variant="outline" size="lg" disabled>
+          <Button
+            variant="outline"
+            size="lg"
+            disabled={submitting}
+            onClick={() => gateway.beginOAuth("github")}
+          >
             <IconBrandGithub />
             GitHub
           </Button>
