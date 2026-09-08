@@ -12,7 +12,7 @@ const ANCHOR_ID = MessageId.makeUnsafe("delayed-steer");
 function DelayedLayout({ revision, onFinished }: { revision: number; onFinished: () => void }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const listRef = useRef({ getScrollableNode: () => containerRef.current } as LegendListRef);
+  const listRef = useRef({ getScrollableNode: () => containerRef.current! } as LegendListRef);
   useTailAnchorScroll({
     listRef,
     timelineRootRef: rootRef,
