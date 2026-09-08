@@ -76,22 +76,7 @@ describe("FeedbackDialogForm", () => {
     expect(draftButton).toContain("disabled");
   });
 
-  it.each([
-    { isSending: true, label: "Sending…" },
-    { isDraftingIssue: true, label: "Opening thread" },
-  ])("disables submit and draft buttons while $label", ({ isSending, isDraftingIssue }) => {
-    const markup = renderToStaticMarkup(
-      <FeedbackDialogForm
-        initialCategory="bug"
-        isSending={isSending ?? false}
-        isDraftingIssue={isDraftingIssue ?? false}
-        onSubmit={noopSubmit}
-        onDraftGithubIssue={noopDraft}
-      />,
-    );
-
-    const buttons = actionButtons(markup);
-    expect(buttons.length).toBe(2);
-    expect(buttons.every((button) => button.includes("disabled"))).toBe(true);
-  });
+  // Busy-state disabling needs a non-empty report, and `details` is internal
+  // state that static markup cannot set — the real coverage lives in
+  // FeedbackDialog.browser.tsx where a renderer can type into the textarea.
 });

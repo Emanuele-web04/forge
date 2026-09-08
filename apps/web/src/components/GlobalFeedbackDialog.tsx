@@ -18,7 +18,7 @@ export function GlobalFeedbackDialog() {
   const requestedInitialCategory = useFeedbackDialogStore((state) => state.initialCategory);
   const setOpen = useFeedbackDialogStore((state) => state.setOpen);
 
-  const { handleNewThread, projects } = useHandleNewThread();
+  const { handleNewThread, projects, threadsHydrated } = useHandleNewThread();
   // The agent draft path targets a real user project, so the always-present Home and
   // Studio containers must not count: with zero ordinary projects there is no project
   // to draft the bug-report thread in and the path stays hidden.
@@ -33,6 +33,9 @@ export function GlobalFeedbackDialog() {
     [chatWorkspaceRoot, homeDir, projects, studioWorkspaceRoot],
   );
   const hasProjects = ordinaryProjects.length > 0;
+  // handleNewThread returns null until the thread store finishes hydrating, so
+  // offering the draft action earlier would surface a guaranteed error toast.
+  const canDraftIssue = hasProjects && threadsHydrated;
 
   const context: FeedbackThreadContext = requestedContext ?? {
     provider: activeThread?.modelSelection.provider ?? null,
@@ -92,7 +95,7 @@ export function GlobalFeedbackDialog() {
       context={context}
       initialCategory={requestedInitialCategory}
       onOpenChange={setOpen}
-      onDraftGithubIssue={hasProjects ? onDraftGithubIssue : undefined}
+      onDraftGithubIssue={canDraftIssue ? onDraftGithubIssue : undefined}
     />
   );
 }

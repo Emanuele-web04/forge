@@ -54,6 +54,9 @@ export interface NewThreadNavigationOptions {
 
 export function useHandleNewThread() {
   const projects = useStore((store) => store.projects);
+  // Callers that mint threads (e.g. the feedback draft action) must not offer
+  // the action before hydration: handleNewThread returns null until then.
+  const threadsHydrated = useStore((store) => store.threadsHydrated);
   const { settings, serverSettings } = useAppSettings();
   const queryClient = useQueryClient();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
@@ -424,5 +427,6 @@ export function useHandleNewThread() {
     handleNewThread,
     projects,
     routeThreadId,
+    threadsHydrated,
   };
 }

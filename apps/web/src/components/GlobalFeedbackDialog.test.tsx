@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
     activeThread: null as unknown,
   },
   projects: [] as Project[],
+  threadsHydrated: true,
   handleNewThread: vi.fn(),
   appendComposerPromptText: vi.fn(),
   toastAdd: vi.fn(),
@@ -25,6 +26,7 @@ vi.mock("../hooks/useHandleNewThread", () => ({
   useHandleNewThread: () => ({
     handleNewThread: mocks.handleNewThread,
     projects: mocks.projects,
+    threadsHydrated: mocks.threadsHydrated,
   }),
 }));
 vi.mock("../workspacePathsStore", () => ({
@@ -95,6 +97,7 @@ describe("GlobalFeedbackDialog.onDraftGithubIssue", () => {
     mocks.focusedChat.activeProjectId = null;
     mocks.focusedChat.activeThread = null;
     mocks.projects = [];
+    mocks.threadsHydrated = true;
     mocks.handleNewThread.mockResolvedValue("thread-1");
     useFeedbackDialogStore.setState({ isOpen: false, context: null, initialCategory: null });
     vi.stubGlobal("window", { innerWidth: 1_440, innerHeight: 900 });
@@ -148,6 +151,18 @@ describe("GlobalFeedbackDialog.onDraftGithubIssue", () => {
     const props = renderDialog();
 
     expect(props.onDraftGithubIssue).toBeUndefined();
+  });
+
+  it("hides the draft action until threads finish hydrating", () => {
+    // handleNewThread returns null while the thread store is still hydrating,
+    // so the action must not be offered during that window.
+    mocks.projects = [project({ id: "proj-hydrating" as Project["id"] })];
+    mocks.threadsHydrated = false;
+
+    expect(renderDialog().onDraftGithubIssue).toBeUndefined();
+
+    mocks.threadsHydrated = true;
+    expect(renderDialog().onDraftGithubIssue).toBeTypeOf("function");
   });
 
   it("rejects without touching the composer when the thread cannot be opened", async () => {
