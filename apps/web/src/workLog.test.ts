@@ -1090,7 +1090,7 @@ describe("deriveWorkLogEntries", () => {
           createdAt: at(second),
           sequence: second,
           kind,
-          turnId,
+          ...(turnId !== null ? { turnId } : {}),
           summary: "Read file",
           payload: { itemType: "dynamic_tool_call", data: { toolCallId: "background-tool" } },
         });
