@@ -252,6 +252,7 @@ import {
 import { buildThreadSubscribeInput } from "../threadDetailResumeCursors";
 import { retainThreadDetailSubscription } from "../threadDetailSubscriptionRetention";
 import {
+  canExecuteSideSlashCommand,
   canOfferForkSlashCommand,
   canOfferSideSlashCommand,
   canOfferReviewSlashCommand,
@@ -602,6 +603,7 @@ import {
   filterSidechatTranscriptMessages,
   hasLiveTurnTakenOver,
   hasServerAcknowledgedLocalDispatch,
+  threadHasProviderLockingActivity,
   LOCAL_DISPATCH_ACK_TIMEOUT_MS,
   LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS,
   resolveNextLocalDispatchSnapshot,
@@ -2312,7 +2314,12 @@ export default function ChatView({
       activeThread.messages.length > 0 ||
       activeThread.session !== null),
   );
-  const lockedProvider: ProviderKind | null = hasThreadStarted
+  // Side chats import source history as fork-import rows. Those imports must not lock the
+  // provider picker before the Side produces its first native turn (#810).
+  const hasProviderLockingActivity = Boolean(
+    activeThread && threadHasProviderLockingActivity(activeThread),
+  );
+  const lockedProvider: ProviderKind | null = hasProviderLockingActivity
     ? (sessionProvider ?? threadProvider ?? selectedProviderByThreadId ?? null)
     : null;
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
@@ -3895,17 +3902,24 @@ export default function ChatView({
       selectedMentionCount: selectedComposerMentions.length,
       interactionMode,
     });
+  const sideSlashCommandContext = {
+    imageCount: composerImages.length,
+    terminalContextCount: composerTerminalContexts.length,
+    selectedSkillCount: selectedComposerSkills.length,
+    selectedMentionCount: selectedComposerMentions.length,
+    interactionMode,
+    isSidechat: Boolean(activeThread?.sidechatSourceThreadId),
+  } as const;
+  const canExecuteSideCommand =
+    isServerThread &&
+    activeThread !== undefined &&
+    canExecuteSideSlashCommand(sideSlashCommandContext);
   const canOfferSideCommand =
     isServerThread &&
     activeThread !== undefined &&
     canOfferSideSlashCommand({
       prompt: composerPromptWithoutActiveSlashTrigger,
-      imageCount: composerImages.length,
-      terminalContextCount: composerTerminalContexts.length,
-      selectedSkillCount: selectedComposerSkills.length,
-      selectedMentionCount: selectedComposerMentions.length,
-      interactionMode,
-      isSidechat: Boolean(activeThread.sidechatSourceThreadId),
+      ...sideSlashCommandContext,
     });
   // Export is hidden while the thread is running so archives cannot capture a
   // partial assistant response. Same shared predicate as the server's 409
@@ -10660,7 +10674,7 @@ export default function ChatView({
       isServerThread &&
       activeThread?.session !== null &&
       activeThread?.session?.status !== "closed",
-    canOfferSideCommand,
+    canExecuteSideCommand,
     sidechatTargetProviders: handoffTargetProviders,
     canOfferExportCommand,
     supportsTextNativeReviewCommand,

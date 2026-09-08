@@ -70,7 +70,11 @@ import {
 import { applySpaceMetadataProjection } from "../spaceMetadataProjection.ts";
 import { resolveStableMessageTurnId } from "../messageTurnId.ts";
 import { maxIso, settleTurnStateFromSession } from "../turnLifecycle.ts";
-import { deriveTurnStartModelSelection, deriveTurnStartSession } from "../turnStartSession.ts";
+import {
+  canAdoptFirstTurnProvider,
+  deriveTurnStartModelSelection,
+  deriveTurnStartSession,
+} from "../turnStartSession.ts";
 import {
   attachmentRelativePath,
   parseAttachmentIdFromRelativePath,
@@ -825,14 +829,14 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               threadId: event.payload.threadId,
             }),
           ]);
-          const canAdoptFirstTurnProvider =
-            existingRow.value.latestTurnId === null &&
-            Option.isNone(session) &&
-            messages.length <= 1;
           const projectedModelSelection = deriveTurnStartModelSelection({
             currentModelSelection: existingRow.value.modelSelection,
             requestedModelSelection: event.payload.modelSelection,
-            canAdoptRequestedProvider: canAdoptFirstTurnProvider,
+            canAdoptRequestedProvider: canAdoptFirstTurnProvider({
+              hasLatestTurn: existingRow.value.latestTurnId !== null,
+              hasSession: Option.isSome(session),
+              messages,
+            }),
           });
           // Automation-dispatched turns run with the automation's modes but must not
           // repaint the thread's persisted modes: on a heartbeat target thread the
