@@ -32,6 +32,11 @@ route/Fumadocs types, and source snapshot. Node is slightly below the declared
 - Three samples per command/cache state, alternating command order per round.
 - Cold means compiler incremental caches removed, **not** a cold OS/filesystem.
   Incremental means the immediate unchanged rerun, with separate compiler caches.
+- The cold/incremental contrast covers the five workspaces that emit incremental
+  caches. `packages/contracts` and `packages/shared` run a bare `tsc --noEmit`
+  with both compilers (no `--tsBuildInfoFile`; their tsconfigs set neither
+  `composite` nor `incremental`), so cache removal is a no-op there and their
+  cold and incremental samples measure the same full check.
 - Other coordinated benchmarks were paused. Wall time was measured around a
   child-process invocation; no application speed, RSS, or energy claim is made.
 
@@ -109,7 +114,10 @@ separate run does not replace the original Bun 1.3.12 measurements above.
 | Default, incremental |  3.059 s |  3.170 s |  3.472 s |
 
 The new default reduced median latency by 77.8% cold (4.50x) and 74.5%
-incrementally (3.93x). All twelve runs passed all seven workspaces. A temporary
+incrementally (3.93x). All twelve runs passed all seven workspaces. As in the
+original qualification, `packages/contracts` and `packages/shared` emit no
+incremental caches, so their cold and incremental samples are identical and the
+cold/incremental contrast reflects the other five workspaces. A temporary
 web source mutation also confirmed that both the workspace and root default
 commands fail on invalid optional properties (TS2375), unchecked indexed access
 (TS2322), and an unused Effect (TS377001). The mutation was removed before
