@@ -25,7 +25,7 @@ async function mount(saving: boolean) {
       return (
         <>
           <p>Editor buffer</p>
-          <button onClick={() => void router.navigate({ to: "/next" })}>Next page</button>
+          <button onClick={() => void router.navigate({ to: "/settings" })}>Next page</button>
           <EditorDirtyRouteGuard enabled={state.dirty || state.saving} saving={state.saving} />
         </>
       );
@@ -33,7 +33,7 @@ async function mount(saving: boolean) {
   });
   const next = createRoute({
     getParentRoute: () => root,
-    path: "/next",
+    path: "/settings",
     component: () => <p>Next page content</p>,
   });
   const router = createRouter({
@@ -53,7 +53,7 @@ it("keeps route navigation blocked when discard is cancelled", async () => {
   expect(router.state.location.pathname).toBe("/editor");
   await page.getByRole("button", { name: "Next page" }).click();
   await page.getByRole("button", { name: "Discard changes and leave" }).click();
-  await expect.poll(() => router.state.location.pathname).toBe("/next");
+  await expect.poll(() => router.state.location.pathname).toBe("/settings");
   await view.unmount();
 });
 
@@ -63,6 +63,6 @@ it.each([true, false])("settles a confirmed deferred departure with dirty=%s", a
   expect(router.state.location.pathname).toBe("/editor");
   await settle({ dirty, saving: false });
   await expect.element(page.getByRole("alertdialog")).not.toBeInTheDocument();
-  await expect.poll(() => router.state.location.pathname).toBe(dirty ? "/editor" : "/next");
+  await expect.poll(() => router.state.location.pathname).toBe(dirty ? "/editor" : "/settings");
   await view.unmount();
 });
