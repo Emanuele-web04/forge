@@ -262,16 +262,15 @@ describe("buildFeedbackSubmission", () => {
     expect(text).toBe(`flag ${assignment} end`);
   });
 
-  it.each([
-    "secrets=s3cr3tvalue",
-    "client_secrets=s3cr3tvalue",
-    "MY_API_TOKEN=s3cr3tvalue",
-  ])("still redacts the delimited credential key %s", (assignment) => {
-    const { text } = redactObviousSecrets(`flag ${assignment} end`);
+  it.each(["secrets=s3cr3tvalue", "client_secrets=s3cr3tvalue", "MY_API_TOKEN=s3cr3tvalue"])(
+    "still redacts the delimited credential key %s",
+    (assignment) => {
+      const { text } = redactObviousSecrets(`flag ${assignment} end`);
 
-    expect(text).not.toContain(assignment);
-    expect(text).toContain("[REDACTED]");
-  });
+      expect(text).not.toContain(assignment);
+      expect(text).toContain("[REDACTED]");
+    },
+  );
 
   it("maps /root to ~ without swallowing the first directory", () => {
     expect(normalizeHomePaths("crash log at /root/project/config.txt")).toBe(
