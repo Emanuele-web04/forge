@@ -72,6 +72,7 @@ const PROJECTS = {
   ui: "project-mind-service-ui",
   pinSweep: "project-mind-service-pin-sweep",
   xproject: "project-mind-service-xproject",
+  txn: "project-mind-service-txn",
 } as const;
 
 let memoryCounter = 0;
@@ -767,5 +768,107 @@ layer("MindService", (it) => {
       );
       assert.strictEqual(pinError._tag, "MindMemoryNotFoundError");
     }),
+  );
+
+  it.effect(
+    "a failed journal write rolls the confirm, pin, and forget mutations back atomically",
+    () =>
+      Effect.gen(function* () {
+        const service = yield* MindService;
+        const repository = yield* MindRepository;
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations();
+        const projectId = ProjectId.makeUnsafe(PROJECTS.txn);
+        yield* ensureProjectRow(PROJECTS.txn);
+        const remembered = yield* service.remember(
+          rememberRequest(projectId, "Transaction rollback target", {
+            turnId: "turn-txn-create",
+          }),
+        );
+
+        // A BEFORE INSERT trigger that aborts every journal write stands in for
+        // a crash between the row mutation and its durable marker.
+        yield* Effect.acquireUseRelease(
+          sql`CREATE TRIGGER mind_journal_fail_insert
+            BEFORE INSERT ON mind_journal
+            BEGIN
+              SELECT RAISE(ABORT, 'forced journal failure');
+            END`,
+          () =>
+            Effect.gen(function* () {
+              const confirmError = yield* Effect.flip(
+                service.confirm({
+                  memoryId: remembered.memoryId,
+                  projectId,
+                  actor: { kind: "user" },
+                  threadId: null,
+                  turnId: "turn-txn-confirm",
+                }),
+              );
+              assert.strictEqual(confirmError._tag, "PersistenceSqlError");
+              const pinError = yield* Effect.flip(
+                service.setPinned({
+                  memoryId: remembered.memoryId,
+                  projectId,
+                  pinned: true,
+                  actor: { kind: "user" },
+                  threadId: null,
+                  turnId: "turn-txn-pin",
+                }),
+              );
+              assert.strictEqual(pinError._tag, "PersistenceSqlError");
+              const forgetError = yield* Effect.flip(
+                service.forget({
+                  memoryId: remembered.memoryId,
+                  projectId,
+                  actor: { kind: "user" },
+                  threadId: null,
+                  turnId: "turn-txn-forget",
+                }),
+              );
+              assert.strictEqual(forgetError._tag, "PersistenceSqlError");
+            }),
+          () =>
+            sql`DROP TRIGGER IF EXISTS mind_journal_fail_insert`.pipe(
+              Effect.catch(() => Effect.void),
+            ),
+        );
+
+        // Nothing landed: the row is untouched, no journal rows, no receipt.
+        const row = Option.getOrThrow(yield* repository.getById({ memoryId: remembered.memoryId }));
+        assert.strictEqual(row.peakWeight, 0.6);
+        assert.strictEqual(row.accessCount, 0);
+        assert.strictEqual(row.pinned, false);
+        for (const [op, turnId] of [
+          ["confirm", "turn-txn-confirm"],
+          ["pin", "turn-txn-pin"],
+          ["forget", "turn-txn-forget"],
+        ] as const) {
+          assert.isTrue(
+            Option.isNone(
+              yield* repository.findJournalOp({ memoryId: remembered.memoryId, op, turnId }),
+            ),
+          );
+        }
+        assert.isTrue(
+          Option.isNone(
+            yield* repository.getReceipt({
+              projectId,
+              operationId: `confirm:turn-txn-confirm:${remembered.memoryId}`,
+            }),
+          ),
+        );
+
+        // With the fault cleared the same operations succeed normally.
+        const confirmed = yield* service.confirm({
+          memoryId: remembered.memoryId,
+          projectId,
+          actor: { kind: "user" },
+          threadId: null,
+          turnId: "turn-txn-confirm",
+        });
+        assert.strictEqual(confirmed.weight, 0.75);
+        assert.strictEqual(confirmed.accessCount, 1);
+      }),
   );
 });

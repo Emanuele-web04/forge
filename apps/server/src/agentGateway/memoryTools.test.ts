@@ -747,7 +747,12 @@ layer("agent gateway memory tools", (it) => {
       const badLimit = plainErrorText(
         yield* callTool(byName, "synara_recall_memories", { limit: 0 }, makeContext()),
       );
-      assert.isTrue(badLimit.includes("between 1 and 20"));
+      // The advertised bound matches the delivered cap (MIND_RECALL_MAX_ITEMS).
+      assert.isTrue(badLimit.includes("between 1 and 8"));
+      const overCapLimit = plainErrorText(
+        yield* callTool(byName, "synara_recall_memories", { limit: 9 }, makeContext()),
+      );
+      assert.isTrue(overCapLimit.includes("between 1 and 8"));
       const missingMemoryId = plainErrorText(
         yield* callTool(byName, "synara_confirm_memory", {}, makeContext()),
       );

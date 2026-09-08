@@ -1,7 +1,7 @@
 import {
   MIND_MEMORY_TEXT_MAX_CHARS,
+  MIND_RECALL_MAX_ITEMS,
   MIND_RECALL_QUERY_MAX_CHARS,
-  MIND_RECALL_REQUEST_MAX_ITEMS,
   MindMemoryId,
   type MindMemoryType,
   type OrchestrationThreadShell,
@@ -89,12 +89,15 @@ function readRecallQuery(args: Record<string, unknown>): string | undefined {
   return query;
 }
 
+// The delivered result is hard-capped at MIND_RECALL_MAX_ITEMS by the contracts,
+// so the tool advertises and enforces exactly that bound — never a request cap
+// the service would only clamp.
 function readRecallLimit(args: Record<string, unknown>): number | undefined {
   const limit = readNumberArg(args, "limit");
   if (limit === undefined) return undefined;
-  if (!Number.isInteger(limit) || limit < 1 || limit > MIND_RECALL_REQUEST_MAX_ITEMS) {
+  if (!Number.isInteger(limit) || limit < 1 || limit > MIND_RECALL_MAX_ITEMS) {
     throw new ToolInputError(
-      `Argument "limit" must be an integer between 1 and ${MIND_RECALL_REQUEST_MAX_ITEMS}.`,
+      `Argument "limit" must be an integer between 1 and ${MIND_RECALL_MAX_ITEMS}.`,
     );
   }
   return limit;
@@ -192,8 +195,8 @@ export function makeAgentGatewayMemoryTools(
           limit: {
             type: "number",
             minimum: 1,
-            maximum: MIND_RECALL_REQUEST_MAX_ITEMS,
-            description: `Maximum matches for a query recall (default 10, max ${MIND_RECALL_REQUEST_MAX_ITEMS}). Ignored without a query.`,
+            maximum: MIND_RECALL_MAX_ITEMS,
+            description: `How many matches a query recall returns (1-${MIND_RECALL_MAX_ITEMS}, default ${MIND_RECALL_MAX_ITEMS}). Ignored without a query.`,
           },
         },
         additionalProperties: false,
@@ -230,7 +233,7 @@ export function makeAgentGatewayMemoryTools(
     definition: {
       name: "synara_confirm_memory",
       description:
-        "Confirm that a recalled project memory proved correct and useful. Confirmed memories gain weight and stop decaying; unconfirmed memories decay and are eventually pruned. Pass the memoryId exactly as returned by synara_recall_memories.",
+        "Confirm that a recalled project memory proved correct and useful. Confirmed memories gain weight and decay more slowly from their new peak — only pinning a memory stops decay entirely. Unconfirmed memories decay and are eventually pruned. Pass the memoryId exactly as returned by synara_recall_memories.",
       inputSchema: {
         type: "object",
         properties: {

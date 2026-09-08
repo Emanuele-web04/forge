@@ -176,6 +176,10 @@ export interface MindRepositoryShape {
   /**
    * Every memory across all projects, newest-access first. Backs the global
    * Mind list: memories whose project rows left the projection stay reachable.
+   * Accepted bound: the table can only hold `MIND_MEMORY_PROJECT_CAP` rows per
+   * project, and the merged page is sliced to the cap with the true total in
+   * `count` at the WS edge — effective weight is decay-dependent and cannot be
+   * ranked in SQL, so a SQL LIMIT here would silently drop high-weight rows.
    */
   readonly listAll: () => Effect.Effect<ReadonlyArray<MindMemoryRow>, MindRepositoryError>;
   /**
