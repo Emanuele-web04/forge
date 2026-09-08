@@ -193,6 +193,54 @@ describe("deriveActiveTaskListState", () => {
 });
 
 describe("deriveActiveBackgroundTasksState", () => {
+  it("excludes foreground Bash and Codex root tasks from persistent background work", () => {
+    for (const taskType of ["local_bash", "default", "plan"]) {
+      expect(
+        deriveActiveBackgroundTasksState([
+          makeActivity({
+            kind: "task.started",
+            payload: { taskId: "foreground", taskType, toolUseId: "tool-1" },
+          }),
+        ]),
+      ).toBeNull();
+    }
+  });
+
+  it("retires tasks at a session boundary and ignores late progress after reconnect", () => {
+    const activities = [
+      makeActivity({
+        id: "old-task",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "task.started",
+        payload: { taskId: "old", taskType: "local_bash", isBackgrounded: true },
+      }),
+      makeActivity({
+        id: "session-exit",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "provider.session.boundary",
+        payload: { state: "stopped" },
+      }),
+      makeActivity({
+        id: "late-progress",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "task.progress",
+        payload: { taskId: "old" },
+      }),
+    ];
+    expect(deriveActiveBackgroundTasksState(activities)).toBeNull();
+    expect(
+      deriveActiveBackgroundTasksState([
+        ...activities,
+        makeActivity({
+          id: "new-task",
+          createdAt: "2026-02-23T00:00:04.000Z",
+          kind: "task.started",
+          payload: { taskId: "new", taskType: "local_bash", isBackgrounded: true },
+        }),
+      ])?.taskIds,
+    ).toEqual(["new"]);
+  });
+
   it("keeps detached work across turns until its task completes", () => {
     const activities = [
       makeActivity({
@@ -200,7 +248,7 @@ describe("deriveActiveBackgroundTasksState", () => {
         kind: "task.started",
         turnId: "turn-1",
         createdAt: "2026-02-23T00:00:01.000Z",
-        payload: { taskId: "bash-1", taskType: "local_bash" },
+        payload: { taskId: "bash-1", taskType: "local_bash", isBackgrounded: true },
       }),
       makeActivity({
         id: "turn-done",

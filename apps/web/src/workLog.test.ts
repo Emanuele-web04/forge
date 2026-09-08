@@ -145,6 +145,54 @@ describe("deriveWorkLogEntries", () => {
     const [live] = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-1"), {
       activeTurnId: TurnId.makeUnsafe("turn-1"),
     });
+    const foregroundActivities = activities.map((activity) => ({
+      ...activity,
+      payload:
+        activity.kind === "task.started"
+          ? { taskId: "bg-1", taskType: "local_bash", toolUseId: "toolu_bg" }
+          : {
+              ...bashPayload,
+              status: activity.kind === "tool.completed" ? "completed" : "inProgress",
+              data: { ...bashPayload.data, input: { command: "bunx vitest run" } },
+            },
+    }));
+    const [foreground] = deriveWorkLogEntries(foregroundActivities, TurnId.makeUnsafe("turn-1"));
+    expect(foreground?.toolStatus).toBe("completed");
+    expect(foreground?.liveActivity?.background).toBeUndefined();
+    const [transitioned] = deriveWorkLogEntries(
+      [
+        ...foregroundActivities,
+        makeActivity({
+          id: "background-transition",
+          kind: "task.updated",
+          createdAt: "2026-02-23T00:00:04.000Z",
+          payload: { taskId: "bg-1", isBackgrounded: true },
+        }),
+      ],
+      TurnId.makeUnsafe("turn-1"),
+    );
+    expect(transitioned?.liveActivity?.background).toBe(true);
+
+    for (const state of ["stopped", "error"]) {
+      const [terminated] = deriveWorkLogEntries(
+        [
+          ...activities,
+          makeActivity({
+            id: "session-boundary",
+            kind: "provider.session.boundary",
+            createdAt: "2026-02-23T00:00:04.000Z",
+            payload: { state },
+          }),
+        ],
+        TurnId.makeUnsafe("turn-1"),
+        { activeTurnId: TurnId.makeUnsafe("turn-2") },
+      );
+      expect(terminated?.toolStatus).toBe(state === "error" ? "failed" : "cancelled");
+    }
+    const [closedSnapshot] = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-1"), {
+      session: { status: "closed", updatedAt: "2026-02-23T00:00:04.000Z" },
+    });
+    expect(closedSnapshot?.toolStatus).toBe("cancelled");
     expect(live?.toolStatus).toBe("running");
     expect(live?.liveActivity).toMatchObject({
       state: "waiting",

@@ -2606,6 +2606,7 @@ export default function ChatView({
     () =>
       deriveWorkLogEntries(threadActivities, activeLatestTurnId ?? undefined, {
         visibleTurnIds: workLogVisibleTurnIds,
+        session: activeThread?.session ?? null,
         activeTurnId: latestTurnLive ? activeLatestTurnId : null,
         activeTurnStartedAt: activeLatestTurnStartedAt,
         latestTurnState: activeLatestTurnState,
@@ -2616,6 +2617,7 @@ export default function ChatView({
       activeLatestTurnId,
       activeLatestTurnStartedAt,
       activeLatestTurnState,
+      activeThread?.session,
       latestTurnLive,
       threadActivities,
       workLogVisibleTurnIds,
@@ -2747,6 +2749,7 @@ export default function ChatView({
         deriveParentWorkLogEntries: () =>
           deriveWorkLogEntries(stripSourceActivities, stripSourceLatestTurnId ?? undefined, {
             visibleTurnIds: stripVisibleTurnIds,
+            session: stripParentThread?.session ?? null,
             activeTurnId: stripLiveTurnId,
             activeTurnStartedAt: stripSourceLatestTurnStartedAt,
             latestTurnState: stripSourceLatestTurnState,
@@ -3012,8 +3015,11 @@ export default function ChatView({
   }, [activeLatestTurn?.turnId, latestTurnSettled, showDebugTaskBanner, threadActivities]);
   const activeBackgroundTasks = useMemo(
     // Detached tasks can outlive their turn. Their own lifecycle clears the panel.
-    () => deriveActiveBackgroundTasksState(threadActivities),
-    [threadActivities],
+    () =>
+      activeThread?.session?.status === "closed" || activeThread?.session?.status === "error"
+        ? null
+        : deriveActiveBackgroundTasksState(threadActivities),
+    [activeThread?.session?.status, threadActivities],
   );
   // Task tool_use_ids the provider confirmed as backgrounded via task_updated
   // patches (last patch wins, so re-foregrounded tasks drop back out).

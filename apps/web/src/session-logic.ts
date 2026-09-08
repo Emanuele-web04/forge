@@ -9,6 +9,10 @@ import {
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 
 import { orderedActivities, parseTaskListTasks } from "./workLog";
+import {
+  backgroundTaskSessionBoundary,
+  collectExplicitBackgroundTaskIds,
+} from "./backgroundTaskLifecycle";
 
 import type {
   ChatMessage,
@@ -293,8 +297,13 @@ export function deriveActiveBackgroundTasksState(
 ): ActiveBackgroundTasksState | null {
   const ordered = orderedActivities(activities);
   const activeTasks = new Map<string, ActiveBackgroundTask>();
+  const explicitBackgroundTaskIds = collectExplicitBackgroundTaskIds(ordered);
 
   for (const activity of ordered) {
+    if (backgroundTaskSessionBoundary(activity)) {
+      activeTasks.clear();
+      continue;
+    }
     if (
       latestTurnId &&
       activity.turnId &&
@@ -344,6 +353,9 @@ export function deriveActiveBackgroundTasksState(
     }
 
     const previous = activeTasks.get(taskId);
+    if (latestTurnId === undefined && activity.kind === "task.progress" && !previous) {
+      continue;
+    }
     const taskType = payloadString(payload, "taskType") ?? previous?.taskType;
     const subagentType = payloadString(payload, "subagentType") ?? previous?.subagentType;
     // The server projects task.started's description into `detail`; progress rows
@@ -364,7 +376,16 @@ export function deriveActiveBackgroundTasksState(
     });
   }
 
-  const tasks = [...activeTasks.values()].filter((task) => task.taskType !== "plan");
+  const tasks = [...activeTasks.values()].filter(
+    (task) =>
+      task.taskType !== "plan" &&
+      (latestTurnId !== undefined ||
+        explicitBackgroundTaskIds.has(task.taskId) ||
+        task.subagentType !== undefined ||
+        task.taskType === "subagent" ||
+        task.taskType === "local_agent" ||
+        task.taskType === "local_workflow"),
+  );
   return tasks.length > 0
     ? { activeCount: tasks.length, taskIds: tasks.map((task) => task.taskId), tasks }
     : null;
