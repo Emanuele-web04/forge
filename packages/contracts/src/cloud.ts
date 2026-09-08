@@ -52,6 +52,46 @@ export type CloudOrganizationRole = typeof CloudOrganizationRole.Type;
 export const CloudIdentityProvider = Schema.Literals(["password", "google", "github"]);
 export type CloudIdentityProvider = typeof CloudIdentityProvider.Type;
 
+/**
+ * Public API capabilities. These are evaluated by the cloud control plane, never trusted from
+ * browser state alone. Keep values additive so already-issued tokens retain their meaning.
+ */
+export const CloudApiTokenScope = Schema.Literals([
+  "cortex.ai.invoke",
+  "projects.read",
+  "projects.write",
+  "workspaces.read",
+  "workspaces.write",
+  "repositories.read",
+  "repositories.write",
+  "tasks.read",
+  "tasks.write",
+  "organizations.read",
+]);
+export type CloudApiTokenScope = typeof CloudApiTokenScope.Type;
+
+/** Metadata safe to return after creation. Raw credentials are deliberately absent. */
+export const CloudApiToken = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  organizationId: OrganizationId,
+  userId: UserId,
+  name: TrimmedNonEmptyString,
+  prefix: TrimmedNonEmptyString,
+  scopes: Schema.Array(CloudApiTokenScope),
+  createdAt: Schema.DateTimeUtcFromString,
+  expiresAt: Schema.optional(Schema.DateTimeUtcFromString),
+  lastUsedAt: Schema.optional(Schema.DateTimeUtcFromString),
+  revokedAt: Schema.optional(Schema.DateTimeUtcFromString),
+});
+export type CloudApiToken = typeof CloudApiToken.Type;
+
+/** The one and only API response shape allowed to carry a raw token. */
+export const CloudCreatedApiToken = Schema.Struct({
+  token: CloudApiToken,
+  secret: TrimmedNonEmptyString,
+});
+export type CloudCreatedApiToken = typeof CloudCreatedApiToken.Type;
+
 export const CloudSignInInput = Schema.Struct({
   email: TrimmedNonEmptyString,
   password: TrimmedNonEmptyString,

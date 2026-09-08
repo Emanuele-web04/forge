@@ -32,6 +32,16 @@
         "wait-on": "^8.0.2",
       },
     },
+    "apps/cloud-control": {
+      "name": "@synara/cloud-control",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "@types/node": "catalog:",
+        "typescript": "catalog:",
+        "vitest": "catalog:",
+      },
+    },
     "apps/marketing": {
       "name": "@synara/marketing",
       "version": "0.1.0",

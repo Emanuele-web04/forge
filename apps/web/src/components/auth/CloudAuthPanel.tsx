@@ -14,7 +14,7 @@ import {
   type CloudAuthMode,
   type CloudAuthValues,
 } from "~/cloudAuthForm";
-import { SynaraLogo } from "~/components/SynaraLogo";
+import { CortexLogo } from "~/components/CortexLogo";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
@@ -70,7 +70,7 @@ export function CloudAuthPanel({
 
   const alternate = isSignup
     ? { label: "Already have an account?", action: "Sign in", to: "/login" as const }
-    : { label: "New to Synara?", action: "Create an account", to: "/signup" as const };
+    : { label: "New to CORTEX?", action: "Create an account", to: "/signup" as const };
 
   return (
     <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background px-4 py-8 text-foreground sm:px-6">
@@ -80,12 +80,12 @@ export function CloudAuthPanel({
           to="/"
           className="inline-flex items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
-          <SynaraLogo className="size-6" aria-label="Synara" />
-          <span className="font-semibold tracking-tight">Synara</span>
+          <CortexLogo className="size-6" aria-label="CORTEX" />
+          <span className="font-semibold tracking-[0.08em]">CORTEX</span>
         </Link>
         <div className="mt-7">
           <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
-            Cloud workspace
+            CORTEX Cloud · Private preview
           </p>
           <h1 className="mt-2 text-2xl font-semibold tracking-tight">
             {isSignup ? "Create your account" : "Welcome back"}
@@ -93,7 +93,7 @@ export function CloudAuthPanel({
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
             {isSignup
               ? "Start with a personal organization, then connect the repositories you choose."
-              : "Sign in to resume your cloud workspaces and agent tasks."}
+              : "Cloud accounts are in private preview. Local CORTEX workspaces remain available now."}
           </p>
         </div>
 

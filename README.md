@@ -1,6 +1,6 @@
 <div align="center">
-  <img src="./assets/prod/logo.svg" width="112" alt="Synara logo">
-  <h1>Synara</h1>
+  <img src="./assets/prod/logo.svg" width="112" alt="CORTEX logo">
+  <h1>CORTEX</h1>
   <p><strong>A focused workspace for coding agents.</strong><br>
   Projects, provider sessions, execution surfaces, and review tools in one local-first desktop application.</p>
   <p>
