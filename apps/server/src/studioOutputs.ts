@@ -326,6 +326,7 @@ export function studioOutputsCapturedActivityPayload(
   relativePaths: readonly string[],
   options?: {
     readonly generatedImage?: {
+      readonly origin?: "codex.explicit_image_generation";
       readonly sourcePath: string;
       readonly fullPath: string;
     };

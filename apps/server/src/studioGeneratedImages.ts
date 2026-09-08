@@ -10,6 +10,7 @@ import { copyFile, link, mkdir, readFile, realpath, stat, unlink } from "node:fs
 import path from "node:path";
 
 import {
+  CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN,
   CommandId,
   EventId,
   STUDIO_OUTPUTS_ACTIVITY_KIND,
@@ -244,6 +245,7 @@ export const copyAndAttributeStudioGeneratedImage = Effect.fnUntraced(function* 
       summary: "Studio outputs captured",
       payload: studioOutputsCapturedActivityPayload([copied.relativePath], {
         generatedImage: {
+          origin: CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN,
           sourcePath: input.sourcePath,
           fullPath: copied.fullPath,
         },

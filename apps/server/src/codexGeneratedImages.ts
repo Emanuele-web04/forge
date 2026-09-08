@@ -8,6 +8,7 @@ import path from "node:path";
 
 import {
   CODEX_GENERATED_IMAGE_ARTIFACT_KIND,
+  CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN,
   type CodexGeneratedImageArtifact,
   type ProviderRuntimeEvent,
   type ThreadId,
@@ -19,13 +20,17 @@ import {
   resolveCodexHomeAllowlistCandidates,
 } from "./codexHomePaths.ts";
 
-export { CODEX_GENERATED_IMAGE_ARTIFACT_KIND };
+export { CODEX_GENERATED_IMAGE_ARTIFACT_KIND, CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN };
 
 const CODEX_GENERATED_IMAGE_ITEM_TYPES = new Set([
   "imagegeneration",
   "imagegenerationcall",
   "imagegenerationend",
-  "imageview",
+]);
+
+const CODEX_GENERATED_IMAGE_EVENT_METHODS = new Set([
+  "codex/event/image_generation_end",
+  "image_generation_end",
 ]);
 
 const IMAGE_PATH_KEYS = ["saved_path", "savedPath", "path", "file_path"] as const;
@@ -235,6 +240,7 @@ export function codexGeneratedImageArtifact(
 ): CodexGeneratedImageArtifact {
   return {
     kind: CODEX_GENERATED_IMAGE_ARTIFACT_KIND,
+    origin: CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN,
     path: reference.path,
     ...(reference.callId ? { callId: reference.callId } : {}),
   };
@@ -249,6 +255,67 @@ export function isCodexGeneratedImageArtifact(
     typeof record.path === "string" &&
     record.path.trim().length > 0
   );
+}
+
+export function isTrustedCodexGeneratedImageArtifact(
+  value: unknown,
+): value is CodexGeneratedImageArtifact & {
+  readonly origin: typeof CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN;
+} {
+  return (
+    isCodexGeneratedImageArtifact(value) && value.origin === CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN
+  );
+}
+
+function legacyRuntimeEventProvesExplicitImageGeneration(event: ProviderRuntimeEvent): boolean {
+  if (CODEX_GENERATED_IMAGE_EVENT_METHODS.has(event.raw?.method ?? "")) {
+    return true;
+  }
+
+  const payload = asObject(event.raw?.payload);
+  const candidates = [
+    payload,
+    asObject(payload?.item),
+    asObject(payload?.msg),
+    asObject(payload?.event),
+    asObject(payload?.payload),
+    asObject(payload?.data),
+  ];
+  return candidates.some(
+    (candidate) =>
+      candidate !== undefined && isCodexGeneratedImageItemType(candidate.type ?? candidate.kind),
+  );
+}
+
+/**
+ * Adds durable provenance to a legacy image-generation event when its raw
+ * Codex payload still proves that the provider emitted an explicit generation
+ * item. Unmarked events without that evidence stay untrusted.
+ */
+export function markTrustedCodexGeneratedImageRuntimeEvent(
+  event: ProviderRuntimeEvent,
+): ProviderRuntimeEvent {
+  if (
+    event.provider !== "codex" ||
+    event.type !== "item.completed" ||
+    event.payload.itemType !== "image_generation" ||
+    !isCodexGeneratedImageArtifact(event.payload.data) ||
+    isTrustedCodexGeneratedImageArtifact(event.payload.data) ||
+    !legacyRuntimeEventProvesExplicitImageGeneration(event)
+  ) {
+    return event;
+  }
+
+  return {
+    ...event,
+    payload: {
+      ...event.payload,
+      data: {
+        ...event.payload.data,
+        origin: CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN,
+      },
+    },
+  };
 }
 
 export function markdownImagePath(filePath: string): string {
@@ -271,11 +338,19 @@ export function generatedImageMarkdown(filePath: string): string {
 export function generatedImagePathFromRuntimeEvent(
   event: ProviderRuntimeEvent,
 ): string | undefined {
-  if (event.type !== "item.completed" || event.payload.itemType !== "image_generation") {
+  if (
+    event.provider !== "codex" ||
+    event.type !== "item.completed" ||
+    event.payload.itemType !== "image_generation"
+  ) {
     return undefined;
   }
-  const artifact = isCodexGeneratedImageArtifact(event.payload.data)
-    ? event.payload.data
+  const normalizedEvent = markTrustedCodexGeneratedImageRuntimeEvent(event);
+  if (normalizedEvent.type !== "item.completed") {
+    return undefined;
+  }
+  const artifact = isTrustedCodexGeneratedImageArtifact(normalizedEvent.payload.data)
+    ? normalizedEvent.payload.data
     : undefined;
   return artifact?.path;
 }
