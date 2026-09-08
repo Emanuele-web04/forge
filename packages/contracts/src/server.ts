@@ -131,6 +131,8 @@ export const ServerProviderUsageLine = Schema.Struct({
   label: TrimmedNonEmptyString,
   value: TrimmedNonEmptyString,
   subtitle: Schema.optional(TrimmedNonEmptyString),
+  source: Schema.optional(TrimmedNonEmptyString),
+  observedAt: Schema.optional(IsoDateTime),
 });
 export type ServerProviderUsageLine = typeof ServerProviderUsageLine.Type;
 
@@ -157,6 +159,61 @@ export const ServerProviderUsageSnapshot = Schema.Struct({
   stale: Schema.optional(Schema.Boolean),
 });
 export type ServerProviderUsageSnapshot = typeof ServerProviderUsageSnapshot.Type;
+
+export const AgentProviderUsageAvailability = Schema.Literals([
+  "available",
+  "partial",
+  "unavailable",
+]);
+export type AgentProviderUsageAvailability = typeof AgentProviderUsageAvailability.Type;
+
+export const AgentProviderUsageUnavailableReason = Schema.Literals([
+  "disabled",
+  "needs-auth",
+  "unsupported",
+  "provider-error",
+  "missing-snapshot",
+  "missing-quota",
+  "stale",
+  "expired-window",
+  "timed-out",
+]);
+export type AgentProviderUsageUnavailableReason = typeof AgentProviderUsageUnavailableReason.Type;
+
+// Agent-facing interpretation of one provider snapshot. The original snapshot remains attached so
+// agents see the same normalized data as Settings, while quotaWindows marks only authoritative
+// account-quota percentages as actionable. usageLines are informational and never become quota.
+export const ServerAgentProviderUsageWindow = Schema.Struct({
+  window: TrimmedNonEmptyString,
+  availability: Schema.Literals(["available", "unavailable"]),
+  usedPercent: Schema.optional(
+    Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)).check(Schema.isLessThanOrEqualTo(100)),
+  ),
+  remainingPercent: Schema.optional(
+    Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)).check(Schema.isLessThanOrEqualTo(100)),
+  ),
+  resetsAt: Schema.optional(IsoDateTime),
+  windowDurationMins: Schema.optional(NonNegativeInt),
+  unavailableReason: Schema.optional(AgentProviderUsageUnavailableReason),
+  source: TrimmedNonEmptyString,
+  observedAt: IsoDateTime,
+});
+export type ServerAgentProviderUsageWindow = typeof ServerAgentProviderUsageWindow.Type;
+
+export const ServerAgentProviderUsage = Schema.Struct({
+  provider: ProviderKind,
+  availability: AgentProviderUsageAvailability,
+  unavailableReason: Schema.optional(AgentProviderUsageUnavailableReason),
+  checkedAt: IsoDateTime,
+  freshness: Schema.Struct({
+    stale: Schema.Boolean,
+    ageMs: NonNegativeInt,
+    maxAgeMs: NonNegativeInt,
+  }),
+  snapshot: Schema.NullOr(ServerProviderUsageSnapshot),
+  quotaWindows: Schema.Array(ServerAgentProviderUsageWindow),
+});
+export type ServerAgentProviderUsage = typeof ServerAgentProviderUsage.Type;
 
 export const ServerGetProviderUsageSnapshotInput = Schema.Struct({
   provider: ProviderKind,

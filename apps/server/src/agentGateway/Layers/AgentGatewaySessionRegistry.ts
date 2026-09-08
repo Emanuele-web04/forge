@@ -14,6 +14,7 @@ const PROVIDER_SESSION_CAPABILITIES = [
   "thread:write",
   "automation:write",
   "diagnostics:read",
+  "usage:read",
   "browser:control",
   "device:control",
 ] as const;

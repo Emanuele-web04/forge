@@ -26,6 +26,7 @@ import {
   type ServerProviderStatus,
   type TurnDispatchMode,
 } from "@synara/contracts";
+import { PROVIDER_USAGE_PROVIDERS } from "@synara/shared/providerUsage";
 import { runtimeModeEscalatesPrivilege } from "@synara/shared/runtimeMode";
 import { Effect, Layer, Option } from "effect";
 
@@ -46,6 +47,11 @@ import { AgentGatewayCredentials } from "../Services/AgentGatewayCredentials.ts"
 import { AgentGatewayOperationRepository } from "../Services/AgentGatewayOperationRepository.ts";
 import { ProviderDiscoveryService } from "../../provider/Services/ProviderDiscoveryService.ts";
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
+import {
+  summarizeProviderUsageForAgent,
+  summarizeProviderUsageListForAgent,
+} from "../../providerUsage/agent.ts";
+import { collectProviderUsageSnapshots } from "../../providerUsage/index.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   AGENT_GATEWAY_TARGET_OPTIONS_DESCRIPTION,
@@ -77,6 +83,7 @@ import { BrowserAutomationHost } from "../../browserAutomation/Services/BrowserA
 import { makeBrowserAutomationHost } from "../../browserAutomation/Layers/BrowserAutomationHost.ts";
 import { makeThreadReadTools } from "../threadReadTools.ts";
 import { makeThreadDiagnosticTools } from "../threadDiagnosticTools.ts";
+import { makeAgentGatewayUsageTools } from "../usageTools.ts";
 import { pruneProjectedArchivedManagedWorktrees } from "../../managedWorktrees.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 
@@ -159,6 +166,49 @@ export const makeAgentGateway = Effect.gen(function* () {
       }),
     );
   });
+  const loadProviderUsage = (provider?: ProviderKind) =>
+    Effect.gen(function* () {
+      const settings = yield* serverSettings.getSettings;
+      const nowMs = Date.now();
+      const enabledProviders = new Set(
+        PROVIDER_USAGE_PROVIDERS.filter((kind) => settings.providers[kind].enabled),
+      );
+      const requestedProviders = provider
+        ? [provider]
+        : PROVIDER_USAGE_PROVIDERS.filter((kind) => enabledProviders.has(kind));
+      const providersToFetch = requestedProviders.filter((kind) => enabledProviders.has(kind));
+      const snapshots =
+        providersToFetch.length === 0
+          ? []
+          : yield* Effect.promise(() =>
+              collectProviderUsageSnapshots(
+                {
+                  homeDir: serverConfig.homeDir,
+                  env: process.env,
+                  platform: process.platform,
+                  nowMs,
+                  claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
+                },
+                { providers: providersToFetch },
+              ),
+            );
+      if (provider) {
+        return [
+          summarizeProviderUsageForAgent({
+            provider,
+            enabled: enabledProviders.has(provider),
+            snapshot: snapshots[0] ?? null,
+            checkedAtMs: nowMs,
+          }),
+        ];
+      }
+      return summarizeProviderUsageListForAgent({
+        providers: requestedProviders,
+        enabledProviders,
+        snapshots,
+        checkedAtMs: nowMs,
+      });
+    });
 
   yield* recoverInterruptedAgentGatewayOperations({
     operationRepository,
@@ -217,6 +267,7 @@ export const makeAgentGateway = Effect.gen(function* () {
       homeDir: serverConfig.homeDir,
       chatWorkspaceRoot: serverConfig.chatWorkspaceRoot,
     },
+    loadProviderUsage,
   });
   const diagnosticTools = makeThreadDiagnosticTools({
     snapshotQuery,
@@ -746,6 +797,7 @@ export const makeAgentGateway = Effect.gen(function* () {
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   };
 
+  const usageTools = makeAgentGatewayUsageTools({ loadProviderUsage });
   const automationTools = makeAgentGatewayAutomationTools({
     automationService,
     requireThreadShell,
@@ -786,6 +838,7 @@ export const makeAgentGateway = Effect.gen(function* () {
   const tools: ReadonlyArray<ToolEntry> = [
     ...readTools,
     ...diagnosticTools,
+    ...usageTools,
     createThreads,
     createThread,
     sendMessage,
