@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { randomUUID } from "node:crypto";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import {
   lstatSync,
@@ -30,6 +31,7 @@ import {
 import {
   buildCodexInitializeParams,
   buildCodexThreadOpenRequest,
+  resolveCodexThreadOpenMinimumVersion,
   shouldWarnCodexFreshStartWithoutResume,
   CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
   CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
@@ -46,16 +48,157 @@ import {
   assertCodexWorkingDirectoryExists,
   formatMissingCodexWorkingDirectoryError,
 } from "./codexWorkingDirectory";
-import { CodexJsonlFramer, CodexJsonlWriter } from "./codexAppServerTransport";
+import {
+  CodexAppServerTransportError,
+  CodexJsonlFramer,
+  CodexJsonlWriter,
+} from "./codexAppServerTransport";
 import { ensureIsolatedScratchWorkspace } from "./scratchWorkspaces";
 import { SYNARA_HARNESS_POLICY_MARKER } from "./agentGateway/harnessPolicy.ts";
 import {
   AGENT_GATEWAY_TURN_AUTHORITY_RETIRED,
   acquireAgentGatewaySessionLease,
 } from "./agentGateway/sessionLease.ts";
-import { MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION } from "./provider/codexCliVersion.ts";
+import {
+  MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION,
+  MINIMUM_CODEX_EXCLUDE_TURNS_CLI_VERSION,
+} from "./provider/codexCliVersion.ts";
 
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
+
+type SyntheticCodexRequest = {
+  readonly id?: string | number;
+  readonly method: string;
+  readonly params?: Record<string, unknown>;
+};
+
+function createSyntheticCodexAppServer(options?: { readonly forceFullHistoryResponse?: boolean }) {
+  const historySentinel = "SYNTHETIC_PRIVATE_HISTORY_SENTINEL";
+  const persistedTranscript = Object.freeze([
+    Object.freeze({ role: "user", text: historySentinel }),
+    Object.freeze({ role: "assistant", text: "synthetic reply" }),
+  ]);
+  const historyFingerprint = () =>
+    createHash("sha256").update(JSON.stringify(persistedTranscript)).digest("hex");
+  const requests: SyntheticCodexRequest[] = [];
+  const historicalResponses: Array<{ readonly thread: { readonly id: string } }> = [];
+  const children: ChildProcessWithoutNullStreams[] = [];
+  let oversizedResponseCount = 0;
+  let nextPid = 50_000;
+  let nextTurn = 1;
+
+  const buildFullHistoryFrame = (id: string | number, providerThreadId: string): Buffer => {
+    const targetFrameBytes = 16_842_743;
+    const prefix = Buffer.from(
+      `{"id":${JSON.stringify(id)},"result":{"thread":{"id":${JSON.stringify(providerThreadId)},"turns":[{"payload":"${historySentinel}`,
+      "utf8",
+    );
+    const suffix = Buffer.from('"}]}}}', "utf8");
+    const fillerBytes = targetFrameBytes - prefix.length - suffix.length;
+    if (fillerBytes < 0) throw new Error("Synthetic Codex frame prefix exceeds target size");
+    return Buffer.concat(
+      [prefix, Buffer.alloc(fillerBytes, 0x78), suffix, Buffer.from("\n")],
+      targetFrameBytes + 1,
+    );
+  };
+
+  const spawnAppServer = (): ChildProcessWithoutNullStreams => {
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const child = Object.assign(new EventEmitter(), {
+      stdin,
+      stdout,
+      stderr,
+      pid: nextPid++,
+      exitCode: null,
+      signalCode: null,
+      killed: false,
+    }) as unknown as ChildProcessWithoutNullStreams;
+    children.push(child);
+
+    let bufferedInput = "";
+    stdin.on("data", (chunk: Buffer) => {
+      bufferedInput += chunk.toString("utf8");
+      for (;;) {
+        const newline = bufferedInput.indexOf("\n");
+        if (newline < 0) break;
+        const line = bufferedInput.slice(0, newline);
+        bufferedInput = bufferedInput.slice(newline + 1);
+        if (!line) continue;
+        const request = JSON.parse(line) as SyntheticCodexRequest;
+        requests.push(request);
+        if (request.id === undefined) continue;
+
+        const respond = (result: unknown) => {
+          queueMicrotask(() => stdout.write(`${JSON.stringify({ id: request.id, result })}\n`));
+        };
+        if (request.method === "initialize") {
+          respond({});
+        } else if (request.method === "account/read") {
+          respond({ account: { type: "apiKey" } });
+        } else if (request.method === "thread/resume" || request.method === "thread/fork") {
+          const providerThreadId = String(request.params?.threadId ?? "provider-thread");
+          if (options?.forceFullHistoryResponse === true || request.params?.excludeTurns !== true) {
+            oversizedResponseCount += 1;
+            queueMicrotask(() =>
+              stdout.write(buildFullHistoryFrame(request.id!, providerThreadId)),
+            );
+          } else {
+            const result = {
+              thread: {
+                id:
+                  request.method === "thread/fork"
+                    ? `${providerThreadId}-forked`
+                    : providerThreadId,
+              },
+            };
+            historicalResponses.push(result);
+            respond(result);
+          }
+        } else if (request.method === "thread/start") {
+          respond({ thread: { id: "fresh-provider-thread" } });
+        } else if (request.method === "turn/start") {
+          respond({ turn: { id: `synthetic-turn-${nextTurn++}` } });
+        } else {
+          respond({});
+        }
+      }
+    });
+
+    return child;
+  };
+
+  return {
+    buildFullHistoryFrame,
+    children,
+    historyFingerprint,
+    historySentinel,
+    historicalResponses,
+    transcriptSnapshot: () => structuredClone(persistedTranscript),
+    requests,
+    spawnAppServer,
+    get oversizedResponseCount() {
+      return oversizedResponseCount;
+    },
+  };
+}
+
+function createSyntheticCodexManager(fake: ReturnType<typeof createSyntheticCodexAppServer>) {
+  const teardownProcessTree = vi.fn(async () => ({ escalated: false, signalErrors: [] }));
+  const manager = new CodexAppServerManager(undefined, {
+    spawnAppServer: fake.spawnAppServer,
+    teardownProcessTree,
+  });
+  const internals = manager as unknown as {
+    assertSupportedCodexCliVersion: () => Promise<void>;
+    buildSessionProcessEnv: () => Promise<NodeJS.ProcessEnv>;
+  };
+  vi.spyOn(internals, "assertSupportedCodexCliVersion").mockResolvedValue(undefined);
+  vi.spyOn(internals, "buildSessionProcessEnv").mockResolvedValue({});
+  return { manager, teardownProcessTree };
+}
+
 const fullAccessTurnOverrides = {
   approvalPolicy: "never",
   approvalsReviewer: "user",
@@ -838,6 +981,17 @@ describe("codex CLI version gate", () => {
           minimumVersion: MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION,
         }),
       ).rejects.toThrow(`Auto mode requires v${MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION} or newer`);
+      await expect(
+        assertSupportedCodexCliVersion({
+          binaryPath,
+          cwd: dir,
+          homePath,
+          minimumVersion: MINIMUM_CODEX_EXCLUDE_TURNS_CLI_VERSION,
+          minimumVersionRequirement: "Codex thread resume and fork",
+        }),
+      ).rejects.toThrow(
+        `Codex thread resume and fork requires v${MINIMUM_CODEX_EXCLUDE_TURNS_CLI_VERSION} or newer`,
+      );
     } finally {
       reset();
       vi.unstubAllEnvs();
@@ -1442,6 +1596,7 @@ describe("buildCodexThreadOpenRequest", () => {
       params: {
         ...sessionOverrides,
         threadId: "external-thread",
+        excludeTurns: true,
       },
     });
   });
@@ -1457,18 +1612,21 @@ describe("buildCodexThreadOpenRequest", () => {
       params: {
         ...sessionOverrides,
         threadId: "existing-thread",
+        excludeTurns: true,
       },
     });
   });
 
   it("starts a fresh thread with raw events disabled", () => {
-    expect(buildCodexThreadOpenRequest({ sessionOverrides })).toEqual({
+    const request = buildCodexThreadOpenRequest({ sessionOverrides });
+    expect(request).toEqual({
       method: "thread/start",
       params: {
         ...sessionOverrides,
         experimentalRawEvents: false,
       },
     });
+    expect(request.params).not.toHaveProperty("excludeTurns");
   });
 
   it("rejects conflicting resume and fork sources", () => {
@@ -1479,6 +1637,34 @@ describe("buildCodexThreadOpenRequest", () => {
         sessionOverrides,
       }),
     ).toThrow("cannot resume and fork at the same time");
+  });
+});
+
+describe("resolveCodexThreadOpenMinimumVersion", () => {
+  it("keeps fresh starts on their existing floor and merges stricter capability floors", () => {
+    expect(
+      resolveCodexThreadOpenMinimumVersion({
+        runtimeMode: "full-access",
+        threadOpenMethod: "thread/start",
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveCodexThreadOpenMinimumVersion({
+        runtimeMode: "auto",
+        threadOpenMethod: "thread/start",
+      }),
+    ).toBe(MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION);
+    for (const threadOpenMethod of ["thread/resume", "thread/fork"] as const) {
+      expect(
+        resolveCodexThreadOpenMinimumVersion({
+          runtimeMode: "full-access",
+          threadOpenMethod,
+        }),
+      ).toBe(MINIMUM_CODEX_EXCLUDE_TURNS_CLI_VERSION);
+      expect(resolveCodexThreadOpenMinimumVersion({ runtimeMode: "auto", threadOpenMethod })).toBe(
+        MINIMUM_CODEX_EXCLUDE_TURNS_CLI_VERSION,
+      );
+    }
   });
 });
 
@@ -1588,6 +1774,181 @@ describe("resolveCodexModelForAccount", () => {
 });
 
 describe("startSession", () => {
+  it("resumes a synthetic large-history thread across restart without replay or payload exposure", async () => {
+    const fake = createSyntheticCodexAppServer();
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "synara-codex-large-resume-"));
+    const beforeFingerprint = fake.historyFingerprint();
+    const beforeTranscript = fake.transcriptSnapshot();
+    const first = createSyntheticCodexManager(fake);
+    const second = createSyntheticCodexManager(fake);
+    const eventMessages: string[] = [];
+    first.manager.on("event", (event) => {
+      if (event.message) eventMessages.push(event.message);
+    });
+    second.manager.on("event", (event) => {
+      if (event.message) eventMessages.push(event.message);
+    });
+
+    try {
+      const fullHistoryFrame = fake.buildFullHistoryFrame(99, "provider-thread");
+      expect(fullHistoryFrame).toHaveLength(16_842_744);
+      expect(() => new CodexJsonlFramer().push(fullHistoryFrame)).toThrowError(
+        expect.objectContaining({
+          reason: "frame-too-large",
+          observedBytes: 16_842_743,
+          maxBytes: 16_777_216,
+        }),
+      );
+      const firstSession = await first.manager.startSession({
+        threadId: asThreadId("thread-synthetic-restart"),
+        provider: "codex",
+        runtimeMode: "full-access",
+        cwd,
+        resumeCursor: { threadId: "provider-thread" },
+      });
+      expect(firstSession).toMatchObject({
+        status: "ready",
+        resumeCursor: { threadId: "provider-thread" },
+      });
+      await first.manager.sendTurn({
+        threadId: firstSession.threadId,
+        input: "Unfinished original turn",
+      });
+      await first.manager.stopSession(firstSession.threadId);
+
+      const resumedSession = await second.manager.startSession({
+        threadId: asThreadId("thread-synthetic-restart"),
+        provider: "codex",
+        runtimeMode: "full-access",
+        cwd,
+        resumeCursor: firstSession.resumeCursor,
+      });
+      expect(resumedSession).toMatchObject({
+        status: "ready",
+        resumeCursor: { threadId: "provider-thread" },
+      });
+      expect(resumedSession.lastError).toBeUndefined();
+      await second.manager.sendTurn({
+        threadId: resumedSession.threadId,
+        input: "Follow-up after restart",
+      });
+
+      const historicalRequests = fake.requests.filter(
+        (request) => request.method === "thread/resume",
+      );
+      expect(historicalRequests).toHaveLength(2);
+      expect(historicalRequests.every((request) => request.params?.excludeTurns === true)).toBe(
+        true,
+      );
+      expect(fake.requests.filter((request) => request.method === "thread/start")).toEqual([]);
+      const turnRequests = fake.requests.filter((request) => request.method === "turn/start");
+      expect(turnRequests).toHaveLength(2);
+      const serializedTurns = JSON.stringify(turnRequests);
+      expect(serializedTurns.match(/Unfinished original turn/g)).toHaveLength(1);
+      expect(serializedTurns.match(/Follow-up after restart/g)).toHaveLength(1);
+      expect(fake.oversizedResponseCount).toBe(0);
+      expect(fake.historicalResponses).toHaveLength(2);
+      expect(fake.historicalResponses.every((response) => !("turns" in response.thread))).toBe(
+        true,
+      );
+      expect(
+        Buffer.byteLength(JSON.stringify({ id: 1, result: fake.historicalResponses[0] }) + "\n"),
+      ).toBeLessThan(16_777_216);
+      expect(fake.historyFingerprint()).toBe(beforeFingerprint);
+      expect(fake.transcriptSnapshot()).toEqual(beforeTranscript);
+      expect(fake.transcriptSnapshot().map((entry) => entry.role)).toEqual(["user", "assistant"]);
+      expect(eventMessages.join("\n")).not.toContain(fake.historySentinel);
+      expect(JSON.stringify(fake.requests)).not.toContain(fake.historySentinel);
+      expect(first.teardownProcessTree).toHaveBeenCalledTimes(1);
+    } finally {
+      await first.manager.stopAll();
+      await second.manager.stopAll();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("forks a synthetic large-history thread with a metadata-only response", async () => {
+    const fake = createSyntheticCodexAppServer();
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "synara-codex-large-fork-"));
+    const { manager } = createSyntheticCodexManager(fake);
+
+    try {
+      const session = await manager.startSession({
+        threadId: asThreadId("thread-synthetic-fork"),
+        provider: "codex",
+        runtimeMode: "auto",
+        cwd,
+        forkSourceResumeCursor: { threadId: "provider-source-thread" },
+      });
+
+      expect(session).toMatchObject({
+        status: "ready",
+        resumeCursor: { threadId: "provider-source-thread-forked" },
+      });
+      expect(fake.requests.filter((request) => request.method === "thread/fork")).toEqual([
+        expect.objectContaining({
+          params: expect.objectContaining({
+            threadId: "provider-source-thread",
+            excludeTurns: true,
+          }),
+        }),
+      ]);
+      expect(fake.oversizedResponseCount).toBe(0);
+    } finally {
+      await manager.stopAll();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the oversized resume error primary through start failure, exit, and repeated stop", async () => {
+    const fake = createSyntheticCodexAppServer({ forceFullHistoryResponse: true });
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "synara-codex-root-cause-"));
+    const { manager, teardownProcessTree } = createSyntheticCodexManager(fake);
+    const events: Array<{ kind: string; method: string; message?: string }> = [];
+    manager.on("event", (event) => {
+      events.push({
+        kind: event.kind,
+        method: event.method,
+        ...(event.message ? { message: event.message } : {}),
+      });
+    });
+    const expectedMessage =
+      "Codex app-server JSONL frame exceeded its byte limit (16842743/16777216). Operation: thread/resume.";
+
+    try {
+      await expect(
+        manager.startSession({
+          threadId: asThreadId("thread-synthetic-root-cause"),
+          provider: "codex",
+          runtimeMode: "full-access",
+          cwd,
+          resumeCursor: { threadId: "provider-thread" },
+        }),
+      ).rejects.toThrow(expectedMessage);
+
+      expect(fake.oversizedResponseCount).toBe(1);
+      expect(events.filter((event) => event.kind === "error")).toEqual([
+        {
+          kind: "error",
+          method: "protocol/transportError",
+          message: expectedMessage,
+        },
+      ]);
+      expect(events.some((event) => event.message?.includes("Session stopped before"))).toBe(false);
+      expect(events.map((event) => event.message).join("\n")).not.toContain(fake.historySentinel);
+      expect(teardownProcessTree).toHaveBeenCalledTimes(1);
+      expect(manager.hasSession(asThreadId("thread-synthetic-root-cause"))).toBe(false);
+
+      fake.children[0]?.emit("exit", 1, null);
+      await manager.stopSession(asThreadId("thread-synthetic-root-cause"));
+      expect(events.filter((event) => event.kind === "error")).toHaveLength(1);
+      expect(teardownProcessTree).toHaveBeenCalledTimes(1);
+    } finally {
+      await manager.stopAll();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("emits session/started after any successful thread open", () => {
     const manager = new CodexAppServerManager();
     const methods: string[] = [];
@@ -1789,6 +2150,88 @@ describe("startSession", () => {
         }),
       ).rejects.toThrow("Codex Auto version gate");
       expect(versionCheck).toHaveBeenCalledTimes(1);
+    } finally {
+      versionCheck.mockRestore();
+      await manager.stopAll();
+    }
+  });
+
+  it("requires excludeTurns support before spawning a resumed Codex session", async () => {
+    const spawnAppServer = vi.fn(() => {
+      throw new Error("Version gate must run before spawning Codex");
+    });
+    const manager = new CodexAppServerManager(undefined, { spawnAppServer });
+    const versionCheck = vi
+      .spyOn(
+        manager as unknown as {
+          assertSupportedCodexCliVersion: (input: {
+            binaryPath: string;
+            cwd: string;
+            homePath?: string;
+            minimumVersion?: string;
+            minimumVersionRequirement?: string;
+          }) => void;
+        },
+        "assertSupportedCodexCliVersion",
+      )
+      .mockImplementation((input) => {
+        expect(input.minimumVersion).toBe(MINIMUM_CODEX_EXCLUDE_TURNS_CLI_VERSION);
+        expect(input.minimumVersionRequirement).toMatch(/resume|fork/i);
+        throw new Error("Codex excludeTurns version gate");
+      });
+
+    try {
+      await expect(
+        manager.startSession({
+          threadId: asThreadId("thread-resume-version"),
+          provider: "codex",
+          runtimeMode: "full-access",
+          resumeCursor: { threadId: "provider-thread" },
+        }),
+      ).rejects.toThrow("Codex excludeTurns version gate");
+      expect(versionCheck).toHaveBeenCalledTimes(1);
+      expect(spawnAppServer).not.toHaveBeenCalled();
+    } finally {
+      versionCheck.mockRestore();
+      await manager.stopAll();
+    }
+  });
+
+  it("requires excludeTurns support before spawning a forked Codex session", async () => {
+    const spawnAppServer = vi.fn(() => {
+      throw new Error("Version gate must run before spawning Codex");
+    });
+    const manager = new CodexAppServerManager(undefined, { spawnAppServer });
+    const versionCheck = vi
+      .spyOn(
+        manager as unknown as {
+          assertSupportedCodexCliVersion: (input: {
+            binaryPath: string;
+            cwd: string;
+            homePath?: string;
+            minimumVersion?: string;
+            minimumVersionRequirement?: string;
+          }) => void;
+        },
+        "assertSupportedCodexCliVersion",
+      )
+      .mockImplementation((input) => {
+        expect(input.minimumVersion).toBe(MINIMUM_CODEX_EXCLUDE_TURNS_CLI_VERSION);
+        expect(input.minimumVersionRequirement).toMatch(/resume|fork/i);
+        throw new Error("Codex fork excludeTurns version gate");
+      });
+
+    try {
+      await expect(
+        manager.forkThread({
+          sourceThreadId: asThreadId("source-thread"),
+          sourceResumeCursor: { threadId: "provider-source-thread" },
+          threadId: asThreadId("thread-fork-version"),
+          runtimeMode: "full-access",
+        }),
+      ).rejects.toThrow("Codex fork excludeTurns version gate");
+      expect(versionCheck).toHaveBeenCalledTimes(1);
+      expect(spawnAppServer).not.toHaveBeenCalled();
     } finally {
       versionCheck.mockRestore();
       await manager.stopAll();
@@ -4553,6 +4996,105 @@ describe("handleServerNotification error normalization", () => {
 });
 
 describe("CodexAppServerManager process teardown", () => {
+  it("preserves the first transport failure and its pending operation through teardown", async () => {
+    const teardownProcessTree = vi.fn(async () => ({ escalated: false, signalErrors: [] }));
+    const manager = new CodexAppServerManager(undefined, { teardownProcessTree });
+    const threadId = asThreadId("thread-transport-root-cause");
+    const rejected = vi.fn();
+    const writerClose = vi.fn();
+    const events: Array<{ kind: string; method: string; message?: string }> = [];
+    manager.on("event", (event) => {
+      events.push({
+        kind: event.kind,
+        method: event.method,
+        ...(event.message ? { message: event.message } : {}),
+      });
+    });
+    const context = {
+      session: {
+        provider: "codex",
+        status: "connecting",
+        threadId,
+        runtimeMode: "full-access",
+        createdAt: "2026-09-08T08:03:37.000Z",
+        updatedAt: "2026-09-08T08:03:37.000Z",
+      },
+      account: { type: "unknown", planType: null, sparkEnabled: true },
+      child: {
+        pid: 42_426,
+        exitCode: null,
+        signalCode: null,
+        once: vi.fn(),
+        removeListener: vi.fn(),
+      },
+      stdinWriter: { close: writerClose },
+      pending: new Map([
+        [
+          "7",
+          {
+            method: "thread/resume",
+            timeout: setTimeout(() => {}, 60_000),
+            resolve: vi.fn(),
+            reject: rejected,
+          },
+        ],
+      ]),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+      reviewTurnIds: new Set(),
+      nextRequestId: 8,
+      stopping: false,
+      sessionAttemptId: "attempt-transport-root-cause",
+    };
+    const internals = manager as unknown as {
+      sessions: Map<ThreadId, unknown>;
+      handleTransportFailure: (context: unknown, cause: unknown) => void;
+    };
+    internals.sessions.set(threadId, context);
+
+    internals.handleTransportFailure(
+      context,
+      new CodexAppServerTransportError({
+        reason: "frame-too-large",
+        observedBytes: 16_842_743,
+        maxBytes: 16_777_216,
+      }),
+    );
+    await manager.stopSession(threadId);
+
+    const expectedMessage =
+      "Codex app-server JSONL frame exceeded its byte limit (16842743/16777216). Operation: thread/resume.";
+    expect(rejected).toHaveBeenCalledTimes(1);
+    expect(rejected.mock.calls[0]?.[0]).toMatchObject({ message: expectedMessage });
+    expect(writerClose).toHaveBeenCalledWith(expect.objectContaining({ message: expectedMessage }));
+    expect(context.session).toMatchObject({ status: "closed", lastError: expectedMessage });
+    expect(
+      (
+        context as typeof context & {
+          terminalFailure?: Record<string, unknown>;
+        }
+      ).terminalFailure,
+    ).toMatchObject({
+      kind: "frame-too-large",
+      operation: "thread/resume",
+      observedBytes: 16_842_743,
+      limitBytes: 16_777_216,
+      source: "transport",
+      sessionAttemptId: "attempt-transport-root-cause",
+    });
+    expect(events.filter((event) => event.kind === "error")).toEqual([
+      {
+        kind: "error",
+        method: "protocol/transportError",
+        message: expectedMessage,
+      },
+    ]);
+    expect(events.some((event) => event.message?.includes("Session stopped before"))).toBe(false);
+    expect(teardownProcessTree).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps one stop in flight and publishes closed eagerly", async () => {
     let proveExit: (() => void) | undefined;
     const exitProof = new Promise<void>((resolve) => {

@@ -9,6 +9,8 @@ import {
 export const MINIMUM_CODEX_CLI_VERSION = "0.37.0";
 // `approvalsReviewer: "auto_review"` and its companion messages shipped in rust-v0.124.0.
 export const MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION = "0.124.0";
+// `excludeTurns` for thread/resume and thread/fork shipped in rust-v0.125.0.
+export const MINIMUM_CODEX_EXCLUDE_TURNS_CLI_VERSION = "0.125.0";
 
 function parseSemver(version: string): ParsedCliVersion | null {
   const normalized = normalizeCliVersion(version);
