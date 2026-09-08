@@ -214,11 +214,20 @@ const OAUTH_HTML = `<!doctype html><html><head><title>OAuth fixture</title></hea
   <h1>Complete fixture sign-in</h1><button type="button">Continue manually</button>
 </body></html>`;
 
+const SIGNIN_HTML = `<!doctype html><html><head><title>Sign-in fixture</title></head><body>
+  <label>Email <input type="email" /></label>
+  <label>Password <input type="password" /></label>
+  <button type="button" onclick="document.querySelector('#mode').textContent='Log In selected'">Log In</button>
+  <button type="button" onclick="document.querySelector('#mode').textContent='Google selected'">Continue with Google</button>
+  <p id="mode">Sign Up selected</p>
+</body></html>`;
+
 const HTML_BY_PATH: Readonly<Record<string, string>> = {
   "/app": APP_HTML,
   "/next": NEXT_HTML,
   "/oauth": OAUTH_HTML,
   "/popup": POPUP_HTML,
+  "/signin": SIGNIN_HTML,
 };
 
 export async function startVisibleBrowserFixtureSite(): Promise<VisibleBrowserFixtureSite> {

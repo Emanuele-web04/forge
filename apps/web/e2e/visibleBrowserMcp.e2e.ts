@@ -649,6 +649,40 @@ test("production MCP controls one persistent Electron page across visibility cha
       await run('await page.keyboard.press("Enter"); return true;');
       await expect(page.locator("html")).toHaveAttribute("data-host-submits", "0");
     });
+
+    await test.step("explains invalid sandbox APIs and recovers sign-in button clicks", async () => {
+      const signinUrl = new URL("/signin", site.initialUrl).href;
+      await mcp.call("browser_navigate", { url: signinUrl });
+      for (const code of [
+        'await human.click(getByRole("button",{name:"Log In",exact:true}));',
+        'await getByRole("button",{name:"Log In",exact:true}).click();',
+        'await human.click(getByRole("button",{name:"Continue with Google"}));',
+        'return Array.from(document.querySelectorAll("button"));',
+        "await waitForTimeout(400);",
+      ]) {
+        await expect(run(code)).rejects.toThrow("BrowserScriptApiUnavailable");
+      }
+      expect(
+        (await run('return await page.locator("#mode").innerText();')).structuredContent.value,
+      ).toBe("Sign Up selected");
+      await run('await human.click(page.getByRole("button",{name:"Log In",exact:true}));');
+      expect(
+        (await run('return await page.locator("#mode").innerText();')).structuredContent.value,
+      ).toBe("Log In selected");
+      const partial = await run(
+        'await page.getByRole("button",{name:"Continue with Google"}).click(); return location.href;',
+      ).catch((error: unknown) => error);
+      expect(String(partial)).toContain("BrowserScriptApiUnavailable");
+      expect(String(partial)).toContain('\\"effectMayHaveCommitted\\":true');
+      expect(
+        (await run('return await page.locator("#mode").innerText();')).structuredContent.value,
+      ).toBe("Google selected");
+      expect((await run("return await page.url();")).structuredContent.value).toBe(signinUrl);
+      expect(
+        (await run("return await page.evaluate(() => document.title);")).structuredContent.value,
+      ).toBe("Sign-in fixture");
+      await expect(page.getByLabel("Host composer")).toHaveValue("HOST_SENTINEL");
+    });
   } finally {
     try {
       await closeElectronApplication(electronApp);

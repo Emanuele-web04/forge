@@ -162,6 +162,26 @@ describe("browser automation catalogue projection", () => {
     );
   });
 
+  it("provides executable page-scoped locator and DOM examples", () => {
+    const description = BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_run.description;
+    expect(description).toContain(
+      'human.click(page.getByRole("button",{name:"Log In",exact:true}))',
+    );
+    for (const name of [
+      "getByRole",
+      "getByLabel",
+      "getByText",
+      "getByPlaceholder",
+      "getByTestId",
+      "locator",
+    ]) {
+      expect(description).toContain(`page.${name}`);
+    }
+    expect(description).toContain("page.evaluate(() => document.title)");
+    expect(description).toContain("never bare document/window/location");
+    expect(description).toContain("Script errors do not mean sign-in buttons are blocked");
+  });
+
   it("rejects undefined and non-finite JSON values", () => {
     expect(() => stableJsonStringify({ value: undefined })).toThrow();
     expect(() => stableJsonStringify({ value: Number.NaN })).toThrow();

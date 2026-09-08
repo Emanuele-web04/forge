@@ -52,6 +52,7 @@ const browserErrorCodes = [
   "BrowserPopupOpenerUnsupported",
   "BrowserDownloadApprovalRequired",
   "BrowserEvaluationFailed",
+  "BrowserScriptApiUnavailable",
   "BrowserEvaluationResultTooLarge",
   "BrowserSnapshotTooLarge",
   "BrowserScreenshotTooLarge",

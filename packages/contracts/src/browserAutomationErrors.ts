@@ -48,6 +48,7 @@ export const BrowserErrorCode = Schema.Literals([
   "BrowserPopupOpenerUnsupported",
   "BrowserDownloadApprovalRequired",
   "BrowserEvaluationFailed",
+  "BrowserScriptApiUnavailable",
   "BrowserEvaluationResultTooLarge",
   "BrowserSnapshotTooLarge",
   "BrowserScreenshotTooLarge",
@@ -164,7 +165,9 @@ export const BrowserAutomationErrorMessages = Object.freeze({
   BrowserPopupOpenerUnsupported: "The popup opener relationship is unsupported.",
   BrowserDownloadApprovalRequired: "The browser download requires explicit approval.",
   BrowserEvaluationFailed:
-    "Browser evaluation failed before a confirmed result was available. Inspect the current page and use a separate focused call to isolate the failing operation; do not repeat unchanged calls. Agent password filling and generation are unavailable; ask the user to sign in manually or import a browser session through Saved logins.",
+    "Browser evaluation failed before a confirmed result was available. Inspect the current page and isolate the failing operation in a focused call; do not repeat unchanged calls. This error does not establish that input or sign-in buttons are blocked.",
+  BrowserScriptApiUnavailable:
+    "The script used an unavailable browser API/global. Use page.getByRole(...), page.getByLabel(...), page.url(), and page.evaluate(() => ...) for document/window access. Wait with locator.waitFor or page.waitForURL, not bare waitForTimeout. Earlier actions may have completed; inspect their result before correcting the script. This is not a password-access error.",
   BrowserEvaluationResultTooLarge: "The browser evaluation result exceeds the safe response limit.",
   BrowserSnapshotTooLarge: "The browser snapshot exceeds the safe response limit.",
   BrowserScreenshotTooLarge: "The browser screenshot exceeds the safe response limit.",

@@ -5,6 +5,21 @@ import { openBetterwrightConnection } from "./betterwrightConnection";
 import type { BrowserAutomationVisibleRuntime } from "../browserManager";
 import { BrowserAutomationHostError } from "./hostErrors";
 
+const UNAVAILABLE_SCRIPT_GLOBAL_ERRORS = new Set(
+  [
+    "getByRole",
+    "getByLabel",
+    "getByText",
+    "getByPlaceholder",
+    "getByTestId",
+    "locator",
+    "document",
+    "window",
+    "location",
+    "waitForTimeout",
+  ].map((name) => `${name} is not defined`),
+);
+
 export interface BetterwrightRunOptions {
   readonly home: string;
   readonly contents: WebContents;
@@ -67,9 +82,11 @@ export async function runBetterwright<T>(options: BetterwrightRunOptions): Promi
         code:
           result.error === BrowserAutomationErrorMessages.BrowserCredentialUseUnavailable
             ? "BrowserCredentialUseUnavailable"
-            : credentialTarget
-              ? "BrowserCredentialTargetRequired"
-              : "BrowserEvaluationFailed",
+            : typeof result.error === "string" && UNAVAILABLE_SCRIPT_GLOBAL_ERRORS.has(result.error)
+              ? "BrowserScriptApiUnavailable"
+              : credentialTarget
+                ? "BrowserCredentialTargetRequired"
+                : "BrowserEvaluationFailed",
         retryable: false,
         phase: "evaluate",
         effectMayHaveCommitted: true,

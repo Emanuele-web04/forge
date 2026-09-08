@@ -74,6 +74,42 @@ describe("Betterwright runtime errors", () => {
     },
   );
 
+  it.each([
+    "getByRole",
+    "getByLabel",
+    "getByText",
+    "getByPlaceholder",
+    "getByTestId",
+    "locator",
+    "document",
+    "window",
+    "location",
+    "waitForTimeout",
+  ])("explains the sandbox API for an unavailable %s global", async (name) => {
+    mocks.run.mockResolvedValue({ ok: false, error: `${name} is not defined` });
+    await expect(run()).rejects.toMatchObject({
+      browserError: {
+        code: "BrowserScriptApiUnavailable",
+        message: BrowserAutomationErrorMessages.BrowserScriptApiUnavailable,
+        retryable: false,
+        effectMayHaveCommitted: true,
+      },
+    });
+    expect(mocks.connectionClose).toHaveBeenCalledWith(true);
+  });
+
+  it.each([
+    "private-password is not defined",
+    "getByRole is not defined: private-password",
+    "private-password: document is not defined",
+  ])("does not classify or expose unknown error text: %s", async (error) => {
+    mocks.run.mockResolvedValue({ ok: false, error });
+    const failure = await run().catch((value: unknown) => value);
+    expect(failure).toMatchObject({ browserError: { code: "BrowserEvaluationFailed" } });
+    expect(JSON.stringify(failure)).not.toContain("private-password");
+    expect(JSON.stringify(failure)).not.toContain("sign in manually");
+  });
+
   it("retains successful values and converts milliseconds to seconds", async () => {
     mocks.run.mockResolvedValue({ ok: true, result: { filled: true } });
     expect(await run()).toEqual({ filled: true });

@@ -99,6 +99,11 @@ describe("Codex Synara harness policy", () => {
       expect(instructions).toContain("Do not rediscover tools after a model switch");
       expect(instructions).toContain("print no unrelated catalogue");
       expect(instructions).toContain("Snapshot diffs and aria refs do not persist between calls");
+      expect(instructions).toContain(
+        'human.click(page.getByRole("button",{name:"Log In",exact:true}))',
+      );
+      expect(instructions).toContain("never bare document/window/location");
+      expect(instructions).toContain("Script errors do not mean sign-in buttons are blocked");
     }
   });
 
