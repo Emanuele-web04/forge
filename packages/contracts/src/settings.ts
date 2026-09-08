@@ -88,6 +88,31 @@ export const SkillsServerSettings = Schema.Struct({
 });
 export type SkillsServerSettings = typeof SkillsServerSettings.Type;
 
+export const VoiceTranscriptionProviderKind = Schema.Literals(["auto", "groq", "chatgpt"]);
+export type VoiceTranscriptionProviderKind = typeof VoiceTranscriptionProviderKind.Type;
+export const DEFAULT_VOICE_TRANSCRIPTION_PROVIDER: VoiceTranscriptionProviderKind = "auto";
+
+export const GROQ_VOICE_TRANSCRIPTION_MODELS = [
+  "whisper-large-v3-turbo",
+  "whisper-large-v3",
+  "distil-whisper-large-v3-en",
+] as const;
+export const GroqVoiceTranscriptionModel = Schema.Literals([...GROQ_VOICE_TRANSCRIPTION_MODELS]);
+export type GroqVoiceTranscriptionModel = typeof GroqVoiceTranscriptionModel.Type;
+export const DEFAULT_GROQ_VOICE_TRANSCRIPTION_MODEL: GroqVoiceTranscriptionModel =
+  "whisper-large-v3-turbo";
+
+export const VoiceTranscriptionServerSettings = Schema.Struct({
+  provider: VoiceTranscriptionProviderKind.pipe(
+    Schema.withDecodingDefault(() => DEFAULT_VOICE_TRANSCRIPTION_PROVIDER),
+  ),
+  groqModel: GroqVoiceTranscriptionModel.pipe(
+    Schema.withDecodingDefault(() => DEFAULT_GROQ_VOICE_TRANSCRIPTION_MODEL),
+  ),
+  groqApiKeyConfigured: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
+});
+export type VoiceTranscriptionServerSettings = typeof VoiceTranscriptionServerSettings.Type;
+
 export const ServerSettings = Schema.Struct({
   enableAssistantStreaming: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
@@ -99,6 +124,7 @@ export const ServerSettings = Schema.Struct({
       model: DEFAULT_GIT_TEXT_GENERATION_MODEL,
     })),
   ),
+  voiceTranscription: VoiceTranscriptionServerSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   providers: Schema.Struct({
     codex: CodexServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     claudeAgent: ClaudeServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
@@ -146,6 +172,13 @@ export const ServerSettingsPatch = Schema.Struct({
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvironmentMode),
   addProjectBaseDirectory: Schema.optionalKey(StringSetting),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
+  voiceTranscription: Schema.optionalKey(
+    Schema.Struct({
+      provider: Schema.optionalKey(VoiceTranscriptionProviderKind),
+      groqModel: Schema.optionalKey(GroqVoiceTranscriptionModel),
+      groqApiKey: Schema.optionalKey(StringSetting),
+    }),
+  ),
   providers: Schema.optionalKey(
     Schema.Struct({
       codex: Schema.optionalKey(

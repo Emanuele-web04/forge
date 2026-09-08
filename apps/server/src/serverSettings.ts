@@ -44,6 +44,10 @@ import {
   ProviderCredentialsLive,
   type ExternalProviderServer,
 } from "./providerCredentials";
+import {
+  VoiceTranscriptionCredentials,
+  VoiceTranscriptionCredentialsLive,
+} from "./voiceTranscriptionCredentials";
 
 export interface ServerSettingsShape {
   readonly start: Effect.Effect<void, ServerSettingsError>;
@@ -59,6 +63,7 @@ export interface ServerSettingsShape {
   ) => Effect.Effect<ServerSettingsView, ServerSettingsError>;
   readonly streamChanges: Stream.Stream<ServerSettings>;
   readonly streamViews: Stream.Stream<ServerSettingsView>;
+  readonly getVoiceTranscriptionGroqApiKey: Effect.Effect<string | null, ServerSettingsError>;
 }
 
 export interface ServerSettingsSnapshot {
@@ -149,6 +154,9 @@ export class ServerSettingsService extends ServiceMap.Service<
               Stream.map(toServerSettingsView),
             );
           },
+          getVoiceTranscriptionGroqApiKey: Effect.sync(
+            () => process.env.GROQ_API_KEY?.trim() || null,
+          ),
         } satisfies ServerSettingsShape;
       }),
     );
@@ -229,6 +237,19 @@ function omitProviderPasswords(patch: ServerSettingsPatch): ServerSettingsPatch 
       ...(patch.providers.opencode ? { opencode } : {}),
     },
   };
+}
+
+function omitVoiceTranscriptionSecrets(patch: ServerSettingsPatch): ServerSettingsPatch {
+  if (!patch.voiceTranscription) return patch;
+  const { groqApiKey: _groqApiKey, ...voiceTranscription } = patch.voiceTranscription;
+  return {
+    ...patch,
+    voiceTranscription,
+  };
+}
+
+function omitSecretSettings(patch: ServerSettingsPatch): ServerSettingsPatch {
+  return omitVoiceTranscriptionSecrets(omitProviderPasswords(patch));
 }
 
 // Migrate only portable Kilo state. Its model/options shape and enabled flag
@@ -337,6 +358,7 @@ function decodeSettingsFromJson(settingsPath: string, raw: string) {
 const makeServerSettings = Effect.gen(function* () {
   const { settingsPath } = yield* ServerConfig;
   const providerCredentials = yield* ProviderCredentials;
+  const voiceTranscriptionCredentials = yield* VoiceTranscriptionCredentials;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const writeSemaphore = yield* Semaphore.make(1);
@@ -352,6 +374,7 @@ const makeServerSettings = Effect.gen(function* () {
   const withCredentialState = (settings: ServerSettings) =>
     Effect.all({
       opencode: providerCredentials.isServerPasswordConfigured("opencode"),
+      groqVoice: voiceTranscriptionCredentials.isGroqApiKeyConfigured(),
     }).pipe(
       Effect.map(
         (configured): ServerSettings => ({
@@ -362,6 +385,10 @@ const makeServerSettings = Effect.gen(function* () {
               ...settings.providers.opencode,
               serverPasswordConfigured: configured.opencode,
             },
+          },
+          voiceTranscription: {
+            ...settings.voiceTranscription,
+            groqApiKeyConfigured: configured.groqVoice,
           },
         }),
       ),
@@ -522,10 +549,24 @@ const makeServerSettings = Effect.gen(function* () {
             );
           }
         }
+        if (patch.voiceTranscription?.groqApiKey !== undefined) {
+          yield* voiceTranscriptionCredentials
+            .replaceGroqApiKey(patch.voiceTranscription.groqApiKey)
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ServerSettingsError({
+                    settingsPath,
+                    detail: "failed to update Groq voice transcription API key",
+                    cause,
+                  }),
+              ),
+            );
+        }
         const normalized = yield* normalizeSettings(
           settingsPath,
           current,
-          omitProviderPasswords(patch),
+          omitSecretSettings(patch),
         );
         const next = yield* withCredentialState(normalized);
         const nextRevision = Math.max(disk.revision, yield* Ref.get(revisionRef)) + 1;
@@ -564,9 +605,20 @@ const makeServerSettings = Effect.gen(function* () {
         Stream.map(toServerSettingsView),
       );
     },
+    getVoiceTranscriptionGroqApiKey: voiceTranscriptionCredentials.getGroqApiKey().pipe(
+      Effect.mapError(
+        (cause) =>
+          new ServerSettingsError({
+            settingsPath,
+            detail: "failed to read Groq voice transcription API key",
+            cause,
+          }),
+      ),
+    ),
   } satisfies ServerSettingsShape;
 });
 
 export const ServerSettingsLive = Layer.effect(ServerSettingsService, makeServerSettings).pipe(
   Layer.provide(ProviderCredentialsLive),
+  Layer.provide(VoiceTranscriptionCredentialsLive),
 );

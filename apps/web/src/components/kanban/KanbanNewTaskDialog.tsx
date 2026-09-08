@@ -369,6 +369,8 @@ export function KanbanNewTaskDialog({
     threadId: scratchThreadId,
     selectedProvider,
     activeProviderStatus: voiceProviderStatus,
+    voiceTranscriptionProvider: settings.voiceTranscriptionProvider,
+    groqApiKeyConfigured: settings.voiceTranscriptionGroqApiKeyConfigured,
     pendingUserInputCount: 0,
     onTranscriptReady: handleTranscriptReady,
     refreshVoiceStatus: refreshProviderStatuses,

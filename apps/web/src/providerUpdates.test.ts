@@ -59,6 +59,11 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
     defaultThreadEnvMode: "local",
     addProjectBaseDirectory: "",
     textGenerationModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
+    voiceTranscription: {
+      provider: "auto",
+      groqModel: "whisper-large-v3-turbo",
+      groqApiKeyConfigured: false,
+    },
     providers: {
       codex: { ...provider, binaryPath: "codex", homePath: "" },
       claudeAgent: { ...provider, binaryPath: "claude", launchArgs: "" },

@@ -396,6 +396,60 @@ describe("binaryUploadEffectRouteLayer", () => {
     );
   });
 
+  it("transcribes through Groq when Codex is disabled", async () => {
+    vi.stubEnv("GROQ_API_KEY", "gsk_test");
+    const transcribeVoice = vi.fn(() => Effect.succeed({ text: "unexpected" }));
+    const { outboundHttp } = await import("@synara/shared/outboundHttp");
+    const request = vi.spyOn(outboundHttp, "request").mockResolvedValue({
+      status: 200,
+      headers: new Headers({ "content-type": "application/json" }),
+      body: new TextEncoder().encode(JSON.stringify({ text: "groq dictation" })),
+      url: "https://api.groq.com/openai/v1/audio/transcriptions",
+    });
+    try {
+      await withAuthEffectServer(
+        { host: "127.0.0.1", publicUrl: undefined } as ServerConfigShape,
+        makeServerAuth({ count: 0 }),
+        async (serverOrigin) => {
+          const params = new URLSearchParams({
+            provider: "codex",
+            cwd: "/tmp/project",
+            mimeType: "audio/wav",
+            sampleRateHz: "24000",
+            durationMs: "1000",
+          });
+          const response = await fetch(
+            `${serverOrigin}${VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH}?${params.toString()}`,
+            {
+              method: "POST",
+              headers: { Authorization: "Bearer bearer-token" },
+              body: Buffer.from("RIFF0000WAVE", "ascii"),
+            },
+          );
+
+          expect(response.status).toBe(200);
+          await expect(response.json()).resolves.toEqual({ text: "groq dictation" });
+          expect(transcribeVoice).not.toHaveBeenCalled();
+          expect(request).toHaveBeenCalledTimes(1);
+        },
+        binaryUploadEffectRouteLayer,
+        {
+          providerAdapterRegistry: {
+            getByProvider: () => Effect.succeed({ provider: "codex", transcribeVoice } as never),
+            listProviders: () => Effect.succeed(["codex"]),
+          },
+          serverSettingsLayer: ServerSettingsService.layerTest({
+            voiceTranscription: { provider: "groq" },
+            providers: { codex: { enabled: false } },
+          }),
+        },
+      );
+    } finally {
+      vi.unstubAllEnvs();
+      request.mockRestore();
+    }
+  });
+
   it("allows credentialed Canary attachment upload preflights", async () => {
     const config = {
       host: "127.0.0.1",

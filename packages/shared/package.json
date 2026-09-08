@@ -240,6 +240,14 @@
       "types": "./src/chatGptVoiceTranscription.ts",
       "import": "./src/chatGptVoiceTranscription.ts"
     },
+    "./groqVoiceTranscription": {
+      "types": "./src/groqVoiceTranscription.ts",
+      "import": "./src/groqVoiceTranscription.ts"
+    },
+    "./voiceTranscription": {
+      "types": "./src/voiceTranscription.ts",
+      "import": "./src/voiceTranscription.ts"
+    },
     "./composerSlashCommands": {
       "types": "./src/composerSlashCommands.ts",
       "import": "./src/composerSlashCommands.ts"

@@ -39,7 +39,7 @@ import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolve
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
-import { getEnabledProviderAdapter } from "./provider/enabledProviderAdapter";
+import { transcribeConfiguredVoice } from "./voiceTranscriptionDispatch";
 import { threadArchiveChunks, threadArchiveFileName } from "./orchestration/exportThreadArchive";
 import type { ServerReadiness } from "./server/readiness";
 import { ServerSettingsService } from "./serverSettings";
@@ -997,22 +997,19 @@ const binaryUploadEffectHandler = Effect.gen(function* () {
       const bytes = yield* readEffectBinary(request, SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES);
       const registry = yield* ProviderAdapterRegistry;
       const serverSettings = yield* ServerSettingsService;
-      const adapter = yield* getEnabledProviderAdapter(provider as never, serverSettings, registry);
-      if (!adapter.transcribeVoice) {
-        return HttpServerResponse.jsonUnsafe(
-          { error: `Voice transcription is unavailable for provider '${provider}'.` },
-          { status: 400, headers: corsHeaders },
-        );
-      }
-      const result = yield* adapter.transcribeVoice({
-        provider: provider as never,
-        cwd,
-        ...(threadId ? { threadId: ThreadId.makeUnsafe(threadId) } : {}),
-        mimeType,
-        sampleRateHz,
-        durationMs,
-        audioBase64: Buffer.from(bytes).toString("base64"),
-      });
+      const result = yield* transcribeConfiguredVoice(
+        {
+          provider: provider as never,
+          cwd,
+          ...(threadId ? { threadId: ThreadId.makeUnsafe(threadId) } : {}),
+          mimeType,
+          sampleRateHz,
+          durationMs,
+          audioBase64: Buffer.from(bytes).toString("base64"),
+        },
+        serverSettings,
+        registry,
+      );
       return HttpServerResponse.jsonUnsafe(result, { status: 200, headers: corsHeaders });
     }).pipe(Effect.ensuring(Effect.sync(releaseUpload)));
   }

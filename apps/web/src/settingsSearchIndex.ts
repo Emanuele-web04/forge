@@ -54,6 +54,25 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Replay the first-run setup: feature tour, provider selection, appearance, and first project. onboarding welcome wizard getting started setup",
   },
   {
+    id: "general:transcription-provider",
+    section: "general",
+    title: "Transcription provider",
+    keywords:
+      "Voice dictation speech-to-text groq whisper chatgpt independent of coding agent harness microphone",
+  },
+  {
+    id: "general:groq-model",
+    section: "general",
+    title: "Groq model",
+    keywords: "whisper-large-v3-turbo groq speech to text voice dictation model",
+  },
+  {
+    id: "general:groq-api-key",
+    section: "general",
+    title: "Groq API key",
+    keywords: "GROQ_API_KEY groq console speech to text voice dictation credential",
+  },
+  {
     id: "general:project-order",
     section: "general",
     title: "Project order",
