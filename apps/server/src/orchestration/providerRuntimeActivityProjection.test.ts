@@ -290,7 +290,7 @@ describe("provider runtime activity projection", () => {
     ];
     expect(absent.map(projectProviderRuntimeActivities)).toEqual([[], [], []]);
 
-    for (const provider of ["codex", "antigravity"] as const) {
+    for (const provider of ["codex", "antigravity", "claudeAgent"] as const) {
       const [activity] = projectProviderRuntimeActivities(
         runtimeEvent({
           type: "item.completed",
@@ -316,6 +316,21 @@ describe("provider runtime activity projection", () => {
         },
       });
     }
+  });
+
+  it("preserves long readable thinking beyond activity metadata limits", () => {
+    const detail = "First paragraph.\n\n" + "Reasoning text. ".repeat(2000) + "Final paragraph.";
+    const [activity] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "item.completed",
+        eventId: "long-thinking",
+        provider: "claudeAgent",
+        turnId: TURN_ID,
+        itemId: RuntimeItemId.makeUnsafe("long-thinking"),
+        payload: { itemType: "reasoning", status: "completed", detail },
+      }),
+    );
+    expect(activity?.payload).toMatchObject({ detail });
   });
 
   it("maps tool progress without losing call identity", () => {

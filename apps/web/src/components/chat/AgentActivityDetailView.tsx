@@ -1,3 +1,4 @@
+import { ReasoningContent } from "./ReasoningContent";
 // FILE: AgentActivityDetailView.tsx
 // Purpose: Full-width transcript replacement for inspecting agent activity without opening side UI.
 // Layer: Chat presentation component
@@ -164,7 +165,9 @@ function AgentActivityEventRow(props: {
 }) {
   const preview = formatAgentActivityEntryPreview(props.entry);
   const title = formatAgentActivityEntryTitle(props.entry);
-  const body = isReasoningUpdateWorkEntry(props.entry) ? preview : (preview ?? props.entry.detail);
+  const body = isReasoningUpdateWorkEntry(props.entry)
+    ? (props.entry.detail ?? preview)
+    : (preview ?? props.entry.detail);
 
   return (
     <div className="py-3 first:pt-0 last:pb-0">
@@ -176,7 +179,9 @@ function AgentActivityEventRow(props: {
           {formatShortTimestamp(props.entry.createdAt, props.timestampFormat)}
         </p>
       </div>
-      {body ? (
+      {body && isReasoningUpdateWorkEntry(props.entry) ? (
+        <ReasoningContent text={body} cwd={props.markdownCwd} onImageExpand={props.onImageExpand} />
+      ) : body ? (
         <div className="mt-1 text-muted-foreground/70">
           <ChatMarkdown
             text={body}

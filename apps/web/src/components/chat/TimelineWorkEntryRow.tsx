@@ -1,3 +1,4 @@
+import { ReasoningContent } from "./ReasoningContent";
 // FILE: TimelineWorkEntryRow.tsx
 // Purpose: Renders transcript work/tool rows and their inline details.
 // Layer: Web chat presentation component
@@ -23,6 +24,7 @@ import {
   ArrowUpCircleIcon,
   BackgroundTrayIcon,
   BotIcon,
+  BrainIcon,
   CheckIcon,
   CircleAlertIcon,
   CircleQuestionIcon,
@@ -603,6 +605,35 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   // Use the text font size (matching the UI settings) for tool call rows
   const rowFontSizePx = textFontSizePx;
 
+  if (isReasoningUpdateWorkEntry(workEntry)) {
+    return (
+      <div className="my-1 rounded-lg border-l-2 border-violet-400/60 bg-violet-500/5 px-2 py-1 dark:border-violet-400/50">
+        <ToolDetailsDisclosure
+          compact={compact}
+          timestampFormat={timestampFormat}
+          detailContent={
+            <ReasoningContent
+              text={workEntry.detail ?? preview ?? ""}
+              cwd={markdownCwd}
+              onImageExpand={onImageExpand}
+            />
+          }
+        >
+          <BrainIcon className="size-4 shrink-0 text-violet-600 dark:text-violet-400" />
+          <span className="shrink-0 text-xs font-medium text-violet-700 dark:text-violet-300">
+            Thinking
+          </span>
+          <span
+            className="min-w-0 truncate text-muted-foreground"
+            style={{ fontSize: `${rowFontSizePx}px` }}
+          >
+            {preview}
+          </span>
+        </ToolDetailsDisclosure>
+      </div>
+    );
+  }
+
   return (
     <div className={cn(compact ? "py-0.5" : "rounded-lg py-1")}>
       {showEditedRows ? (
@@ -680,7 +711,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                 <span
                   className={cn(
                     "flex shrink-0 items-center justify-center",
-                    WORK_ROW_MUTED_HOVER_TONE["tool-row"],
+                    "text-sky-600 dark:text-sky-400",
                     compact ? "size-4" : "size-5",
                   )}
                   data-tool-icon={leftIconKind}

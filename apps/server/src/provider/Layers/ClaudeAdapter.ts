@@ -204,6 +204,8 @@ interface ClaudeTurnState {
   readonly synthetic?: true;
   readonly items: Array<unknown>;
   readonly assistantTextBlocks: Map<number, AssistantTextBlockState>;
+  readonly thinkingBlocks: Map<number, { id: string; text: string }>;
+  readonly emittedThinkingTexts: Set<string>;
   readonly assistantTextBlockOrder: Array<AssistantTextBlockState>;
   readonly capturedProposedPlanKeys: Set<string>;
   readonly sawFileChange: boolean;
@@ -3226,6 +3228,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             if (deltaText.length === 0) {
               return;
             }
+            if (event.delta.type === "thinking_delta") {
+              const block = context.turnState.thinkingBlocks.get(event.index) ?? {
+                id: `claude-thinking:${context.turnState.turnId}:${message.uuid}`,
+                text: "",
+              };
+              block.text += deltaText;
+              context.turnState.thinkingBlocks.set(event.index, block);
+            }
             const streamKind = streamKindFromDeltaType(event.delta.type);
             const assistantBlockEntry =
               event.delta.type === "text_delta"
@@ -3376,6 +3386,30 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
         if (event.type === "content_block_stop") {
           const { index } = event;
+          const thinkingBlock = context.turnState?.thinkingBlocks.get(index);
+          if (thinkingBlock && context.turnState) {
+            context.turnState.thinkingBlocks.delete(index);
+            if (context.turnState.emittedThinkingTexts.has(thinkingBlock.text)) return;
+            context.turnState.emittedThinkingTexts.add(thinkingBlock.text);
+            const stamp = yield* makeEventStamp();
+            yield* offerRuntimeEvent(context, {
+              type: "item.completed",
+              eventId: stamp.eventId,
+              provider: PROVIDER,
+              createdAt: stamp.createdAt,
+              threadId: context.session.threadId,
+              turnId: context.turnState.turnId,
+              itemId: asRuntimeItemId(thinkingBlock.id),
+              payload: {
+                itemType: "reasoning",
+                status: "completed",
+                title: "Thinking",
+                detail: thinkingBlock.text,
+              },
+              providerRefs: nativeProviderRefs(context),
+            });
+            return;
+          }
           const assistantBlock = context.turnState?.assistantTextBlocks.get(index);
           if (assistantBlock) {
             assistantBlock.streamClosed = true;
@@ -3590,6 +3624,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           synthetic: true,
           items: [],
           assistantTextBlocks: new Map(),
+          thinkingBlocks: new Map(),
+          emittedThinkingTexts: new Set(),
           assistantTextBlockOrder: [],
           capturedProposedPlanKeys: new Set(),
           sawFileChange: false,
@@ -3682,6 +3718,31 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         if (Array.isArray(content)) {
           for (const block of content) {
             if (!block || typeof block !== "object") {
+              continue;
+            }
+            if (block.type === "thinking" && context.turnState) {
+              const text = typeof block.thinking === "string" ? block.thinking : "";
+              if (!context.turnState.emittedThinkingTexts.has(text)) {
+                context.turnState.emittedThinkingTexts.add(text);
+                const stamp = yield* makeEventStamp();
+                yield* offerRuntimeEvent(context, {
+                  type: "item.completed",
+                  eventId: stamp.eventId,
+                  provider: PROVIDER,
+                  createdAt: stamp.createdAt,
+                  threadId: context.session.threadId,
+                  turnId: context.turnState.turnId,
+                  itemId: asRuntimeItemId(`claude-thinking:${message.uuid}`),
+                  payload: {
+                    itemType: "reasoning",
+                    status: "completed",
+                    title: "Thinking",
+                    detail:
+                      text || "Claude completed a thinking step but did not provide its text.",
+                  },
+                  providerRefs: nativeProviderRefs(context),
+                });
+              }
               continue;
             }
             const toolUse = block as {
@@ -5343,6 +5404,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           ...(existingResumeSessionId ? { resume: existingResumeSessionId } : {}),
           ...(newSessionId ? { sessionId: newSessionId } : {}),
           includePartialMessages: true,
+          // Request readable summaries without changing the selected thinking budget or toggle.
+          extraArgs: { "thinking-display": "summarized" },
           // Forward full subagent conversations (text + thinking) tagged with
           // parent_tool_use_id so child threads can stream live.
           forwardSubagentText: true,
@@ -5831,6 +5894,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           interactionMode: effectiveInteractionMode,
           items: [],
           assistantTextBlocks: new Map(),
+          thinkingBlocks: new Map(),
+          emittedThinkingTexts: new Set(),
           assistantTextBlockOrder: [],
           capturedProposedPlanKeys: new Set(),
           sawFileChange: false,
