@@ -14,6 +14,7 @@ describe("AgentGatewaySessionRegistry", () => {
     assert.equal(registry.verify(second.token)?.threadId, "thread-1");
     assert.equal(registry.verify(first.token)?.provider, "codex");
     assert.equal(registry.verify(second.token)?.provider, "claudeAgent");
+    assert.isTrue(registry.verify(first.token)?.capabilities.has("usage:read"));
   });
 
   it("keeps replacement runtime credentials independent from outgoing-session revocation", () => {
