@@ -85,9 +85,11 @@ const MODEL_TOKEN_DISPLAY_NAMES: Readonly<Record<string, string>> = {
 };
 
 function humanizeModelToken(token: string): string {
-  return (
-    MODEL_TOKEN_DISPLAY_NAMES[token.toLowerCase()] ?? token.charAt(0).toUpperCase() + token.slice(1)
-  );
+  const key = token.toLowerCase();
+  const displayName = Object.prototype.hasOwnProperty.call(MODEL_TOKEN_DISPLAY_NAMES, key)
+    ? MODEL_TOKEN_DISPLAY_NAMES[key]
+    : undefined;
+  return displayName ?? token.charAt(0).toUpperCase() + token.slice(1);
 }
 
 // Turns a raw model slug into a readable label when no built-in name exists.

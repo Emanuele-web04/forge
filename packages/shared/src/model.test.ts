@@ -756,6 +756,11 @@ describe("formatModelDisplayName", () => {
     expect(formatModelDisplayName("deepseek-v4-flash")).toBe("DeepSeek V4 Flash");
   });
 
+  it("humanizes model tokens that match inherited object properties", () => {
+    expect(formatModelDisplayName("constructor-v1")).toBe("Constructor V1");
+    expect(formatModelDisplayName("gpt-5-constructor")).toBe("GPT-5 Constructor");
+  });
+
   it("leaves non-GPT custom slugs unchanged", () => {
     expect(formatModelDisplayName("custom/internal-model")).toBe("custom/internal-model");
   });
