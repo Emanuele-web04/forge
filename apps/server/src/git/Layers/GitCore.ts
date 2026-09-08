@@ -1682,6 +1682,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       cwd: string,
       operationPrefix: string,
       files?: ReadonlyArray<string>,
+      maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES,
     ) => {
       const resolveFiles: Effect.Effect<ReadonlyArray<string>, GitCommandError> = files
         ? Effect.succeed(files)
@@ -1709,6 +1710,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                 {
                   allowNonZeroExit: true,
                   timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
+                  maxOutputBytes,
                 },
               ).pipe(Effect.map((result) => result.stdout)),
             { concurrency: MAX_UNTRACKED_DIFF_CONCURRENCY },
@@ -2257,6 +2259,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                 cwd,
                 "GitCore.readRefPatch",
                 untrackedFiles,
+                10_000_000,
               );
               return { patch: joinPatchSegments([trackedPatch, ...untrackedPatches]) };
             }),

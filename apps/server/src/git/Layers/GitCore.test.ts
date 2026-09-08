@@ -2797,6 +2797,69 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect(
+      "reads large committed additions against a ref without changing other scope limits",
+      () =>
+        Effect.gen(function* () {
+          const core = yield* GitCore;
+          const tmp = yield* makeTmpDir();
+          yield* initRepoWithCommit(tmp);
+          const baseSha = yield* git(tmp, ["rev-parse", "HEAD"]);
+          const contents = "0123456789abcdef".repeat(75_000) + "\n";
+          yield* writeTextFile(path.join(tmp, "large.txt"), contents);
+
+          const unstaged = yield* Effect.result(core.readUnstagedPatch(tmp));
+          expect(unstaged._tag).toBe("Failure");
+          if (unstaged._tag === "Failure") {
+            expect(unstaged.failure.detail).toContain("output exceeded 1000000 bytes");
+          }
+
+          yield* git(tmp, ["add", "large.txt"]);
+          yield* git(tmp, ["commit", "-m", "add large tracked text"]);
+          const indexBefore = yield* Effect.promise(() =>
+            fs.readFile(path.join(tmp, ".git/index")),
+          );
+          const result = yield* core.readRefPatch(tmp, baseSha);
+          expect(result.patch).toContain("new file mode 100644");
+          expect(result.patch).toContain(`+${contents}`);
+          const indexAfter = yield* Effect.promise(() => fs.readFile(path.join(tmp, ".git/index")));
+          expect(indexAfter).toEqual(indexBefore);
+        }),
+    );
+
+    it.effect("keeps reference addition patch capture finite and rejects overflow", () =>
+      Effect.gen(function* () {
+        const realCore = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const baseSha = yield* git(tmp, ["rev-parse", "HEAD"]);
+        yield* writeTextFile(path.join(tmp, "addition.txt"), "bounded patch\n".repeat(50));
+        yield* git(tmp, ["add", "addition.txt"]);
+        yield* git(tmp, ["commit", "-m", "add text"]);
+        let requestedLimit: number | undefined;
+        let requestedMode: string | undefined;
+        const core = yield* makeIsolatedGitCore((input) => {
+          if (input.operation === "GitCore.readRefPatch.untrackedPatch") {
+            requestedLimit = input.maxOutputBytes;
+            requestedMode = input.outputMode;
+            // Exercise the real collector's overflow path with a small fixture.
+            return realCore.execute({ ...input, maxOutputBytes: 128 });
+          }
+          return realCore.execute(input);
+        });
+        const result = yield* Effect.result(core.readRefPatch(tmp, baseSha));
+        expect(requestedLimit).toBe(10_000_000);
+        expect(requestedMode).not.toBe("truncate");
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") {
+          expect(result.failure).toMatchObject({
+            operation: "GitCore.readRefPatch.untrackedPatch",
+            detail: expect.stringContaining("output exceeded 128 bytes"),
+          });
+        }
+      }),
+    );
+
     it.effect("reads the working tree as a patch against an older commit", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
