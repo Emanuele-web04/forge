@@ -88,10 +88,11 @@ describe("Codex Synara harness policy", () => {
         expect(instructions, name).toContain(`\`${name.slice("browser_".length)}\``);
       }
       expect(instructions).toContain("Do not search or filter \`ALL_TOOLS\`");
-      expect(instructions).toContain("Use separate tool calls for browser steps");
-      expect(instructions).toContain("Independent tool calls may still run concurrently");
-      expect(instructions).toContain("one focused browser operation");
-      expect(instructions).not.toContain("Batch deterministic steps");
+      expect(instructions).not.toContain("Use separate tool calls for browser steps");
+      expect(instructions).toContain("Independent tool calls may run concurrently");
+      expect(instructions).toContain("Batch related reads/actions in one browser_run script");
+      expect(instructions).toContain("Split the script when new page state requires inspection");
+      expect(instructions).not.toContain("no multi-action scripts");
       expect(instructions).toContain("your first tool call is");
       expect(instructions).toContain("text(r.structuredContent ?? r)");
       expect(instructions).toContain("errors may only have");

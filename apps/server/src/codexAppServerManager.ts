@@ -35,7 +35,10 @@ import {
   type UserInputQuestion,
 } from "@synara/contracts";
 import { prewarmChatGptVoiceTranscriptionConnection } from "@synara/shared/chatGptVoiceTranscription";
-import { BROWSER_SCRIPT_API_GUIDANCE } from "@synara/shared/browserAutomationCatalogue";
+import {
+  BROWSER_SCRIPT_API_GUIDANCE,
+  BROWSER_SCRIPT_BATCH_GUIDANCE,
+} from "@synara/shared/browserAutomationCatalogue";
 import { getModelSelectionBooleanOptionValue, normalizeModelSlug } from "@synara/shared/model";
 import { decodeSubagentReceiverThreadIds } from "@synara/shared/subagents";
 import { spawnProcess } from "@synara/shared/processRuntime";
@@ -435,9 +438,9 @@ Print one representation: \`text(r.structuredContent ?? r)\`; errors may only ha
 
 ${BROWSER_SCRIPT_API_GUIDANCE} Use \`human.type\`, \`human.scroll\` and \`page.keyboard\` for other input. Native helpers: \`webmcp\`, \`webagents\`, \`controls\`, \`overlays\`, \`site\`, \`media\`. No separate snapshot/click/type/wait/evaluate tools exist.
 
-Do not search or filter \`ALL_TOOLS\` for browser discovery. Do not rediscover tools after a model switch. Only if an exact tool is unavailable, look up that name and print no unrelated catalogue. Use separate tool calls for browser steps. Independent tool calls may still run concurrently; never conflicting same-tab actions.
+Do not search or filter \`ALL_TOOLS\` for browser discovery. Do not rediscover tools after a model switch. Only if an exact tool is unavailable, look up that name and print no unrelated catalogue.
 
-Use \`browser_run({code:"..."})\` for one focused browser operation; no multi-action scripts or workflow loops. Return promptly. Use dedicated tools for tab lifecycle, screenshots and authorized workspace uploads.
+${BROWSER_SCRIPT_BATCH_GUIDANCE} Return promptly. Use dedicated tools for tab lifecycle, screenshots and authorized workspace uploads.
 
 Saved accounts: \`credentials.list()\` and \`credentials.listPending()\` provide origin-scoped metadata only. Password filling, generation and vault changes are unavailable to browser scripts. Ask the human to sign in manually or import a browser session through Saved logins; never ask for passwords in chat or retry credential mutations. Never read password inputs, return credentials, or reveal/transform secrets. Password retrieval/cookie import are human-only Saved logins UI. Manual input interrupts automation; wait for handoff, never fight it.
 

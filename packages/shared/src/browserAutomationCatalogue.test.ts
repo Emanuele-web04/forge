@@ -134,12 +134,14 @@ describe("browser automation catalogue projection", () => {
       "Password filling, generation and vault changes are unavailable",
     );
     expect(batch.description).toContain("credentials.listPending()");
-    expect(batch.description).toContain("one focused browser operation");
-    expect(batch.description).toContain("Use separate tool calls for subsequent steps");
+    expect(batch.description).toContain("Batch related reads/actions in one browser_run script");
+    expect(batch.description).toContain("Await dependent actions in order");
+    expect(batch.description).toContain("checking which actions completed");
+    expect(batch.description).not.toContain("no multi-action scripts");
+    expect(batch.description).not.toContain("Use separate tool calls for subsequent steps");
     expect(batch.description).toContain("Independent tool calls may run concurrently");
-    expect(batch.description).not.toContain("Batch related reads/actions");
-    expect(batch.description).not.toContain("controls.inspect/directory/batch");
-    expect(batch.description).not.toContain("webagents.discover/batch");
+    expect(batch.description).toContain("controls.inspect/directory/batch");
+    expect(batch.description).toContain("webagents.discover/batch");
     expect(batch.description).toContain("Return the smallest useful result");
     expect(batch.description).toContain("Use global snapshot(), not page.snapshot()");
     expect(batch.description).toContain("not a whole-page snapshot by default");
