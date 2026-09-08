@@ -1,7 +1,9 @@
+import { ThreadId } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
   draftNavigationSlotKey,
+  getInFlightDraftThreadIds,
   runDraftNavigationOnce,
   stageDraftNavigation,
 } from "./stagedDraftNavigation";
@@ -85,5 +87,48 @@ describe("stagedDraftNavigation", () => {
 
     await expect(runDraftNavigationOnce(slotKey, secondRun)).resolves.toBe("second");
     expect(secondRun).toHaveBeenCalledOnce();
+  });
+
+  it("tracks the draft thread id from stage through finalize", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-track-finalize");
+    const finalize = vi.fn();
+    let resolveNavigate!: () => void;
+    const navigatePromise = new Promise<void>((resolve) => {
+      resolveNavigate = resolve;
+    });
+
+    const stagePromise = stageDraftNavigation({
+      draftThreadId: threadId,
+      stage: () => undefined,
+      navigate: () => navigatePromise,
+      isDestinationActive: () => true,
+      finalize,
+      rollback: () => undefined,
+    });
+
+    expect(getInFlightDraftThreadIds().has(threadId)).toBe(true);
+    resolveNavigate();
+    await stagePromise;
+    expect(finalize).toHaveBeenCalledOnce();
+    expect(getInFlightDraftThreadIds().has(threadId)).toBe(false);
+  });
+
+  it("removes the draft thread id on rollback", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-track-rollback");
+    const rollback = vi.fn();
+
+    const stagePromise = stageDraftNavigation({
+      draftThreadId: threadId,
+      stage: () => undefined,
+      navigate: async () => undefined,
+      isDestinationActive: () => false,
+      finalize: () => undefined,
+      rollback,
+    });
+
+    expect(getInFlightDraftThreadIds().has(threadId)).toBe(true);
+    await stagePromise;
+    expect(rollback).toHaveBeenCalledOnce();
+    expect(getInFlightDraftThreadIds().has(threadId)).toBe(false);
   });
 });

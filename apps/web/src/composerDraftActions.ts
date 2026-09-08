@@ -225,6 +225,7 @@ export const createComposerDraftStoreState =
           lastKnownPr: null,
           envMode: options.envMode ?? (worktreePath ? "worktree" : "local"),
           ...(options.isTemporary ? { isTemporary: true } : {}),
+          ...(options.isKanbanDraft ? { isKanbanDraft: true } : {}),
         };
         return {
           draftThreadsByThreadId: {

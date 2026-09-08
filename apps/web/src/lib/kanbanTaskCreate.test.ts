@@ -48,6 +48,7 @@ describe("Kanban task Debug mode", () => {
     expect(useComposerDraftStore.getState().getDraftThread(threadId)?.interactionMode).toBe(
       "debug",
     );
+    expect(useComposerDraftStore.getState().getDraftThread(threadId)?.isKanbanDraft).toBe(true);
     expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.interactionMode).toBe(
       "debug",
     );

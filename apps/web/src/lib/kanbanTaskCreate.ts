@@ -43,6 +43,7 @@ export function createKanbanDraftTask(input: KanbanDraftTaskInput): ThreadId {
     envMode: input.envMode,
     runtimeMode: input.runtimeMode,
     interactionMode: input.interactionMode,
+    isKanbanDraft: true,
   });
   if (input.sourceComposerThreadId) {
     store.copyTransferableComposerState(input.sourceComposerThreadId, threadId);

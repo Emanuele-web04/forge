@@ -201,6 +201,9 @@ export interface DraftThreadState {
   // `thread.meta.update` when the first send promotes the draft.
   goal?: string;
   isTemporary?: boolean;
+  // Draft originated from the Kanban board; preserve it from chat-route
+  // reclamation because the board itself reaches it.
+  isKanbanDraft?: boolean;
   promotedTo?: ThreadId;
 }
 
@@ -218,6 +221,7 @@ interface DraftThreadMutationOptions {
   interactionMode?: ProviderInteractionMode;
   entryPoint?: ThreadPrimarySurface;
   isTemporary?: boolean;
+  isKanbanDraft?: boolean;
   // Empty string clears the staged goal; undefined leaves it unchanged.
   goal?: string;
 }
@@ -264,6 +268,7 @@ export interface ComposerDraftStoreState {
       interactionMode?: ProviderInteractionMode;
       entryPoint?: ThreadPrimarySurface;
       isTemporary?: boolean;
+      isKanbanDraft?: boolean;
     },
   ) => void;
   setDraftThreadContext: (
@@ -437,6 +442,12 @@ export function buildDraftThreadState(input: {
       : options?.isTemporary === false
         ? false
         : existingThread?.isTemporary === true;
+  const nextIsKanbanDraft =
+    options?.isKanbanDraft === true
+      ? true
+      : options?.isKanbanDraft === false
+        ? false
+        : existingThread?.isKanbanDraft === true;
   const nextPromotedTo = existingThread?.promotedTo;
   const nextGoal =
     options?.goal === undefined ? existingThread?.goal : options.goal.trim() || undefined;
@@ -467,6 +478,7 @@ export function buildDraftThreadState(input: {
       options?.envMode ?? (nextWorktreePath ? "worktree" : (existingThread?.envMode ?? "local")),
     ...(nextGoal ? { goal: nextGoal } : {}),
     ...(nextIsTemporary ? { isTemporary: true } : {}),
+    ...(nextIsKanbanDraft ? { isKanbanDraft: true } : {}),
     ...(nextPromotedTo ? { promotedTo: nextPromotedTo } : {}),
   };
 }
@@ -492,6 +504,7 @@ export function draftThreadStatesEqual(
     left.envMode === right.envMode &&
     (left.goal ?? "") === (right.goal ?? "") &&
     (left.isTemporary === true) === (right.isTemporary === true) &&
+    (left.isKanbanDraft === true) === (right.isKanbanDraft === true) &&
     left.promotedTo === right.promotedTo
   );
 }

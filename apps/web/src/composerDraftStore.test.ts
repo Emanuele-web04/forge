@@ -7,6 +7,7 @@ import {
   reclaimUnreachableDetachedDraftThreads,
   useComposerDraftStore,
 } from "./composerDraftStore";
+import { stageDraftNavigation } from "./lib/stagedDraftNavigation";
 import {
   makeImage,
   makeQueuedChatTurn,
@@ -589,6 +590,7 @@ describe("composerDraftStore project draft thread mapping", () => {
 
 describe("composerDraftStore runtime and interaction settings", () => {
   const threadId = ThreadId.makeUnsafe("thread-settings");
+  const projectId = ProjectId.makeUnsafe("project-settings");
 
   beforeEach(() => {
     resetComposerDraftStore();
@@ -631,5 +633,45 @@ describe("composerDraftStore runtime and interaction settings", () => {
     store.setInteractionMode(threadId, null);
 
     expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
+  });
+
+  it("preserves Kanban drafts and in-flight staged drafts during reclamation", async () => {
+    const store = useComposerDraftStore.getState();
+    const kanbanId = ThreadId.makeUnsafe("thread-kanban");
+    const stagedId = ThreadId.makeUnsafe("thread-staged");
+    const abandonedId = ThreadId.makeUnsafe("thread-abandoned");
+
+    store.registerDraftThread(kanbanId, { projectId, entryPoint: "chat", isKanbanDraft: true });
+    store.setPrompt(kanbanId, "kanban task");
+    store.registerDraftThread(stagedId, { projectId, entryPoint: "chat" });
+    store.setPrompt(stagedId, "staged bug report");
+    store.registerDraftThread(abandonedId, { projectId, entryPoint: "chat" });
+    store.setPrompt(abandonedId, "abandoned bug report");
+
+    let resolveStagedNavigate!: () => void;
+    const stagedNavigate = new Promise<void>((resolve) => {
+      resolveStagedNavigate = resolve;
+    });
+
+    const stagedStagePromise = stageDraftNavigation({
+      draftThreadId: stagedId,
+      stage: () => undefined,
+      navigate: () => stagedNavigate,
+      isDestinationActive: () => true,
+      finalize: () => undefined,
+      rollback: () => store.clearDraftThread(stagedId),
+    });
+
+    // Stage runs synchronously, so the staged draft is in the in-flight set
+    // before the navigate promise resolves.
+    reclaimUnreachableDetachedDraftThreads(new Set());
+
+    expect(store.getDraftThread(kanbanId)).not.toBeNull();
+    expect(store.getDraftThread(stagedId)).not.toBeNull();
+    expect(store.getDraftThread(abandonedId)).toBeNull();
+
+    resolveStagedNavigate();
+    // Wait for the stage to complete so the in-flight set is cleaned up.
+    await stagedStagePromise;
   });
 });

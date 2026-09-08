@@ -321,6 +321,7 @@ const PersistedDraftThreadState = Schema.Struct({
   envMode: DraftThreadEnvModeSchema,
   goal: Schema.optionalKey(Schema.String),
   isTemporary: Schema.optionalKey(Schema.Boolean),
+  isKanbanDraft: Schema.optionalKey(Schema.Boolean),
   promotedTo: Schema.optionalKey(ThreadId),
 });
 
@@ -751,6 +752,7 @@ function normalizePersistedDraftThreads(
           ? candidateDraftThread.goal
           : undefined;
       const isTemporary = candidateDraftThread.isTemporary === true ? true : undefined;
+      const isKanbanDraft = candidateDraftThread.isKanbanDraft === true ? true : undefined;
       const promotedTo =
         typeof candidateDraftThread.promotedTo === "string" &&
         candidateDraftThread.promotedTo.length > 0
@@ -779,6 +781,7 @@ function normalizePersistedDraftThreads(
         envMode: normalizeDraftThreadEnvMode(candidateDraftThread.envMode, normalizedWorktreePath),
         ...(goal ? { goal } : {}),
         ...(isTemporary ? { isTemporary: true } : {}),
+        ...(isKanbanDraft ? { isKanbanDraft: true } : {}),
         ...(promotedTo ? { promotedTo } : {}),
       };
     }

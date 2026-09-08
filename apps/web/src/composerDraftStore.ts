@@ -31,6 +31,7 @@ import {
   flushStorageBeforePageHide,
   type StateStorage,
 } from "./lib/storage";
+import { getInFlightDraftThreadIds } from "./lib/stagedDraftNavigation";
 
 export {
   findSupersededComposerImageBlobAttachments,
@@ -164,16 +165,29 @@ export function finalizePromotedDraftThreads(serverThreadIds: ReadonlySet<Thread
  * project, sidebar row, or other surface links back to it. Sweep drafts that
  * are unmapped, not mid-promotion, and absent from the displayed set; without
  * this, abandoned detached drafts would persist in storage forever.
+ *
+ * Kanban drafts are preserved because the board reaches them even when no chat
+ * pane is open. Staged draft-route navigations are preserved until they commit
+ * or roll back, so another new-thread sweep cannot delete a draft that is
+ * mid-navigation.
  */
 export function reclaimUnreachableDetachedDraftThreads(
   displayedThreadIds: ReadonlySet<ThreadId>,
 ): void {
   const store = useComposerDraftStore.getState();
   const mappedThreadIds = new Set(Object.values(store.projectDraftThreadIdByProjectId));
+  const inFlightThreadIds = getInFlightDraftThreadIds();
   for (const threadId of Object.keys(store.draftThreadsByThreadId) as ThreadId[]) {
     const draftThread = store.draftThreadsByThreadId[threadId];
     if (!draftThread || draftThread.promotedTo !== undefined) continue;
-    if (mappedThreadIds.has(threadId) || displayedThreadIds.has(threadId)) continue;
+    if (
+      mappedThreadIds.has(threadId) ||
+      displayedThreadIds.has(threadId) ||
+      inFlightThreadIds.has(threadId) ||
+      draftThread.isKanbanDraft === true
+    ) {
+      continue;
+    }
     store.clearDraftThread(threadId);
   }
 }

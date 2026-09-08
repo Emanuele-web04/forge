@@ -387,6 +387,7 @@ export function useHandleNewThread() {
       const createdAt = new Date().toISOString();
       const draftSeed = createFreshDraftThreadSeed({ createdAt, entryPoint, options });
       const committed = await stageDraftNavigation({
+        draftThreadId: threadId,
         // Keep the previous routed draft alive while the destination loads. Replacing the
         // project's primary slot earlier makes the route guard redirect the old URL to Home.
         stage: () => {
