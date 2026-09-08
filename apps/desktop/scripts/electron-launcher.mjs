@@ -24,7 +24,7 @@ const desktopFlavor = resolveSynaraDesktopFlavor({
 const desktopIdentity = synaraDesktopIdentity(desktopFlavor);
 const APP_DISPLAY_NAME = desktopIdentity.displayName;
 const APP_BUNDLE_ID = desktopIdentity.bundleId;
-const LAUNCHER_VERSION = 2;
+const LAUNCHER_VERSION = 3;
 const MICROPHONE_USAGE_DESCRIPTION =
   "Synara needs microphone access so you can record voice notes and transcribe them into the chat composer.";
 
@@ -153,6 +153,22 @@ function buildMacLauncher(electronBinaryPath) {
   copyMacAppBundle(sourceAppBundlePath, targetAppBundlePath);
   patchMainBundleInfoPlist(targetAppBundlePath, iconPath);
   patchHelperBundleInfoPlists(targetAppBundlePath);
+  // The plist patches above break the linker-signed bundle's seal, and TCC
+  // refuses to persist grants for bundles it cannot verify. Re-seal ad-hoc so
+  // Input Monitoring / Screen Recording grants survive quit-and-reopen.
+  const signResult = spawnSync(
+    "codesign",
+    ["--force", "--deep", "--sign", "-", targetAppBundlePath],
+    {
+      encoding: "utf8",
+    },
+  );
+  if (signResult.status !== 0) {
+    const details = [signResult.stderr, signResult.stdout].filter(Boolean).join("\n").trim();
+    throw new Error(
+      `Failed to ad-hoc sign the macOS app bundle (codesign exit ${signResult.status}): ${details}`,
+    );
+  }
   writeFileSync(metadataPath, `${JSON.stringify(expectedMetadata, null, 2)}\n`);
 
   return targetBinaryPath;

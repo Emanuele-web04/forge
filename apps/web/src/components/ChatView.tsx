@@ -11456,6 +11456,7 @@ export default function ChatView({
         interactionMode={interactionMode}
         supportsFastMode={composerTraitSelection.caps.supportsFastMode}
         fastModeEnabled={composerTraitSelection.fastModeEnabled}
+        threadId={threadId}
         onAddAttachments={addComposerAttachments}
         onToggleFastMode={toggleFastMode}
         onInteractionModeChange={handleInteractionModeChange}

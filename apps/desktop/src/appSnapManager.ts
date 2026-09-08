@@ -16,11 +16,14 @@ import {
   type DesktopAppSnapCapture,
   type DesktopAppSnapErrorEvent,
   type DesktopAppSnapPermission,
+  type DesktopAppSnapPermissionGuideState,
   type DesktopAppSnapPlatform,
+  type DesktopAppSnapSettingsPane,
   type DesktopAppSnapShortcut,
   type DesktopAppSnapShortcutAvailability,
   type DesktopAppSnapShortcutUpdateResult,
   type DesktopAppSnapState,
+  type DesktopAppSnapWindowEntry,
 } from "@synara/contracts";
 import {
   DEFAULT_APP_SNAP_SHORTCUT,
@@ -38,6 +41,11 @@ const PENDING_CAPTURE_FILE_PATTERN = /^pending-([a-f0-9]{64})\.json$/;
 const PENDING_CAPTURE_IMAGE_PATTERN = /^pending-([a-f0-9]{64})\.png$/;
 const HELPER_CAPTURE_IMAGE_PATTERN =
   /^appsnap-([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\.png$/;
+const LIST_WINDOWS_TIMEOUT_MS = 5_000;
+const CAPTURE_WINDOW_TIMEOUT_MS = 20_000;
+// Late helper answers to a timed-out capture request are dropped instead of
+// being consumed as unsolicited hotkey captures. Entries are unique UUIDs and
+// self-expire so the map stays bounded.
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 type AppSnapHelperProcess = ChildProcess.ChildProcessByStdio<Writable | null, Readable, Readable>;
@@ -80,22 +88,34 @@ type AppSnapHelperMessage =
       sourceAppIconDataUrl?: string | null;
       sourceWindowTitle?: string | null;
     }
+  | { type: "windows"; requestId: string; windows: DesktopAppSnapWindowEntry[] }
+  | { type: "permission-guide"; state: DesktopAppSnapPermissionGuideState }
   | {
       type: "error";
       id?: string;
       code: string;
       message: string;
       capturedAt?: string;
+      requestId?: string;
     };
+
+interface PendingAppSnapRequest<T> {
+  resolve: (value: T) => void;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
+}
 
 export interface DesktopAppSnapManagerOptions {
   platform: NodeJS.Platform;
   helperPath: string;
   captureDirectory: string;
   excludedBundleId: string;
+  appDisplayName: string;
+  appBundlePath: string;
   onState: (state: DesktopAppSnapState) => void;
   onCaptured: (capture: DesktopAppSnapCapture) => void;
   onError: (error: DesktopAppSnapErrorEvent, focusApp: boolean) => void;
+  onPermissionGuideState: (state: DesktopAppSnapPermissionGuideState) => void;
   now?: () => Date;
   spawn?: typeof ChildProcess.spawn;
   shortcutRegistry?: {
@@ -312,7 +332,42 @@ export function parseAppSnapHelperMessage(line: string): AppSnapHelperMessage | 
       message: value.message,
       ...(typeof value.id === "string" && value.id.length > 0 ? { id: value.id } : {}),
       ...(typeof value.capturedAt === "string" ? { capturedAt: value.capturedAt } : {}),
+      ...(typeof value.requestId === "string" && value.requestId.length > 0
+        ? { requestId: value.requestId }
+        : {}),
     };
+  }
+  if (
+    value.type === "windows" &&
+    typeof value.requestId === "string" &&
+    Array.isArray(value.windows)
+  ) {
+    const windows: DesktopAppSnapWindowEntry[] = [];
+    for (const candidate of value.windows) {
+      if (!candidate || typeof candidate !== "object") continue;
+      const entry = candidate as Record<string, unknown>;
+      if (
+        typeof entry.windowId !== "number" ||
+        !Number.isInteger(entry.windowId) ||
+        entry.windowId <= 0
+      ) {
+        continue;
+      }
+      windows.push({
+        windowId: entry.windowId,
+        appName: normalizeOptionalText(entry.appName),
+        bundleIdentifier: normalizeOptionalText(entry.bundleIdentifier),
+        windowTitle: normalizeOptionalText(entry.windowTitle),
+        appIconDataUrl: normalizeAppIconDataUrl(entry.appIconDataUrl),
+      });
+    }
+    return { type: "windows", requestId: value.requestId, windows };
+  }
+  if (
+    value.type === "permission-guide" &&
+    (value.state === "shown" || value.state === "closed" || value.state === "granted")
+  ) {
+    return { type: "permission-guide", state: value.state };
   }
   return null;
 }
@@ -366,6 +421,12 @@ export class DesktopAppSnapManager {
   #captureReadQueue: Promise<void> = Promise.resolve();
   #shortcut: DesktopAppSnapShortcut = DEFAULT_APP_SNAP_SHORTCUT;
   #registeredAccelerator: string | null = null;
+  #pendingWindowRequests = new Map<string, PendingAppSnapRequest<DesktopAppSnapWindowEntry[]>>();
+  #pendingCaptureRequests = new Map<string, PendingAppSnapRequest<DesktopAppSnapCapture>>();
+  #timedOutCaptureRequestIds = new Set<string>();
+  #guideProcess: AppSnapHelperProcess | null = null;
+  #guideOutputLines: Readline.Interface | null = null;
+  #lastGuideState: DesktopAppSnapPermissionGuideState | null = null;
 
   constructor(options: DesktopAppSnapManagerOptions) {
     this.#options = {
@@ -389,6 +450,7 @@ export class DesktopAppSnapManager {
       inputMonitoringPermission: this.#inputMonitoringPermission,
       screenRecordingPermission: this.#screenRecordingPermission,
       message: this.#message,
+      appDisplayName: this.#options.appDisplayName,
     };
   }
 
@@ -501,13 +563,194 @@ export class DesktopAppSnapManager {
     this.#pendingCaptures = this.#pendingCaptures.filter(({ capture }) => capture.id !== captureId);
   }
 
+  async listWindows(): Promise<DesktopAppSnapWindowEntry[]> {
+    const child = this.#requireWatchProcess();
+    const requestId = Crypto.randomUUID();
+    return await new Promise<DesktopAppSnapWindowEntry[]>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.#pendingWindowRequests.delete(requestId);
+        reject(new Error("Timed out while listing capturable windows."));
+      }, LIST_WINDOWS_TIMEOUT_MS);
+      this.#pendingWindowRequests.set(requestId, { resolve, reject, timer });
+      try {
+        child.stdin?.write(`list-windows ${requestId}\n`);
+      } catch {
+        this.#settleWindowRequest(requestId, null, new Error("AppSnap is not listening."));
+      }
+    });
+  }
+
+  async captureWindow(windowId: number): Promise<DesktopAppSnapCapture> {
+    if (!Number.isInteger(windowId) || windowId <= 0) {
+      throw new Error("captureWindow requires a positive integer window id.");
+    }
+    const child = this.#requireWatchProcess();
+    const requestId = Crypto.randomUUID();
+    return await new Promise<DesktopAppSnapCapture>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.#pendingCaptureRequests.delete(requestId);
+        this.#tombstoneCaptureRequest(requestId);
+        reject(new Error("Timed out while capturing the requested window."));
+      }, CAPTURE_WINDOW_TIMEOUT_MS);
+      this.#pendingCaptureRequests.set(requestId, { resolve, reject, timer });
+      try {
+        child.stdin?.write(`capture-window ${requestId} ${windowId}\n`);
+      } catch {
+        this.#settleCaptureRequest(requestId, null, new Error("AppSnap is not listening."));
+      }
+    });
+  }
+
+  #requireWatchProcess(): AppSnapHelperProcess {
+    const child = this.#watchProcess;
+    if (!child || this.#disposed || !this.#enabled) {
+      throw new Error("AppSnap is not listening.");
+    }
+    return child;
+  }
+
+  showPermissionGuide(pane: DesktopAppSnapSettingsPane): void {
+    if (this.#platform !== "macos" || this.#disposed) return;
+    if (!FS.existsSync(this.#options.helperPath)) return;
+    this.#stopGuideProcess();
+    try {
+      const child = this.#options.spawn(
+        this.#options.helperPath,
+        [
+          "--permission-guide",
+          "--pane",
+          pane,
+          "--app-path",
+          this.#options.appBundlePath,
+          "--app-name",
+          this.#options.appDisplayName,
+        ],
+        { stdio: ["pipe", "pipe", "pipe"] },
+      );
+      // A helper that dies mid-write must not surface as an unhandled stream error.
+      child.stdin?.on("error", () => undefined);
+      this.#guideProcess = child;
+      this.#lastGuideState = null;
+      this.#guideOutputLines = this.#wireHelperOutput(child, (message) =>
+        this.#handleGuideMessage(child, message),
+      );
+      child.once("exit", () => {
+        if (this.#guideProcess !== child) return;
+        this.#guideProcess = null;
+        this.#guideOutputLines?.close();
+        this.#guideOutputLines = null;
+        // Crash or external kill: report closed so the renderer guide stays honest.
+        if (this.#lastGuideState !== "closed" && this.#lastGuideState !== "granted") {
+          this.#lastGuideState = "closed";
+          this.#options.onPermissionGuideState("closed");
+        }
+      });
+    } catch {
+      // The guide is best-effort; the inline steps remain usable without it.
+    }
+  }
+
+  hidePermissionGuide(): void {
+    this.#stopGuideProcess();
+  }
+
+  #stopGuideProcess(): void {
+    const child = this.#guideProcess;
+    if (!child) return;
+    this.#guideProcess = null;
+    this.#guideOutputLines?.close();
+    this.#guideOutputLines = null;
+    try {
+      child.stdin?.write("close\n");
+    } catch {
+      // Fall through to the kill below.
+    }
+    setTimeout(() => {
+      child.kill("SIGTERM");
+    }, 500).unref();
+  }
+
+  #handleGuideMessage(child: AppSnapHelperProcess, message: AppSnapHelperMessage): void {
+    if (this.#guideProcess !== child) return;
+    if (message.type !== "permission-guide") return;
+    this.#lastGuideState = message.state;
+    this.#options.onPermissionGuideState(message.state);
+  }
+
+  #settleWindowRequest(
+    requestId: string,
+    windows: DesktopAppSnapWindowEntry[] | null,
+    error?: Error,
+  ): void {
+    const request = this.#pendingWindowRequests.get(requestId);
+    if (!request) return;
+    this.#pendingWindowRequests.delete(requestId);
+    clearTimeout(request.timer);
+    if (error) {
+      request.reject(error);
+    } else {
+      request.resolve(windows ?? []);
+    }
+  }
+
+  #settleCaptureRequest(
+    requestId: string,
+    capture: DesktopAppSnapCapture | null,
+    error?: Error,
+  ): void {
+    const request = this.#pendingCaptureRequests.get(requestId);
+    if (!request) return;
+    this.#pendingCaptureRequests.delete(requestId);
+    clearTimeout(request.timer);
+    if (error) {
+      request.reject(error);
+    } else if (capture) {
+      request.resolve(capture);
+    } else {
+      request.reject(new Error("The AppSnap helper returned no capture."));
+    }
+  }
+  // Timed-out request ids are tombstoned for the lifetime of the manager: a
+  // late capture for them must always be dropped, never consumed as a hotkey
+  // capture. The set stays tiny (timeouts are rare) and is cleared on dispose.
+  #tombstoneCaptureRequest(requestId: string): void {
+    this.#timedOutCaptureRequestIds.add(requestId);
+  }
+
+  async #dropLateRequestCapture(
+    message: Extract<AppSnapHelperMessage, { type: "captured" }>,
+  ): Promise<void> {
+    const capturePath = Path.resolve(message.path);
+    if (!isPathInsideDirectory(this.#options.captureDirectory, capturePath)) {
+      return;
+    }
+    await FS.promises.unlink(capturePath).catch(() => undefined);
+  }
+
+  #rejectPendingRequests(message: string): void {
+    const windowRequests = [...this.#pendingWindowRequests.values()];
+    const captureRequests = [...this.#pendingCaptureRequests.values()];
+    this.#pendingWindowRequests.clear();
+    this.#pendingCaptureRequests.clear();
+    for (const request of windowRequests) {
+      clearTimeout(request.timer);
+      request.reject(new Error(message));
+    }
+    for (const request of captureRequests) {
+      clearTimeout(request.timer);
+      request.reject(new Error(message));
+    }
+  }
+
   dispose(): void {
     this.#disposed = true;
     this.#stopWatchProcess();
+    this.#stopGuideProcess();
     this.#releaseShortcutReservation();
     this.#permissionProcess?.kill("SIGTERM");
     this.#permissionProcess = null;
     this.#pendingCaptures = [];
+    this.#timedOutCaptureRequestIds.clear();
   }
 
   async #ensurePendingCapturesLoaded(): Promise<void> {
@@ -670,6 +913,27 @@ export class DesktopAppSnapManager {
     });
   }
 
+  async #recordPendingCapture(pendingRecord: PendingAppSnapCaptureRecord): Promise<void> {
+    const nextPendingCaptures = [
+      ...this.#pendingCaptures.filter((entry) => entry.capture.id !== pendingRecord.capture.id),
+      pendingRecord,
+    ];
+    const discardedRecord =
+      nextPendingCaptures.length > MAX_PENDING_CAPTURES ? nextPendingCaptures[0] : null;
+    this.#pendingCaptures = nextPendingCaptures.slice(-MAX_PENDING_CAPTURES);
+    if (discardedRecord) {
+      await this.#deletePendingCaptureFiles(discardedRecord).catch((error) =>
+        console.warn("[desktop-appsnap] Could not delete an overflow pending capture", error),
+      );
+      this.#emitCaptureError(
+        "pending-capture-overflow",
+        `Synara could retain only the latest ${MAX_PENDING_CAPTURES} AppSnaps while the composer was unavailable. The oldest capture was discarded.`,
+        discardedRecord.capture.capturedAt,
+        false,
+      );
+    }
+  }
+
   #emitState(): void {
     this.#options.onState(this.getState());
   }
@@ -794,6 +1058,7 @@ export class DesktopAppSnapManager {
       this.#watchProcess = null;
       this.#watchOutputLines?.close();
       this.#watchOutputLines = null;
+      this.#rejectPendingRequests("AppSnap stopped listening while a request was in flight.");
       this.#releaseShortcutReservation();
       const message = `Could not start AppSnap: ${error.message}`;
       this.#setState("error", message);
@@ -804,6 +1069,7 @@ export class DesktopAppSnapManager {
       this.#watchProcess = null;
       this.#watchOutputLines?.close();
       this.#watchOutputLines = null;
+      this.#rejectPendingRequests("AppSnap stopped listening while a request was in flight.");
       if (this.#disposed || this.#intentionalWatchStop || !this.#enabled) return;
       this.#releaseShortcutReservation();
       const message = `The AppSnap helper stopped unexpectedly (${signal ?? `exit ${code ?? "unknown"}`}).`;
@@ -817,6 +1083,7 @@ export class DesktopAppSnapManager {
     this.#watchProcess = null;
     this.#watchOutputLines?.close();
     this.#watchOutputLines = null;
+    this.#rejectPendingRequests("AppSnap stopped listening while a request was in flight.");
     if (!child) return;
     this.#intentionalWatchStop = true;
     child.kill("SIGTERM");
@@ -964,13 +1231,42 @@ export class DesktopAppSnapManager {
       this.#inputMonitoringPermission = message.inputMonitoring;
       this.#screenRecordingPermission = message.screenRecording;
       this.#emitState();
+      // A revocation must stop the helper and flip the picker off; a grant
+      // must start it. Reconcile so the UI follows the live permission state.
+      void this.#reconcileWatchProcess();
       return;
     }
     if (message.type === "triggered") {
-      console.info(`[desktop-appsnap] Option chord triggered (${message.id}).`);
+      if (!this.#pendingCaptureRequests.has(message.id)) {
+        console.info(`[desktop-appsnap] Option chord triggered (${message.id}).`);
+      }
+      return;
+    }
+    if (message.type === "windows") {
+      this.#settleWindowRequest(message.requestId, message.windows);
       return;
     }
     if (message.type === "captured") {
+      if (this.#pendingCaptureRequests.has(message.id)) {
+        this.#captureReadQueue = this.#captureReadQueue
+          .then(() => this.#consumeRequestCapture(message))
+          .catch((error) => {
+            this.#settleCaptureRequest(
+              message.id,
+              null,
+              error instanceof Error ? error : new Error(String(error)),
+            );
+          });
+        return;
+      }
+      if (this.#timedOutCaptureRequestIds.has(message.id)) {
+        // The request already failed with a timeout, so the caller was told.
+        // Drop the late file instead of consuming it as a hotkey capture.
+        this.#captureReadQueue = this.#captureReadQueue
+          .then(() => this.#dropLateRequestCapture(message))
+          .catch(() => undefined);
+        return;
+      }
       this.#captureReadQueue = this.#captureReadQueue
         .then(() => this.#consumeCapture(message))
         .catch((error) => {
@@ -983,6 +1279,39 @@ export class DesktopAppSnapManager {
         });
       return;
     }
+
+    if (message.type === "error" && message.requestId !== undefined) {
+      this.#settleWindowRequest(
+        message.requestId,
+        null,
+        new Error(`${message.message} (${message.code})`),
+      );
+      return;
+    }
+    if (
+      message.type === "error" &&
+      message.id !== undefined &&
+      this.#timedOutCaptureRequestIds.has(message.id)
+    ) {
+      // The request already failed with a timeout; a late error must not
+      // surface a second, spurious failure toast.
+      return;
+    }
+
+    if (
+      message.type === "error" &&
+      message.id !== undefined &&
+      this.#pendingCaptureRequests.has(message.id)
+    ) {
+      this.#settleCaptureRequest(
+        message.id,
+        null,
+        new Error(`${message.message} (${message.code})`),
+      );
+      return;
+    }
+
+    if (message.type !== "error") return;
 
     if (message.code === "event_tap_disabled" || message.code === "event-tap-disabled") {
       console.warn(`[desktop-appsnap] ${message.message}`);
@@ -1015,15 +1344,14 @@ export class DesktopAppSnapManager {
     );
   }
 
-  async #consumeCapture(
+  async #readCaptureFromHelperMessage(
     message: Extract<AppSnapHelperMessage, { type: "captured" }>,
-  ): Promise<void> {
+  ): Promise<{ capture: DesktopAppSnapCapture; capturePath: string }> {
     const capturePath = Path.resolve(message.path);
     if (!isPathInsideDirectory(this.#options.captureDirectory, capturePath)) {
       throw new Error("The AppSnap helper returned a capture outside its private directory.");
     }
 
-    await this.#ensurePendingCapturesLoaded();
     const bytes = await readValidatedPendingPng(capturePath);
     const now = this.#options.now();
     const capture: DesktopAppSnapCapture = {
@@ -1040,30 +1368,35 @@ export class DesktopAppSnapManager {
       sourceAppIconDataUrl: normalizeAppIconDataUrl(message.sourceAppIconDataUrl),
       sourceWindowTitle: normalizeOptionalText(message.sourceWindowTitle),
     };
+    return { capture, capturePath };
+  }
+
+  async #consumeCapture(
+    message: Extract<AppSnapHelperMessage, { type: "captured" }>,
+  ): Promise<void> {
+    const { capture, capturePath } = await this.#readCaptureFromHelperMessage(message);
+    await this.#ensurePendingCapturesLoaded();
     const pendingRecord = await this.#persistPendingCapture(capture);
     // Only delete the helper's temporary file once the pending copy durably
     // owns the capture; deleting it earlier would destroy the only on-disk
     // copy when persistence fails transiently.
     await FS.promises.unlink(capturePath).catch(() => undefined);
-    const nextPendingCaptures = [
-      ...this.#pendingCaptures.filter((entry) => entry.capture.id !== capture.id),
-      pendingRecord,
-    ];
-    const discardedRecord =
-      nextPendingCaptures.length > MAX_PENDING_CAPTURES ? nextPendingCaptures[0] : null;
-    this.#pendingCaptures = nextPendingCaptures.slice(-MAX_PENDING_CAPTURES);
-    if (discardedRecord) {
-      await this.#deletePendingCaptureFiles(discardedRecord).catch((error) =>
-        console.warn("[desktop-appsnap] Could not delete an overflow pending capture", error),
-      );
-      this.#emitCaptureError(
-        "pending-capture-overflow",
-        `Synara could retain only the latest ${MAX_PENDING_CAPTURES} AppSnaps while the composer was unavailable. The oldest capture was discarded.`,
-        discardedRecord.capture.capturedAt,
-        false,
-      );
-    }
+    await this.#recordPendingCapture(pendingRecord);
     this.#options.onCaptured(capture);
+  }
+
+  async #consumeRequestCapture(
+    message: Extract<AppSnapHelperMessage, { type: "captured" }>,
+  ): Promise<void> {
+    const { capture, capturePath } = await this.#readCaptureFromHelperMessage(message);
+    await this.#ensurePendingCapturesLoaded();
+    const pendingRecord = await this.#persistPendingCapture(capture);
+    // Keep a durable pending copy even for request-driven captures: a renderer
+    // crash before the capture is acknowledged would otherwise lose the
+    // screenshot when the helper's temporary file is deleted.
+    await FS.promises.unlink(capturePath).catch(() => undefined);
+    await this.#recordPendingCapture(pendingRecord);
+    this.#settleCaptureRequest(capture.id, capture);
   }
 
   #emitCaptureError(

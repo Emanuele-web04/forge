@@ -6,6 +6,7 @@
 import {
   type DesktopAppSnapCapture,
   type DesktopAppSnapShortcut,
+  type DesktopBridge,
   type ThreadId,
 } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
@@ -21,6 +22,8 @@ import {
   persistedAppSnapCaptureBlobKeys,
   resolveAppSnapTarget,
 } from "../appSnap.logic";
+import { attachAppSnapCapture } from "../appSnapAttach";
+import { sourceWithCachedIcon } from "../appSnapIntake";
 import {
   type ComposerImageAttachment,
   type PersistedComposerImageAttachment,
@@ -31,21 +34,11 @@ import { requestComposerFocus } from "../composerFocusRequestStore";
 import { useFocusedChatContext } from "../focusedChatContext";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import {
-  effectiveComposerAttachmentCount,
-  prepareComposerImageAttachmentsFromFiles,
-} from "../lib/composerSend";
-import {
-  deleteComposerImageBlob,
   deleteOrphanedComposerImageBlobs,
-  persistComposerImageBlob,
   readComposerImageBlob,
 } from "../lib/composerImageBlobStore";
-import { persistAppSnapIcon, readAppSnapIcon } from "../lib/appSnapIconStore";
 import { playAppSnapCaptureSound } from "../lib/appSnapSound";
-import {
-  type ComposerAppSnapSource,
-  isComposerAppSnapCaptureSource,
-} from "../lib/composerImageSource";
+import { isComposerAppSnapCaptureSource } from "../lib/composerImageSource";
 import { resolveRecentThreadSplitActivation } from "../recentViewActivation.logic";
 import { useSplitViewStore } from "../splitViewStore";
 import { useStore } from "../store";
@@ -86,23 +79,6 @@ function rememberCaptureId(captureIds: Map<string, true>, captureId: string): bo
     captureIds.delete(oldest);
   }
   return true;
-}
-
-async function sourceWithCachedIcon(source: ComposerAppSnapSource): Promise<ComposerAppSnapSource> {
-  const bundleIdentifier = source.bundleIdentifier?.trim() || null;
-  if (!bundleIdentifier) return source;
-  if (source.appIconDataUrl) {
-    await persistAppSnapIcon({
-      bundleIdentifier,
-      dataUrl: source.appIconDataUrl,
-    }).catch((error) => console.warn("[appsnap] Could not cache source app icon", error));
-    return source;
-  }
-  const appIconDataUrl = await readAppSnapIcon(bundleIdentifier).catch((error) => {
-    console.warn("[appsnap] Could not restore source app icon", error);
-    return null;
-  });
-  return appIconDataUrl ? { ...source, appIconDataUrl } : source;
 }
 
 // Kept at module scope so its try/finally stays out of the compiled coordinator.
@@ -220,7 +196,11 @@ export function AppSnapCoordinator() {
   const blobHydrationInFlightRef = useRef(new Set<string>());
   const hydratePersistedAppSnapsRef = useRef<(captureId?: string) => Promise<void>>(async () => {});
   const attachCaptureRef = useRef<
-    ((capture: DesktopAppSnapCapture) => Promise<"persisted" | "unverified">) | null
+    | ((
+        capture: DesktopAppSnapCapture,
+        bridge: DesktopBridge["appSnap"],
+      ) => Promise<"persisted" | "unverified">)
+    | null
   >(null);
   // Read through a ref so toggling the sound preference doesn't resubscribe the
   // capture listener (which would re-deliver pending captures).
@@ -359,7 +339,7 @@ export function AppSnapCoordinator() {
   );
 
   const attachCapture = useCallback(
-    async (capture: DesktopAppSnapCapture) => {
+    async (capture: DesktopAppSnapCapture, bridge: DesktopBridge["appSnap"]) => {
       const captureAtMs = captureTimestampMs(capture);
       const resolvedTarget = resolveAppSnapTarget({
         captureAtMs,
@@ -389,98 +369,11 @@ export function AppSnapCoordinator() {
         }
       }
 
-      const bytes = new Uint8Array(capture.bytes);
-      if (bytes.byteLength === 0) throw new Error("The captured AppSnap is empty.");
-      const file = new File([bytes], capture.name, {
-        type: capture.mimeType,
-        lastModified: captureAtMs,
-      });
-      const draftStore = useComposerDraftStore.getState();
-      const draft = draftStore.draftsByThreadId[target.threadId];
-      const existingAttachmentCount = effectiveComposerAttachmentCount(draft);
-      const { images, error } = await prepareComposerImageAttachmentsFromFiles({
-        files: [file],
-        existingAttachmentCount,
-      });
-      const image = images[0];
-      if (!image) throw new Error(error ?? "Synara could not attach the captured AppSnap.");
-
-      let imageAddedToDraft = false;
-      let blobKey: string | null = null;
-      let persistenceResult: "persisted" | "unverified" = "persisted";
-      try {
-        const source: ComposerAppSnapSource = {
-          kind: "appsnap",
-          captureId: capture.id,
-          capturedAt: capture.capturedAt,
-          appName: capture.sourceAppName,
-          bundleIdentifier: capture.sourceBundleIdentifier,
-          appIconDataUrl: capture.sourceAppIconDataUrl,
-          windowTitle: capture.sourceWindowTitle,
-        };
-        const sourceWithIcon = await sourceWithCachedIcon(source);
-        const appSnapImage = { ...image, source: sourceWithIcon };
-        blobKey = await persistComposerImageBlob({
-          threadId: target.threadId,
-          imageId: appSnapImage.id,
-          file: appSnapImage.file,
-        });
-
-        // Match ordinary composer mutations: recalled prompt-history state no longer owns the draft.
-        draftStore.setPromptHistorySavedDraft(target.threadId, null);
-        if (!draftStore.addImage(target.threadId, appSnapImage)) {
-          throw new Error(
-            "The AppSnap was prepared, but this message already has the maximum number of references.",
-          );
-        }
-        imageAddedToDraft = true;
-        const currentPersistedAttachments =
-          useComposerDraftStore.getState().draftsByThreadId[target.threadId]
-            ?.persistedAttachments ?? [];
-        const result = await draftStore.syncPersistedAttachments(target.threadId, [
-          ...currentPersistedAttachments.filter((attachment) => attachment.id !== appSnapImage.id),
-          {
-            id: appSnapImage.id,
-            name: appSnapImage.name,
-            mimeType: appSnapImage.mimeType,
-            sizeBytes: appSnapImage.sizeBytes,
-            blobKey,
-            source: sourceWithIcon,
-          },
-        ]);
-        if (result === "rejected") {
-          draftStore.removeImage(target.threadId, appSnapImage.id);
-          await deleteComposerImageBlob(blobKey).catch((error) =>
-            console.warn("[appsnap] Could not roll back rejected capture", error),
-          );
-          throw new Error("The AppSnap was captured, but its draft metadata was rejected.");
-        }
-        persistenceResult = result;
-      } catch (error) {
-        if (!imageAddedToDraft) {
-          URL.revokeObjectURL(image.previewUrl);
-          if (blobKey) {
-            await deleteComposerImageBlob(blobKey).catch((cleanupError) =>
-              console.warn("[appsnap] Could not roll back unattached capture", cleanupError),
-            );
-          }
-        }
-        throw error;
-      }
+      const persistenceResult = await attachAppSnapCapture(target.threadId, capture, () =>
+        bridge.acknowledgeCapture(capture.id),
+      );
       lastAppSnapRef.current = { ...target, atMs: captureAtMs };
       requestComposerFocus(target.threadId);
-      toastManager.add({
-        type: persistenceResult === "unverified" ? "warning" : "success",
-        title:
-          persistenceResult === "unverified" ? "AppSnap added with a warning" : "AppSnap added",
-        description:
-          persistenceResult === "unverified"
-            ? "The capture is attached, but Synara could not verify its draft metadata. If it is missing after a reload, Synara will attach it again."
-            : capture.sourceAppName
-              ? `Captured ${capture.sourceAppName} and added it to the composer.`
-              : "The frontmost window was added to the composer.",
-        data: { allowCrossThreadVisibility: true },
-      });
       return persistenceResult;
     },
     [activateExistingTarget, handleNewChat, openChatThreadPage],
@@ -526,7 +419,6 @@ export function AppSnapCoordinator() {
               }
             }
           }
-          let persistence: "persisted" | "unverified";
           try {
             // Missing blob bytes make the old metadata unusable. Purge every
             // row for this capture (including prompt-history snapshots) before
@@ -534,7 +426,7 @@ export function AppSnapCoordinator() {
             useComposerDraftStore.getState().removeAppSnapCapture(capture.id);
             const attach = attachCaptureRef.current;
             if (!attach) throw new Error("The AppSnap composer is not ready yet.");
-            persistence = await attach(capture);
+            await attach(capture, bridge);
           } catch (error) {
             toastManager.add({
               type: "error",
@@ -551,12 +443,6 @@ export function AppSnapCoordinator() {
             });
             return;
           }
-          // An unverified draft may vanish on reload; keeping the capture
-          // pending lets the next mount re-deliver it.
-          if (persistence !== "persisted") return;
-          await bridge
-            .acknowledgeCapture(capture.id)
-            .catch((error) => console.warn("[appsnap] Could not acknowledge capture", error));
         })
         .catch(() => undefined);
     };
