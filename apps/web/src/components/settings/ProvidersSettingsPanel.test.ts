@@ -14,6 +14,7 @@ describe("isProviderInstallSettingsDirty", () => {
     const dirtyPatches = [
       { codexBinaryPath: "/opt/codex" },
       { codexHomePath: "/tmp/codex-home" },
+      { codexLaunchArgs: '-c model_provider="apitoken"' },
       { claudeBinaryPath: "/opt/claude" },
       { cursorBinaryPath: "/opt/cursor" },
       { cursorApiEndpoint: "https://cursor.example" },
@@ -60,6 +61,7 @@ describe("createProviderInstallResetPatch", () => {
         "claudeBinaryPath",
         "codexBinaryPath",
         "codexHomePath",
+        "codexLaunchArgs",
         "cursorApiEndpoint",
         "cursorBinaryPath",
         "devinBinaryPath",

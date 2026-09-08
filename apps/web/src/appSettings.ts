@@ -264,6 +264,7 @@ export const AppSettingsSchema = Schema.Struct({
   ),
   codexBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   codexHomePath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  codexLaunchArgs: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   cursorBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   cursorApiEndpoint: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   devinBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
@@ -673,6 +674,7 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
     codexBinaryPath: settings.providers.codex.binaryPath,
     codexHomePath: settings.providers.codex.homePath,
+    codexLaunchArgs: settings.providers.codex.launchArgs,
     cursorApiEndpoint: settings.providers.cursor.apiEndpoint,
     cursorBinaryPath: settings.providers.cursor.binaryPath,
     devinBinaryPath: settings.providers.devin.binaryPath,
@@ -793,11 +795,13 @@ export function appSettingsPatchToServerSettingsPatch(
   if (
     hasOwn(patch, "codexBinaryPath") ||
     hasOwn(patch, "codexHomePath") ||
+    hasOwn(patch, "codexLaunchArgs") ||
     hasOwn(patch, "customCodexModels")
   ) {
     providers.codex = {
       ...(hasOwn(patch, "codexBinaryPath") ? { binaryPath: patch.codexBinaryPath ?? "" } : {}),
       ...(hasOwn(patch, "codexHomePath") ? { homePath: patch.codexHomePath ?? "" } : {}),
+      ...(hasOwn(patch, "codexLaunchArgs") ? { launchArgs: patch.codexLaunchArgs ?? "" } : {}),
       ...(hasOwn(patch, "customCodexModels")
         ? { customModels: patch.customCodexModels ?? [] }
         : {}),
@@ -927,6 +931,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "claudeBinaryPath",
     "codexBinaryPath",
     "codexHomePath",
+    "codexLaunchArgs",
     "cursorApiEndpoint",
     "cursorBinaryPath",
     "defaultThreadEnvMode",
@@ -1177,6 +1182,7 @@ export function getProviderStartOptions(
     | "claudeBinaryPath"
     | "codexBinaryPath"
     | "codexHomePath"
+    | "codexLaunchArgs"
     | "cursorApiEndpoint"
     | "cursorBinaryPath"
     | "devinBinaryPath"
@@ -1208,15 +1214,17 @@ export function getProviderStartOptions(
     settings.openCodeBinaryPath,
   );
   const piBinaryPath = normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath);
+  const codexLaunchArgs = settings.codexLaunchArgs.trim();
   const hasOpenCodeStartOptions = Boolean(
     openCodeBinaryPath || settings.openCodeExperimentalWebSockets || settings.openCodeServerUrl,
   );
   const providerOptions: ProviderStartOptions = {
-    ...(codexBinaryPath || settings.codexHomePath
+    ...(codexBinaryPath || settings.codexHomePath || codexLaunchArgs
       ? {
           codex: {
             ...(codexBinaryPath ? { binaryPath: codexBinaryPath } : {}),
             ...(settings.codexHomePath ? { homePath: settings.codexHomePath } : {}),
+            ...(codexLaunchArgs ? { launchArgs: codexLaunchArgs } : {}),
           },
         }
       : {}),

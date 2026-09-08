@@ -64,6 +64,10 @@
       "types": "./src/processRuntime.ts",
       "import": "./src/processRuntime.ts"
     },
+    "./providerLaunchArgs": {
+      "types": "./src/providerLaunchArgs.ts",
+      "import": "./src/providerLaunchArgs.ts"
+    },
     "./filesystemPlatform": {
       "types": "./src/filesystemPlatform.ts",
       "import": "./src/filesystemPlatform.ts"

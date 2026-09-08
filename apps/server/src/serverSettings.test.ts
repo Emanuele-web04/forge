@@ -31,6 +31,7 @@ describe("ServerSettingsService", () => {
     );
 
     expect(settings.providers.codex.binaryPath).toBe("codex");
+    expect(settings.providers.codex.launchArgs).toBe("");
     expect(settings.providers.grok.binaryPath).toBe("grok");
     expect(settings.defaultThreadEnvMode).toBe("local");
     expect(settings.enableProviderUpdateChecks).toBe(true);

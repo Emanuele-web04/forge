@@ -136,6 +136,15 @@ describe("server-backed provider enablement", () => {
     expect(patch.providers).toBeUndefined();
   });
 
+  it("maps Codex launch args into the server provider patch", () => {
+    const patch = appSettingsPatchToServerSettingsPatch({
+      codexLaunchArgs: '-c model_provider="apitoken"',
+    });
+    expect(patch.providers?.codex).toEqual({
+      launchArgs: '-c model_provider="apitoken"',
+    });
+  });
+
   it("invalidates discovery for initial and changed streamed provider settings", () => {
     const disabledOpenCode = {
       ...DEFAULT_SERVER_SETTINGS_VIEW,
@@ -668,6 +677,7 @@ describe("getProviderStartOptions", () => {
         claudeBinaryPath: "/usr/local/bin/claude",
         codexBinaryPath: "",
         codexHomePath: "/Users/you/.codex",
+        codexLaunchArgs: "",
         cursorApiEndpoint: "http://localhost:3000",
         cursorBinaryPath: "/usr/local/bin/agent",
         antigravityBinaryPath: "/usr/local/bin/agy",
@@ -709,6 +719,7 @@ describe("getProviderStartOptions", () => {
         claudeBinaryPath: "",
         codexBinaryPath: "",
         codexHomePath: "",
+        codexLaunchArgs: "",
         cursorApiEndpoint: "",
         cursorBinaryPath: "",
         antigravityBinaryPath: "",
@@ -724,12 +735,39 @@ describe("getProviderStartOptions", () => {
     ).toBeUndefined();
   });
 
+  it("includes Codex launch args without requiring a custom binary", () => {
+    expect(
+      getProviderStartOptions({
+        claudeBinaryPath: "",
+        codexBinaryPath: "",
+        codexHomePath: "",
+        codexLaunchArgs: '-c model_provider="apitoken"',
+        cursorApiEndpoint: "",
+        cursorBinaryPath: "",
+        antigravityBinaryPath: "",
+        grokBinaryPath: "",
+        droidBinaryPath: "",
+        openCodeBinaryPath: "",
+        openCodeExperimentalWebSockets: false,
+        openCodeServerUrl: "",
+        piAgentDir: "",
+        piBinaryPath: "",
+        devinBinaryPath: "",
+      }),
+    ).toEqual({
+      codex: {
+        launchArgs: '-c model_provider="apitoken"',
+      },
+    });
+  });
+
   it("ignores default provider command names as custom binary overrides", () => {
     expect(
       getProviderStartOptions({
         claudeBinaryPath: "claude",
         codexBinaryPath: "codex",
         codexHomePath: "",
+        codexLaunchArgs: "",
         cursorApiEndpoint: "",
         cursorBinaryPath: "cursor-agent",
         antigravityBinaryPath: "agy",
