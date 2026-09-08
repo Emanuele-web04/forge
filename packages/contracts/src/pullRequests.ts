@@ -29,6 +29,14 @@ export const PullRequestActor = Schema.Struct({
 });
 export type PullRequestActor = typeof PullRequestActor.Type;
 
+export const PullRequestCommitAuthor = Schema.Struct({
+  login: Schema.NullOr(TrimmedNonEmptyString),
+  name: Schema.NullOr(Schema.String),
+  avatarUrl: Schema.NullOr(Schema.String),
+  url: Schema.NullOr(Schema.String),
+});
+export type PullRequestCommitAuthor = typeof PullRequestCommitAuthor.Type;
+
 export const PullRequestLabel = Schema.Struct({
   name: TrimmedNonEmptyString,
   color: Schema.NullOr(Schema.String),
@@ -80,7 +88,7 @@ export const PullRequestCommit = Schema.Struct({
   messageHeadline: Schema.String,
   messageBody: Schema.String,
   committedDate: IsoDateTime,
-  authors: Schema.Array(PullRequestActor),
+  authors: Schema.Array(PullRequestCommitAuthor),
 });
 export type PullRequestCommit = typeof PullRequestCommit.Type;
 

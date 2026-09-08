@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import { Schema } from "effect";
 
 import {
+  PullRequestActor,
+  PullRequestCommit,
+  PullRequestCommitAuthor,
   PullRequestCommentInput,
   PullRequestActionResult,
   PullRequestDetail,
@@ -18,6 +21,36 @@ const decodeReviewRequestCountResult = Schema.decodeUnknownSync(
   PullRequestReviewRequestCountResult,
 );
 const decodeActionResult = Schema.decodeUnknownSync(PullRequestActionResult);
+
+describe("PullRequestCommitAuthor", () => {
+  const decodeAuthor = Schema.decodeUnknownSync(PullRequestCommitAuthor);
+  const localAuthor = {
+    login: null,
+    name: "Local author",
+    avatarUrl: null,
+    url: null,
+  };
+
+  it("preserves name-only authors through the commit wire contract", () => {
+    const commit = Schema.decodeUnknownSync(PullRequestCommit)({
+      oid: "abc123",
+      messageHeadline: "Keep local author",
+      messageBody: "",
+      committedDate: "2026-09-08T13:18:37Z",
+      authors: [localAuthor],
+    });
+    expect(commit.authors).toEqual([localAuthor]);
+    expect(() => Schema.decodeUnknownSync(PullRequestActor)(localAuthor)).toThrow();
+  });
+
+  it.each(["", "   ", 123, false, {}])("rejects invalid login %j", (login) => {
+    expect(() => decodeAuthor({ ...localAuthor, login })).toThrow();
+  });
+
+  it("rejects non-string names", () => {
+    expect(() => decodeAuthor({ ...localAuthor, name: 123 })).toThrow();
+  });
+});
 
 function listEntry() {
   return {
