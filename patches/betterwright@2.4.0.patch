@@ -1,6 +1,9 @@
 diff --git a/node_modules/betterwright/.bun-tag-2818573c67d7b19b b/.bun-tag-2818573c67d7b19b
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/betterwright/.bun-tag-29e8fc06f5b346b9 b/.bun-tag-29e8fc06f5b346b9
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/node_modules/betterwright/.bun-tag-42f2166c6e2accf0 b/.bun-tag-42f2166c6e2accf0
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
@@ -20,6 +23,9 @@ diff --git a/node_modules/betterwright/.bun-tag-8f96ea77d0fce2c4 b/.bun-tag-8f96
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/node_modules/betterwright/.bun-tag-c7d3ed853f191214 b/.bun-tag-c7d3ed853f191214
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/betterwright/.bun-tag-c916bf746146e07e b/.bun-tag-c916bf746146e07e
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/node_modules/betterwright/.bun-tag-ce72083686ab4ee7 b/.bun-tag-ce72083686ab4ee7
@@ -116,10 +122,31 @@ index 1701abbbbf141a6f47b8b15ffefe4c168fb77ca9..6e0aad76e3d6d45d15918428ae2d895a
      _extractCookieSync(options) {
          return extractCookieSync(options);
 diff --git a/dist/src/cookie-sync.js b/dist/src/cookie-sync.js
-index ef705665c8c54d34f2f42c3a2d3820103e81dfc6..5a92ac2408b454ff19c839e913bd54eedc39393b 100644
+index ef705665c8c54d34f2f42c3a2d3820103e81dfc6..8070c3a91dbac6e03e97e83ece07186a45976360 100644
 --- a/dist/src/cookie-sync.js
 +++ b/dist/src/cookie-sync.js
-@@ -445,8 +445,36 @@ export async function extractCookieSync(options, load = loadCookieReader) {
+@@ -1,5 +1,6 @@
+ import { isIP } from "node:net";
+ import { domainToASCII } from "node:url";
++import { heliumCookieSourceAvailable, listHeliumProfiles, readHeliumCookieSnapshot } from "./helium-cookie-source.js";
+ import { isBoolean, isCallable, isNumber, isRecord, isString, untrustedField, } from "./untrusted-value.js";
+ export const COOKIE_SYNC_MAX_COOKIES = 10_000;
+ export const COOKIE_SYNC_MAX_BYTES = 6 * 1024 * 1024;
+@@ -428,9 +429,12 @@ export function normalizeCookieSnapshot(snapshot, options, { now = Date.now() }
+         source: { ...options.source },
+     };
+ }
+-export async function extractCookieSync(options, load = loadCookieReader) {
++export async function extractCookieSync(options, load = loadCookieReader, heliumDeps = undefined) {
+     let reader;
+     let snapshot;
++    if (options.source.browser === "helium") {
++        return normalizeCookieSnapshot(await readHeliumCookieSnapshot(options, heliumDeps), options);
++    }
+     reader = await load();
+     const readOptions = {
+         browser: options.source.browser,
+@@ -445,8 +449,36 @@ export async function extractCookieSync(options, load = loadCookieReader) {
      try {
          snapshot = await reader.read(readOptions);
      }
@@ -158,6 +185,274 @@ index ef705665c8c54d34f2f42c3a2d3820103e81dfc6..5a92ac2408b454ff19c839e913bd54ee
      }
      return normalizeCookieSnapshot(snapshot, options);
  }
+@@ -461,7 +493,7 @@ export async function listCookieSourceBrowsers(load = loadCookieReader) {
+     }
+     if (!Array.isArray(value))
+         throw new Error("Cookie Sync returned an invalid browser list.");
+-    return value.flatMap((entry) => {
++    const browsers = value.flatMap((entry) => {
+         const id = cleanPublicText(untrustedField(entry, "id"), 128).toLowerCase();
+         const name = cleanPublicText(untrustedField(entry, "displayName"), 256);
+         const engine = cleanPublicText(untrustedField(entry, "engine"), 64);
+@@ -469,10 +501,14 @@ export async function listCookieSourceBrowsers(load = loadCookieReader) {
+             return [];
+         return id && name ? [{ id, name, engine }] : [];
+     });
++    const helium = await heliumCookieSourceAvailable();
++    if (helium && !browsers.some((entry) => entry.id === helium.id)) browsers.push(helium);
++    return browsers;
+ }
+ export async function listCookieSourceProfiles(browser, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}, load = loadCookieReader) {
+     const normalized = normalizeCookieSyncOptions({ source: { browser }, timeoutMs });
+     const source = normalized.source;
++    if (source.browser === "helium") return listHeliumProfiles();
+     const reader = await load();
+     let value;
+     try {
+diff --git a/node_modules/betterwright/dist/src/helium-cookie-source.js b/dist/src/helium-cookie-source.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..66fb5323aa647bbe3f75a0b8eb0ff6d375dd846f
+--- /dev/null
++++ b/dist/src/helium-cookie-source.js
+@@ -0,0 +1,238 @@
++// Helium (net.imput.helium) cookie source for hosts whose native reader does
++// not register the browser yet. Reads the same Chromium cookie database the
++// native reader would, decrypts v10 rows with the profile's Keychain secret,
++// and emits the same detailed-cookie snapshot shape as the native reader so
++// the regular Cookie Sync transfer pipeline stays in charge.
++import { execFile } from "node:child_process";
++import { createDecipheriv, pbkdf2Sync } from "node:crypto";
++import { copyFile, mkdtemp, readdir, rm, stat } from "node:fs/promises";
++import { homedir, tmpdir } from "node:os";
++import { join } from "node:path";
++import { DatabaseSync } from "node:sqlite";
++
++const HELIUM_BROWSER_ID = "helium";
++const HELIUM_DATA_DIR = "net.imput.helium";
++const HELIUM_KEYCHAIN_SERVICE = "Helium Storage Key";
++const HELIUM_KEYCHAIN_ACCOUNT = "Helium";
++const HELIUM_PROFILE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9 _-]{0,127}$/;
++const HELIUM_RESERVED_PROFILE_DIRS = new Set([
++    "BrowserMetrics-spare.pma",
++    "CertificateRevocation",
++    "ChromeFeatureState",
++    "Crashpad",
++    "GPUPersistentCache",
++    "GraphiteDawnCache",
++    "GrShaderCache",
++    "ShaderCache",
++    "Snapshots",
++    "System Profile",
++    "component_crx_cache",
++    "extensions_crx_cache",
++]);
++const CHROMIUM_EPOCH_OFFSET_SECONDS = 11_644_473_600;
++const CHROMIUM_AES_IV = Buffer.alloc(16, 0x20);
++const HELIUM_KEYCHAIN_TIMEOUT_MS = 30_000;
++
++export async function heliumCookieSourceAvailable() {
++    if (process.platform !== "darwin") return null;
++    try {
++        if (!(await stat(heliumProfileRoot())).isDirectory()) return null;
++    } catch {
++        return null;
++    }
++    return { id: HELIUM_BROWSER_ID, name: "Helium", engine: "chromium" };
++}
++
++function heliumProfileRoot() {
++    return join(homedir(), "Library", "Application Support", HELIUM_DATA_DIR);
++}
++
++function heliumError(code, stage, permissionDenied = false) {
++    const error = new Error("Cookie Sync could not read the selected Helium profile.");
++    error.cookieReaderCode = code;
++    if (stage) error.cookieReaderStage = stage;
++    error.cookiePermissionDenied = permissionDenied === true;
++    return error;
++}
++
++async function heliumCookieDatabasePath(profileDir) {
++    for (const candidate of [join(profileDir, "Network", "Cookies"), join(profileDir, "Cookies")]) {
++        try {
++            if ((await stat(candidate)).isFile()) return candidate;
++        } catch { /* Try the next known cookie location. */ }
++    }
++    return null;
++}
++
++export async function listHeliumProfiles() {
++    if (process.platform !== "darwin") return [];
++    let entries;
++    try {
++        entries = await readdir(heliumProfileRoot(), { withFileTypes: true });
++    } catch {
++        return [];
++    }
++    const profiles = [];
++    for (const entry of entries) {
++        if (!entry.isDirectory() || !HELIUM_PROFILE_NAME_PATTERN.test(entry.name)) continue;
++        if (HELIUM_RESERVED_PROFILE_DIRS.has(entry.name)) continue;
++        if (await heliumCookieDatabasePath(join(heliumProfileRoot(), entry.name)) === null) continue;
++        profiles.push({ id: entry.name, name: entry.name, isDefault: entry.name === "Default" });
++    }
++    return profiles.sort((left, right) => (right.isDefault ? 1 : 0) - (left.isDefault ? 1 : 0) || left.id.localeCompare(right.id));
++}
++
++export function keychainFailure(cause) {
++    // Never include tool output in the error: it may carry prompt text.
++    const message = String(cause?.message || "");
++    if (cause?.killed === true || /timed out/i.test(message)) return heliumError("timed_out", "decrypt");
++    if (/\bcancel+ed\b|interaction|auth/i.test(message)) return heliumError("source_extraction_failed", "decrypt", true);
++    return heliumError("source_extraction_failed", "decrypt");
++}
++
++function spawnKeychainPassword(timeoutMs) {
++    return new Promise((resolve, reject) => {
++        execFile(
++            "/usr/bin/security",
++            ["find-generic-password", "-w", "-a", HELIUM_KEYCHAIN_ACCOUNT, "-s", HELIUM_KEYCHAIN_SERVICE],
++            { timeout: Math.max(1_000, Math.min(timeoutMs, HELIUM_KEYCHAIN_TIMEOUT_MS)), maxBuffer: 4_096, windowsHide: true },
++            (error, stdout) => {
++                if (!error) {
++                    const password = String(stdout).replace(/\r?\n$/, "");
++                    if (password) {
++                        resolve(password);
++                        return;
++                    }
++                    reject(heliumError("reader_failed", "decrypt"));
++                    return;
++                }
++                reject(keychainFailure(error));
++            },
++        );
++    });
++}
++
++function decryptChromiumValue(encrypted, key) {
++    if (!(encrypted instanceof Uint8Array) || encrypted.length <= 3) return null;
++    const blob = Buffer.from(encrypted.buffer, encrypted.byteOffset, encrypted.byteLength);
++    const tag = blob.toString("latin1", 0, 3);
++    let body;
++    if (tag === "v10") body = blob.subarray(3);
++    else if (tag === "v11") body = blob.subarray(35);
++    else return null;
++    try {
++        const decipher = createDecipheriv("aes-128-cbc", key, CHROMIUM_AES_IV);
++        const plain = Buffer.concat([decipher.update(body), decipher.final()]);
++        return plain.length ? plain.toString("utf8") : "";
++    } catch {
++        return null;
++    }
++}
++
++function heliumCookieRow(row, key, warnings) {
++    const name = typeof row.name === "string" ? row.name : "";
++    const domain = typeof row.host_key === "string" ? row.host_key.trim().toLowerCase() : "";
++    const path = typeof row.path === "string" ? row.path : "";
++    if (!name || !domain || !path.startsWith("/")) {
++        warnings.set("malformed", (warnings.get("malformed") ?? 0) + 1);
++        return null;
++    }
++    let value = typeof row.value === "string" ? row.value : "";
++    if (!value) {
++        value = decryptChromiumValue(row.encrypted_value, key);
++        if (value === null) {
++            warnings.set("decrypt_failed", (warnings.get("decrypt_failed") ?? 0) + 1);
++            return null;
++        }
++    }
++    // readBigInts surfaces every INTEGER column as bigint; widen the small ones.
++    const secure = Number(row.is_secure);
++    const httpOnly = Number(row.is_httponly);
++    const sameSite = Number(row.samesite);
++    const cookie = {
++        name,
++        value,
++        domain,
++        path,
++        secure: secure === 1,
++        httpOnly: httpOnly === 1,
++        sameSite: sameSite >= -1 && sameSite <= 2 ? sameSite : -1,
++    };
++    if (Number(row.has_expires) === 1 && typeof row.expires_utc === "bigint" && row.expires_utc > 0n) {
++        cookie.expires = Number(row.expires_utc / 1_000_000n) - CHROMIUM_EPOCH_OFFSET_SECONDS;
++    }
++    const context = {};
++    const sourceScheme = Number(row.source_scheme);
++    if (sourceScheme === 0 || sourceScheme === 1 || sourceScheme === 2) {
++        context.sourceScheme = sourceScheme;
++    }
++    const sourcePort = Number(row.source_port);
++    if (sourcePort === -1 || (sourcePort >= 1 && sourcePort <= 65_535)) {
++        context.sourcePort = sourcePort;
++    }
++    return { cookie, context };
++}
++
++async function queryHeliumCookies(databasePath, key, warnings) {
++    const database = new DatabaseSync(databasePath, { readBigInts: true });
++    try {
++        const columns = new Set(
++            database.prepare("PRAGMA table_info(cookies)").all().map((column) => String(column.name)),
++        );
++        const secure = columns.has("is_secure") ? "is_secure" : "secure";
++        const httpOnly = columns.has("is_httponly") ? "is_httponly" : "httponly";
++        const selection = [
++            "host_key",
++            "name",
++            "value",
++            "encrypted_value",
++            "path",
++            secure,
++            httpOnly,
++            "samesite",
++            "expires_utc",
++            "has_expires",
++            ...(columns.has("source_scheme") ? ["source_scheme"] : []),
++            ...(columns.has("source_port") ? ["source_port"] : []),
++        ].filter(Boolean);
++        const rows = database.prepare(`SELECT ${selection.join(", ")} FROM cookies`).all();
++        const detailedCookies = [];
++        for (const row of rows) {
++            const detailed = heliumCookieRow(row, key, warnings);
++            if (detailed) detailedCookies.push(detailed);
++        }
++        return detailedCookies;
++    } finally {
++        database.close();
++    }
++}
++
++export async function readHeliumCookieSnapshot(options, deps = {}) {
++    if (process.platform !== "darwin") throw heliumError("no_discovered_source", "discovery");
++    const profile = typeof options.source.profile === "string" ? options.source.profile.trim() : "";
++    if (!profile || !HELIUM_PROFILE_NAME_PATTERN.test(profile)) throw heliumError("no_selected_source", "discovery");
++    const listProfiles = deps.listProfiles ?? listHeliumProfiles;
++    const available = await listProfiles();
++    if (!available.some((entry) => entry.id === profile)) throw heliumError("no_selected_source", "discovery");
++    const databasePath = await heliumCookieDatabasePath(join(heliumProfileRoot(), profile));
++    if (!databasePath) throw heliumError("no_selected_source", "acquisition");
++    const workspace = await mkdtemp(join(tmpdir(), "betterwright-helium-"));
++    try {
++        const copyPath = join(workspace, "Cookies");
++        await copyFile(databasePath, copyPath);
++        await copyFile(`${databasePath}-wal`, `${copyPath}-wal`).catch(() => {});
++        await copyFile(`${databasePath}-shm`, `${copyPath}-shm`).catch(() => {});
++        const keychainPassword = deps.keychainPassword ?? spawnKeychainPassword;
++        const password = await keychainPassword(Math.min(options.timeoutMs, HELIUM_KEYCHAIN_TIMEOUT_MS));
++        if (!password) throw heliumError("source_extraction_failed", "decrypt");
++        const key = pbkdf2Sync(password, "saltysalt", 1003, 16, "sha1");
++        const warnings = new Map();
++        const detailedCookies = await queryHeliumCookies(copyPath, key, warnings);
++        return {
++            detailedCookies,
++            warnings: [...warnings.entries()].map(([code, count]) => ({ code, count })),
++        };
++    } finally {
++        await rm(workspace, { recursive: true, force: true }).catch(() => {});
++    }
++}
 diff --git a/dist/src/vault-capture.js b/dist/src/vault-capture.js
 index d704ee96ab1b8b89ca80f993572804327d0bb442..017e0a2d32dfa1315bfc8a7ab1351dd5096aa6f4 100644
 --- a/dist/src/vault-capture.js

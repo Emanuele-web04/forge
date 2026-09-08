@@ -44,7 +44,7 @@ export type BrowserVaultSnapshot = typeof BrowserVaultSnapshot.Type;
 const CookieImportDestination = {
   threadId: ThreadId,
   tabId: Schema.String,
-  browser: Schema.Literals(["chrome", "safari", "edge"]),
+  browser: Schema.Literals(["chrome", "safari", "edge", "helium"]),
   profile: Schema.String.check(Schema.isMaxLength(4096)),
 };
 export const BrowserCookieImportInput = Schema.Union([

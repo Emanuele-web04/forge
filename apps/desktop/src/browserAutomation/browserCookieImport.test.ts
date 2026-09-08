@@ -116,6 +116,29 @@ describe("human-only cookie import", () => {
     expect(mocks.connect).not.toHaveBeenCalled();
   });
 
+  it("accepts helium as an import source and forwards it to cookie sync", async () => {
+    const { importer } = fixture();
+    mocks.sources.mockResolvedValue([
+      { id: "chrome", name: "Chrome" },
+      { id: "firefox", name: "Firefox" },
+      { id: "helium", name: "Helium" },
+    ]);
+    await expect(importer.sources()).resolves.toEqual([
+      { id: "chrome", name: "Chrome" },
+      { id: "helium", name: "Helium" },
+    ]);
+    expect(() =>
+      Schema.decodeUnknownSync(BrowserCookieImportInput)({ ...input, browser: "helium" }),
+    ).not.toThrow();
+    await expect(importer.import({ ...input, browser: "helium" })).resolves.toMatchObject({
+      ok: true,
+      imported: 2,
+    });
+    expect(mocks.sync).toHaveBeenCalledWith(
+      expect.objectContaining({ source: { browser: "helium", profile: "Default" } }),
+    );
+  });
+
   it("does not report success or release human control before durable cookie writes finish", async () => {
     const { importer, contents, releaseHumanOperation } = fixture();
     let flushed!: () => void;

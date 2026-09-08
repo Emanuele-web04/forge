@@ -9,6 +9,10 @@ export interface BrowserCookieDestination {
   origin: string | null;
 }
 type Choice = { id: string; name: string };
+const IMPORT_SOURCES = ["chrome", "safari", "edge", "helium"] as const;
+type ImportSource = (typeof IMPORT_SOURCES)[number];
+const isImportSource = (value: string): value is ImportSource =>
+  (IMPORT_SOURCES as readonly string[]).includes(value);
 
 function importFailure(
   result: Extract<BrowserCookieImportResult, { ok: false }>,
@@ -109,14 +113,8 @@ export function BrowserCookieImport({
   };
 
   const run = async () => {
-    if (
-      busy ||
-      !profile ||
-      !["chrome", "safari", "edge"].includes(source) ||
-      (scope === "profile" && !confirmed)
-    )
-      return;
-    if (source !== "chrome" && source !== "safari" && source !== "edge") return;
+    if (busy || !profile || (scope === "profile" && !confirmed)) return;
+    if (!isImportSource(source)) return;
     const request = ++generation.current;
     setBusy(true);
     setStatus(null);
