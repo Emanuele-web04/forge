@@ -780,6 +780,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     activeFindMatchRef.current = findHighlight?.activeMatch ?? null;
   }, [findHighlight]);
   const observeTimelineRow = useTimelineRowOverlapGuard();
+  const messageTimelineEntries = useMemo(
+    () =>
+      timelineEntries.filter(
+        (entry) => entry.kind === "message" || entry.kind === "message-segment",
+      ),
+    [timelineEntries],
+  );
   useTailAnchorScroll({
     listRef: resolvedListRef,
     timelineRootRef,
@@ -789,6 +796,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     anchorScrollInFlightRef: tailAnchorScrollInFlightRef,
     onAnchorSlideFinished: handleTailAnchorSlideFinished,
     contentChangeSignal: timelineEntries,
+    messageChangeSignal: messageTimelineEntries,
     animateAnchorSlide: !followLiveOutput,
   });
 
