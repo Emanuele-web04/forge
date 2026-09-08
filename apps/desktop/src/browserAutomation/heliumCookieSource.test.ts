@@ -1,5 +1,5 @@
 import { createCipheriv, createHash, pbkdf2Sync, randomBytes } from "node:crypto";
-import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
@@ -211,12 +211,16 @@ async function createHeliumProfile(
     source_scheme: number;
     source_port: number;
   }>,
+  metaStorage: "text" | "integer" = "text",
 ): Promise<void> {
   const dir = join(home, "Library", "Application Support", "net.imput.helium", profileName);
   await mkdir(dir, { recursive: true, mode: 0o700 });
   const database = new DatabaseSync(join(dir, "Cookies"));
+  // Real Chromium stores meta.value as INTEGER; readBigInts surfaces it as
+  // bigint. The text form keeps coverage for legacy and synthetic databases.
+  const metaValueType = metaStorage === "integer" ? "INTEGER" : "TEXT";
   database.exec(`
-    CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE meta (key TEXT PRIMARY KEY, value ${metaValueType} NOT NULL);
     CREATE TABLE cookies (
       creation_utc INTEGER NOT NULL DEFAULT 0,
       host_key TEXT NOT NULL,
@@ -237,7 +241,7 @@ async function createHeliumProfile(
   `);
   database
     .prepare("INSERT INTO meta (key, value) VALUES (?, ?)")
-    .run("version", String(metaVersion));
+    .run("version", metaStorage === "integer" ? metaVersion : String(metaVersion));
   const insert = database.prepare(
     `INSERT INTO cookies (host_key, top_frame_site_key, has_cross_site_ancestor, name, value, encrypted_value, path, expires_utc, is_secure, is_httponly, samesite, source_scheme, source_port)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -349,6 +353,56 @@ describe.skipIf(process.platform !== "darwin")("helium cookie source", () => {
       value: "v24-session-value",
       domain: "example.test",
     });
+  });
+
+  it("strips the v24 host-key digest when meta.version is stored as an integer", async () => {
+    await createHeliumProfile(
+      "Chromium24Integer",
+      24,
+      [
+        {
+          host_key: "example.test",
+          name: "session",
+          encrypted_value: v10Blob("v24-integer-meta-value", 24),
+          path: "/",
+          expires_utc: futureUtc,
+          is_secure: 1,
+          is_httponly: 1,
+          samesite: -1,
+          source_scheme: 2,
+          source_port: 443,
+        },
+      ],
+      "integer",
+    );
+    const snapshot = await cookieSync.extractCookieSync(
+      heliumOptions({ profile: "Chromium24Integer", domains: ["example.test"] }),
+      neverLoadNativeReader(),
+      { keychainPassword: async () => syntheticKeychainPassword() },
+    );
+    expect(snapshot.cookies).toHaveLength(1);
+    expect(snapshot.cookies[0]).toMatchObject({
+      name: "session",
+      value: "v24-integer-meta-value",
+      domain: "example.test",
+    });
+  });
+
+  it("maps a corrupt cookie database to a bounded reader error", async () => {
+    const dir = join(home, "Library", "Application Support", "net.imput.helium", "Corrupt");
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    await writeFile(join(dir, "Cookies"), Buffer.from("not a sqlite database"));
+    const error = await cookieSync
+      .extractCookieSync(heliumOptions({ profile: "Corrupt" }), neverLoadNativeReader(), {
+        keychainPassword: async () => syntheticKeychainPassword(),
+      })
+      .catch((value: unknown) => value);
+    expect(error).toMatchObject({
+      cookieReaderCode: "source_extraction_failed",
+      cookieReaderStage: "acquisition",
+      cookiePermissionDenied: false,
+    });
+    expect(String(error)).not.toContain("not a sqlite");
   });
 
   it("decrypts Chromium v11 values", async () => {
@@ -470,11 +524,16 @@ describe("patched Betterwright listCookieSourceBrowsers", () => {
     });
   });
 
-  it("returns Helium independently when the native reader fails", async () => {
-    const load = vi.fn(async () => {
-      throw new Error("synthetic native reader load failure");
-    });
-    const result = await cookieSync.listCookieSourceBrowsers(load);
-    expect(result.some((entry: { id: string }) => entry.id === "helium")).toBe(true);
-  });
+  // Helium discovery itself is macOS-only; the two rejection tests above stay
+  // platform-independent because they remove the Helium data directory first.
+  it.skipIf(process.platform !== "darwin")(
+    "returns Helium independently when the native reader fails",
+    async () => {
+      const load = vi.fn(async () => {
+        throw new Error("synthetic native reader load failure");
+      });
+      const result = await cookieSync.listCookieSourceBrowsers(load);
+      expect(result.some((entry: { id: string }) => entry.id === "helium")).toBe(true);
+    },
+  );
 });

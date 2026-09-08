@@ -2409,6 +2409,8 @@ describe("ProviderCommandReactor", () => {
     "manual interrupt",
     "ambiguous provider failure",
     "newer running session",
+    "newer starting session",
+    "newer errored session",
     "late stop",
     "failed stop",
     "turn start",
@@ -2484,6 +2486,22 @@ describe("ProviderCommandReactor", () => {
           threadId,
           session: { ...session, status: "running", activeTurnId: asTurnId("new-turn") },
           createdAt,
+        }),
+      );
+    }
+    if (scenario === "newer starting session" || scenario === "newer errored session") {
+      // A session state recorded after the clean stop but before the failed
+      // diagnostic must reset the proof that the provider had already exited.
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("newer-session-state"),
+          threadId,
+          session:
+            scenario === "newer starting session"
+              ? { ...session, status: "starting" }
+              : { ...session, status: "error", lastError: "Provider crashed" },
+          createdAt: failedAt,
         }),
       );
     }

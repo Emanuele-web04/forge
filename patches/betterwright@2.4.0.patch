@@ -216,10 +216,10 @@ index ef705665c8c54d34f2f42c3a2d3820103e81dfc6..b15980ea402632ae78ac400266a6eca3
      try {
 diff --git a/dist/src/helium-cookie-source.js b/dist/src/helium-cookie-source.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..4e6b0c936c44d7347244eee4ead2161b08c2b1fa
+index 0000000000000000000000000000000000000000..e384c75bda7a82b2217b73c032d60b83347fa117
 --- /dev/null
 +++ b/dist/src/helium-cookie-source.js
-@@ -0,0 +1,311 @@
+@@ -0,0 +1,312 @@
 +// Helium (net.imput.helium) cookie source for hosts whose native reader does
 +// not register the browser yet. Reads the same Chromium cookie database the
 +// native reader would, decrypts v10 rows with the profile's Keychain secret,
@@ -277,17 +277,23 @@ index 0000000000000000000000000000000000000000..4e6b0c936c44d7347244eee4ead2161b
 +    return error;
 +}
 +
-+function isSqliteResourceError(error) {
-+    if (!(error instanceof Error)) return false;
-+    const message = String(error.message).toLowerCase();
-+    return /\b(?:database is locked|table is locked|locked|unable to open|busy|i\/o error|io error)\b/i.test(message);
++// Every failure while opening, snapshotting, or querying the SQLite store is
++// reported through the bounded reader contract: a fixed message, the failing
++// stage, and explicit permission markers only, never the raw diagnostic,
++// which can carry filesystem paths or parser internals.
++function classifySqliteError(error, stage) {
++    if (error instanceof Error && typeof error.cookieReaderCode === "string") return error;
++    const message = error instanceof Error ? String(error.message) : "";
++    const permissionDenied = /\b(?:permission denied|operation not permitted|eacces|eperm|os error (?:1|13))\b/i.test(message);
++    return heliumError("source_extraction_failed", stage, permissionDenied);
 +}
 +
-+function classifySqliteError(error, stage) {
-+    if (isSqliteResourceError(error)) {
-+        return heliumError("source_extraction_failed", stage, false);
++function queryHeliumRows(database, sql) {
++    try {
++        return database.prepare(sql).all();
++    } catch (error) {
++        throw classifySqliteError(error, "query");
 +    }
-+    return null;
 +}
 +
 +async function heliumCookieDatabasePath(profileDir) {
@@ -430,18 +436,14 @@ index 0000000000000000000000000000000000000000..4e6b0c936c44d7347244eee4ead2161b
 +    try {
 +        database = new DatabaseSync(databasePath, { readOnly: true });
 +    } catch (error) {
-+        const classified = classifySqliteError(error, "acquisition");
-+        if (classified) throw classified;
-+        throw error;
++        throw classifySqliteError(error, "acquisition");
 +    }
 +    try {
 +        const copyPath = join(workspace, "Cookies");
 +        database.exec(`VACUUM INTO '${copyPath.replaceAll("'", "''")}'`);
 +        return copyPath;
 +    } catch (error) {
-+        const classified = classifySqliteError(error, "acquisition");
-+        if (classified) throw classified;
-+        throw error;
++        throw classifySqliteError(error, "acquisition");
 +    } finally {
 +        database.close();
 +    }
@@ -452,13 +454,11 @@ index 0000000000000000000000000000000000000000..4e6b0c936c44d7347244eee4ead2161b
 +    try {
 +        database = new DatabaseSync(databasePath, { readBigInts: true });
 +    } catch (error) {
-+        const classified = classifySqliteError(error, "acquisition");
-+        if (classified) throw classified;
-+        throw error;
++        throw classifySqliteError(error, "acquisition");
 +    }
 +    try {
 +        const columns = new Set(
-+            database.prepare("PRAGMA table_info(cookies)").all().map((column) => String(column.name)),
++            queryHeliumRows(database, "PRAGMA table_info(cookies)").map((column) => String(column.name)),
 +        );
 +        const secure = columns.has("is_secure") ? "is_secure" : "secure";
 +        const httpOnly = columns.has("is_httponly") ? "is_httponly" : "httponly";
@@ -483,22 +483,23 @@ index 0000000000000000000000000000000000000000..4e6b0c936c44d7347244eee4ead2161b
 +        let version = 0;
 +        try {
 +            const meta = database.prepare("SELECT value FROM meta WHERE key = 'version'").get();
-+            if (meta && typeof meta.value === "string") {
-+                const parsed = Number.parseInt(meta.value, 10);
-+                if (Number.isInteger(parsed)) version = parsed;
++            if (meta) {
++                // Real Helium databases store meta.value as INTEGER, which
++                // readBigInts surfaces as bigint; legacy and synthetic stores
++                // keep the string form.
++                const parsed = typeof meta.value === "bigint" || typeof meta.value === "number"
++                    ? Number(meta.value)
++                    : Number.parseInt(String(meta.value), 10);
++                if (Number.isInteger(parsed) && parsed >= 0) version = parsed;
 +            }
 +        } catch { /* The meta table is best-effort. */ }
-+        const rows = database.prepare(`SELECT ${selection.join(", ")} FROM cookies`).all();
++        const rows = queryHeliumRows(database, `SELECT ${selection.join(", ")} FROM cookies`);
 +        const detailedCookies = [];
 +        for (const row of rows) {
 +            const detailed = heliumCookieRow(row, key, warnings, version);
 +            if (detailed) detailedCookies.push(detailed);
 +        }
 +        return detailedCookies;
-+    } catch (error) {
-+        const classified = classifySqliteError(error, "query");
-+        if (classified) throw classified;
-+        throw error;
 +    } finally {
 +        database.close();
 +    }

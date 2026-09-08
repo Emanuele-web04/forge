@@ -5287,6 +5287,8 @@ const make = Effect.gen(function* () {
 
       // Require durable stop evidence before the failed diagnostic, not a stop
       // from some later session. Never infer provider exit from admission alone.
+      // The latest session state recorded at or before the failed diagnostic is
+      // authoritative: a non-qualifying state after the stop resets the proof.
       const highWater = yield* orchestrationEngine.getEventHighWaterSequence;
       return yield* orchestrationEngine
         .readThreadEventsThrough(blocker.threadId, blocker.eventSequence, highWater, [
@@ -5297,19 +5299,12 @@ const make = Effect.gen(function* () {
             () => false,
             (settled, event) => {
               if (event.type !== "thread.session-set") return settled;
+              if (event.occurredAt > blocker.updatedAt) return settled;
               const session = event.payload.session;
-              if (
-                session.activeTurnId !== null ||
-                session.status === "running" ||
-                session.status === "ready"
-              ) {
-                return false;
-              }
               return (
-                settled ||
-                (event.occurredAt <= blocker.updatedAt &&
-                  session.status === "stopped" &&
-                  session.lastError === null)
+                session.status === "stopped" &&
+                session.activeTurnId === null &&
+                session.lastError === null
               );
             },
           ),
