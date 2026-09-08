@@ -433,8 +433,13 @@ export type ItemLifecyclePayload = typeof ItemLifecyclePayload.Type;
 
 // Codex-generated images are persisted as local file references, never inline bytes.
 export const CODEX_GENERATED_IMAGE_ARTIFACT_KIND = "codex.generated_image" as const;
+export const CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN = "codex.explicit_image_generation" as const;
 export const CodexGeneratedImageArtifact = Schema.Struct({
   kind: Schema.Literal(CODEX_GENERATED_IMAGE_ARTIFACT_KIND),
+  // Older persisted artifacts predate provenance. New producers always set it,
+  // while consumers require either this marker or explicit legacy raw evidence
+  // before treating a local path as generated output.
+  origin: Schema.optional(Schema.Literal(CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN)),
   path: TrimmedNonEmptyStringSchema,
   callId: Schema.optional(TrimmedNonEmptyStringSchema),
 });

@@ -6,7 +6,9 @@ import type { ProviderRuntimeEvent } from "@synara/contracts";
 
 import {
   CODEX_GENERATED_IMAGE_ARTIFACT_KIND,
+  CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN,
   generatedImagePathFromRuntimeEvent,
+  markTrustedCodexGeneratedImageRuntimeEvent,
   resolveCodexGeneratedImagesRoot,
   resolveCodexGeneratedImagesRoots,
 } from "./codexGeneratedImages.ts";
@@ -14,6 +16,7 @@ import {
 function makeImageGenerationCompletedEvent(overrides?: {
   data?: unknown;
   detail?: string;
+  raw?: ProviderRuntimeEvent["raw"];
 }): ProviderRuntimeEvent {
   return {
     eventId: "evt-1",
@@ -30,10 +33,12 @@ function makeImageGenerationCompletedEvent(overrides?: {
         overrides?.data ??
         ({
           kind: CODEX_GENERATED_IMAGE_ARTIFACT_KIND,
+          origin: CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN,
           path: "/codex-home/generated_images/thread-1/call-1.png",
           callId: "call-1",
         } as unknown),
     },
+    ...(overrides?.raw ? { raw: overrides.raw } : {}),
   } as unknown as ProviderRuntimeEvent;
 }
 
@@ -68,6 +73,61 @@ describe("generatedImagePathFromRuntimeEvent", () => {
       payload: { ...event.payload, itemType: "assistant_message" },
     } as ProviderRuntimeEvent;
     assert.equal(generatedImagePathFromRuntimeEvent(otherItem), undefined);
+  });
+
+  it("marks and accepts legacy artifacts when the raw item proves image generation", () => {
+    const event = makeImageGenerationCompletedEvent({
+      data: {
+        kind: CODEX_GENERATED_IMAGE_ARTIFACT_KIND,
+        path: "/codex-home/generated_images/thread-1/legacy.png",
+      },
+      raw: {
+        source: "codex.app-server.notification",
+        method: "item/completed",
+        payload: { item: { type: "image_generation_call" } },
+      },
+    });
+
+    assert.equal(
+      generatedImagePathFromRuntimeEvent(event),
+      "/codex-home/generated_images/thread-1/legacy.png",
+    );
+    const marked = markTrustedCodexGeneratedImageRuntimeEvent(event);
+    assert.equal(marked.type, "item.completed");
+    if (marked.type === "item.completed") {
+      assert.equal(
+        (marked.payload.data as { origin?: unknown }).origin,
+        CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN,
+      );
+    }
+  });
+
+  it("rejects legacy artifacts whose raw item is an image view", () => {
+    const event = makeImageGenerationCompletedEvent({
+      data: {
+        kind: CODEX_GENERATED_IMAGE_ARTIFACT_KIND,
+        path: "C:\\Users\\Test User\\QA 100%\\page.png",
+      },
+      raw: {
+        source: "codex.app-server.notification",
+        method: "item/completed",
+        payload: { item: { type: "imageView" } },
+      },
+    });
+
+    assert.equal(generatedImagePathFromRuntimeEvent(event), undefined);
+    assert.strictEqual(markTrustedCodexGeneratedImageRuntimeEvent(event), event);
+  });
+
+  it("rejects unmarked artifacts without explicit legacy evidence", () => {
+    const event = makeImageGenerationCompletedEvent({
+      data: {
+        kind: CODEX_GENERATED_IMAGE_ARTIFACT_KIND,
+        path: "/tmp/untrusted.png",
+      },
+    });
+
+    assert.equal(generatedImagePathFromRuntimeEvent(event), undefined);
   });
 });
 

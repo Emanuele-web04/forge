@@ -11,6 +11,7 @@ import type {
 } from "@synara/contracts";
 import {
   ApprovalRequestId,
+  CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
@@ -1704,6 +1705,7 @@ describe("ProviderRuntimeIngestion", () => {
         detail: imagePath,
         data: {
           kind: "codex.generated_image",
+          origin: CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN,
           path: imagePath,
           callId: "call",
         },
@@ -1734,6 +1736,91 @@ describe("ProviderRuntimeIngestion", () => {
     expect(assistantMessage?.streaming).toBe(false);
   });
 
+  it("does not append an unmarked image-view artifact replayed from the runtime journal", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-image-view-replay");
+    const imagePath = "C:\\Users\\Test User\\QA 100%\\page.png";
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-image-view-replay-turn-started"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId,
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-image-view-replay-answer-delta"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("image-view-replay-answer"),
+      payload: { streamKind: "assistant_text", delta: "Inspection complete." },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-image-view-replay-answer-complete"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("image-view-replay-answer"),
+      payload: { itemType: "assistant_message", status: "completed" },
+    });
+
+    await waitForThread(harness.engine, (thread) =>
+      thread.messages.some(
+        (message) =>
+          message.id === "assistant:image-view-replay-answer" &&
+          message.text === "Inspection complete." &&
+          message.streaming === false,
+      ),
+    );
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-image-view-replay-complete"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("image-view-replay"),
+      payload: {
+        itemType: "image_generation",
+        status: "completed",
+        title: "Generated image",
+        detail: imagePath,
+        data: { kind: "codex.generated_image", path: imagePath, callId: "image-view-replay" },
+      },
+      raw: {
+        method: "item/completed",
+        payload: {
+          item: { type: "imageView", id: "image-view-replay", path: imagePath },
+        },
+      },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-image-view-replay-turn-completed"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: { state: "completed" },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some((activity) => activity.id === "evt-image-view-replay-turn-completed"),
+    );
+    const assistantMessage = thread.messages.find(
+      (message) => message.id === "assistant:image-view-replay-answer",
+    );
+    expect(assistantMessage?.text).toBe("Inspection complete.");
+    expect(thread.messages.some((message) => message.text.includes(imagePath))).toBe(false);
+  });
+
   it("prefers a persisted Studio copy over its provider-home image source", () => {
     expect(
       collectPersistedGeneratedImagePaths([
@@ -1744,6 +1831,7 @@ describe("ProviderRuntimeIngestion", () => {
             data: {
               files: [{ path: "Outbox/Images/generated.png" }],
               generatedImage: {
+                origin: CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN,
                 sourcePath: "/codex/generated.png",
                 fullPath: "/studio/Outbox/Images/generated.png",
               },
@@ -1755,11 +1843,43 @@ describe("ProviderRuntimeIngestion", () => {
           payload: {
             itemType: "image_generation",
             status: "completed",
-            data: { kind: "codex.generated_image", path: "/codex/generated.png" },
+            data: {
+              kind: "codex.generated_image",
+              origin: CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN,
+              path: "/codex/generated.png",
+            },
           },
         },
       ]),
     ).toEqual(["/studio/Outbox/Images/generated.png"]);
+  });
+
+  it("ignores persisted generated-image records without explicit provenance", () => {
+    expect(
+      collectPersistedGeneratedImagePaths([
+        {
+          kind: "studio.outputs.captured",
+          payload: {
+            itemType: "studio_outputs",
+            data: {
+              files: [{ path: "Outbox/Images/viewed.png" }],
+              generatedImage: {
+                sourcePath: "/codex/viewed.png",
+                fullPath: "/studio/Outbox/Images/viewed.png",
+              },
+            },
+          },
+        },
+        {
+          kind: "tool.completed",
+          payload: {
+            itemType: "image_generation",
+            status: "completed",
+            data: { kind: "codex.generated_image", path: "/codex/viewed.png" },
+          },
+        },
+      ]),
+    ).toEqual([]);
   });
 
   it("recovers generated-image references from persisted turn activities", async () => {
@@ -1810,6 +1930,7 @@ describe("ProviderRuntimeIngestion", () => {
             status: "completed",
             data: {
               kind: "codex.generated_image",
+              origin: CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN,
               path: imagePath,
               callId: "persisted-recovery",
             },
@@ -1904,7 +2025,12 @@ describe("ProviderRuntimeIngestion", () => {
         status: "completed",
         title: "Generated image",
         detail: imagePath,
-        data: { kind: "codex.generated_image", path: imagePath, callId: "image-call" },
+        data: {
+          kind: "codex.generated_image",
+          origin: CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN,
+          path: imagePath,
+          callId: "image-call",
+        },
       },
     });
     // The empty final item: no deltas, no fallback detail — mirrors the real trace.
@@ -2003,7 +2129,12 @@ describe("ProviderRuntimeIngestion", () => {
         status: "completed",
         title: "Generated image",
         detail: imagePath,
-        data: { kind: "codex.generated_image", path: imagePath, callId: "call-replay" },
+        data: {
+          kind: "codex.generated_image",
+          origin: CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN,
+          path: imagePath,
+          callId: "call-replay",
+        },
       },
     };
 

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN,
   EventId,
   STUDIO_OUTPUTS_ACTIVITY_KIND,
   ThreadId,
@@ -239,6 +240,7 @@ describe("copyAndAttributeStudioGeneratedImage", () => {
           data: {
             files: [{ path: "Outbox/Images/2026-07-08_generated-image.jpeg" }],
             generatedImage: {
+              origin: CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN,
               sourcePath,
               fullPath: copied?.fullPath,
             },
