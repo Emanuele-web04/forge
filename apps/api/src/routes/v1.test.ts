@@ -115,7 +115,7 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     trustedProxyHops?: number;
     avatarStorage?: AvatarStorage;
     profileProxySecret?: string;
-    scheduleDeferred?: (task: () => void, delayMs: number) => void;
+    scheduleDeferred?: (task: () => Promise<void>, delayMs: number) => void;
   };
 
   /**
@@ -2035,17 +2035,16 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
      * themselves to observe the delete.
      */
     function capturedScheduler() {
-      const tasks: (() => void)[] = [];
+      const tasks: (() => Promise<void>)[] = [];
       return {
-        schedule: (task: () => void) => {
+        schedule: (task: () => Promise<void>) => {
           tasks.push(task);
         },
         tasks,
-        // The scheduled task's async body has no handle to await; a
-        // microtask drain after firing lets its DB re-read and delete land.
+        // Awaits each task's own completion: the delete's DB re-read takes as
+        // long as it takes, and a fixed drain lost that race on a loaded box.
         async fire() {
-          for (const task of tasks.splice(0)) task();
-          await new Promise((resolve) => setTimeout(resolve, 25));
+          await Promise.all(tasks.splice(0).map((task) => task()));
         },
       };
     }

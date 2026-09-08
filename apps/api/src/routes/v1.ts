@@ -345,9 +345,10 @@ export function createV1Routes(deps: {
   /**
    * Test seam over `setTimeout` for the deferred avatar-object deletes;
    * production uses the real timer (unref'd, so it never holds the process
-   * open).
+   * open). The task returns its completion so a test scheduler can await the
+   * delete instead of guessing how long the DB round trip takes.
    */
-  scheduleDeferred?: (task: () => void, delayMs: number) => void;
+  scheduleDeferred?: (task: () => Promise<void>, delayMs: number) => void;
 }): Hono {
   const {
     verifier,
@@ -365,8 +366,8 @@ export function createV1Routes(deps: {
   const profileProxySecret = deps.profileProxySecret;
   const scheduleDeferred =
     deps.scheduleDeferred ??
-    ((task: () => void, delayMs: number) => {
-      setTimeout(task, delayMs).unref?.();
+    ((task: () => Promise<void>, delayMs: number) => {
+      setTimeout(() => void task(), delayMs).unref?.();
     });
   const v1 = new Hono();
 
@@ -383,8 +384,8 @@ export function createV1Routes(deps: {
   function scheduleAvatarObjectDelete(userId: string, key: string): void {
     const storage = avatarStorage;
     if (!storage) return;
-    scheduleDeferred(() => {
-      void (async () => {
+    scheduleDeferred(async () => {
+      try {
         const [row] = await db
           .select({ avatarKey: profiles.avatarKey })
           .from(profiles)
@@ -392,9 +393,9 @@ export function createV1Routes(deps: {
           .limit(1);
         if (row?.avatarKey === key) return;
         await storage.delete(key);
-      })().catch((error: unknown) => {
+      } catch (error) {
         console.error("[api] deferred avatar delete failed:", error);
-      });
+      }
     }, AVATAR_DELETE_DELAY_MS);
   }
 
