@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { compareCodexCliVersions, parseCodexCliVersion } from "./codexCliVersion.ts";
+import {
+  compareCodexCliVersions,
+  MINIMUM_CODEX_EXCLUDE_TURNS_CLI_VERSION,
+  parseCodexCliVersion,
+} from "./codexCliVersion.ts";
 import { compareSemverVersions, parseGenericCliVersion } from "./providerMaintenance.ts";
 
 describe.each([
@@ -37,6 +41,16 @@ describe.each([
 });
 
 describe("provider-specific CLI version boundaries", () => {
+  it("pins the Codex historical-open capability to the 0.125.0 boundary", () => {
+    expect(
+      compareCodexCliVersions("0.124.99", MINIMUM_CODEX_EXCLUDE_TURNS_CLI_VERSION),
+    ).toBeLessThan(0);
+    expect(compareCodexCliVersions("0.125.0", MINIMUM_CODEX_EXCLUDE_TURNS_CLI_VERSION)).toBe(0);
+    expect(
+      compareCodexCliVersions("0.153.4", MINIMUM_CODEX_EXCLUDE_TURNS_CLI_VERSION),
+    ).toBeGreaterThan(0);
+  });
+
   it("strips a leading v for generic comparisons but preserves Codex's fallback", () => {
     expect(compareSemverVersions("v1.2.3", "1.2.3")).toBe(0);
     expect(compareCodexCliVersions("v1.2.3", "1.2.3")).toBe("v1.2.3".localeCompare("1.2.3"));

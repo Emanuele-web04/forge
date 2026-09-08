@@ -100,11 +100,15 @@ export class CodexJsonlFramer {
     if (chunk.length === 0) return;
     const observedBytes = this.frameBytes + chunk.length;
     if (observedBytes > this.maxFrameBytes) {
-      throw new CodexAppServerTransportError({
+      const error = new CodexAppServerTransportError({
         reason: "frame-too-large",
         maxBytes: this.maxFrameBytes,
         observedBytes,
       });
+      // Oversize input is terminal for this stream. Release already-buffered
+      // chunks immediately instead of retaining them until process teardown.
+      this.reset();
+      throw error;
     }
     // Do not retain a large source chunk through one small trailing slice.
     this.chunks.push(Buffer.from(chunk));

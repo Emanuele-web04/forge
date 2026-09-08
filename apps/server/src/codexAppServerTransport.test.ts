@@ -4,10 +4,25 @@ import type { Writable } from "node:stream";
 import { describe, expect, it } from "vitest";
 
 import {
+  CODEX_APP_SERVER_MAX_FRAME_BYTES,
   CodexAppServerTransportError,
   CodexJsonlFramer,
   CodexJsonlWriter,
 } from "./codexAppServerTransport.ts";
+
+function buildCompleteJsonlFrame(frameBytes: number): Buffer {
+  const prefix = Buffer.from('{"payload":"', "utf8");
+  const suffix = Buffer.from('"}', "utf8");
+  return Buffer.concat(
+    [
+      prefix,
+      Buffer.alloc(frameBytes - prefix.length - suffix.length, 0x78),
+      suffix,
+      Buffer.from("\n"),
+    ],
+    frameBytes + 1,
+  );
+}
 
 describe("Codex app-server transport", () => {
   it("frames split UTF-8 and rejects invalid, oversize, or unterminated input", () => {
@@ -33,6 +48,37 @@ describe("Codex app-server transport", () => {
     expect(() => new CodexJsonlFramer(64).push(Buffer.from([0xff, 0x0a]))).toThrowError(
       expect.objectContaining({ reason: "invalid-utf8" }),
     );
+  });
+
+  it("accepts the frame limit, rejects larger frames, and releases retained input", () => {
+    const atLimit = new CodexJsonlFramer();
+    const frames = atLimit.push(buildCompleteJsonlFrame(CODEX_APP_SERVER_MAX_FRAME_BYTES));
+    expect(frames).toHaveLength(1);
+    expect(Buffer.byteLength(frames[0] ?? "", "utf8")).toBe(CODEX_APP_SERVER_MAX_FRAME_BYTES);
+    expect(atLimit.bufferedBytes).toBe(0);
+
+    const oneByteOver = new CodexJsonlFramer();
+    expect(() =>
+      oneByteOver.push(buildCompleteJsonlFrame(CODEX_APP_SERVER_MAX_FRAME_BYTES + 1)),
+    ).toThrowError(
+      expect.objectContaining({
+        reason: "frame-too-large",
+        observedBytes: CODEX_APP_SERVER_MAX_FRAME_BYTES + 1,
+        maxBytes: CODEX_APP_SERVER_MAX_FRAME_BYTES,
+      }),
+    );
+    expect(oneByteOver.bufferedBytes).toBe(0);
+
+    const observedFailure = new CodexJsonlFramer();
+    expect(observedFailure.push(Buffer.alloc(1_024, 0x78))).toEqual([]);
+    expect(() => observedFailure.push(Buffer.alloc(16_842_743 - 1_024, 0x78))).toThrowError(
+      expect.objectContaining({
+        reason: "frame-too-large",
+        observedBytes: 16_842_743,
+        maxBytes: 16_777_216,
+      }),
+    );
+    expect(observedFailure.bufferedBytes).toBe(0);
   });
 
   it("serializes slow stdin writes within one retained-byte budget", async () => {
