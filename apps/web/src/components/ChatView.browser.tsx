@@ -8864,6 +8864,38 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it.each(["claudeAgent", "antigravity"] as const)(
+    "gates background stop controls for %s",
+    async (provider) => {
+      const snapshot = createSnapshotWithActiveInlinePlan();
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: {
+          ...snapshot,
+          threads: snapshot.threads.map((thread) => ({
+            ...thread,
+            session: thread.session ? { ...thread.session, provider } : null,
+          })),
+        },
+      });
+      try {
+        await vi.waitFor(
+          () => {
+            expect(
+              document.querySelector('[data-testid="composer-background-tasks-panel"]'),
+            ).not.toBeNull();
+            expect(document.querySelector('button[aria-label="Stop Subagent"]') !== null).toBe(
+              provider === "claudeAgent",
+            );
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+  );
+
   it("shows the skinny inline plan card for active turn plans", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,

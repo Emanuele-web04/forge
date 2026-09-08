@@ -11916,7 +11916,10 @@ export default function ChatView({
                   rows={composerBackgroundTaskRows}
                   compact={backgroundTasksPanelCompact}
                   onCompactChange={setBackgroundTasksPanelCompact}
-                  onStopTask={onStopBackgroundTask}
+                  // Only Claude currently implements the provider task-stop API.
+                  {...(activeThread?.session?.provider === "claudeAgent"
+                    ? { onStopTask: onStopBackgroundTask }
+                    : {})}
                   attachedToPrevious={
                     showComposerLiveChangesHeader ||
                     showComposerActiveTaskListCard ||
