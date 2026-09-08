@@ -1,0 +1,560 @@
+[
+  {
+    "repeat": 0,
+    "variant": "baseline",
+    "elapsedMs": 8004.408958,
+    "timing": [
+      {
+        "className": "animate-spin-stepped motion-reduce:animate-none",
+        "animations": [
+          {
+            "startTime": 0,
+            "delay": 0,
+            "direction": "normal",
+            "duration": 1300,
+            "easing": "linear",
+            "endDelay": 0,
+            "fill": "none",
+            "iterationStart": 0,
+            "iterations": null
+          }
+        ]
+      },
+      {
+        "className": "work shimmer",
+        "animations": [
+          {
+            "startTime": 8.5,
+            "delay": 0,
+            "direction": "normal",
+            "duration": 2000,
+            "easing": "linear",
+            "endDelay": 0,
+            "fill": "none",
+            "iterationStart": 0,
+            "iterations": null
+          }
+        ]
+      }
+    ],
+    "metrics": [
+      {
+        "pid": 36131,
+        "type": "Browser",
+        "cpu": {
+          "cumulativeCPUUsage": 0.349046,
+          "percentCPUUsage": 0.03263495406182013,
+          "idleWakeupsPerSecond": 10
+        },
+        "memory": {
+          "workingSetSize": 158272,
+          "peakWorkingSetSize": 158528
+        }
+      },
+      {
+        "pid": 36187,
+        "type": "GPU",
+        "cpu": {
+          "cumulativeCPUUsage": 1.432487,
+          "percentCPUUsage": 0.7268770410164045,
+          "idleWakeupsPerSecond": 255
+        },
+        "memory": {
+          "workingSetSize": 104640,
+          "peakWorkingSetSize": 115536
+        }
+      },
+      {
+        "pid": 36188,
+        "type": "Utility",
+        "cpu": {
+          "cumulativeCPUUsage": 0.045373,
+          "percentCPUUsage": 0.00068921632563993,
+          "idleWakeupsPerSecond": 0
+        },
+        "memory": {
+          "workingSetSize": 45760,
+          "peakWorkingSetSize": 45760
+        }
+      },
+      {
+        "pid": 36189,
+        "type": "Tab",
+        "cpu": {
+          "cumulativeCPUUsage": 0.890499,
+          "percentCPUUsage": 0.46824572366204126,
+          "idleWakeupsPerSecond": 52
+        },
+        "memory": {
+          "workingSetSize": 113824,
+          "peakWorkingSetSize": 113824
+        }
+      }
+    ]
+  },
+  {
+    "repeat": 0,
+    "variant": "optimized",
+    "elapsedMs": 8005.127625000001,
+    "timing": [
+      {
+        "className": "animate-spin-stepped motion-reduce:animate-none",
+        "animations": [
+          {
+            "startTime": 0,
+            "delay": 0,
+            "direction": "normal",
+            "duration": 1300,
+            "easing": "linear",
+            "endDelay": 0,
+            "fill": "none",
+            "iterationStart": 0,
+            "iterations": null
+          }
+        ]
+      },
+      {
+        "className": "work shimmer",
+        "animations": [
+          {
+            "startTime": 0,
+            "delay": 0,
+            "direction": "normal",
+            "duration": 2000,
+            "easing": "linear",
+            "endDelay": 0,
+            "fill": "none",
+            "iterationStart": 0,
+            "iterations": null
+          }
+        ]
+      }
+    ],
+    "metrics": [
+      {
+        "pid": 36131,
+        "type": "Browser",
+        "cpu": {
+          "cumulativeCPUUsage": 0.382362,
+          "percentCPUUsage": 0.005546015381930226,
+          "idleWakeupsPerSecond": 1
+        },
+        "memory": {
+          "workingSetSize": 159152,
+          "peakWorkingSetSize": 163968
+        }
+      },
+      {
+        "pid": 36187,
+        "type": "GPU",
+        "cpu": {
+          "cumulativeCPUUsage": 2.342357,
+          "percentCPUUsage": 0.5126828730411828,
+          "idleWakeupsPerSecond": 249
+        },
+        "memory": {
+          "workingSetSize": 101216,
+          "peakWorkingSetSize": 115536
+        }
+      },
+      {
+        "pid": 36188,
+        "type": "Utility",
+        "cpu": {
+          "cumulativeCPUUsage": 0.045868,
+          "percentCPUUsage": 0,
+          "idleWakeupsPerSecond": 0
+        },
+        "memory": {
+          "workingSetSize": 45792,
+          "peakWorkingSetSize": 45792
+        }
+      },
+      {
+        "pid": 36189,
+        "type": "Tab",
+        "cpu": {
+          "cumulativeCPUUsage": 1.732135,
+          "percentCPUUsage": 0.4534633535334355,
+          "idleWakeupsPerSecond": 56
+        },
+        "memory": {
+          "workingSetSize": 124704,
+          "peakWorkingSetSize": 125456
+        }
+      }
+    ]
+  },
+  {
+    "repeat": 1,
+    "variant": "optimized",
+    "elapsedMs": 8004.991708000001,
+    "timing": [
+      {
+        "className": "animate-spin-stepped motion-reduce:animate-none",
+        "animations": [
+          {
+            "startTime": 0,
+            "delay": 0,
+            "direction": "normal",
+            "duration": 1300,
+            "easing": "linear",
+            "endDelay": 0,
+            "fill": "none",
+            "iterationStart": 0,
+            "iterations": null
+          }
+        ]
+      },
+      {
+        "className": "work shimmer",
+        "animations": [
+          {
+            "startTime": 0,
+            "delay": 0,
+            "direction": "normal",
+            "duration": 2000,
+            "easing": "linear",
+            "endDelay": 0,
+            "fill": "none",
+            "iterationStart": 0,
+            "iterations": null
+          }
+        ]
+      }
+    ],
+    "metrics": [
+      {
+        "pid": 36131,
+        "type": "Browser",
+        "cpu": {
+          "cumulativeCPUUsage": 0.428583,
+          "percentCPUUsage": 0.014957122153092726,
+          "idleWakeupsPerSecond": 2
+        },
+        "memory": {
+          "workingSetSize": 158448,
+          "peakWorkingSetSize": 163968
+        }
+      },
+      {
+        "pid": 36187,
+        "type": "GPU",
+        "cpu": {
+          "cumulativeCPUUsage": 3.340601,
+          "percentCPUUsage": 0.5597391258713562,
+          "idleWakeupsPerSecond": 251
+        },
+        "memory": {
+          "workingSetSize": 101216,
+          "peakWorkingSetSize": 115536
+        }
+      },
+      {
+        "pid": 36188,
+        "type": "Utility",
+        "cpu": {
+          "cumulativeCPUUsage": 0.046566,
+          "percentCPUUsage": 0.000029147509466070094,
+          "idleWakeupsPerSecond": 0
+        },
+        "memory": {
+          "workingSetSize": 45840,
+          "peakWorkingSetSize": 45840
+        }
+      },
+      {
+        "pid": 36189,
+        "type": "Tab",
+        "cpu": {
+          "cumulativeCPUUsage": 2.706045,
+          "percentCPUUsage": 0.5479174058553166,
+          "idleWakeupsPerSecond": 60
+        },
+        "memory": {
+          "workingSetSize": 127248,
+          "peakWorkingSetSize": 128160
+        }
+      }
+    ]
+  },
+  {
+    "repeat": 1,
+    "variant": "baseline",
+    "elapsedMs": 8004.661749999999,
+    "timing": [
+      {
+        "className": "animate-spin-stepped motion-reduce:animate-none",
+        "animations": [
+          {
+            "startTime": 0,
+            "delay": 0,
+            "direction": "normal",
+            "duration": 1300,
+            "easing": "linear",
+            "endDelay": 0,
+            "fill": "none",
+            "iterationStart": 0,
+            "iterations": null
+          }
+        ]
+      },
+      {
+        "className": "work shimmer",
+        "animations": [
+          {
+            "startTime": 9.700000000000001,
+            "delay": 0,
+            "direction": "normal",
+            "duration": 2000,
+            "easing": "linear",
+            "endDelay": 0,
+            "fill": "none",
+            "iterationStart": 0,
+            "iterations": null
+          }
+        ]
+      }
+    ],
+    "metrics": [
+      {
+        "pid": 36131,
+        "type": "Browser",
+        "cpu": {
+          "cumulativeCPUUsage": 0.469334,
+          "percentCPUUsage": 0.00640887738205979,
+          "idleWakeupsPerSecond": 1
+        },
+        "memory": {
+          "workingSetSize": 158576,
+          "peakWorkingSetSize": 163968
+        }
+      },
+      {
+        "pid": 36187,
+        "type": "GPU",
+        "cpu": {
+          "cumulativeCPUUsage": 4.810101,
+          "percentCPUUsage": 0.8053559179051614,
+          "idleWakeupsPerSecond": 255
+        },
+        "memory": {
+          "workingSetSize": 101360,
+          "peakWorkingSetSize": 115536
+        }
+      },
+      {
+        "pid": 36188,
+        "type": "Utility",
+        "cpu": {
+          "cumulativeCPUUsage": 0.046969,
+          "percentCPUUsage": 0,
+          "idleWakeupsPerSecond": 0
+        },
+        "memory": {
+          "workingSetSize": 45840,
+          "peakWorkingSetSize": 45840
+        }
+      },
+      {
+        "pid": 36189,
+        "type": "Tab",
+        "cpu": {
+          "cumulativeCPUUsage": 3.66165,
+          "percentCPUUsage": 0.5186109782309294,
+          "idleWakeupsPerSecond": 56
+        },
+        "memory": {
+          "workingSetSize": 121088,
+          "peakWorkingSetSize": 128160
+        }
+      }
+    ]
+  },
+  {
+    "repeat": 2,
+    "variant": "baseline",
+    "elapsedMs": 8002.786790999999,
+    "timing": [
+      {
+        "className": "animate-spin-stepped motion-reduce:animate-none",
+        "animations": [
+          {
+            "startTime": 0,
+            "delay": 0,
+            "direction": "normal",
+            "duration": 1300,
+            "easing": "linear",
+            "endDelay": 0,
+            "fill": "none",
+            "iterationStart": 0,
+            "iterations": null
+          }
+        ]
+      },
+      {
+        "className": "work shimmer",
+        "animations": [
+          {
+            "startTime": 12.4,
+            "delay": 0,
+            "direction": "normal",
+            "duration": 2000,
+            "easing": "linear",
+            "endDelay": 0,
+            "fill": "none",
+            "iterationStart": 0,
+            "iterations": null
+          }
+        ]
+      }
+    ],
+    "metrics": [
+      {
+        "pid": 36131,
+        "type": "Browser",
+        "cpu": {
+          "cumulativeCPUUsage": 0.494625,
+          "percentCPUUsage": 0.0046443373921552025,
+          "idleWakeupsPerSecond": 1
+        },
+        "memory": {
+          "workingSetSize": 158736,
+          "peakWorkingSetSize": 163968
+        }
+      },
+      {
+        "pid": 36187,
+        "type": "GPU",
+        "cpu": {
+          "cumulativeCPUUsage": 6.285261,
+          "percentCPUUsage": 0.8333851153539604,
+          "idleWakeupsPerSecond": 258
+        },
+        "memory": {
+          "workingSetSize": 101360,
+          "peakWorkingSetSize": 115536
+        }
+      },
+      {
+        "pid": 36188,
+        "type": "Utility",
+        "cpu": {
+          "cumulativeCPUUsage": 0.047465,
+          "percentCPUUsage": 0,
+          "idleWakeupsPerSecond": 0
+        },
+        "memory": {
+          "workingSetSize": 45840,
+          "peakWorkingSetSize": 45840
+        }
+      },
+      {
+        "pid": 36189,
+        "type": "Tab",
+        "cpu": {
+          "cumulativeCPUUsage": 4.589027,
+          "percentCPUUsage": 0.5173048562548077,
+          "idleWakeupsPerSecond": 52
+        },
+        "memory": {
+          "workingSetSize": 125120,
+          "peakWorkingSetSize": 128160
+        }
+      }
+    ]
+  },
+  {
+    "repeat": 2,
+    "variant": "optimized",
+    "elapsedMs": 8004.877708,
+    "timing": [
+      {
+        "className": "animate-spin-stepped motion-reduce:animate-none",
+        "animations": [
+          {
+            "startTime": 0,
+            "delay": 0,
+            "direction": "normal",
+            "duration": 1300,
+            "easing": "linear",
+            "endDelay": 0,
+            "fill": "none",
+            "iterationStart": 0,
+            "iterations": null
+          }
+        ]
+      },
+      {
+        "className": "work shimmer",
+        "animations": [
+          {
+            "startTime": 0,
+            "delay": 0,
+            "direction": "normal",
+            "duration": 2000,
+            "easing": "linear",
+            "endDelay": 0,
+            "fill": "none",
+            "iterationStart": 0,
+            "iterations": null
+          }
+        ]
+      }
+    ],
+    "metrics": [
+      {
+        "pid": 36131,
+        "type": "Browser",
+        "cpu": {
+          "cumulativeCPUUsage": 0.527024,
+          "percentCPUUsage": 0.008247135706062869,
+          "idleWakeupsPerSecond": 1
+        },
+        "memory": {
+          "workingSetSize": 159024,
+          "peakWorkingSetSize": 163968
+        }
+      },
+      {
+        "pid": 36187,
+        "type": "GPU",
+        "cpu": {
+          "cumulativeCPUUsage": 7.259933,
+          "percentCPUUsage": 0.5499576517389602,
+          "idleWakeupsPerSecond": 252
+        },
+        "memory": {
+          "workingSetSize": 101392,
+          "peakWorkingSetSize": 115536
+        }
+      },
+      {
+        "pid": 36188,
+        "type": "Utility",
+        "cpu": {
+          "cumulativeCPUUsage": 0.048924,
+          "percentCPUUsage": 0.000580157929814409,
+          "idleWakeupsPerSecond": 0
+        },
+        "memory": {
+          "workingSetSize": 45968,
+          "peakWorkingSetSize": 45968
+        }
+      },
+      {
+        "pid": 36189,
+        "type": "Tab",
+        "cpu": {
+          "cumulativeCPUUsage": 5.517673,
+          "percentCPUUsage": 0.5225606000287554,
+          "idleWakeupsPerSecond": 56
+        },
+        "memory": {
+          "workingSetSize": 131824,
+          "peakWorkingSetSize": 131824
+        }
+      }
+    ]
+  }
+]

@@ -221,6 +221,7 @@ describe("MessagesTimeline worktree setup card", () => {
       expect(setupRow()?.textContent).toContain("Preparing worktree...");
       expect(setupRow()?.textContent).toContain("Creating branch");
       expect(setupRow()?.querySelector(".shimmer")?.classList).not.toContain("shimmer-once");
+      expect(setupRow()?.querySelector(".shimmer")?.getAnimations()[0]?.startTime).toBe(0);
       // The generic working shimmer stays suppressed while the card is open.
       expect(workingRow()).toBeNull();
 
@@ -236,6 +237,7 @@ describe("MessagesTimeline worktree setup card", () => {
       await expect.poll(() => setupRow() === null, { timeout: 2000 }).toBe(true);
       expect(workingRow()).not.toBeNull();
       expect(workingRow()?.querySelector(".shimmer")?.classList).not.toContain("shimmer-once");
+      expect(workingRow()?.querySelector(".shimmer")?.getAnimations()[0]?.startTime).toBe(0);
     } finally {
       await screen.unmount();
     }
