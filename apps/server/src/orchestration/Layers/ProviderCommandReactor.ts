@@ -1807,6 +1807,7 @@ const make = Effect.gen(function* () {
       };
     }
 
+    let bootstrapTranscriptIfResumeFails = false;
     if (providerService.forkThread && thread.forkSourceThreadId) {
       const forked = yield* providerService.forkThread({
         ...providerSessionOptions,
@@ -1846,9 +1847,10 @@ const make = Effect.gen(function* () {
           nativeSessionRestarted: false,
         };
       }
-      if (shouldRegisterContextBootstrap && !thread.sidechatSourceThreadId) {
-        freshSessionContextBootstrapThreadIds.add(threadId);
-      }
+      // An existing fork also returns null: wait for its native resume result
+      // before treating the conversation as missing provider history.
+      bootstrapTranscriptIfResumeFails =
+        shouldRegisterContextBootstrap && !thread.sidechatSourceThreadId;
     }
 
     if (
@@ -1894,6 +1896,9 @@ const make = Effect.gen(function* () {
         });
       }),
     );
+    if (bootstrapTranscriptIfResumeFails && !startOutcome.nativeResumeSucceeded) {
+      freshSessionContextBootstrapThreadIds.add(threadId);
+    }
     let retainContextBootstrapSuppression = false;
     if (startOutcome.priorTranscriptBootstrapPending) {
       if (shouldRegisterContextBootstrap) {

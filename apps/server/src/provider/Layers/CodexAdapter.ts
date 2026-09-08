@@ -291,8 +291,24 @@ function normalizeCodexTokenUsage(value: unknown): ThreadTokenUsageSnapshot | un
   const reasoningOutputTokens =
     asNumber(lastUsage?.reasoning_output_tokens) ?? asNumber(lastUsage?.reasoningOutputTokens);
 
+  const totalInput = asNumber(totalUsage?.input_tokens) ?? asNumber(totalUsage?.inputTokens);
+  const totalOutput = asNumber(totalUsage?.output_tokens) ?? asNumber(totalUsage?.outputTokens);
+  const totalCached =
+    asNumber(totalUsage?.cached_input_tokens) ?? asNumber(totalUsage?.cachedInputTokens);
+  const totalWrites =
+    asNumber(totalUsage?.cacheWriteInputTokens) ?? asNumber(totalUsage?.cache_write_input_tokens);
   return {
     usedTokens,
+    ...(totalInput !== undefined && totalOutput !== undefined
+      ? {
+          cumulativeUsage: {
+            inputTokens: totalInput,
+            outputTokens: totalOutput,
+            ...(totalCached !== undefined ? { cachedInputTokens: totalCached } : {}),
+            ...(totalWrites !== undefined ? { cacheCreationInputTokens: totalWrites } : {}),
+          },
+        }
+      : {}),
     ...(totalProcessedTokens !== undefined && totalProcessedTokens > usedTokens
       ? { totalProcessedTokens }
       : {}),

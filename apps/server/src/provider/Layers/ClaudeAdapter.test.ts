@@ -8279,7 +8279,136 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
-  it.effect("warns once when a turn ingests a large uncached prompt", () => {
+  for (const boundary of [
+    "same query",
+    "new session identity",
+    "conversation reset",
+    "zero reset result",
+    "resumed process",
+  ] as const) {
+    it.effect("keeps result accounting scoped to " + boundary, () => {
+      const harness = makeMultiQueryHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const oldSessionId = "21d6c45d-b52f-4d3b-a7b1-dcb6bc8d8ba1";
+        const newSessionId = "51406530-67fa-4864-9061-871ba03e9aed";
+        const startInput = {
+          threadId: THREAD_ID,
+          provider: "claudeAgent" as const,
+          runtimeMode: "full-access" as const,
+        };
+        yield* adapter.startSession(startInput);
+        let query = harness.queries[0]!;
+        const collectCompletion = () =>
+          adapter.streamEvents.pipe(
+            Stream.takeUntil((event) => event.type === "turn.completed"),
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+        const emitResult = (
+          sessionId: string,
+          uuid: string,
+          input: number,
+          output: number,
+          reads: number,
+          writes: number,
+          cost: number,
+        ) =>
+          query.emit({
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            errors: [],
+            session_id: sessionId,
+            uuid,
+            total_cost_usd: cost,
+            modelUsage: {
+              "claude-sonnet-5": {
+                inputTokens: input,
+                outputTokens: output,
+                cacheReadInputTokens: reads,
+                cacheCreationInputTokens: writes,
+                costUSD: cost,
+                contextWindow: 200000,
+                maxOutputTokens: 64000,
+                webSearchRequests: 0,
+              },
+            },
+          } as unknown as SDKMessage);
+        const first = yield* collectCompletion();
+        yield* adapter.sendTurn({ threadId: THREAD_ID, input: "first", attachments: [] });
+        emitResult(oldSessionId, "first-accounting-result", 100, 100, 100, 100, 1);
+        yield* Fiber.join(first);
+
+        if (boundary === "resumed process") {
+          const resumeCursor = (yield* adapter.listSessions())[0]!.resumeCursor;
+          yield* adapter.stopSession(THREAD_ID);
+          yield* adapter.startSession({ ...startInput, resumeCursor });
+          query = harness.queries[1]!;
+          assert.equal(harness.createInputs[1]!.options.resume, oldSessionId);
+        }
+        if (boundary === "conversation reset" || boundary === "zero reset result") {
+          // Reset is authoritative even if a message still carries the old identity.
+          query.emit({
+            type: "conversation_reset",
+            new_conversation_id: newSessionId,
+            session_id: oldSessionId,
+            uuid: "fcb9a8a0-a7d8-4c73-96a2-2a29ea26b515",
+          });
+        }
+        if (boundary === "zero reset result") {
+          const cleared = yield* collectCompletion();
+          yield* adapter.sendTurn({ threadId: THREAD_ID, input: "/clear", attachments: [] });
+          emitResult(newSessionId, "zero-accounting-result", 0, 0, 0, 0, 0);
+          yield* Fiber.join(cleared);
+        }
+        const next = yield* collectCompletion();
+        yield* adapter.sendTurn({ threadId: THREAD_ID, input: "next", attachments: [] });
+        const sameQuery = boundary === "same query";
+        const sessionId =
+          boundary === "new session identity" || boundary === "zero reset result"
+            ? newSessionId
+            : oldSessionId;
+        emitResult(
+          sessionId,
+          "next-accounting-result",
+          150,
+          sameQuery ? 120 : 20,
+          sameQuery ? 150 : 50,
+          200,
+          2,
+        );
+        const events = Array.from(yield* Fiber.join(next));
+        const completed = events.find((event) => event.type === "turn.completed");
+        assert.equal(completed?.type, "turn.completed");
+        if (completed?.type === "turn.completed") {
+          assert.equal(completed.payload.totalCostUsd, sameQuery ? 1 : 2);
+          assert.deepEqual(completed.payload.modelUsage?.["claude-sonnet-5"], {
+            inputTokens: sameQuery ? 50 : 150,
+            outputTokens: 20,
+            cacheReadInputTokens: 50,
+            cacheCreationInputTokens: sameQuery ? 100 : 200,
+            costUSD: sameQuery ? 1 : 2,
+            contextWindow: 200000,
+            maxOutputTokens: 64000,
+            webSearchRequests: 0,
+          });
+        }
+        assert.isFalse(
+          events.some(
+            (event) =>
+              event.type === "runtime.warning" &&
+              event.payload.message.includes("conversation_reset"),
+          ),
+        );
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    });
+  }
+
+  it.effect("does not warn about uncached ingestion when most input is cache creation", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -8301,7 +8430,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         attachments: [],
       });
 
-      // Synthetic low-cache-ratio result: ~60k of 61k prompt tokens uncached.
+      // Cache writes are separate from ordinary uncached input.
       const uncachedUsage = {
         input_tokens: 5_000,
         cache_creation_input_tokens: 55_000,
@@ -8334,10 +8463,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       const warningMessages = runtimeEvents.flatMap((event) =>
         event.type === "runtime.warning" ? [event.payload.message] : [],
       );
-      // Emitted once per session even though two responses crossed the bar.
-      assert.equal(warningMessages.length, 1);
-      assert.ok(warningMessages[0]?.includes("uncached prompt tokens"));
-      assert.ok(warningMessages[0]?.includes("resume"));
+      assert.equal(warningMessages.length, 0);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
