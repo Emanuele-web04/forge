@@ -245,6 +245,13 @@ function ProfileContent({
         ) : (
           <p className="text-sm text-muted-foreground">No model activity yet.</p>
         )}
+        {modelUsage.unavailableProviders.length > 0 ? (
+          <p className="text-xs text-muted-foreground">
+            Token usage isn’t tracked yet for{" "}
+            {modelUsage.unavailableProviders.map(formatProviderLabel).join(", ")}, so those turns
+            aren’t reflected above — they still count toward Total prompts and Total threads.
+          </p>
+        ) : null}
       </section>
 
       <ShareDialog
