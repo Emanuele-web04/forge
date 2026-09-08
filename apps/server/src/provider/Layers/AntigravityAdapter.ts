@@ -1,4 +1,3 @@
-import { parseAntigravityPrintResult } from "../antigravityResultUsage.ts";
 import crypto from "node:crypto";
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
@@ -58,6 +57,7 @@ import {
   PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
   type ProviderThreadSnapshot,
 } from "../Services/ProviderAdapter.ts";
+import { createAntigravityPrintResultParser } from "../antigravityPrintResult.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { makeBoundedCallbackIngress } from "../boundedCallbackIngress.ts";
 import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
@@ -118,7 +118,6 @@ type ToolSurfaceCounters = {
   surfacedToolCallCounts: Map<string, number>;
   /** Occurrence order observed specifically from pre-tool hook events. */
   hookToolCallCounts: Map<string, number>;
-  transcriptToolCallCounts: Map<string, number>;
 };
 
 type ForeignConversationState = ToolSurfaceCounters & {
@@ -192,27 +191,6 @@ function nextToolOccurrence(counts: Map<string, number>, key: string): number {
   const occurrence = (counts.get(key) ?? 0) + 1;
   counts.set(key, occurrence);
   return occurrence;
-}
-
-// Hook stepIdx names the execution step; transcript tool_calls belong to the
-// preceding model step. Match argument signatures and per-source occurrence
-// counts across the turn, preserving intentionally repeated identical calls.
-function canonicalToolArgs(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonicalToolArgs);
-  if (value && typeof value === "object")
-    return Object.fromEntries(
-      Object.entries(value)
-        .toSorted(([a], [b]) => a.localeCompare(b))
-        .map(([key, child]) => [key, canonicalToolArgs(child)]),
-    );
-  return value;
-}
-function antigravityToolSurfaceKey(
-  step: number,
-  name: string,
-  args: Record<string, unknown> | undefined,
-): string {
-  return args ? `${name}:${JSON.stringify(canonicalToolArgs(args))}` : `${step}:${name}`;
 }
 
 function claimToolOccurrence(
@@ -1261,7 +1239,6 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       input: {
         readonly state: "completed" | "interrupted" | "failed";
         readonly stopReason: "model_stop" | "interrupted" | "error";
-        readonly usage?: Record<string, number>;
         readonly errorMessage?: string;
         readonly raw?: ReturnType<typeof raw>;
       },
@@ -1318,7 +1295,6 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               : {
                   state: "completed",
                   stopReason: "model_stop",
-                  ...(input.usage ? { usage: input.usage } : {}),
                 },
         ...(input.raw ? { raw: input.raw } : {}),
       } satisfies ProviderRuntimeEvent);
@@ -1385,7 +1361,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       stepIndex: number,
       calls: ReadonlyArray<NonNullable<TranscriptStep["tool_calls"]>[number]>,
     ) => {
-      const transcriptCounts = context.transcriptToolCallCounts;
+      const transcriptCounts = new Map<string, number>();
       for (const call of calls) {
         const name = typeof call?.name === "string" ? trim(call.name) : undefined;
         if (!name) continue;
@@ -1393,7 +1369,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           call.args && typeof call.args === "object"
             ? (call.args as Record<string, unknown>)
             : undefined;
-        const surfaceKey = antigravityToolSurfaceKey(stepIndex, name, args);
+        const surfaceKey = `${stepIndex}:${name}`;
         const occurrence = nextToolOccurrence(transcriptCounts, surfaceKey);
         if (!claimToolOccurrence(context.surfacedToolCallCounts, surfaceKey, occurrence)) continue;
         const itemId = RuntimeItemId.makeUnsafe(
@@ -1573,7 +1549,6 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           pendingTools: [],
           surfacedToolCallCounts: new Map(),
           hookToolCallCounts: new Map(),
-          transcriptToolCallCounts: new Map(),
           nextToolSequence: 0,
           terminalEmitted: false,
         };
@@ -1798,7 +1773,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               ? (toolCall.args as Record<string, unknown>)
               : undefined;
           if (name) {
-            const surfaceKey = antigravityToolSurfaceKey(stepIndex, name, toolArgs);
+            const surfaceKey = `${stepIndex}:${name}`;
             const occurrence = nextToolOccurrence(context.hookToolCallCounts, surfaceKey);
             if (!claimToolOccurrence(context.surfacedToolCallCounts, surfaceKey, occurrence)) {
               // The transcript already surfaced this call as a completed item;
@@ -2033,7 +2008,6 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           foreignConversations: new Map(),
           surfacedToolCallCounts: new Map(),
           hookToolCallCounts: new Map(),
-          transcriptToolCallCounts: new Map(),
           sawAssistant: false,
           interrupted: false,
           stopped: false,
@@ -2161,7 +2135,6 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         context.foreignConversations.clear();
         context.surfacedToolCallCounts.clear();
         context.hookToolCallCounts.clear();
-        context.transcriptToolCallCounts.clear();
         context.sawAssistant = false;
         context.interrupted = false;
         context.turnTerminalEmitted = false;
@@ -2195,7 +2168,6 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           "-p",
           providerPrompt,
         ];
-        const invocationStartedAt = Date.now();
         let child: AntigravityChildProcess;
         try {
           const spawnProcess =
@@ -2235,9 +2207,13 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           context.activeTurnId === turnId;
         let stdout = "";
         let stderr = "";
+        const outputParser = createAntigravityPrintResultParser();
         child.stdout.setEncoding("utf8");
         child.stderr.setEncoding("utf8");
-        child.stdout.on("data", (chunk) => (stdout += chunk));
+        child.stdout.on("data", (chunk) => {
+          outputParser.write(String(chunk));
+          stdout += chunk;
+        });
         child.stderr.on("data", (chunk) => (stderr += chunk));
         const timer = setInterval(() => {
           if (ownsTurn()) void pollHookFile(context);
@@ -2290,10 +2266,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
               return;
             }
-            const printResult = parseAntigravityPrintResult(
-              stdout.trim(),
-              Date.now() - invocationStartedAt,
-            );
+            const printResult = outputParser.finish();
             const responseText = printResult?.response ?? stdout.trim();
             if (!context.sawAssistant && responseText) {
               emitTextItem(
@@ -2312,11 +2285,10 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
               return;
             }
-            // agy can emit a timeout envelope after the final response is DONE,
-            // even on the first turn. Resumes can also carry historical errors.
-            // Require completed stream steps and no pending work before recovery.
-            const completedDespiteEnvelopeError =
-              (code === 1 || context.stopTeardownRequested === true) &&
+            // Only our stop-hook teardown may replace a missing clean process exit.
+            // A provider ERROR is authoritative even when earlier response steps are DONE.
+            const completedAfterStopTeardown =
+              context.stopTeardownRequested === true &&
               printResult?.completedResponse === true &&
               context.sawAssistant &&
               !stderr.trim() &&
@@ -2324,11 +2296,14 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               context.pendingBackgroundTasks.size === 0 &&
               context.pendingAnonymousBackgroundTasks === 0;
             const interrupted =
-              context.interrupted || (signal !== null && !completedDespiteEnvelopeError);
+              context.interrupted ||
+              printResult?.state === "interrupted" ||
+              (signal !== null && printResult?.state !== "failed" && !completedAfterStopTeardown);
             const failed =
               !interrupted &&
-              ((code ?? 1) !== 0 || printResult?.failed === true) &&
-              !completedDespiteEnvelopeError;
+              !completedAfterStopTeardown &&
+              ((code ?? 1) !== 0 ||
+                (printResult !== undefined && printResult.state !== "completed"));
             if (failed && stderr.trim()) {
               offer({
                 ...base(context, { includeTurn: false }),
@@ -2339,13 +2314,15 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
             }
             settleActiveTurn(context, {
               state: interrupted ? "interrupted" : failed ? "failed" : "completed",
-              ...(printResult?.usage ? { usage: printResult.usage } : {}),
               stopReason: interrupted ? "interrupted" : failed ? "error" : "model_stop",
               ...(failed
                 ? {
                     errorMessage:
                       printResult?.error ||
                       stderr.trim() ||
+                      (printResult?.state === undefined && printResult !== undefined
+                        ? "Antigravity CLI exited without a complete result."
+                        : undefined) ||
                       `Antigravity CLI exited with code ${code ?? 1}.`,
                   }
                 : {}),
