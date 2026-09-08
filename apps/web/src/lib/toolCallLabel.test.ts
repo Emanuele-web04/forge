@@ -121,6 +121,13 @@ describe("deriveSynaraMcpToolTitle", () => {
         "Synara finished waiting for threads",
       ],
       ["synara_send_message", "Synara is sending a message", "Synara sent a message"],
+      ["synara_read_kanban_board", "Synara is reading the board", "Synara read the board"],
+      [
+        "synara_create_kanban_task",
+        "Synara is creating a board task",
+        "Synara created a board task",
+      ],
+      ["synara_move_kanban_card", "Synara is moving a board card", "Synara moved a board card"],
       ["synara_interrupt_thread", "Synara is interrupting a thread", "Synara interrupted a thread"],
       ["synara_set_thread_title", "Synara is renaming a thread", "Synara renamed a thread"],
       ["synara_set_thread_archived", "Synara is updating a thread", "Synara updated a thread"],
@@ -167,6 +174,17 @@ describe("deriveSynaraMcpToolTitle", () => {
         status: "cancelled",
       }),
     ).toBe("Synara stopped creating a thread");
+
+    for (const [toolName, failed] of [
+      ["synara_read_kanban_board", "Synara couldn't read the board"],
+      ["synara_create_kanban_task", "Synara couldn't create a board task"],
+      ["synara_move_kanban_card", "Synara couldn't move a board card"],
+    ] as const) {
+      expect(deriveSynaraMcpToolTitle({ toolName, status: "failed" })).toBe(failed);
+    }
+    expect(
+      deriveSynaraMcpToolTitle({ toolName: "synara_move_kanban_card", status: "cancelled" }),
+    ).toBe("Synara stopped moving a board card");
   });
 
   it("turns provider-specific create-thread identifiers into activity sentences", () => {

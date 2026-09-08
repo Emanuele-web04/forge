@@ -17,6 +17,7 @@ const harness = vi.hoisted(() => ({
   deleteActiveThread: vi.fn(),
   archiveThread: vi.fn(),
   toast: vi.fn(),
+  sendAsGoal: vi.fn(),
 }));
 
 vi.mock("react", async (importOriginal) => ({
@@ -29,8 +30,15 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 vi.mock("~/appSettings", () => ({
   useAppSettings: () => ({
-    settings: { confirmThreadArchive: false, confirmThreadDelete: false },
+    settings: {
+      confirmThreadArchive: false,
+      confirmThreadDelete: false,
+      defaultProvider: "codex",
+      enableAssistantStreaming: false,
+    },
   }),
+  resolveAssistantDeliveryMode: () => "buffered" as const,
+  getProviderStartOptions: () => undefined,
 }));
 vi.mock("~/hooks/useCopyToClipboard", () => ({
   useCopyPathToClipboard: () => vi.fn(),
@@ -42,6 +50,14 @@ vi.mock("~/lib/activeThreadDelete", () => ({
 vi.mock("~/lib/gitReactQuery", () => ({ gitRemoveWorktreeMutationOptions: () => ({}) }));
 vi.mock("~/lib/threadArchive", () => ({ archiveThreadFromClient: harness.archiveThread }));
 vi.mock("~/lib/threadRename", () => ({ dispatchThreadRename: vi.fn() }));
+vi.mock("~/lib/kanbanDispatch", () => ({
+  dispatchKanbanDraftCardAsGoal: harness.sendAsGoal,
+  kanbanDispatchFailureToast: vi.fn().mockReturnValue({
+    type: "error",
+    title: "Mock toast",
+    description: "mock",
+  }),
+}));
 vi.mock("../../composerDraftStore", () => ({
   useComposerDraftStore: (selector: (state: unknown) => unknown) =>
     selector({
@@ -128,12 +144,14 @@ beforeEach(() => {
     harness.deleteActiveThread,
     harness.archiveThread,
     harness.toast,
+    harness.sendAsGoal,
   ]) {
     mock.mockReset();
   }
   harness.showContextMenu.mockImplementation(async () => harness.clicked);
   harness.confirm.mockResolvedValue(true);
   harness.archiveThread.mockResolvedValue(undefined);
+  harness.sendAsGoal.mockResolvedValue({ kind: "dispatched" });
   harness.deleteActiveThread.mockImplementation(async (input: unknown) => {
     const action = input as {
       onDeleted: (input: { thread: { id: ThreadId; projectId: ProjectId } }) => void;
@@ -190,5 +208,71 @@ describe("useKanbanCardContextMenu", () => {
 
     expect(harness.deleteActiveThread).not.toHaveBeenCalled();
     expect(harness.clearDraftThread).not.toHaveBeenCalled();
+  });
+
+  it("shows 'Send as goal' for a dispatchable draft card and dispatches when clicked", async () => {
+    harness.clicked = "send-as-goal";
+    const dispatchableDraftCard = {
+      ...CARD,
+      cardId: `draft:${THREAD_ID}`,
+      column: "draft",
+      draftPrompt: "Ship the kanban v2 goal flow",
+      draftHasAttachments: false,
+    } as KanbanCard;
+
+    useKanbanCardContextMenu().onCardContextMenu(dispatchableDraftCard, EVENT);
+    await vi.waitFor(() => expect(harness.sendAsGoal).toHaveBeenCalled());
+
+    const menu = harness.showContextMenu.mock.calls[0]?.[0] as Array<{
+      id?: string;
+      label?: string;
+    }>;
+    expect(menu.some((item) => item.id === "send-as-goal")).toBe(true);
+    expect(harness.sendAsGoal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        card: dispatchableDraftCard,
+        defaultProvider: "codex",
+        assistantDeliveryMode: "buffered",
+      }),
+    );
+    expect(harness.toast).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "success", title: "Goal set" }),
+    );
+  });
+
+  it("does not show 'Send as goal' for non-dispatchable cards", async () => {
+    const emptyDraftCard = {
+      ...CARD,
+      cardId: `draft:${THREAD_ID}`,
+      column: "draft",
+      draftPrompt: "",
+      draftHasAttachments: false,
+      thread: null,
+    } as KanbanCard;
+
+    useKanbanCardContextMenu().onCardContextMenu(emptyDraftCard, EVENT);
+    await vi.waitFor(() => expect(harness.showContextMenu).toHaveBeenCalled());
+
+    const menu = harness.showContextMenu.mock.calls[0]?.[0] as Array<{ id?: string }>;
+    expect(menu.some((item) => item.id === "send-as-goal")).toBe(false);
+  });
+
+  it("surfaces a warning toast when the dispatcher returns a goal warning", async () => {
+    harness.clicked = "send-as-goal";
+    harness.sendAsGoal.mockResolvedValue({ kind: "dispatched", warning: "Goal not saved" });
+    const dispatchableDraftCard = {
+      ...CARD,
+      cardId: `draft:${THREAD_ID}`,
+      column: "draft",
+      draftPrompt: "Ship the kanban v2 goal flow",
+      draftHasAttachments: false,
+    } as KanbanCard;
+
+    useKanbanCardContextMenu().onCardContextMenu(dispatchableDraftCard, EVENT);
+    await vi.waitFor(() => expect(harness.sendAsGoal).toHaveBeenCalled());
+
+    expect(harness.toast).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "warning", description: "Goal not saved" }),
+    );
   });
 });

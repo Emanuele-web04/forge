@@ -57,11 +57,37 @@ import { newCommandId, newMessageId } from "./utils";
 
 export type KanbanDraftDispatchResult =
   /** The drafted prompt is on its way; runtime events move the card to In Progress. */
-  | { kind: "dispatched" }
+  | { kind: "dispatched"; warning?: string | undefined }
   /** The board cannot dispatch this card faithfully — open the chat instead. */
   | { kind: "open-thread"; reason: KanbanDraftOpenThreadReason }
   | { kind: "unavailable" }
   | { kind: "error"; message: string };
+
+export function kanbanDispatchFailureToast(
+  result: Exclude<KanbanDraftDispatchResult, { kind: "dispatched" }>,
+  errorTitle: string,
+): { type: "info" | "error"; title: string; description: string } {
+  if (result.kind === "open-thread") {
+    return {
+      type: "info",
+      title: "Finish this draft in the chat",
+      description:
+        result.reason === "empty"
+          ? "Nothing to send yet. Write the prompt in the composer."
+          : result.reason === "worktree-pending"
+            ? "Open the chat to create the worktree with the normal send flow."
+            : "Open the chat to continue this task.",
+    };
+  }
+  if (result.kind === "unavailable") {
+    return {
+      type: "error",
+      title: "Not connected",
+      description: "Reconnect to the server before sending drafts.",
+    };
+  }
+  return { type: "error", title: errorTitle, description: result.message };
+}
 
 export async function dispatchKanbanDraftCard(input: {
   card: KanbanCard;
@@ -86,6 +112,30 @@ export async function dispatchKanbanDraftCard(input: {
   });
 }
 
+/** Right-click "Send as goal" for a dispatchable draft card. */
+export async function dispatchKanbanDraftCardAsGoal(input: {
+  card: KanbanCard;
+  defaultProvider: ProviderKind;
+  assistantDeliveryMode: AssistantDeliveryMode;
+  providerOptions?: ProviderStartOptions | undefined;
+}): Promise<KanbanDraftDispatchResult> {
+  const { card } = input;
+  if (resolveDraftDropAction(card) !== "dispatch") {
+    return {
+      kind: "open-thread",
+      reason: resolveKanbanDraftOpenThreadReason(card) ?? "not-draft",
+    };
+  }
+  return dispatchKanbanDraftThreadAsGoal({
+    threadId: card.threadId,
+    projectId: card.projectId,
+    thread: card.thread,
+    defaultProvider: input.defaultProvider,
+    assistantDeliveryMode: input.assistantDeliveryMode,
+    providerOptions: input.providerOptions,
+  });
+}
+
 interface KanbanDraftDispatchInput {
   threadId: ThreadId;
   projectId: ProjectId;
@@ -96,11 +146,31 @@ interface KanbanDraftDispatchInput {
   providerOptions?: ProviderStartOptions | undefined;
 }
 
-// Racing callers (a re-drop before the board re-derives, drag + send-now) must
-// not queue two turns for the same thread — the server accepts duplicate
-// thread.turn.start commands while the session is still starting. Same pattern
-// as threadCreatePromotion's inFlightThreadCreateById.
-const inFlightDispatchByThreadId = new Map<ThreadId, Promise<KanbanDraftDispatchResult>>();
+const MAX_KANBAN_GOAL_LENGTH = 4096;
+
+// Racing callers (a re-drop before the board re-derives, drag + send-now, or a
+// drag racing a right-click "Send as goal") must not queue two turns for the
+// same thread — the server accepts duplicate thread.turn.start commands while
+// the session is still starting. Same pattern as threadCreatePromotion's
+// inFlightThreadCreateById. The guard is keyed by threadId alone so a
+// concurrent dispatch and "Send as goal" coalesce onto the first turn instead
+// of racing past each other on mode-specific keys.
+const inFlightDispatchByThreadId = new Map<string, Promise<KanbanDraftDispatchResult>>();
+
+function dispatchKanbanDraftThreadInternal(
+  input: KanbanDraftDispatchInput,
+  mode: "dispatch" | "goal",
+): Promise<KanbanDraftDispatchResult> {
+  const existing = inFlightDispatchByThreadId.get(input.threadId);
+  if (existing) {
+    return existing;
+  }
+  const dispatchPromise = dispatchKanbanDraftThreadOnce(input, mode).finally(() => {
+    inFlightDispatchByThreadId.delete(input.threadId);
+  });
+  inFlightDispatchByThreadId.set(input.threadId, dispatchPromise);
+  return dispatchPromise;
+}
 
 /**
  * Promote (when needed) and dispatch a draft thread's composer prompt as a queued
@@ -112,19 +182,24 @@ const inFlightDispatchByThreadId = new Map<ThreadId, Promise<KanbanDraftDispatch
 export function dispatchKanbanDraftThread(
   input: KanbanDraftDispatchInput,
 ): Promise<KanbanDraftDispatchResult> {
-  const existing = inFlightDispatchByThreadId.get(input.threadId);
-  if (existing) {
-    return existing;
-  }
-  const dispatchPromise = dispatchKanbanDraftThreadOnce(input).finally(() => {
-    inFlightDispatchByThreadId.delete(input.threadId);
-  });
-  inFlightDispatchByThreadId.set(input.threadId, dispatchPromise);
-  return dispatchPromise;
+  return dispatchKanbanDraftThreadInternal(input, "dispatch");
+}
+
+/**
+ * Promote a local-only draft (when needed), set the thread's goal from the live
+ * composer prompt, then queue the turn. Dispatches `thread.meta.update` with
+ * `goalStartBehavior: "defer"` before `thread.turn.start`; if the goal update
+ * fails the turn still starts and a warning is surfaced.
+ */
+export function dispatchKanbanDraftThreadAsGoal(
+  input: KanbanDraftDispatchInput,
+): Promise<KanbanDraftDispatchResult> {
+  return dispatchKanbanDraftThreadInternal(input, "goal");
 }
 
 async function dispatchKanbanDraftThreadOnce(
   input: KanbanDraftDispatchInput,
+  mode: "dispatch" | "goal",
 ): Promise<KanbanDraftDispatchResult> {
   const { threadId, projectId, thread } = input;
   const api = readNativeApi();
@@ -249,6 +324,8 @@ async function dispatchKanbanDraftThreadOnce(
     droppedAtMs,
   });
 
+  let goalWarning: string | undefined;
+
   try {
     if (thread === null) {
       // Local-only draft thread: create the durable thread first, reusing the same
@@ -300,6 +377,29 @@ async function dispatchKanbanDraftThreadOnce(
       }
     }
 
+    if (mode === "goal" && prompt.length > 0) {
+      // Attachment-only drafts intentionally dispatch no goal command; a prompt
+      // over the cap is clamped so the metadata update never fails validation.
+      const truncated = prompt.length > MAX_KANBAN_GOAL_LENGTH;
+      const goal = truncated ? prompt.slice(0, MAX_KANBAN_GOAL_LENGTH) : prompt;
+      if (truncated) {
+        goalWarning = `Goal saved truncated to ${MAX_KANBAN_GOAL_LENGTH} characters.`;
+      }
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "thread.meta.update",
+          commandId: newCommandId(),
+          threadId,
+          goal,
+          goalStartBehavior: "defer",
+        });
+      } catch (error) {
+        goalWarning = `Could not save the goal; the task was started anyway. ${
+          error instanceof Error ? error.message : "Unknown error."
+        }`;
+      }
+    }
+
     const stagedTurnAttachments = await turnAttachmentsPromise;
     await stagedTurnAttachments.runWithDispatch((turnAttachments) =>
       api.orchestration.dispatchCommand({
@@ -338,5 +438,5 @@ async function dispatchKanbanDraftThreadOnce(
   // The prompt was consumed by the dispatched turn; an open composer for this
   // thread should not keep offering it.
   useComposerDraftStore.getState().clearComposerContent(threadId);
-  return { kind: "dispatched" };
+  return { kind: "dispatched", warning: goalWarning };
 }

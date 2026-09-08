@@ -130,9 +130,14 @@ export function parseProviderKind(raw: string): ProviderKind {
 export function buildModelSelection(
   provider: ProviderKind,
   model: string | undefined,
+  fallbackModel?: string,
 ): ModelSelection {
+  // Explicit argument wins, then the caller's own thread model, and only then
+  // the provider default — an agent on a non-default model must not silently
+  // spawn work on that provider's default model.
   const effectiveModel =
     model ??
+    fallbackModel ??
     (provider === "pi"
       ? undefined
       : DEFAULT_MODEL_BY_PROVIDER[provider as Exclude<ProviderKind, "pi">]);

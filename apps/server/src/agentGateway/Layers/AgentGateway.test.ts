@@ -1716,6 +1716,154 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect("denies kanban write tools to read-only caller sessions", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent-readonly",
+        name: "synara_create_kanban_task",
+        args: { title: "Must not run", requestId: "readonly-kanban" },
+      });
+      const error = toolResultJson(response.result).error as {
+        code: string;
+        details: { requiredCapability: string };
+      };
+      assert.equal(error.code, "capability_denied");
+      assert.equal(error.details.requiredCapability, "thread:write");
+      assert.equal(harness.dispatched.length, 0);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("drives the full kanban agent loop through the real gateway wiring", () => {
+    const draftCard = makeThreadShell("thread-draft-card");
+    const doneCard = makeThreadShell("thread-done-card", {
+      latestTurn: {
+        turnId: TurnId.makeUnsafe("turn-done"),
+        state: "completed",
+        requestedAt: NOW,
+        startedAt: NOW,
+        completedAt: NOW,
+        assistantMessageId: null,
+      },
+    });
+    const awaitingCard = makeThreadShell("thread-awaiting-card", {
+      hasPendingApprovals: true,
+      latestTurn: {
+        turnId: TurnId.makeUnsafe("turn-awaiting"),
+        state: "running",
+        requestedAt: NOW,
+        startedAt: NOW,
+        completedAt: null,
+        assistantMessageId: null,
+      },
+    });
+    const { gatewayLayer, makeHarness } = makeHarnessLayer([
+      makeThreadShell("thread-parent"),
+      draftCard,
+      doneCard,
+      awaitingCard,
+    ]);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+
+      // 1. Board read: every v2 column derives from live state.
+      const boardResponse = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_read_kanban_board",
+        args: {},
+      });
+      assert.isFalse(isToolError(boardResponse.result), toolErrorText(boardResponse.result));
+      const board = toolResultJson(boardResponse.result) as {
+        truncated?: boolean;
+        projects: Array<{
+          columns: Array<{ key: string; cards: Array<{ threadId: string; attention: string[] }> }>;
+        }>;
+      };
+      assert.isFalse(board.truncated ?? false);
+      const columns = Object.fromEntries(
+        board.projects[0]!.columns.map((column) => [column.key, column.cards]),
+      );
+      assert.deepEqual(
+        columns.draft?.map((card) => card.threadId),
+        ["thread-draft-card"],
+      );
+      assert.deepEqual(
+        columns.done?.map((card) => card.threadId),
+        ["thread-done-card"],
+      );
+      // thread-parent runs a turn stamped at NOW (long past, the tool clock is
+      // real time), so it correctly ages into stuck/awaitingYou alongside the
+      // pending-approval card.
+      assert.deepEqual(columns.awaitingYou?.map((card) => card.threadId).toSorted(), [
+        "thread-awaiting-card",
+        "thread-parent",
+      ]);
+      const awaitingCardView = columns.awaitingYou?.find(
+        (card) => card.threadId === "thread-awaiting-card",
+      );
+      assert.include(awaitingCardView?.attention ?? [], "awaiting-approval");
+      assert.include(
+        columns.awaitingYou?.find((card) => card.threadId === "thread-parent")?.attention ?? [],
+        "stuck",
+      );
+
+      // 2. Single-card reads work for settled cards too (not just running ones).
+      const doneRead = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_read_kanban_card",
+        args: { threadId: "thread-done-card" },
+      });
+      assert.isFalse(isToolError(doneRead.result), toolErrorText(doneRead.result));
+      assert.equal((toolResultJson(doneRead.result).card as { column: string }).column, "done");
+
+      // 3. Move the draft card into In Progress: dispatches a turn.
+      const moveStart = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_move_kanban_card",
+        args: { threadId: "thread-draft-card", target: "inProgress", message: "Get to work" },
+      });
+      assert.isFalse(isToolError(moveStart.result), toolErrorText(moveStart.result));
+      const startedTurns = harness.dispatched.filter(
+        (command) =>
+          command.type === "thread.turn.start" &&
+          command.threadId === ThreadId.makeUnsafe("thread-draft-card"),
+      );
+      assert.lengthOf(startedTurns, 1);
+
+      // 4. An Awaiting-you card refuses to be force-moved and reports why.
+      const dispatchesBefore = harness.dispatched.length;
+      const moveAwaiting = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_move_kanban_card",
+        args: { threadId: "thread-awaiting-card", target: "inProgress" },
+      });
+      assert.isFalse(isToolError(moveAwaiting.result), toolErrorText(moveAwaiting.result));
+      const awaitingPayload = toolResultJson(moveAwaiting.result) as {
+        alreadyInProgress: boolean;
+        awaitingYou: boolean;
+      };
+      assert.isTrue(awaitingPayload.alreadyInProgress);
+      assert.isTrue(awaitingPayload.awaitingYou);
+      assert.equal(harness.dispatched.length, dispatchesBefore);
+
+      // 5. Create a tracked task: exactly-once creation plus its first turn.
+      const createTask = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_kanban_task",
+        args: { title: "Ship the fix", requestId: "e2e-kanban-create" },
+      });
+      assert.isFalse(isToolError(createTask.result), toolErrorText(createTask.result));
+      const created = toolResultJson(createTask.result) as {
+        threadId: string;
+        card: { column: string };
+      };
+      assert.isString(created.threadId);
+      const creates = harness.dispatched.filter((command) => command.type === "thread.create");
+      assert.lengthOf(creates, 1);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("rejects oversized and duplicate-id JSON-RPC batches before dispatch", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {
@@ -1817,6 +1965,9 @@ describe("AgentGateway", () => {
         "synara_cancel_automation",
         "synara_update_automation_memory",
         "synara_report_automation_result",
+        "synara_read_kanban_board",
+        "synara_create_kanban_task",
+        "synara_move_kanban_card",
       ]);
       const createThreadProperties = tools.find((tool) => tool.name === "synara_create_thread")
         ?.inputSchema.properties;
