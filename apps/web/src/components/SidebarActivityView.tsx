@@ -27,6 +27,7 @@ import {
   WorktreeIcon,
 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { splitShortcutLabel } from "../keybindings";
 import {
   SIDEBAR_ROW_ACTIVE_CLASS_NAME,
   SIDEBAR_ROW_FOCUS_CLASS_NAME,
@@ -78,6 +79,7 @@ import { ThreadArchiveActionButton } from "./ThreadArchiveActionButton";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
 import { DisclosureRegion } from "./ui/DisclosureRegion";
+import { Kbd, KbdGroup } from "./ui/kbd";
 import {
   Menu,
   MenuGroup,
@@ -107,6 +109,7 @@ function ActivityThreadRow({
   isPinned,
   pr,
   status,
+  threadJumpLabel,
   onOpen,
   onSetSettled,
   onTogglePinned,
@@ -123,6 +126,7 @@ function ActivityThreadRow({
   isPinned: boolean;
   pr: OrchestrationThreadPullRequest | null;
   status: ThreadStatusPill | null;
+  threadJumpLabel: string | null;
   onOpen: () => void;
   onSetSettled: (settled: boolean) => void;
   onTogglePinned: () => void;
@@ -148,7 +152,12 @@ function ActivityThreadRow({
   // One trailing slot, top-right, shared by every status: the accent dot for an
   // unread completion and the running spinner (or state dot) for everything
   // else — same rule and same glyphs the classic thread/project rows use.
-  const trailingStatus = resolveThreadStatusTrailingIndicator({ status, isActive });
+  const trailingStatus = resolveThreadStatusTrailingIndicator({
+    status,
+    isActive,
+    slotOccupied: Boolean(threadJumpLabel),
+  });
+  const threadJumpLabelParts = threadJumpLabel ? splitShortcutLabel(threadJumpLabel) : [];
   // Rename/context-menu gestures live on the row wrapper (not the title button) so
   // they also fire over the trailing status and hover-action cluster, which are
   // absolutely positioned siblings of the button.
@@ -186,6 +195,7 @@ function ActivityThreadRow({
           <span
             className={cn(
               "flex min-w-0 items-center gap-1.5 overflow-hidden pr-5 transition-[padding] duration-150 ease-out",
+              threadJumpLabel && "pr-12",
               // Yield the title row to the hover action cluster (pin + archive + done).
               "group-hover/activity-row:pr-[4.25rem] group-focus-within/activity-row:pr-[4.25rem]",
             )}
@@ -225,6 +235,18 @@ function ActivityThreadRow({
             </span>
           </span>
         </button>
+        {threadJumpLabel ? (
+          <KbdGroup
+            className={cn(
+              "pointer-events-none absolute top-1 right-1",
+              sidebarHoverRevealHideClassName("activity-row"),
+            )}
+          >
+            {threadJumpLabelParts.map((part) => (
+              <Kbd key={part}>{part}</Kbd>
+            ))}
+          </KbdGroup>
+        ) : null}
         {trailingStatus ? (
           <span
             data-slot="activity-completion-status"
@@ -535,6 +557,7 @@ export function SidebarActivityView({
   onProjectContextMenu,
   renderThreadHoverCard,
   prByThreadId,
+  threadJumpLabelByThreadId,
   onVisibleThreadIdsChange,
   onCreateChat,
   onAddProject,
@@ -546,6 +569,7 @@ export function SidebarActivityView({
   settledOverrideByThreadId: ReadonlyMap<ThreadId, boolean>;
   threadsHydrated: boolean;
   prByThreadId: ReadonlyMap<ThreadId, OrchestrationThreadPullRequest | null>;
+  threadJumpLabelByThreadId: ReadonlyMap<ThreadId, string>;
   onVisibleThreadIdsChange: (threadIds: readonly ThreadId[]) => void;
   resolveThreadStatus: (thread: SidebarThreadSummary) => ThreadStatusPill | null;
   onOpenThread: (threadId: ThreadId) => void;
@@ -715,6 +739,7 @@ export function SidebarActivityView({
             })
       }
       status={resolveThreadStatus(thread)}
+      threadJumpLabel={threadJumpLabelByThreadId.get(thread.id) ?? null}
       onOpen={() => onOpenThread(thread.id)}
       onSetSettled={(settled) => {
         if (settled) onMarkThreadRead(thread.id, thread.latestTurn?.completedAt ?? undefined);

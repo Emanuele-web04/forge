@@ -73,6 +73,7 @@ function renderActivity(input: {
   pinnedThreadIdSet?: ReadonlySet<ThreadId>;
   settledOverrideByThreadId?: ReadonlyMap<ThreadId, boolean>;
   prByThreadId?: ReadonlyMap<ThreadId, OrchestrationThreadPullRequest | null>;
+  threadJumpLabelByThreadId?: ReadonlyMap<ThreadId, string>;
   onVisibleThreadIdsChange?: (threadIds: readonly ThreadId[]) => void;
   onOpenThread?: (threadId: ThreadId) => void;
   onSetThreadSettled?: (threadId: ThreadId, settled: boolean) => void;
@@ -93,6 +94,7 @@ function renderActivity(input: {
       settledOverrideByThreadId={input.settledOverrideByThreadId ?? new Map()}
       threadsHydrated
       prByThreadId={input.prByThreadId ?? new Map()}
+      threadJumpLabelByThreadId={input.threadJumpLabelByThreadId ?? new Map()}
       onVisibleThreadIdsChange={input.onVisibleThreadIdsChange ?? (() => {})}
       resolveThreadStatus={input.resolveThreadStatus ?? (() => null)}
       onOpenThread={input.onOpenThread ?? (() => {})}
@@ -114,6 +116,20 @@ function renderActivity(input: {
 describe("SidebarActivityView", () => {
   afterEach(() => {
     document.body.innerHTML = "";
+  });
+
+  it("shows an assigned thread jump shortcut in its activity row", async () => {
+    const thread = makeThread(0);
+    const mounted = await render(
+      renderActivity({
+        threads: [thread],
+        threadJumpLabelByThreadId: new Map([[thread.id, "⌘1"]]),
+      }),
+    );
+
+    expect(page.getByText("⌘")).toBeVisible();
+    expect(page.getByText("1")).toBeVisible();
+    await mounted.unmount();
   });
 
   it("pages project groups, reports only mounted rows, and prefers live PR state", async () => {
