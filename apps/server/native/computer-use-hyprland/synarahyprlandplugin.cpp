@@ -308,6 +308,7 @@ struct SState {
     // and keyboard (its enter/leave bookkeeping, independent of the seat's),
     // and everything it is currently holding down there.
     WP<CWLSurfaceResource> directPointerSurface;
+    bool directPointerNeedsEnter = true;
     WP<CWLSurfaceResource> directKeyboardSurface;
     std::set<uint32_t>     pressedButtons;
     // The seat's pointer focus as of its last change signal. The signal carries
@@ -807,13 +808,49 @@ void releasePressedButtons() {
     g.pressedButtons.clear();
 }
 
-void directPointerLeave() {
+// Where the human's pointer is, in the coordinates of the surface the seat
+// has entered: the position the seat itself would quote in an enter.
+Vector2D seatPointerLocal(const SP<CWLSurfaceResource>& surface) {
+    if (!g_pInputManager)
+        return {};
+    const auto global = g_pInputManager->getMouseCoordsInternal();
+    if (const auto hlSurface = surface->m_hlSurface.lock()) {
+        if (const auto box = hlSurface->getSurfaceBoxGlobal())
+            return global - box->pos();
+    }
+    return {};
+}
+
+// Re-sends the seat's own wl_pointer.enter for the surface the human's pointer
+// is on, if that surface belongs to `client`. The agent's enter above took the
+// client's shared wl_pointer away from the seat; this gives it back, so the
+// human's next motion, scroll, or click is routed to their window again.
+void restoreSeatPointerEnter(wl_client* client) {
+    if (!g_pSeatManager)
+        return;
+    const auto seatSurface = g_pSeatManager->m_state.pointerFocus.lock();
+    if (!seatSurface || seatSurface->client() != client)
+        return;
+    const auto     local  = seatPointerLocal(seatSurface);
+    const uint32_t serial = directSerial(seatSurface, true);
+    for (wl_resource* resource : clientInputResources(client, "wl_pointer")) {
+        wl_pointer_send_enter(resource, serial, seatSurface->getResource()->resource(), wl_fixed_from_double(local.x), wl_fixed_from_double(local.y));
+        if (wl_resource_get_version(resource) >= WL_POINTER_FRAME_SINCE_VERSION)
+            wl_pointer_send_frame(resource);
+    }
+}
+
+void directPointerLeave(bool forgetSurface = true) {
     const auto surface = g.directPointerSurface.lock();
-    g.directPointerSurface.reset();
-    // Owed sub-notch clicks belong to the surface that was being scrolled.
-    g.axisRemainderH = 0;
-    g.axisRemainderV = 0;
-    if (!surface)
+    const bool entered = !g.directPointerNeedsEnter;
+    g.directPointerNeedsEnter = true;
+    if (forgetSurface) {
+        g.directPointerSurface.reset();
+        // Owed sub-notch clicks belong to the surface that was being scrolled.
+        g.axisRemainderH = 0;
+        g.axisRemainderV = 0;
+    }
+    if (!surface || !entered)
         return;
     // Never revoke a focus the human is holding: if their pointer sits on this
     // surface, the enter the client believes in is the seat's, not ours.
@@ -825,6 +862,33 @@ void directPointerLeave() {
         if (wl_resource_get_version(resource) >= WL_POINTER_FRAME_SINCE_VERSION)
             wl_pointer_send_frame(resource);
     }
+    // A leave from our surface leaves the client with no entered surface at
+    // all, even when the human's pointer is on a sibling window of it.
+    restoreSeatPointerEnter(surface->client());
+}
+
+// The hand-back, the other half of the shared-object problem. While the human's
+// pointer is on another surface of the client the agent is entered on, the
+// client's one wl_pointer belongs to whichever of us entered last, and the
+// human's motion, scroll, and clicks name no surface: after the agent's enter
+// they would all land in the agent's window until the seat happened to send a
+// fresh enter of its own. So every agent burst ends by returning the pointer to
+// the seat's surface. The logical target and fractional scroll remain, but the
+// next agent event re-enters its target first (see directPointerMotion), so the two
+// take turns and the human always ends up in possession. Hover state on the
+// agent's target does not survive this, which is the right trade: the human is
+// using that application right now. A held button is the one exception — a
+// drag cannot change surfaces mid-way — so the hand-back waits for its release.
+void returnPointerToSeat() {
+    if (!g_pSeatManager || !g.pressedButtons.empty())
+        return;
+    const auto agentSurface = g.directPointerSurface.lock();
+    const auto seatSurface  = g_pSeatManager->m_state.pointerFocus.lock();
+    if (!agentSurface || !seatSurface || seatSurface == agentSurface || seatSurface->client() != agentSurface->client())
+        return;
+    // Keep the logical target and its fractional scroll while returning the
+    // protocol object. The next motion must enter again before sending input.
+    directPointerLeave(false);
 }
 
 // Enter-if-needed plus motion, aimed by the ghost cursor's position. The hit
@@ -853,8 +917,9 @@ void directPointerMotion(const PHLWINDOW& window) {
         directPointerLeave();
         return;
     }
-    const bool reenter    = g.directPointerSurface.lock() != surface;
+    const bool reenter    = g.directPointerNeedsEnter || g.directPointerSurface.lock() != surface;
     g.directPointerSurface = surface;
+    g.directPointerNeedsEnter = false;
     const uint32_t time   = directTimestampMs();
     const uint32_t serial = reenter ? directSerial(surface, true) : 0;
     for (wl_resource* resource : resources) {
@@ -932,6 +997,7 @@ void onSeatPointerFocusChange() {
 
     releasePressedButtons();
     g.directPointerSurface.reset();
+    g.directPointerNeedsEnter = true;
     // Owed sub-notch clicks belonged to the enter just invalidated.
     g.axisRemainderH = 0;
     g.axisRemainderV = 0;
@@ -1013,6 +1079,34 @@ void releasePressedKeys() {
     directKeyboardModifiers();
 }
 
+// The keyboard twin of restoreSeatPointerEnter: the seat's own enter for the
+// surface the human's keyboard focus is on, if it belongs to `client`, carrying
+// the keys the human is physically holding and the seat keyboard's modifier
+// state, so a Shift the human has down survives the agent's turn.
+void restoreSeatKeyboardEnter(wl_client* client) {
+    if (!g_pSeatManager)
+        return;
+    const auto seatSurface = g_pSeatManager->m_state.keyboardFocus.lock();
+    if (!seatSurface || seatSurface->client() != client)
+        return;
+    wl_array keys;
+    wl_array_init(&keys);
+    for (const uint32_t key : g.humanHeldKeys) {
+        if (auto* slot = static_cast<uint32_t*>(wl_array_add(&keys, sizeof(uint32_t))))
+            *slot = key;
+    }
+    const uint32_t serial   = directSerial(seatSurface, true);
+    const auto     keyboard = g_pSeatManager->m_keyboard.lock();
+    for (wl_resource* resource : clientInputResources(client, "wl_keyboard")) {
+        wl_keyboard_send_enter(resource, serial, seatSurface->getResource()->resource(), &keys);
+        if (keyboard) {
+            const auto& mods = keyboard->m_modifiersState;
+            wl_keyboard_send_modifiers(resource, serial, mods.depressed, mods.latched, mods.locked, mods.group);
+        }
+    }
+    wl_array_release(&keys);
+}
+
 void directKeyboardLeave() {
     const auto surface = g.directKeyboardSurface.lock();
     g.directKeyboardSurface.reset();
@@ -1025,6 +1119,25 @@ void directKeyboardLeave() {
     const uint32_t serial = directSerial(surface);
     for (wl_resource* resource : clientInputResources(surface->client(), "wl_keyboard"))
         wl_keyboard_send_leave(resource, serial, surface->getResource()->resource());
+    restoreSeatKeyboardEnter(surface->client());
+}
+
+// The keyboard hand-back. The re-stamp before every agent key takes the
+// client's shared wl_keyboard for that key; if the human is typing in another
+// window of the same client, their next key would follow ours into the agent's
+// window. After each agent key the seat's enter is put back, unless the agent
+// is mid-chord: a Ctrl it still holds must stay where it was pressed.
+void returnKeyboardToSeat() {
+    if (!g_pSeatManager || !g.pressedKeys.empty())
+        return;
+    const auto agentSurface = g.directKeyboardSurface.lock();
+    const auto seatSurface  = g_pSeatManager->m_state.keyboardFocus.lock();
+    if (!agentSurface || !seatSurface || seatSurface == agentSurface || seatSurface->client() != agentSurface->client())
+        return;
+    const uint32_t serial = directSerial(agentSurface);
+    for (wl_resource* resource : clientInputResources(agentSurface->client(), "wl_keyboard"))
+        wl_keyboard_send_leave(resource, serial, agentSurface->getResource()->resource());
+    restoreSeatKeyboardEnter(agentSurface->client());
 }
 
 void clearKeyboardDelivery() {
@@ -1408,9 +1521,20 @@ bool clearFocusWindow() {
     return true;
 }
 
+// Focus preparation is shared by motion, clicks, scrolls, and keys. Hand back
+// only after the complete operation, including refusals and exceptions. Held
+// buttons and modifiers retain their enter until the matching release.
+struct InputFocusHandback {
+    ~InputFocusHandback() {
+        returnKeyboardToSeat();
+        returnPointerToSeat();
+    }
+};
+
 bool movePointer(double x, double y) {
     if (!requireRunning())
         return false;
+    const InputFocusHandback handback;
     const CBox geo = workspaceGeometry();
     Vector2D   next{x, y};
     if (geo.w > 0 && geo.h > 0) {
@@ -1429,6 +1553,7 @@ bool movePointer(double x, double y) {
 bool injectButton(uint32_t button, bool pressed) {
     if (!requireRunning())
         return false;
+    const InputFocusHandback handback;
     // The reachability refusal outranks the plain focus failure: a pointer-less
     // client leaves updatePointerFocus without a surface too, and the caller
     // deserves the loud error, not a silent false.
@@ -1503,6 +1628,7 @@ int scrollValue120(double pixels) {
 bool injectAxis(double horizontal, double vertical) {
     if (!requireRunning())
         return false;
+    const InputFocusHandback handback;
     const bool focused = updatePointerFocus();
     const auto window  = g.pointerWindow.lock();
     if (window)
@@ -1557,6 +1683,7 @@ bool injectAxis(double horizontal, double vertical) {
 bool injectKey(uint32_t keyCode, bool pressed) {
     if (!requireRunning())
         return false;
+    const InputFocusHandback handback;
     if (!updateKeyboardFocus())
         return false;
     const auto window = g.keyboardWindow.lock();

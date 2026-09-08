@@ -28,4 +28,7 @@ $(OUT): synarahyprlandplugin.cpp
 clean:
 	rm -f $(OUT)
 
-.PHONY: all clean
+test:
+	python3 tests/focus_test.py
+
+.PHONY: all clean test
