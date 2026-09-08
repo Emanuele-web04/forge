@@ -31,6 +31,47 @@ function deferred<T>() {
 
 describe("teardownProviderProcessTree", () => {
   it.each(["linux", "win32"] as const)(
+    "does not certify cleanup when the OS root is gone before its exit notification on %s",
+    async (platform) => {
+      const rootExit = deferred<void>();
+      const tree: CapturedProcessTree = { descendants: [], captureComplete: true };
+      const result = await teardownProviderProcessTree(
+        { rootPid: 91, rootExited: rootExit.promise },
+        {
+          platform,
+          isRootRunning: async () => false,
+          processTreeKiller: {
+            capture: () => tree,
+            inspect: () => ({ verified: true, survivors: [] }),
+            signal: () => rootExit.resolve(undefined),
+          },
+          ...deterministicClock(),
+        },
+      );
+      expect(result.capturedBeforeRootExit).toBe(false);
+    },
+  );
+
+  it("does not certify cleanup if the native liveness probe fails", async () => {
+    const rootExit = deferred<void>();
+    const result = await teardownProviderProcessTree(
+      { rootPid: 91, rootExited: rootExit.promise },
+      {
+        isRootRunning: async () => {
+          throw new Error("process table unavailable");
+        },
+        processTreeKiller: {
+          capture: () => ({ descendants: [], captureComplete: true }),
+          inspect: () => ({ verified: true, survivors: [] }),
+          signal: () => rootExit.resolve(undefined),
+        },
+        ...deterministicClock(),
+      },
+    );
+    expect(result.capturedBeforeRootExit).toBe(false);
+  });
+
+  it.each(["linux", "win32"] as const)(
     "does not certify a pre-exit capture when the root exits during the initial snapshot on %s",
     async (platform) => {
       const tree: CapturedProcessTree = { descendants: [], captureComplete: true };
@@ -119,6 +160,7 @@ describe("teardownProviderProcessTree", () => {
       teardownProviderProcessTree(
         { rootPid: 101, rootExited, termGraceMs: 10, forceExitMs: 10, pollMs: 5 },
         {
+          isRootRunning: async () => true,
           processTreeKiller,
           ...clock,
         },
@@ -159,6 +201,7 @@ describe("teardownProviderProcessTree", () => {
       teardownProviderProcessTree(
         { rootPid: 201, rootExited, termGraceMs: 10, forceExitMs: 10, pollMs: 5 },
         {
+          isRootRunning: async () => true,
           processTreeKiller,
           ...clock,
         },
@@ -213,6 +256,7 @@ describe("teardownProviderProcessTree", () => {
         { rootPid: 801, rootExited, termGraceMs: 5, forceExitMs: 5, pollMs: 5 },
         {
           platform: "win32",
+          isRootRunning: async () => true,
           processTreeKiller,
           captureProcessTree: async () => tree,
           inspectProcessTree: async () => ({

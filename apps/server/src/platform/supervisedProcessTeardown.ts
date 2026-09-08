@@ -8,6 +8,7 @@ import {
   captureProcessTree,
   defaultProcessTreeKiller,
   inspectProcessTree,
+  isProcessRunning,
   type CapturedProcess,
   type CapturedProcessTree,
   type CapturedProcessTreeInspection,
@@ -60,6 +61,8 @@ export interface SupervisedProcessTeardownDependencies {
   readonly inspectProcessTree: (
     tree: CapturedProcessTree,
   ) => Promise<CapturedProcessTreeInspection>;
+  /** Fresh native liveness observation, taken after the descendant snapshot. */
+  readonly isRootRunning: (rootPid: number) => Promise<boolean>;
   readonly now: () => number;
   readonly sleep: (milliseconds: number) => Promise<void>;
 }
@@ -210,7 +213,22 @@ export async function teardownProviderProcessTree(
     // PPID traversal after root exit can miss reparented descendants. Cleanup
     // can still retire the observed tree, but callers must not treat that as
     // proof that an interrupted provider command had no surviving side effects.
-    const capturedBeforeRootExit = !rootExited;
+    // The exit promise alone is insufficient: native exit can precede its callback.
+    const rootRunningAfterCapture =
+      !rootExited &&
+      (await (
+        dependencies.isRootRunning?.(input.rootPid) ??
+        isProcessRunning(input.rootPid, {
+          platform,
+          ...(windowsObserver
+            ? {
+                captureWindowsChildren: () =>
+                  windowsObserver.captureWithin(FINAL_PROOF_INSPECTION_MAX_MS),
+              }
+            : {}),
+        })
+      ).catch(() => false));
+    const capturedBeforeRootExit = rootRunningAfterCapture && !rootExited;
     const signalErrors: Error[] = [];
 
     const signal = (
