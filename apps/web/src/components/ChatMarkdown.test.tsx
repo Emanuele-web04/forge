@@ -58,6 +58,105 @@ describe("streamingCodeHighlightIntervalMs", () => {
 });
 
 describe("ChatMarkdown", () => {
+  it("preserves bilingual payload text through the markdown renderer", async () => {
+    const text = "مرحبا بالعالم\n\nAPI status: ready";
+    const markup = await renderMarkdown(text);
+
+    expect(markup).toContain("مرحبا بالعالم");
+    expect(markup).toContain("API status: ready");
+    expect(markup).not.toContain("�");
+  });
+
+  it("opts transcript blocks into native automatic direction", async () => {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const markup = renderWithQueryClient(
+      <ChatMarkdown
+        text={"مرحبا بالعالم\n\nEnglish paragraph"}
+        cwd={undefined}
+        directionMode="auto-blocks"
+      />,
+    );
+
+    expect(markup).toContain('<p dir="auto">مرحبا بالعالم</p>');
+    expect(markup).toContain('<p dir="auto">English paragraph</p>');
+    expect(markup).toContain('data-direction-mode="auto-blocks"');
+  });
+
+  it("keeps automatic direction off for other ChatMarkdown consumers", async () => {
+    const markup = await renderMarkdown("مرحبا بالعالم");
+
+    expect(markup).not.toContain('data-direction-mode="auto-blocks"');
+    expect(markup).not.toContain('dir="auto"');
+  });
+
+  it("assigns direction to structural owners without changing table order", async () => {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const markup = renderWithQueryClient(
+      <ChatMarkdown
+        text={[
+          "# عنوان",
+          "",
+          "> اقتباس عربي",
+          "",
+          "- عنصر عربي",
+          "- English item",
+          "",
+          "| العربية | English |",
+          "| --- | --- |",
+          "| قيمة | value |",
+        ].join("\n")}
+        cwd={undefined}
+        directionMode="auto-blocks"
+      />,
+    );
+
+    expect(markup).toContain('<h1 dir="auto">عنوان</h1>');
+    expect(markup).toContain('<blockquote dir="auto">');
+    expect(markup.match(/<li dir="auto">/g) ?? []).toHaveLength(2);
+    expect(markup).toContain("<table>");
+    expect(markup).not.toContain("<table dir=");
+    expect(markup).not.toContain("<tr dir=");
+    expect(markup.match(/<th dir="auto">/g) ?? []).toHaveLength(2);
+    expect(markup.match(/<td dir="auto">/g) ?? []).toHaveLength(2);
+  });
+
+  it("isolates code and link labels inside automatic-direction blocks", async () => {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const markup = renderWithQueryClient(
+      <ChatMarkdown
+        text={[
+          "راجع [API docs](https://example.com) واستخدم `npm run test`.",
+          "",
+          "```sh",
+          "npm run test",
+          "```",
+        ].join("\n")}
+        cwd={undefined}
+        directionMode="auto-blocks"
+      />,
+    );
+
+    expect(markup).toContain('dir="auto" href="https://example.com"');
+    expect(markup).toContain('<code dir="ltr">npm run test</code>');
+    expect(markup).toContain('class="chat-markdown-codeblock" data-wrap="false" dir="ltr"');
+  });
+
+  it("isolates transcript file chips without changing their target", async () => {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const markup = renderWithQueryClient(
+      <ChatMarkdown
+        text={"راجع `/tmp/example.ts`"}
+        cwd={undefined}
+        knownAbsoluteFilePaths={["/tmp/example.ts"]}
+        directionMode="auto-blocks"
+      />,
+    );
+
+    expect(markup).toContain('<bdi class="chat-markdown-technical-isolate" dir="ltr">');
+    expect(markup).toContain('href="/tmp/example.ts"');
+    expect(markup).toContain("/tmp/example.ts");
+  });
+
   it("uses the theme foreground token for markdown text", async () => {
     const markup = await renderMarkdown("Theme-aware text");
 
