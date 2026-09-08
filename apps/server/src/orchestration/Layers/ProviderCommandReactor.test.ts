@@ -2632,6 +2632,71 @@ describe("ProviderCommandReactor", () => {
     expect(harness.sendTurn.mock.calls.length).toBe(0);
   });
 
+  it.each([
+    [false, true],
+    [true, true],
+    [true, false],
+  ])("restores an idle session with fork=%s and nativeResume=%s", async (fork, nativeResume) => {
+    const resumes: unknown[] = [];
+    const harness = await createHarness({
+      confirmNativeResume: (cursor) => {
+        resumes.push(cursor);
+        return nativeResume;
+      },
+    });
+    const threadId = ThreadId.makeUnsafe(fork ? "audit-fork" : "thread-1");
+    const now = new Date().toISOString();
+    if (fork)
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.fork.create",
+          commandId: CommandId.makeUnsafe("audit-create"),
+          threadId,
+          sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+          projectId: asProjectId("project-1"),
+          title: "Audit",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          envMode: "local",
+          branch: null,
+          worktreePath: null,
+          importedMessages: [],
+          createdAt: now,
+        }),
+      );
+    const send = async (n: number) => {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe(`audit-command-${n}`),
+          threadId,
+          message: {
+            messageId: asMessageId(`audit-message-${n}`),
+            role: "user",
+            text: `audit prompt ${n}`,
+            attachments: [],
+          },
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: now,
+        }),
+      );
+      await waitFor(() => harness.sendTurn.mock.calls.length === n);
+    };
+    await send(1);
+    await Effect.runPromise(harness.stopRuntimeSession({ threadId }));
+    await send(2);
+    expect(resumes).toHaveLength(1);
+    const prompt = (harness.sendTurn.mock.calls[1]![0] as { input: string }).input;
+    if (nativeResume) {
+      expect(prompt).not.toContain("<thread_context>");
+    } else {
+      expect(prompt).toContain("<thread_context>");
+      expect(prompt).toContain("audit prompt 1");
+    }
+  });
+
   it("bootstraps sidechat context when the provider cannot fork natively", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
