@@ -1246,7 +1246,9 @@ function mergeDerivedWorkLogEntries(
     : (next.toolStatus ?? previous.toolStatus);
   const liveActivity = mergeWorkLogLiveActivity(previous.liveActivity, next.liveActivity);
   const toolDetails = mergeWorkLogToolDetails(previous.toolDetails, next.toolDetails);
-  const turnId = previous.turnId ?? next.turnId;
+  // Keep the visual anchor below, but let the latest known turn own lifecycle
+  // settlement and live composer state when a background tool spans turns.
+  const turnId = next.turnId ?? previous.turnId;
   return {
     ...previous,
     ...next,

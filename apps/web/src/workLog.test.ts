@@ -1059,7 +1059,7 @@ describe("deriveWorkLogEntries", () => {
       id: "codex-command-start",
       createdAt: "2026-02-23T00:00:01.000Z",
       sequence: 10,
-      turnId: TurnId.makeUnsafe("turn-1"),
+      turnId: TurnId.makeUnsafe("turn-2"),
       activityKind: "tool.updated",
       detail: "Process exited with code 0",
     });
@@ -1068,6 +1068,71 @@ describe("deriveWorkLogEntries", () => {
       "intervening-warning",
     ]);
   });
+
+  it.each([
+    ["completed", "turn.completed", "info"],
+    ["cancelled", "turn.aborted", "info"],
+    ["failed", "turn.completed", "error"],
+  ] as const)(
+    "keeps a cross-turn tool running after its original turn %s",
+    (_state, terminalKind, terminalTone) => {
+      const oldTurn = TurnId.makeUnsafe("turn-1");
+      const activeTurn = TurnId.makeUnsafe("turn-2");
+      const at = (second: number) => new Date(Date.UTC(2026, 8, 8, 0, 0, second)).toISOString();
+      const tool = (
+        id: string,
+        second: number,
+        kind: OrchestrationThreadActivity["kind"],
+        turnId: TurnId | null,
+      ) =>
+        makeActivity({
+          id,
+          createdAt: at(second),
+          sequence: second,
+          kind,
+          turnId,
+          summary: "Read file",
+          payload: { itemType: "dynamic_tool_call", data: { toolCallId: "background-tool" } },
+        });
+      const activities = [
+        tool("tool-start", 1, "tool.started", oldTurn),
+        makeActivity({
+          id: "turn-terminal",
+          createdAt: at(2),
+          sequence: 2,
+          turnId: oldTurn,
+          kind: terminalKind,
+          tone: terminalTone,
+        }),
+        tool("tool-next-turn", 3, "tool.updated", activeTurn),
+        tool("tool-progress", 4, "tool.updated", activeTurn),
+        // Some provider updates omit ownership; retain the latest known turn.
+        tool("tool-turnless-progress", 5, "tool.updated", null),
+      ];
+      const options = { activeTurnId: activeTurn, activeTurnStartedAt: at(3) };
+      const findTool = (input: OrchestrationThreadActivity[]) =>
+        deriveWorkLogEntries(input, undefined, options).find((entry) => entry.id === "tool-start");
+      const running = findTool(activities);
+      expect(running).toMatchObject({
+        id: "tool-start",
+        createdAt: at(1),
+        sequence: 1,
+        turnId: activeTurn,
+        toolStatus: "running",
+        liveActivity: { state: "running_tool", lastActivityAt: at(5) },
+      });
+
+      const completed = findTool([...activities, tool("tool-complete", 6, "tool.completed", null)]);
+      expect(completed).toMatchObject({
+        id: "tool-start",
+        createdAt: at(1),
+        sequence: 1,
+        turnId: activeTurn,
+        toolStatus: "completed",
+        liveActivity: { state: "completed", lastActivityAt: at(6) },
+      });
+    },
+  );
 
   it("keeps distinct calls of the same tool separate by tool-call id", () => {
     const activities: OrchestrationThreadActivity[] = [

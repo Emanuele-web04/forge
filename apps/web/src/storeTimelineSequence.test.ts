@@ -41,6 +41,80 @@ describe("snapshot and live activity sequence parity", () => {
     expect(withOrchestrationEventSequence(makeActivity({}), 100).sequence).toBe(100);
   });
 
+  it("keeps a background tool in its original response while its new turn owns its state", () => {
+    const historical = [
+      makeActivity({
+        id: "background-tool",
+        turnId: oldTurn,
+        kind: "tool.started",
+        summary: "Read file",
+        createdAt: at(2),
+        sequence: 1000,
+        payload: { itemType: "dynamic_tool_call", data: { toolCallId: "background" } },
+      }),
+      makeActivity({
+        id: "old-turn-complete",
+        turnId: oldTurn,
+        kind: "turn.completed",
+        createdAt: at(5),
+        sequence: 1001,
+      }),
+    ];
+    const messages = [
+      message("old-user", "user", 0, oldTurn),
+      { ...message("old-answer", "assistant", 4, oldTurn), completedAt: at(5) },
+      message("new-user", "user", 10, newTurn),
+    ];
+    for (const kind of ["tool.updated", "tool.completed"] as const) {
+      const entries = deriveWorkLogEntries(
+        [
+          ...historical,
+          makeActivity({
+            ...historical[0],
+            id: "background-update",
+            kind,
+            turnId: newTurn,
+            createdAt: at(12),
+            sequence: 2000,
+          }),
+        ],
+        newTurn,
+        { visibleTurnIds: new Set([oldTurn, newTurn]), activeTurnId: newTurn },
+      );
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        id: "background-tool",
+        turnId: newTurn,
+        liveActivity: { state: kind === "tool.updated" ? "running_tool" : "completed" },
+      });
+      const timeline = deriveTimelineEntries(messages, [], entries);
+      expect(timeline.map((entry) => entry.id)).toEqual([
+        "old-user",
+        "background-tool",
+        "old-answer",
+        "new-user",
+      ]);
+      const rows = deriveMessagesTimelineRows({
+        timelineEntries: timeline,
+        isWorking: true,
+        activeTurnInProgress: true,
+        activeTurnId: newTurn,
+        activeTurnStartedAt: at(10),
+        worktreeSetup: null,
+        worktreeSetupOpen: false,
+        turnDiffSummaryByAssistantMessageId: new Map(),
+        revertTurnCountByUserMessageId: new Map(),
+      });
+      const oldAnswer = rows.find((row) => row.id === "old-answer");
+      expect(
+        oldAnswer?.kind === "message" && oldAnswer.collapsedTurnItems?.map((item) => item.id),
+      ).toEqual(["background-tool"]);
+      expect(
+        JSON.stringify(rows.slice(rows.findIndex((row) => row.id === "new-user") + 1)),
+      ).not.toContain("background-tool");
+    }
+  });
+
   it.each(["batched", "sequential"] as const)(
     "keeps historical tools and compaction in their original response after %s live events",
     (mode) => {
