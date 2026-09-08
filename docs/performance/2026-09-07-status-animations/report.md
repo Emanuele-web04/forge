@@ -37,12 +37,12 @@ profile serve all samples. Three pairs run in A/B, B/A, A/B order. CPU time is t
 difference in `app.getAppMetrics().cpu.cumulativeCPUUsage`; percentages below use
 100% for one CPU core. The fixture has one process of each reported type.
 
-| Metric, median per 8-second sample | Baseline | Updated | Absolute change | Reduction |
-| --- | ---: | ---: | ---: | ---: |
-| All Electron process CPU time | 1.489 s | 0.956 s | −0.532 s | 35.8% |
-| GPU-process CPU time | 0.894 s | 0.487 s | −0.406 s | 45.5% |
-| Renderer CPU time | 0.577 s | 0.448 s | −0.128 s | 22.2% |
-| All Electron process CPU utilization | 18.60% | 11.95% | −6.66 points | 35.8% |
+| Metric, median per 8-second sample   | Baseline | Updated | Absolute change | Reduction |
+| ------------------------------------ | -------: | ------: | --------------: | --------: |
+| All Electron process CPU time        |  1.489 s | 0.956 s |        −0.532 s |     35.8% |
+| GPU-process CPU time                 |  0.894 s | 0.487 s |        −0.406 s |     45.5% |
+| Renderer CPU time                    |  0.577 s | 0.448 s |        −0.128 s |     22.2% |
+| All Electron process CPU utilization |   18.60% |  11.95% |    −6.66 points |     35.8% |
 
 Raw results: [paired-electron.json](paired-electron.json). All three updated samples
 used less CPU than their paired baseline. Total CPU-time ranges were 1.403–1.822 s
