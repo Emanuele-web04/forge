@@ -1,54 +1,6 @@
-diff --git a/node_modules/betterwright/.bun-tag-2818573c67d7b19b b/.bun-tag-2818573c67d7b19b
-new file mode 100644
-index 0000000..e69de29
-diff --git a/node_modules/betterwright/.bun-tag-29e8fc06f5b346b9 b/.bun-tag-29e8fc06f5b346b9
-new file mode 100644
-index 0000000..e69de29
-diff --git a/node_modules/betterwright/.bun-tag-42f2166c6e2accf0 b/.bun-tag-42f2166c6e2accf0
-new file mode 100644
-index 0000000..e69de29
-diff --git a/node_modules/betterwright/.bun-tag-4ade45b32361aba3 b/.bun-tag-4ade45b32361aba3
-new file mode 100644
-index 0000000..e69de29
-diff --git a/node_modules/betterwright/.bun-tag-4ba60b008e829498 b/.bun-tag-4ba60b008e829498
-new file mode 100644
-index 0000000..e69de29
-diff --git a/node_modules/betterwright/.bun-tag-735109557453c95f b/.bun-tag-735109557453c95f
-new file mode 100644
-index 0000000..e69de29
-diff --git a/node_modules/betterwright/.bun-tag-755a3c0d947adbd0 b/.bun-tag-755a3c0d947adbd0
-new file mode 100644
-index 0000000..e69de29
-diff --git a/node_modules/betterwright/.bun-tag-7ded427ef8e1cf82 b/.bun-tag-7ded427ef8e1cf82
-new file mode 100644
-index 0000000..e69de29
-diff --git a/node_modules/betterwright/.bun-tag-8f96ea77d0fce2c4 b/.bun-tag-8f96ea77d0fce2c4
-new file mode 100644
-index 0000000..e69de29
-diff --git a/node_modules/betterwright/.bun-tag-c7d3ed853f191214 b/.bun-tag-c7d3ed853f191214
-new file mode 100644
-index 0000000..e69de29
-diff --git a/node_modules/betterwright/.bun-tag-c916bf746146e07e b/.bun-tag-c916bf746146e07e
-new file mode 100644
-index 0000000..e69de29
-diff --git a/node_modules/betterwright/.bun-tag-ce72083686ab4ee7 b/.bun-tag-ce72083686ab4ee7
-new file mode 100644
-index 0000000..e69de29
-diff --git a/node_modules/betterwright/.bun-tag-da1702e74478cad b/.bun-tag-da1702e74478cad
-new file mode 100644
-index 0000000..e69de29
-diff --git a/node_modules/betterwright/.bun-tag-ec250626d41ee73c b/.bun-tag-ec250626d41ee73c
-new file mode 100644
-index 0000000..e69de29
-diff --git a/node_modules/betterwright/.bun-tag-eed0a70e8998437f b/.bun-tag-eed0a70e8998437f
-new file mode 100644
-index 0000000..e69de29
-diff --git a/node_modules/betterwright/.bun-tag-f713d9c4cebd79fc b/.bun-tag-f713d9c4cebd79fc
-new file mode 100644
-index 0000000..e69de29
 diff --git a/dist/src/client.js b/dist/src/client.js
 index 1701abb..6e0aad7 100644
---- a/pristine-bw/dist/src/client.js
+--- a/dist/src/client.js
 +++ b/dist/src/client.js
 @@ -330,6 +330,14 @@ export class BetterWright {
       *   machine on the network. Pass `{host:"127.0.0.1"}` for loopback-only.
@@ -125,8 +77,8 @@ index 1701abb..6e0aad7 100644
      _extractCookieSync(options) {
          return extractCookieSync(options);
 diff --git a/dist/src/cookie-sync.js b/dist/src/cookie-sync.js
-index ef70566..8070c3a 100644
---- a/pristine-bw/dist/src/cookie-sync.js
+index ef70566..c6cff4f 100644
+--- a/dist/src/cookie-sync.js
 +++ b/dist/src/cookie-sync.js
 @@ -1,5 +1,6 @@
  import { isIP } from "node:net";
@@ -149,7 +101,7 @@ index ef70566..8070c3a 100644
      reader = await load();
      const readOptions = {
          browser: options.source.browser,
-@@ -445,8 +449,36 @@ export async function extractCookieSync(options, load = loadCookieReader) {
+@@ -445,34 +449,75 @@ export async function extractCookieSync(options, load = loadCookieReader) {
      try {
          snapshot = await reader.read(readOptions);
      }
@@ -188,19 +140,48 @@ index ef70566..8070c3a 100644
      }
      return normalizeCookieSnapshot(snapshot, options);
  }
-@@ -461,7 +493,7 @@ export async function listCookieSourceBrowsers(load = loadCookieReader) {
+ export async function listCookieSourceBrowsers(load = loadCookieReader) {
+-    const reader = await load();
+-    let value;
++    const browsers = [];
+     try {
+-        value = await reader.supportedBrowsers();
++        const reader = await load();
++        let value;
++        try {
++            value = await reader.supportedBrowsers();
++        }
++        catch {
++            // Keep the native reader error from hiding Helium.
++            value = undefined;
++        }
++        if (Array.isArray(value)) {
++            for (const entry of value.flatMap((entry) => {
++                const id = cleanPublicText(untrustedField(entry, "id"), 128).toLowerCase();
++                const name = cleanPublicText(untrustedField(entry, "displayName"), 256);
++                const engine = cleanPublicText(untrustedField(entry, "engine"), 64);
++                if (!/^[a-z0-9][a-z0-9._-]*$/.test(id))
++                    return [];
++                return id && name ? [{ id, name, engine }] : [];
++            })) {
++                browsers.push(entry);
++            }
++        }
      }
-     if (!Array.isArray(value))
-         throw new Error("Cookie Sync returned an invalid browser list.");
+     catch {
+-        throw new Error("Cookie Sync could not list browsers on this host.");
++        // The native reader is optional; Helium has its own reader.
+     }
+-    if (!Array.isArray(value))
+-        throw new Error("Cookie Sync returned an invalid browser list.");
 -    return value.flatMap((entry) => {
-+    const browsers = value.flatMap((entry) => {
-         const id = cleanPublicText(untrustedField(entry, "id"), 128).toLowerCase();
-         const name = cleanPublicText(untrustedField(entry, "displayName"), 256);
-         const engine = cleanPublicText(untrustedField(entry, "engine"), 64);
-@@ -469,10 +501,14 @@ export async function listCookieSourceBrowsers(load = loadCookieReader) {
-             return [];
-         return id && name ? [{ id, name, engine }] : [];
-     });
+-        const id = cleanPublicText(untrustedField(entry, "id"), 128).toLowerCase();
+-        const name = cleanPublicText(untrustedField(entry, "displayName"), 256);
+-        const engine = cleanPublicText(untrustedField(entry, "engine"), 64);
+-        if (!/^[a-z0-9][a-z0-9._-]*$/.test(id))
+-            return [];
+-        return id && name ? [{ id, name, engine }] : [];
+-    });
 +    const helium = await heliumCookieSourceAvailable();
 +    if (helium && !browsers.some((entry) => entry.id === helium.id)) browsers.push(helium);
 +    return browsers;
@@ -212,12 +193,12 @@ index ef70566..8070c3a 100644
      const reader = await load();
      let value;
      try {
-diff --git a/patched-bw/dist/src/helium-cookie-source.js b/dist/src/helium-cookie-source.js
+diff --git a/dist/src/helium-cookie-source.js b/dist/src/helium-cookie-source.js
 new file mode 100644
-index 0000000..22162f9
+index 0000000..4e6b0c9
 --- /dev/null
 +++ b/dist/src/helium-cookie-source.js
-@@ -0,0 +1,250 @@
+@@ -0,0 +1,311 @@
 +// Helium (net.imput.helium) cookie source for hosts whose native reader does
 +// not register the browser yet. Reads the same Chromium cookie database the
 +// native reader would, decrypts v10 rows with the profile's Keychain secret,
@@ -273,6 +254,19 @@ index 0000000..22162f9
 +    if (stage) error.cookieReaderStage = stage;
 +    error.cookiePermissionDenied = permissionDenied === true;
 +    return error;
++}
++
++function isSqliteResourceError(error) {
++    if (!(error instanceof Error)) return false;
++    const message = String(error.message).toLowerCase();
++    return /\b(?:database is locked|table is locked|locked|unable to open|busy|i\/o error|io error)\b/i.test(message);
++}
++
++function classifySqliteError(error, stage) {
++    if (isSqliteResourceError(error)) {
++        return heliumError("source_extraction_failed", stage, false);
++    }
++    return null;
 +}
 +
 +async function heliumCookieDatabasePath(profileDir) {
@@ -334,7 +328,7 @@ index 0000000..22162f9
 +    });
 +}
 +
-+function decryptChromiumValue(encrypted, key) {
++function decryptChromiumValue(encrypted, key, version = 0) {
 +    if (!(encrypted instanceof Uint8Array) || encrypted.length <= 3) return null;
 +    const blob = Buffer.from(encrypted.buffer, encrypted.byteOffset, encrypted.byteLength);
 +    const tag = blob.toString("latin1", 0, 3);
@@ -344,14 +338,18 @@ index 0000000..22162f9
 +    else return null;
 +    try {
 +        const decipher = createDecipheriv("aes-128-cbc", key, CHROMIUM_AES_IV);
-+        const plain = Buffer.concat([decipher.update(body), decipher.final()]);
++        let plain = Buffer.concat([decipher.update(body), decipher.final()]);
++        if (version >= 24) {
++            if (plain.length < 32) return null;
++            plain = plain.subarray(32);
++        }
 +        return plain.length ? plain.toString("utf8") : "";
 +    } catch {
 +        return null;
 +    }
 +}
 +
-+function heliumCookieRow(row, key, warnings) {
++function heliumCookieRow(row, key, warnings, version) {
 +    const name = typeof row.name === "string" ? row.name : "";
 +    const domain = typeof row.host_key === "string" ? row.host_key.trim().toLowerCase() : "";
 +    const path = typeof row.path === "string" ? row.path : "";
@@ -361,7 +359,7 @@ index 0000000..22162f9
 +    }
 +    let value = typeof row.value === "string" ? row.value : "";
 +    if (!value) {
-+        value = decryptChromiumValue(row.encrypted_value, key);
++        value = decryptChromiumValue(row.encrypted_value, key, version);
 +        if (value === null) {
 +            warnings.set("decrypt_failed", (warnings.get("decrypt_failed") ?? 0) + 1);
 +            return null;
@@ -392,30 +390,59 @@ index 0000000..22162f9
 +    if (sourcePort === -1 || (sourcePort >= 1 && sourcePort <= 65_535)) {
 +        context.sourcePort = sourcePort;
 +    }
++    const topFrameSiteKey = typeof row.top_frame_site_key === "string" ? row.top_frame_site_key : "";
++    if (topFrameSiteKey) {
++        const hasCrossSiteAncestor = row.has_cross_site_ancestor;
++        const isCrossSite = hasCrossSiteAncestor !== undefined
++            ? Number(hasCrossSiteAncestor) === 1
++            : false;
++        context.topFrameSiteKey = topFrameSiteKey;
++        context.hasCrossSiteAncestor = isCrossSite;
++    }
 +    return { cookie, context };
 +}
 +
 +async function snapshotHeliumDatabase(databasePath, workspace) {
 +    // VACUUM INTO takes one consistent snapshot under a read transaction, so a
 +    // live Helium write can never be observed as a torn database + WAL pair.
-+    const database = new DatabaseSync(databasePath, { readOnly: true });
++    let database;
++    try {
++        database = new DatabaseSync(databasePath, { readOnly: true });
++    } catch (error) {
++        const classified = classifySqliteError(error, "acquisition");
++        if (classified) throw classified;
++        throw error;
++    }
 +    try {
 +        const copyPath = join(workspace, "Cookies");
 +        database.exec(`VACUUM INTO '${copyPath.replaceAll("'", "''")}'`);
 +        return copyPath;
++    } catch (error) {
++        const classified = classifySqliteError(error, "acquisition");
++        if (classified) throw classified;
++        throw error;
 +    } finally {
 +        database.close();
 +    }
 +}
 +
 +async function queryHeliumCookies(databasePath, key, warnings) {
-+    const database = new DatabaseSync(databasePath, { readBigInts: true });
++    let database;
++    try {
++        database = new DatabaseSync(databasePath, { readBigInts: true });
++    } catch (error) {
++        const classified = classifySqliteError(error, "acquisition");
++        if (classified) throw classified;
++        throw error;
++    }
 +    try {
 +        const columns = new Set(
 +            database.prepare("PRAGMA table_info(cookies)").all().map((column) => String(column.name)),
 +        );
 +        const secure = columns.has("is_secure") ? "is_secure" : "secure";
 +        const httpOnly = columns.has("is_httponly") ? "is_httponly" : "httponly";
++        const topFrameSiteKey = columns.has("top_frame_site_key") ? "top_frame_site_key" : null;
++        const hasCrossSiteAncestor = columns.has("has_cross_site_ancestor") ? "has_cross_site_ancestor" : null;
 +        const selection = [
 +            "host_key",
 +            "name",
@@ -429,14 +456,28 @@ index 0000000..22162f9
 +            "has_expires",
 +            ...(columns.has("source_scheme") ? ["source_scheme"] : []),
 +            ...(columns.has("source_port") ? ["source_port"] : []),
++            ...(topFrameSiteKey ? [topFrameSiteKey] : []),
++            ...(hasCrossSiteAncestor ? [hasCrossSiteAncestor] : []),
 +        ].filter(Boolean);
++        let version = 0;
++        try {
++            const meta = database.prepare("SELECT value FROM meta WHERE key = 'version'").get();
++            if (meta && typeof meta.value === "string") {
++                const parsed = Number.parseInt(meta.value, 10);
++                if (Number.isInteger(parsed)) version = parsed;
++            }
++        } catch { /* The meta table is best-effort. */ }
 +        const rows = database.prepare(`SELECT ${selection.join(", ")} FROM cookies`).all();
 +        const detailedCookies = [];
 +        for (const row of rows) {
-+            const detailed = heliumCookieRow(row, key, warnings);
++            const detailed = heliumCookieRow(row, key, warnings, version);
 +            if (detailed) detailedCookies.push(detailed);
 +        }
 +        return detailedCookies;
++    } catch (error) {
++        const classified = classifySqliteError(error, "query");
++        if (classified) throw classified;
++        throw error;
 +    } finally {
 +        database.close();
 +    }
@@ -467,10 +508,11 @@ index 0000000..22162f9
 +    } finally {
 +        await rm(workspace, { recursive: true, force: true }).catch(() => {});
 +    }
++
 +}
 diff --git a/dist/src/vault-capture.js b/dist/src/vault-capture.js
 index d704ee9..017e0a2 100644
---- a/pristine-bw/dist/src/vault-capture.js
+--- a/dist/src/vault-capture.js
 +++ b/dist/src/vault-capture.js
 @@ -89,6 +89,8 @@ export function installVaultCapture(context, deps = {}) {
      const state = {
@@ -623,7 +665,7 @@ index d704ee9..017e0a2 100644
              }
 diff --git a/dist/src/vault-sensor.js b/dist/src/vault-sensor.js
 index ed10d8d..1b0b16a 100644
---- a/pristine-bw/dist/src/vault-sensor.js
+--- a/dist/src/vault-sensor.js
 +++ b/dist/src/vault-sensor.js
 @@ -17,6 +17,7 @@
      if (globalThis.__bwVaultSensorInstalled)
@@ -692,7 +734,7 @@ index ed10d8d..1b0b16a 100644
  })();
 diff --git a/dist/src/vault.js b/dist/src/vault.js
 index a0918cb..71dcd4d 100644
---- a/pristine-bw/dist/src/vault.js
+--- a/dist/src/vault.js
 +++ b/dist/src/vault.js
 @@ -1147,16 +1147,22 @@ async function acquireLock(paths, timeoutMs, staleMs, afterPublish = null) {
  function emptySnapshot() {
@@ -770,7 +812,7 @@ index a0918cb..71dcd4d 100644
                      const pendingIndex = index === -1
 diff --git a/dist/src/worker.js b/dist/src/worker.js
 index c53eda6..17a7091 100755
---- a/pristine-bw/dist/src/worker.js
+--- a/dist/src/worker.js
 +++ b/dist/src/worker.js
 @@ -463,8 +463,8 @@ function sendResult(message) {
          message.events = [];
@@ -859,7 +901,7 @@ index c53eda6..17a7091 100755
          /* parent/process exit */
 diff --git a/package.json b/package.json
 index 6a77351..58b08d0 100644
---- a/pristine-bw/package.json
+--- a/package.json
 +++ b/package.json
 @@ -6,6 +6,11 @@
    "main": "dist/src/index.js",
@@ -873,41 +915,73 @@ index 6a77351..58b08d0 100644
      ".": {
        "types": "./types/index.d.ts",
        "import": "./dist/src/index.js",
-diff --git a/patched-bw/types/capture.d.ts b/types/capture.d.ts
+diff --git a/types/capture.d.ts b/types/capture.d.ts
 new file mode 100644
-index 0000000..c28171a
+index 0000000..30cb7fe
 --- /dev/null
 +++ b/types/capture.d.ts
-@@ -0,0 +1,26 @@
+@@ -0,0 +1,58 @@
 +export interface CapturePage {
++  readonly closed: boolean;
++  lastAgentActivity: number;
 +  isClosed(): boolean;
-+  once(event: "close", callback: () => void): unknown;
++  close(): void;
 +}
++
++export interface CDPSession {
++  send(method: string, parameters?: unknown): Promise<unknown>;
++  on(event: string, callback: (parameters: unknown) => void): void;
++  detach(): Promise<void>;
++}
++
 +export interface CaptureContext {
 +  pages(): CapturePage[];
-+  on(event: "page", callback: (page: CapturePage) => void): unknown;
-+  off(event: "page", callback: (page: CapturePage) => void): unknown;
-+  newCDPSession(page: CapturePage): Promise<{
-+    send(method: string, params?: Record<string, unknown>): Promise<unknown>;
-+    on(event: string, callback: (event: unknown) => void): unknown;
-+    detach(): Promise<void>;
-+  }>;
++  on(event: "page", listener: (page: CapturePage) => void): void;
++  off(event: "page", listener: (page: CapturePage) => void): void;
++  newCDPSession(page: CapturePage): Promise<CDPSession>;
 +}
-+export function installVaultCapture(context: CaptureContext, deps: {
-+  vaultCallAtOrigin(session: unknown, origin: string, action: string, payload: Record<string, unknown>): Promise<unknown>;
++
++export type VaultAction = "list" | "save";
++
++export interface VaultCaptureDeps {
 +  sessionForPage(page: CapturePage): unknown;
++  vaultCallAtOrigin(
++    session: unknown,
++    origin: string,
++    action: VaultAction,
++    payload: Record<string, unknown>,
++  ): Promise<Record<string, unknown>>;
 +  trackSecret(value: string): void;
 +  isHeaded(): boolean;
 +  lastModelActivity(page: CapturePage, origin: string): number;
-+  shouldCapture?(input: { origin: string; username: string; password: string }): Promise<boolean>;
-+  requestSave?(input: { page: CapturePage; origin: string; username: string; mode: string }): Promise<"save" | "dismiss">;
-+  matchMode?: "exact-origin";
++  shouldCapture(input: { origin: string; username: string; password: string }): boolean | Promise<boolean>;
++  matchMode?: "base-domain" | "host" | "exact-origin";
++  requestSave?(params: {
++    page?: CapturePage;
++    origin: string;
++    username: string;
++    mode: string;
++  }): Promise<string>;
++  prefsPath?: string;
++  gateMs?: number;
++  confirmMs?: number;
++  promptTtlMs?: number;
++  modelWindowMs?: number;
 +  onError?(error: Error): void;
 +  onReady?(): void;
-+}): { dispose(): Promise<void>; isBusy(page: CapturePage): boolean };
++}
++
++export interface VaultCapture {
++  dispose(): Promise<void>;
++}
++
++export function installVaultCapture(
++  context: CaptureContext,
++  deps?: Partial<VaultCaptureDeps>,
++): VaultCapture;
 diff --git a/types/public.d.ts b/types/public.d.ts
 index 7fbd0aa..272b8fd 100644
---- a/pristine-bw/types/public.d.ts
+--- a/types/public.d.ts
 +++ b/types/public.d.ts
 @@ -106,8 +106,9 @@ export type CookieSyncResult =
        target: string;
@@ -933,7 +1007,7 @@ index 7fbd0aa..272b8fd 100644
     * with its own cookie jar, its own profile lock, and its own session daemon,
 diff --git a/types/vault.d.ts b/types/vault.d.ts
 index 0876c43..ca87e73 100644
---- a/pristine-bw/types/vault.d.ts
+--- a/types/vault.d.ts
 +++ b/types/vault.d.ts
 @@ -23,6 +23,8 @@ export type VaultJsonValue =
    | { [key: string]: VaultJsonValue };

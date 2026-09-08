@@ -68,9 +68,10 @@ async function runConnectedBetterwright<T>(options: BetterwrightRunOptions): Pro
   try {
     connection = await Promise.race([setup, aborting]);
   } catch (error) {
-    // A cancelled or stalled setup must still tear down whatever opened, or the
-    // debugger session and loopback transport outlive the run.
-    await setup
+    // A cancelled or stalled setup must still tear down whatever opened, but
+    // never re-await the same setup promise; otherwise the cancellation can hang
+    // until the debugger/loopback setup completes.
+    void setup
       .then(
         (opened) => opened.close(true),
         () => undefined,

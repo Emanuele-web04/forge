@@ -9,7 +9,7 @@ describe("Betterwright input provenance", () => {
         key: "Enter",
         modifiers: 10,
       }),
-    ).toEqual([{ kind: "key", key: "Enter", alt: false, control: true, meta: false, shift: true }]);
+    ).toEqual([{ kind: "key", key: "enter", alt: false, control: true, meta: false, shift: true }]);
     expect(
       betterwrightExpectedInputs("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter" }),
     ).toEqual([]);
@@ -17,8 +17,26 @@ describe("Betterwright input provenance", () => {
   });
 
   it("registers the takeover signal for every accepted key representation", () => {
-    // The keyboard policy accepts these forms, so each must register an
-    // expected signal instead of tripping human takeover.
+    // Multi-character keys must be lower-cased so the browser manager's
+    // normalizeAutomationKey matches the expected signal.
+    expect(
+      betterwrightExpectedInputs("Input.dispatchKeyEvent", {
+        type: "rawKeyDown",
+        key: "ArrowLeft",
+        modifiers: 0,
+      }),
+    ).toEqual([
+      { kind: "key", key: "arrowleft", alt: false, control: false, meta: false, shift: false },
+    ]);
+    expect(
+      betterwrightExpectedInputs("Input.dispatchKeyEvent", {
+        type: "rawKeyDown",
+        key: "Enter",
+        modifiers: 0,
+      }),
+    ).toEqual([
+      { kind: "key", key: "enter", alt: false, control: false, meta: false, shift: false },
+    ]);
     expect(
       betterwrightExpectedInputs("Input.dispatchKeyEvent", {
         type: "rawKeyDown",

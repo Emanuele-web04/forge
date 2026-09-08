@@ -1,13 +1,18 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 const require = createRequire(import.meta.url);
 const moduleUrl = pathToFileURL(
   path.join(path.dirname(require.resolve("betterwright")), "cookie-sync.js"),
 ).href;
-const cookieSync = await import(moduleUrl);
+
+let cookieSync: Record<string, any>;
+
+beforeAll(async () => {
+  cookieSync = await import(moduleUrl);
+});
 
 describe("patched Betterwright native reader diagnostics", () => {
   it("uses only bounded fixed categories from the same selected profile's report", async () => {

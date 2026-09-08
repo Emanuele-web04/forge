@@ -378,7 +378,7 @@ function normalizeAutomationKey(value: string): string {
   if (value === "Space" || value === " ") {
     return " ";
   }
-  return value.length === 1 ? value.toLocaleLowerCase("en-US") : value;
+  return value.toLocaleLowerCase("en-US");
 }
 
 function browserAutomationInputMatches(

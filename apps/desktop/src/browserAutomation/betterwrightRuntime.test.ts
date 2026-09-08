@@ -190,6 +190,25 @@ describe("Betterwright runtime errors", () => {
     },
   );
 
+  it("rejects and restores throttling when cancelled before the connection opens", async () => {
+    const controller = new AbortController();
+    mocks.openConnection.mockImplementation(() => new Promise(() => {}));
+    const result = runBetterwright({
+      home: "/synthetic",
+      contents,
+      code: "return null",
+      timeoutMs: 30000,
+      signal: controller.signal,
+    });
+    await vi.waitFor(() =>
+      expect(contents.setBackgroundThrottling).toHaveBeenLastCalledWith(false),
+    );
+    const reason = new Error("Cancelled before connect");
+    controller.abort(reason);
+    await expect(result).rejects.toBe(reason);
+    expect(contents.setBackgroundThrottling).toHaveBeenLastCalledWith(true);
+  });
+
   it("revokes and terminates an active worker on cancellation", async () => {
     const controller = new AbortController();
     let finish!: (value: unknown) => void;

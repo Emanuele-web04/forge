@@ -4,8 +4,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { execFile, spawn } from "node:child_process";
+import { promisify } from "node:util";
 
 const require = createRequire(import.meta.url);
+const execFileAsync = promisify(execFile);
 const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const asarPath = process.env.SYNARA_ASAR_MODULE;
 if (!asarPath) throw new Error("Set SYNARA_ASAR_MODULE to the installed @electron/asar module.");
@@ -17,7 +19,7 @@ await mkdir(stage);
 // probe identical to the unpackaged run while staying requireable from ASAR.
 const fixture = path.join(desktop, ".smoke/betterwright-smoke.cjs");
 await mkdir(path.dirname(fixture), { recursive: true });
-await execFile("bun", [
+await execFileAsync("bun", [
   "build",
   path.join(desktop, "scripts/betterwright-smoke.ts"),
   "--target=node",

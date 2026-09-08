@@ -38,6 +38,8 @@ const api = vi.hoisted(() => ({
 
 vi.mock("../nativeApi", () => ({ readNativeApi: () => api, ensureNativeApi: () => api }));
 
+const SYNTHETIC_WEBVIEW_TAG = "synthetic-browser-webview";
+
 // A positive webContents id gives the attach path a real lease to hold, so the
 // no-detach assertions below can actually catch a stale Electron lease.
 class SyntheticBrowserWebview extends HTMLElement {
@@ -45,9 +47,13 @@ class SyntheticBrowserWebview extends HTMLElement {
     return 4242;
   }
 }
-if (!customElements.get("webview")) {
-  customElements.define("webview", SyntheticBrowserWebview);
+if (!customElements.get(SYNTHETIC_WEBVIEW_TAG)) {
+  customElements.define(SYNTHETIC_WEBVIEW_TAG, SyntheticBrowserWebview);
 }
+
+const originalCreateElement = document.createElement.bind(document);
+document.createElement = (tagName: string, options?: ElementCreationOptions) =>
+  originalCreateElement(tagName === "webview" ? SYNTHETIC_WEBVIEW_TAG : tagName, options);
 
 const threadId = ThreadId.makeUnsafe("menu-occlusion-fixture");
 const state: ThreadBrowserState = {
@@ -173,8 +179,8 @@ describe("native browser menu occlusion", () => {
         <DockFixture onAdd={() => {}} />
       </QueryClientProvider>,
     );
-    await vi.waitFor(() => expect(document.querySelector("webview")).not.toBeNull());
-    const webview = document.querySelector("webview")!;
+    await vi.waitFor(() => expect(document.querySelector(SYNTHETIC_WEBVIEW_TAG)).not.toBeNull());
+    const webview = document.querySelector(SYNTHETIC_WEBVIEW_TAG)!;
     const stage = webview.parentElement!;
     const sourceUrl = webview.getAttribute("src");
     useBrowserStateStore.getState().upsertThreadState({
@@ -197,7 +203,7 @@ describe("native browser menu occlusion", () => {
     expect(api.browser.detachWebview).not.toHaveBeenCalled();
     useBrowserStateStore.getState().upsertThreadState({ ...openerState, version: 3 });
     await vi.waitFor(() => expect(stage.style.visibility).toBe("visible"));
-    expect(document.querySelector("webview")).toBe(webview);
+    expect(document.querySelector(SYNTHETIC_WEBVIEW_TAG)).toBe(webview);
     expect(webview.getAttribute("src")).toBe(sourceUrl);
     expect(api.browser.detachWebview).not.toHaveBeenCalled();
     await mounted.unmount();
