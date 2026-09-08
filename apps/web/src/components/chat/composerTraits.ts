@@ -180,6 +180,9 @@ export function getComposerTraitSelection(
   };
 }
 
+/** Resolved composer trait state; the single shape every trait surface reads. */
+export type ComposerTraitSelection = ReturnType<typeof getComposerTraitSelection>;
+
 // Human label for the currently selected reasoning/thinking trait, shared by the
 // composer trigger and any surface that summarizes a thread's model selection.
 export function resolveComposerTraitStatusLabel(

@@ -1,8 +1,9 @@
-import { EventId, ThreadId, TurnId } from "@synara/contracts";
+import { ApprovalRequestId, EventId, ThreadId, TurnId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
   planRestartTurnReconciliation,
+  type ReconcilablePendingInteraction,
   type ReconcilableThread,
 } from "./startupTurnReconciliation.ts";
 
@@ -44,6 +45,18 @@ const makeActivity = (
   payload,
   sequence,
   createdAt: `2026-06-13T09:00:0${sequence}.000Z`,
+});
+
+const makePendingInteraction = (
+  threadId: string,
+  interactionKind: ReconcilablePendingInteraction["interactionKind"],
+  requestId: string,
+  status: ReconcilablePendingInteraction["status"],
+): ReconcilablePendingInteraction => ({
+  threadId: ThreadId.makeUnsafe(threadId),
+  interactionKind,
+  requestId: ApprovalRequestId.makeUnsafe(requestId),
+  status,
 });
 
 const expectSessionCommands = (commands: ReturnType<typeof planRestartTurnReconciliation>) =>
@@ -447,6 +460,91 @@ describe("planRestartTurnReconciliation", () => {
 
     const commands = planRestartTurnReconciliation({ threads, now: NOW });
     expect(commands.map((command) => command.threadId)).toEqual(["stuck-a", "stuck-b"]);
+  });
+
+  it("settles durable interaction rows the timeline no longer reports as open", () => {
+    // The row is the only surviving evidence: an answer attempt against the
+    // dead runtime already closed the request for the timeline derivation while
+    // leaving the row unresolved.
+    const thread = makeThread("durably-stuck", {
+      activities: [
+        makeActivity(
+          "user-input-requested",
+          "user-input.requested",
+          { requestId: "input-durable", questions: [] },
+          1,
+        ),
+      ],
+    });
+    const pendingInteractions: ReadonlyArray<ReconcilablePendingInteraction> = [
+      makePendingInteraction("durably-stuck", "userInput", "input-durable", "retryable"),
+      makePendingInteraction("durably-stuck", "approval", "approval-durable", "pending"),
+    ];
+
+    const commands = planRestartTurnReconciliation({
+      threads: [thread],
+      pendingInteractions,
+      now: NOW,
+    });
+
+    expect(commands.map((command) => command.commandId)).toEqual([
+      `restart-reconcile:durably-stuck:user-input:input-durable:${NOW}`,
+      `restart-reconcile:durably-stuck:approval:approval-durable:${NOW}`,
+    ]);
+    expect(commands[0]).toMatchObject({
+      activity: {
+        kind: "provider.user-input.respond.failed",
+        payload: {
+          requestId: "input-durable",
+          detail: expect.stringContaining("Stale pending user-input request: input-durable"),
+        },
+      },
+    });
+  });
+
+  it("ignores resolved rows and rows belonging to other threads", () => {
+    const thread = makeThread("clean-thread", {
+      session: makeSession("clean-thread", { status: "ready", activeTurnId: null }),
+      latestTurn: { state: "completed" },
+    });
+    const pendingInteractions: ReadonlyArray<ReconcilablePendingInteraction> = [
+      makePendingInteraction("clean-thread", "userInput", "answered", "confirmed"),
+      // Already reported as unanswerable: re-reporting would duplicate the row's
+      // failure activity on every boot.
+      makePendingInteraction("clean-thread", "approval", "already-reported", "uncertain"),
+      makePendingInteraction("other-thread", "userInput", "elsewhere", "pending"),
+    ];
+
+    expect(
+      planRestartTurnReconciliation({ threads: [thread], pendingInteractions, now: NOW }),
+    ).toEqual([]);
+  });
+
+  it("settles a request reported by both the timeline and a durable row exactly once", () => {
+    const thread = makeThread("double-reported", {
+      activities: [
+        makeActivity(
+          "approval-requested",
+          "approval.requested",
+          { requestId: "approval-both", requestKind: "command" },
+          1,
+        ),
+      ],
+    });
+    const pendingInteractions: ReadonlyArray<ReconcilablePendingInteraction> = [
+      makePendingInteraction("double-reported", "approval", "approval-both", "pending"),
+    ];
+
+    const commands = planRestartTurnReconciliation({
+      threads: [thread],
+      pendingInteractions,
+      now: NOW,
+    });
+
+    expect(commands).toHaveLength(1);
+    expect(commands[0]?.commandId).toBe(
+      `restart-reconcile:double-reported:approval:approval-both:${NOW}`,
+    );
   });
 
   it("produces deterministic command ids for identical inputs", () => {

@@ -1,4 +1,8 @@
 import {
+  type ComputerPermission,
+  type ComputerBuildSignature,
+  COMPUTER_CONTROL_DENIED_ACTIVITY_KIND,
+  COMPUTER_SETUP_REQUIRED_ACTIVITY_KIND,
   isToolLifecycleItemType,
   STUDIO_OUTPUTS_ACTIVITY_KIND,
   type OrchestrationLatestTurnState,
@@ -67,6 +71,27 @@ export interface ProviderContextLifecycleInfo {
   recapPreviewTruncated: boolean;
 }
 
+export interface WorkLogComputerSetupRequired {
+  /**
+   * The grants the OS is withholding, so the card can name them. Empty when the
+   * backend refused without naming one — the card then says what it can.
+   */
+  missing: readonly ComputerPermission[];
+  /**
+   * How the running build is signed, when the backend could say. Only an
+   * `adhoc` build gets the stale-grant explanation, because only there can
+   * System Settings show the switch on while the grant does not apply.
+   */
+  buildSignature?: ComputerBuildSignature;
+  /**
+   * The app macOS files this Synara's grants against, when a desktop shell told
+   * the server which flavor it is. The card's `tccutil` advice names it, and
+   * absent means that advice is withheld rather than guessed — a guessed
+   * identifier resets a different Synara's grants.
+   */
+  bundleId?: string;
+}
+
 export interface WorkLogEntry {
   id: string;
   createdAt: string;
@@ -92,6 +117,10 @@ export interface WorkLogEntry {
   subagentAction?: WorkLogSubagentAction;
   automation?: WorkLogAutomation;
   synaraThreadCreation?: WorkLogSynaraThreadCreation;
+  // Computer-control denial rows render as an actionable card (enable control
+  // and retry) instead of a plain error line; carry just what that card needs.
+  computerControlDenied?: WorkLogComputerControlDenied;
+  computerSetupRequired?: WorkLogComputerSetupRequired;
   providerContextLifecycle?: ProviderContextLifecycleInfo;
   // Source activity kind, kept so the timeline can pick a kind-specific icon
   // (e.g. user-input.requested -> question glyph) instead of the generic
@@ -129,6 +158,10 @@ export interface WorkLogAutomation {
   name: string;
   cadenceLabel: string;
   proposalState?: "pending" | "accepted" | "dismissed";
+}
+
+export interface WorkLogComputerControlDenied {
+  toolName: string | null;
 }
 
 export interface WorkLogSynaraCreatedThread {
@@ -368,6 +401,15 @@ function shouldKeepActivityForWorkLog(
   // turn that the revert itself just rolled out of view), so never let the
   // turn-visibility filter drop them.
   if (activity.kind === CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND) {
+    return true;
+  }
+
+  // A computer-control denial is the only actionable feedback for a desktop
+  // tool call rejected mid-turn; never let turn-visibility filtering hide it.
+  if (activity.kind === COMPUTER_SETUP_REQUIRED_ACTIVITY_KIND) {
+    return true;
+  }
+  if (activity.kind === COMPUTER_CONTROL_DENIED_ACTIVITY_KIND) {
     return true;
   }
 
@@ -699,6 +741,18 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     if (synaraThreadCreation) {
       entry.synaraThreadCreation = synaraThreadCreation;
     }
+  }
+  if (activity.kind === COMPUTER_SETUP_REQUIRED_ACTIVITY_KIND) {
+    const buildSignature = asComputerBuildSignature(payload?.buildSignature);
+    const bundleId = asTrimmedString(payload?.bundleId);
+    entry.computerSetupRequired = {
+      missing: asComputerPermissions(payload?.missing),
+      ...(buildSignature ? { buildSignature } : {}),
+      ...(bundleId ? { bundleId } : {}),
+    };
+  }
+  if (activity.kind === COMPUTER_CONTROL_DENIED_ACTIVITY_KIND) {
+    entry.computerControlDenied = { toolName: asTrimmedString(payload?.toolName) };
   }
   if (activity.kind === PROVIDER_CONTEXT_LIFECYCLE_ACTIVITY_KIND) {
     const providerContextLifecycle = extractProviderContextLifecycleInfo(payload);
@@ -1557,6 +1611,18 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
 }
 
+function asComputerPermissions(value: unknown): readonly ComputerPermission[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (entry): entry is ComputerPermission =>
+      entry === "accessibility" || entry === "screenRecording",
+  );
+}
+
+function asComputerBuildSignature(value: unknown): ComputerBuildSignature | undefined {
+  return value === "adhoc" || value === "signed" ? value : undefined;
+}
+
 function asTrimmedString(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -2051,7 +2117,14 @@ function extractToolName(payload: Record<string, unknown> | null): string | null
   const data = asRecord(payload?.data);
   const item = asRecord(data?.item);
   const itemInput = asRecord(item?.input);
-  const candidates = [data?.toolName, data?.tool, item?.toolName, item?.name, itemInput?.toolName];
+  const candidates = [
+    payload?.toolName,
+    data?.toolName,
+    data?.tool,
+    item?.toolName,
+    item?.name,
+    itemInput?.toolName,
+  ];
   for (const candidate of candidates) {
     const normalized = asTrimmedString(candidate);
     if (normalized) {
@@ -2115,7 +2188,8 @@ function extractWorkLogRequestKind(
     payload?.requestKind === "command" ||
     payload?.requestKind === "file-read" ||
     payload?.requestKind === "file-change" ||
-    payload?.requestKind === "permissions"
+    payload?.requestKind === "permissions" ||
+    payload?.requestKind === "tool"
   ) {
     return payload.requestKind;
   }

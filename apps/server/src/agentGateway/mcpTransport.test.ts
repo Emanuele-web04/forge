@@ -11,7 +11,13 @@ import { makeAgentGatewayInFlightRequestRegistry } from "./inFlightRequestRegist
 import { makeAgentGatewayMcpTransport } from "./mcpTransport.ts";
 import { FALLBACK_OBJECT_DESCRIPTION } from "./sanitizeToolInputSchema.ts";
 import { countSchemaKeyOccurrences, isJsonRecord } from "./schemaTestUtils.ts";
-import { acquireAgentGatewaySessionLease, type AgentGatewaySessionLease } from "./sessionLease.ts";
+import {
+  acquireAgentGatewaySessionLease,
+  AGENT_GATEWAY_NO_CAPABILITIES,
+  type AgentGatewayCapabilityInput,
+  type AgentGatewaySessionLease,
+  type AgentGatewaySessionLeaseOptions,
+} from "./sessionLease.ts";
 import type { ToolEntry } from "./toolRuntime.ts";
 
 const NOW = "2026-07-22T03:00:00.000Z";
@@ -57,9 +63,9 @@ function makeThread(threadId: string): OrchestrationThreadShell {
 }
 
 function makeTransport(input: {
-  readonly tool: ToolEntry;
-  readonly extraTools?: ReadonlyArray<ToolEntry>;
+  readonly tools: ReadonlyArray<ToolEntry>;
   readonly threads: ReadonlyArray<OrchestrationThreadShell>;
+  readonly leaseCapabilities?: AgentGatewayCapabilityInput;
 }) {
   const threads = new Map(input.threads.map((thread) => [String(thread.id), thread]));
   let nextSession = 0;
@@ -99,8 +105,12 @@ function makeTransport(input: {
       sessionRegistry.revoke(token);
       if (session) inFlightRequests.revokeSession(session.sessionKey);
     },
-    connectionForThread: (threadId: ThreadId) => {
-      const issued = sessionRegistry.issue(threadId, "codex");
+    connectionForThread: (
+      threadId: ThreadId,
+      _provider: unknown,
+      options?: AgentGatewaySessionLeaseOptions,
+    ) => {
+      const issued = sessionRegistry.issue(threadId, "codex", options);
       return {
         url: "http://127.0.0.1:48123/mcp",
         bearerToken: issued.token,
@@ -115,6 +125,7 @@ function makeTransport(input: {
       credentials,
       ThreadId.makeUnsafe(threadId),
       "codex",
+      input.leaseCapabilities ?? AGENT_GATEWAY_NO_CAPABILITIES,
     );
     if (!lease) throw new Error("Expected gateway session lease");
     tokenAliases.set(tokenAlias, lease.connection.bearerToken);
@@ -135,7 +146,7 @@ function makeTransport(input: {
   const transport = makeAgentGatewayMcpTransport({
     credentials,
     snapshotQuery,
-    tools: [input.tool, ...(input.extraTools ?? [])],
+    tools: input.tools,
     instructions: "test",
     requireThreadShell: (threadId) => {
       const thread = threads.get(threadId);
@@ -199,19 +210,21 @@ describe("makeAgentGatewayMcpTransport cancellation", () => {
         let handlerCalls = 0;
         const transport = makeTransport({
           threads: [makeThread("thread-rotated")],
-          tool: {
-            definition: {
-              name: "browser_click",
-              description: "test",
-              inputSchema: { type: "object" },
+          tools: [
+            {
+              definition: {
+                name: "browser_click",
+                description: "test",
+                inputSchema: { type: "object" },
+              },
+              requiredCapability: "browser:control",
+              requiresActiveTurn: true,
+              handler: () => {
+                handlerCalls += 1;
+                return Effect.succeed({ content: [{ type: "text" as const, text: "ok" }] });
+              },
             },
-            requiredCapability: "browser:control",
-            requiresActiveTurn: true,
-            handler: () => {
-              handlerCalls += 1;
-              return Effect.succeed({ content: [{ type: "text" as const, text: "ok" }] });
-            },
-          },
+          ],
         });
         yield* Effect.promise(() =>
           transport.completeTurnAndRestartRuntime(
@@ -271,7 +284,7 @@ describe("makeAgentGatewayMcpTransport cancellation", () => {
         assert.isDefined(browserWait);
         const transport = makeTransport({
           threads: [makeThread("thread-detached")],
-          tool: browserWait!,
+          tools: [browserWait!],
         });
         const body = {
           jsonrpc: "2.0",
@@ -315,15 +328,17 @@ describe("makeAgentGatewayMcpTransport cancellation", () => {
     Effect.gen(function* () {
       const transport = makeTransport({
         threads: [makeThread("thread-reuse")],
-        tool: {
-          definition: {
-            name: "unused",
-            description: "unused",
-            inputSchema: { type: "object" },
+        tools: [
+          {
+            definition: {
+              name: "unused",
+              description: "unused",
+              inputSchema: { type: "object" },
+            },
+            requiredCapability: "thread:read",
+            handler: () => Effect.never,
           },
-          requiredCapability: "thread:read",
-          handler: () => Effect.never,
-        },
+        ],
       });
       const ping = { jsonrpc: "2.0", id: "reusable", method: "ping" };
 
@@ -367,7 +382,7 @@ describe("makeAgentGatewayMcpTransport cancellation", () => {
           },
         };
         const transport = makeTransport({
-          tool,
+          tools: [tool],
           threads: [makeThread("thread-one"), makeThread("thread-two")],
         });
         const slowBody = {
@@ -422,20 +437,22 @@ describe("makeAgentGatewayMcpTransport cancellation", () => {
         const interrupted = yield* Deferred.make<void>();
         const transport = makeTransport({
           threads: [makeThread("thread-batch")],
-          tool: {
-            definition: {
-              name: "slow",
-              description: "Wait until cancelled",
-              inputSchema: { type: "object" },
-            },
-            requiredCapability: "thread:read",
-            handler: () =>
-              Effect.never.pipe(
-                Effect.onInterrupt(() =>
-                  Deferred.succeed(interrupted, undefined).pipe(Effect.asVoid),
+          tools: [
+            {
+              definition: {
+                name: "slow",
+                description: "Wait until cancelled",
+                inputSchema: { type: "object" },
+              },
+              requiredCapability: "thread:read",
+              handler: () =>
+                Effect.never.pipe(
+                  Effect.onInterrupt(() =>
+                    Deferred.succeed(interrupted, undefined).pipe(Effect.asVoid),
+                  ),
                 ),
-              ),
-          },
+            },
+          ],
         });
 
         const response = yield* post(transport, "token-1", [
@@ -493,7 +510,7 @@ describe("makeAgentGatewayMcpTransport tools/list schema sanitization", () => {
       };
       const transport = makeTransport({
         threads: [makeThread("thread-schema")],
-        tool: recursiveTool,
+        tools: [recursiveTool],
       });
       const response = yield* post(transport, "token-1", {
         jsonrpc: "2.0",
@@ -518,6 +535,79 @@ describe("makeAgentGatewayMcpTransport tools/list schema sanitization", () => {
         },
       });
       assert.isAbove(countSchemaKeyOccurrences(recursiveTool.definition.inputSchema, "$ref"), 0);
+    }),
+  );
+});
+
+function listedTools(body: unknown): ReadonlyArray<Record<string, unknown>> {
+  const result = (body as { result?: { tools?: ReadonlyArray<Record<string, unknown>> } }).result;
+  return result?.tools ?? [];
+}
+
+describe("makeAgentGatewayMcpTransport tools/list", () => {
+  const ok = () => Effect.succeed({ content: [{ type: "text" as const, text: "ok" }] });
+  const catalog: ReadonlyArray<ToolEntry> = [
+    {
+      definition: {
+        name: "synara_read_thread",
+        description: "Read a thread",
+        inputSchema: { type: "object" },
+      },
+      requiredCapability: "thread:read",
+      handler: ok,
+    },
+    {
+      definition: {
+        name: "computer_click",
+        description: "Click",
+        inputSchema: { type: "object" },
+        annotations: { title: "Click" },
+        _meta: { "anthropic/alwaysLoad": true },
+      },
+      requiredCapability: "computer:control",
+      handler: ok,
+    },
+  ];
+  const listBody = { jsonrpc: "2.0", id: "list", method: "tools/list" };
+
+  it.effect("omits tools the caller's session was never granted", () =>
+    Effect.gen(function* () {
+      // A session without computer:control can never call these tools; listing
+      // them would cost the model prompt tokens and a guaranteed denial.
+      const transport = makeTransport({ threads: [makeThread("thread-plain")], tools: catalog });
+      const response = yield* post(transport, "token-1", listBody);
+      assert.equal(response.status, 200);
+      assert.deepEqual(
+        listedTools(response.body).map((tool) => tool.name),
+        ["synara_read_thread"],
+      );
+    }),
+  );
+
+  it.effect("passes tool _meta through verbatim to a caller that holds the capability", () =>
+    Effect.gen(function* () {
+      const transport = makeTransport({
+        threads: [makeThread("thread-computer")],
+        tools: catalog,
+        leaseCapabilities: { enableComputerControl: true },
+      });
+      const response = yield* post(transport, "token-1", listBody);
+      assert.equal(response.status, 200);
+      const tools = listedTools(response.body);
+      assert.deepEqual(
+        tools.map((tool) => tool.name),
+        ["synara_read_thread", "computer_click"],
+      );
+      assert.deepEqual(tools[1], {
+        name: "computer_click",
+        description: "Click",
+        inputSchema: { type: "object" },
+        annotations: { title: "Click" },
+        _meta: { "anthropic/alwaysLoad": true },
+      });
+      // A tool that declares no _meta must not gain an empty one: an MCP client
+      // is entitled to treat the key's absence as "no hints".
+      assert.isFalse("_meta" in tools[0]!);
     }),
   );
 });

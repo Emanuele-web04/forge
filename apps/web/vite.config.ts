@@ -182,21 +182,53 @@ function precompressPlugin(): Plugin {
   };
 }
 
-export default defineConfig({
+/**
+ * React Compiler is a Babel pass over every module, and its cost scales with
+ * file size. `vite build` pays that once; the dev server pays it the first time
+ * each module is requested, and with route code-splitting that request is a
+ * click on a thread — so the compile lands inside an interaction instead of a
+ * build step. Measured cold on the dev server: ChatView.tsx 87s, Sidebar.tsx
+ * 17s, repeated after every dev restart and every edit to those files.
+ *
+ * Dev therefore skips the pass unless SYNARA_WEB_REACT_COMPILER=1. The tradeoff
+ * is real and worth knowing: without it the dev app renders with no
+ * auto-memoization, so a render profile taken from the dev server measures a
+ * build the app never ships. Set the env var when that is what you are
+ * measuring. Bailouts stay guarded either way by chatHotPath.compiler.test.ts
+ * and ChatMarkdown.compiler.test.ts, which run the plugin directly.
+ *
+ * Vitest also drives Vite in `serve` mode, but with `mode: "test"`. Tests keep
+ * the pass: the browser suites assert the memoization the shipped build has
+ * (ChatTranscriptPane.browser.tsx counts transcript commits), so they must run
+ * against the same output as production.
+ */
+function reactCompilerBabelPlugin() {
+  return babel({
+    // We need to be explicit about the parser options after moving to @vitejs/plugin-react v6.0.0
+    // This is because the babel plugin only automatically parses typescript and jsx based on relative paths (e.g. "**/*.ts")
+    // whereas the previous version of the plugin parsed all files with a .ts extension.
+    // This is causing our packages/ directory to fail to parse, as they are not relative to the CWD.
+    parserOpts: { plugins: ["typescript", "jsx"] },
+    presets: [reactCompilerPreset()],
+  });
+}
+
+/**
+ * Gating by `apply: "build"` does not work here: `babel()` returns a *promise*
+ * of a plugin, so the property lands on the promise and Vite never sees it.
+ * The plugin has to be left out of the array instead.
+ */
+const runReactCompiler = (command: "build" | "serve", mode: string): boolean =>
+  command === "build" || mode === "test" || process.env.SYNARA_WEB_REACT_COMPILER === "1";
+
+export default defineConfig(({ command, mode }) => ({
   plugins: [
     tanstackRouter({
       target: "react",
       autoCodeSplitting: true,
     }),
     react(),
-    babel({
-      // We need to be explicit about the parser options after moving to @vitejs/plugin-react v6.0.0
-      // This is because the babel plugin only automatically parses typescript and jsx based on relative paths (e.g. "**/*.ts")
-      // whereas the previous version of the plugin parsed all files with a .ts extension.
-      // This is causing our packages/ directory to fail to parse, as they are not relative to the CWD.
-      parserOpts: { plugins: ["typescript", "jsx"] },
-      presets: [reactCompilerPreset()],
-    }),
+    ...(runReactCompiler(command, mode) ? [reactCompilerBabelPlugin()] : []),
     tailwindcss(),
     centralIconPrunePlugin(),
     precompressPlugin(),
@@ -242,4 +274,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

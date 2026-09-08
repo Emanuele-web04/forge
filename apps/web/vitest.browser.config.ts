@@ -7,7 +7,7 @@ import viteConfig from "./vite.config";
 const srcPath = fileURLToPath(new URL("./src", import.meta.url));
 
 export default mergeConfig(
-  viteConfig,
+  viteConfig({ command: "serve", mode: "test" }),
   defineConfig({
     resolve: {
       alias: {

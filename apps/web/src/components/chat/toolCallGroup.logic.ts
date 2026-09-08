@@ -69,6 +69,9 @@ export function classifyToolCallSummaryCategory(entry: WorkLogEntry): ToolCallSu
   if (entry.requestKind === "file-read") {
     return "read";
   }
+  if (entry.requestKind === "tool") {
+    return "tool";
+  }
   if (entry.itemType === "web_search") {
     return "search";
   }
