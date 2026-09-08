@@ -181,6 +181,7 @@ interface CodexSessionContext {
   stopping: boolean;
   transportError?: Error;
   stopPromise?: Promise<void>;
+  teardownCapturedBeforeExit?: boolean;
   discovery?: boolean;
 }
 
@@ -1287,7 +1288,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           lastError: message,
         });
         this.emitErrorEvent(context, "session/startFailed", message);
-        await this.stopSession(threadId);
+        await (context.stopPromise ?? this.stopSession(threadId));
       } else {
         gatewaySessionLease?.release();
         this.emitEvent({
@@ -1303,9 +1304,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           message,
         });
       }
-      // Reaching here proves cleanup succeeded. A failed replacement barrier or
-      // teardown must remain an uncertain process failure, never a safe rejection.
-      throw previousSessionStopped
+      // A post-exit snapshot can miss reparented children even when cleanup
+      // succeeds. Only pre-exit capture can certify a safe startup rejection.
+      throw previousSessionStopped && (!context || context.teardownCapturedBeforeExit === true)
         ? new CodexSessionStartError(message, { cause })
         : new Error(message, { cause });
     }
@@ -2275,7 +2276,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   private async teardownContextProcess(context: CodexSessionContext): Promise<void> {
     try {
-      await teardownChildProcessTree(context.child, this.teardownProcessTree);
+      const result = await teardownChildProcessTree(context.child, this.teardownProcessTree);
+      context.teardownCapturedBeforeExit = result.capturedBeforeRootExit === true;
     } catch (cause) {
       const detail = cause instanceof Error ? cause.message : String(cause);
       throw new Error(
@@ -2964,31 +2966,19 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         return;
       }
 
-      context.detachStdout?.();
-      this.clearTaskCompleteFallback(context);
-      context.gatewaySessionLease?.release();
       const message = `codex app-server exited (code=${code ?? "null"}, signal=${signal ?? "null"}).`;
       const exitError = new Error(message);
       context.stdinWriter.close(exitError);
       this.rejectPendingRequests(context, exitError);
-      // The child is gone, so the responses cannot land; settling still clears
-      // the maps and emits the resolutions that close the pending UI cards.
-      void this.settlePendingHumanRequests(context, "session exited");
       this.updateSession(context, {
         status: "closed",
         activeTurnId: undefined,
         lastError: code === 0 ? context.session.lastError : message,
       });
       this.emitLifecycleEvent(context, "session/exited", message);
-      if (context.discovery) {
-        const discoveryKey = context.session.cwd ?? "";
-        if (discoveryKey) {
-          this.discoverySessions.delete(discoveryKey);
-        }
-      }
-      // Keep normal sessions as non-routable replacement barriers. The root's
-      // exit alone does not prove its descendants stopped; startup cleanup or
-      // the next stop/start must still await stopSession's process-tree proof.
+      // Retire resources promptly while retaining the replacement barrier until
+      // teardown settles. Post-exit capture keeps startup failures uncertain.
+      this.stopFailedContext(context);
     });
   }
 
@@ -3007,11 +2997,15 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     this.updateSession(context, { status: "error", lastError: message });
     this.emitErrorEvent(context, "protocol/transportError", message);
 
+    this.stopFailedContext(context);
+  }
+
+  private stopFailedContext(context: CodexSessionContext): void {
     const stopping = context.discovery
       ? this.stopDiscoverySession(context.session.cwd ?? "")
       : this.stopSession(context.session.threadId);
     void stopping.catch((stopError) => {
-      log.error("failed to stop Codex session after transport error", {
+      log.error("failed to stop Codex session after process or transport failure", {
         threadId: context.session.threadId,
         error: stopError,
       });

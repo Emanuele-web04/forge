@@ -2055,7 +2055,9 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             provider: PROVIDER,
             threadId: input.threadId,
             detail: toMessage(cause, "Failed to start Codex adapter session."),
-            ...(cause instanceof CodexSessionStartError ? { reason: "startup-failed" as const } : {}),
+            ...(cause instanceof CodexSessionStartError
+              ? { reason: "startup-failed" as const }
+              : {}),
             cause,
           }),
       }).pipe(Effect.map((session) => session));

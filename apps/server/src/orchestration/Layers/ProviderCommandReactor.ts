@@ -177,6 +177,9 @@ export function classifyProviderAttemptOutcome(
 ): ProviderAttemptOutcome {
   if (Exit.isSuccess(exit)) return { _tag: "accepted" };
   const detail = Cause.pretty(exit.cause);
+  // A finalizer may add a failed cleanup/restoration after a safe rejection.
+  // Evidence for the first failure cannot establish the entire attempt's outcome.
+  if (exit.cause.reasons.length !== 1) return { _tag: "uncertain", detail };
   const failure = Cause.findErrorOption(exit.cause);
   if (Option.isNone(failure)) return { _tag: "uncertain", detail };
 

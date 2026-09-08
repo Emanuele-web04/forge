@@ -144,6 +144,36 @@ describe("legacy provider blocker recovery", () => {
     expect(outcome._tag).toBe("uncertain");
   });
 
+  it.each(["failure", "defect"] as const)(
+    "keeps startup rejection uncertain when provider restoration adds a %s",
+    async (kind) => {
+      const startupError = new ProviderAdapterProcessError({
+        provider: "codex",
+        threadId: ThreadId.makeUnsafe("thread-switch-start-failed"),
+        reason: "startup-failed",
+        detail: "Codex startup failed after confirmed cleanup.",
+      });
+      const restorationError = new ProviderAdapterProcessError({
+        provider: "claudeAgent",
+        threadId: startupError.threadId,
+        detail: "Previous provider restoration did not prove process-tree exit.",
+      });
+      const exit = await Effect.runPromise(
+        Effect.fail(startupError).pipe(
+          Effect.onExit(() =>
+            kind === "failure" ? Effect.fail(restorationError) : Effect.die(restorationError),
+          ),
+          Effect.exit,
+        ),
+      );
+
+      expect(classifyProviderAttemptOutcome(exit)).toMatchObject({
+        _tag: "uncertain",
+        detail: expect.stringContaining(restorationError.detail),
+      });
+    },
+  );
+
   it("accepts only failures that prove the command frame was not written", () => {
     expect(
       isSafeLegacyProviderBlocker(

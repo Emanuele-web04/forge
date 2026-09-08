@@ -47,7 +47,8 @@ function createStartupHarness(failingMethod?: string, failure: "error" | "exit" 
       });
     } else if (request.id !== undefined) {
       queueMicrotask(() => {
-        const result = request.method === "thread/resume" ? { thread: { id: "native-thread" } } : {};
+        const result =
+          request.method === "thread/resume" ? { thread: { id: "native-thread" } } : {};
         child.stdout.write(`${JSON.stringify({ id: request.id, result })}\n`);
       });
     }
@@ -56,8 +57,9 @@ function createStartupHarness(failingMethod?: string, failure: "error" | "exit" 
     .mockReset()
     .mockReturnValue(child as unknown as ChildProcessWithoutNullStreams);
   const teardownProcessTree = vi.fn(async () => {
+    const capturedBeforeRootExit = child.exitCode === null;
     child.exit();
-    return { escalated: false, signalErrors: [] };
+    return { escalated: false, signalErrors: [], capturedBeforeRootExit };
   });
   const manager = new CodexAppServerManager(undefined, { teardownProcessTree });
   const internals = manager as unknown as {
@@ -73,9 +75,7 @@ function createStartupHarness(failingMethod?: string, failure: "error" | "exit" 
     resumeCursor: { threadId: "codex-existing-thread" },
   };
   const expectedErrorMessage =
-    failure === "exit"
-      ? "codex app-server exited (code=0, signal=null)."
-      : transportError.message;
+    failure === "exit" ? "codex app-server exited (code=0, signal=null)." : transportError.message;
   return { manager, child, input, requests, teardownProcessTree, expectedErrorMessage };
 }
 
@@ -89,7 +89,7 @@ describe("Codex session startup failures", () => {
     ["initialize", "exit"],
     ["thread/resume", "exit"],
   ] as const)(
-    "preserves the cause during %s/%s and confirms cleanup before rejecting",
+    "preserves the cause during %s/%s and requires pre-exit capture for a safe rejection",
     async (method, failure) => {
       const { manager, child, input, requests, teardownProcessTree, expectedErrorMessage } =
         createStartupHarness(method, failure);
@@ -98,9 +98,10 @@ describe("Codex session startup failures", () => {
         proveExit = resolve;
       });
       teardownProcessTree.mockImplementation(async () => {
+        const capturedBeforeRootExit = child.exitCode === null;
         await exitProof;
         child.exit();
-        return { escalated: false, signalErrors: [] };
+        return { escalated: false, signalErrors: [], capturedBeforeRootExit };
       });
       let settled = false;
       const result = manager.startSession(input).catch((error: unknown) => error);
@@ -115,7 +116,8 @@ describe("Codex session startup failures", () => {
         proveExit?.();
       }
       const error = await result;
-      expect(error).toBeInstanceOf(CodexSessionStartError);
+      expect(error).toBeInstanceOf(Error);
+      expect(error instanceof CodexSessionStartError).toBe(failure === "error");
       expect(error).toMatchObject({
         message: expectedErrorMessage,
         cause: { message: expectedErrorMessage },
@@ -149,12 +151,37 @@ describe("Codex session startup failures", () => {
       } finally {
         teardownProcessTree.mockImplementation(async () => {
           child.exit();
-          return { escalated: false, signalErrors: [] };
+          return { escalated: false, signalErrors: [], capturedBeforeRootExit: false };
         });
         await manager.stopAll();
       }
     },
   );
+
+  it("retires an idle session after spontaneous exit only when teardown completes", async () => {
+    const { manager, child, input, teardownProcessTree } = createStartupHarness();
+    await manager.startSession(input);
+    const sessions = (manager as unknown as { sessions: Map<ThreadId, unknown> }).sessions;
+    let finishTeardown: (() => void) | undefined;
+    teardownProcessTree.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishTeardown = () =>
+            resolve({
+              escalated: false,
+              signalErrors: [],
+              capturedBeforeRootExit: false,
+            });
+        }),
+    );
+
+    child.exit();
+    expect(teardownProcessTree).toHaveBeenCalledOnce();
+    expect(manager.hasSession(input.threadId)).toBe(false);
+    expect(sessions.has(input.threadId)).toBe(true);
+    finishTeardown?.();
+    await vi.waitFor(() => expect(sessions.has(input.threadId)).toBe(false));
+  });
 
   it("keeps a turn uncertain when stdin closes after accepting its frame", async () => {
     const { manager, child, input } = createStartupHarness();
