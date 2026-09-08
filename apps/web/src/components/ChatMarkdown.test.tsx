@@ -494,3 +494,21 @@ describe("ChatMarkdown user variant", () => {
     expect(markup).toContain("const value = 1;");
   });
 });
+
+it("opens Obsidian aliases relative to the vault and leaves code unchanged", async () => {
+  const { default: ChatMarkdown } = await import("./ChatMarkdown");
+  const markup = renderWithQueryClient(
+    <ChatMarkdown
+      text={
+        "Read [[03-Resources/papers/Qwen-3.8-Flash-Next.pdf|论文]] and [[My note]]. Code `[[literal|text]]`."
+      }
+      cwd="/vault/02-Areas/Career"
+      wikiLinkRoot="/vault"
+    />,
+  );
+  expect(markup).toContain('href="/vault/03-Resources/papers/Qwen-3.8-Flash-Next.pdf"');
+  expect(markup).toContain("论文");
+  expect(markup).toContain('href="/vault/My%20note.md"');
+  expect(markup).toContain("<code>[[literal|text]]</code>");
+  expect(markup).not.toContain("[[03-Resources");
+});
