@@ -27,6 +27,8 @@ function fixture(
     getURL: () => "https://fixture.example/",
     getTitle: () => "Fixture",
     getType: vi.fn(() => "browserView"),
+    getZoomFactor: vi.fn(() => 1),
+    sendInputEvent: vi.fn(),
     close: vi.fn(),
     focus: vi.fn(() => {
       focusState.current = contents as unknown as WebContents;
@@ -47,6 +49,45 @@ function fixture(
 }
 
 describe("Betterwright target boundary", () => {
+  it.each([0.5, 1, 2])(
+    "scales native hover coordinates at zoom %s and preserves modifiers",
+    async (zoom) => {
+      const f = fixture();
+      f.contents.getZoomFactor.mockReturnValue(zoom);
+      await f.target.receive({
+        id: 1,
+        method: "Target.attachToTarget",
+        params: { targetId: f.target.targetId },
+      });
+      const sessionId = (f.messages[0]!.result as { sessionId: string }).sessionId;
+      await f.target.receive({
+        id: 2,
+        sessionId,
+        method: "Input.dispatchMouseEvent",
+        params: { type: "mouseMoved", x: 12.5, y: 20, modifiers: 15 },
+      });
+      expect(f.contents.sendInputEvent).toHaveBeenCalledWith({
+        type: "mouseMove",
+        x: Math.round(12.5 * zoom),
+        y: Math.round(20 * zoom),
+        modifiers: ["alt", "control", "meta", "shift"],
+      });
+      expect(f.messages.at(-1)).toMatchObject({ id: 2, result: {} });
+      const drag = { type: "mouseMoved", x: 12.5, y: 20, buttons: 1, button: "left" };
+      await f.target.receive({
+        id: 3,
+        sessionId,
+        method: "Input.dispatchMouseEvent",
+        params: drag,
+      });
+      expect(f.debuggerApi.sendCommand).toHaveBeenCalledWith(
+        "Input.dispatchMouseEvent",
+        drag,
+        undefined,
+      );
+      await f.target.dispose(false);
+    },
+  );
   it("drains pending renderer focus and skips input after cancellation", async () => {
     const f = fixture([], "backend");
     f.contents.getType.mockReturnValue("webview");
@@ -270,7 +311,7 @@ describe("Betterwright target boundary", () => {
     expect(f.messages.at(-1)).toHaveProperty("result");
     await f.target.dispose(false);
   });
-  it("preserves the upstream movement, key and wheel command sequence and parameters", async () => {
+  it("dispatches native hover without CDP acknowledgement and preserves clicks, keys and wheels", async () => {
     const f = fixture();
     await f.target.receive({
       id: 1,
@@ -317,8 +358,14 @@ describe("Betterwright target boundary", () => {
     ];
     for (const command of commands) await f.target.receive({ id: 2, sessionId, ...command });
     expect(f.debuggerApi.sendCommand.mock.calls).toEqual(
-      commands.map(({ method, params }) => [method, params, undefined]),
+      commands
+        .filter(({ params }) => params.type !== "mouseMoved")
+        .map(({ method, params }) => [method, params, undefined]),
     );
+    expect(f.contents.sendInputEvent.mock.calls).toEqual([
+      [{ type: "mouseMove", x: 21, y: 33, modifiers: [] }],
+      [{ type: "mouseMove", x: 36, y: 43, modifiers: [] }],
+    ]);
     await f.target.dispose(false);
   });
   it("marks synthetic input before CDP dispatch and releases the exact marker on failure", async () => {

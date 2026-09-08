@@ -280,8 +280,41 @@ export class BetterwrightCdpTarget {
         // Native focus is shared across tabs; DOM focus alone cannot route text
         // to an offscreen preview. Keep focus and dispatch in the same lease.
         if (nativeInput && previousFocus !== this.contents) this.contents.focus();
-        const send = () =>
-          this.send(method, params, this.childSessions.has(sessionId!) ? sessionId : undefined);
+        const send = async () => {
+          if (
+            method === "Input.dispatchMouseEvent" &&
+            params.type === "mouseMoved" &&
+            (params.buttons === undefined || params.buttons === 0) &&
+            (params.button === undefined || params.button === "none") &&
+            (params.pointerType === undefined || params.pointerType === "mouse") &&
+            !this.childSessions.has(sessionId!) &&
+            this.contents.getType() !== "webview" &&
+            typeof params.x === "number" &&
+            Number.isFinite(params.x) &&
+            typeof params.y === "number" &&
+            Number.isFinite(params.y)
+          ) {
+            // Chromium can leave a move's CDP acknowledgement pending in a
+            // hidden native view. Electron dispatches the same trusted hover
+            // input without waiting for that visual acknowledgement.
+            const zoom = this.contents.getZoomFactor();
+            const modifiers = typeof params.modifiers === "number" ? params.modifiers : 0;
+            this.contents.sendInputEvent({
+              type: "mouseMove",
+              x: Math.round(params.x * zoom),
+              y: Math.round(params.y * zoom),
+              modifiers: (["alt", "control", "meta", "shift"] as const).filter(
+                (_name, bit) => modifiers & (1 << bit),
+              ),
+            });
+            return {};
+          }
+          return this.send(
+            method,
+            params,
+            this.childSessions.has(sessionId!) ? sessionId : undefined,
+          );
+        };
         if (!nativeInput) return await send();
         const focusedOperation = withRendererGuestFocus(this.contents, send);
         this.pending.add(focusedOperation);

@@ -3,7 +3,12 @@ import type { WebContents } from "electron";
 import { BrowserAutomationErrorMessages } from "@synara/contracts";
 import { runBetterwright } from "./betterwrightRuntime";
 
-const mocks = vi.hoisted(() => ({ run: vi.fn(), browserClose: vi.fn(), connectionClose: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  run: vi.fn(),
+  browserClose: vi.fn(),
+  connectionClose: vi.fn(),
+  openConnection: vi.fn(),
+}));
 vi.mock("betterwright", () => ({
   BetterWright: class {
     run = mocks.run;
@@ -12,25 +17,66 @@ vi.mock("betterwright", () => ({
   NetworkPolicy: class {},
 }));
 vi.mock("./betterwrightConnection", () => ({
-  openBetterwrightConnection: async () => ({ provider: {}, close: mocks.connectionClose }),
+  openBetterwrightConnection: mocks.openConnection,
 }));
+
+const contents = {
+  getBackgroundThrottling: vi.fn(),
+  setBackgroundThrottling: vi.fn(),
+  isDestroyed: vi.fn(),
+} as unknown as WebContents;
 
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.browserClose.mockResolvedValue(undefined);
   mocks.connectionClose.mockResolvedValue(undefined);
+  mocks.openConnection.mockResolvedValue({ provider: {}, close: mocks.connectionClose });
+  vi.mocked(contents.getBackgroundThrottling).mockReturnValue(true);
+  vi.mocked(contents.isDestroyed).mockReturnValue(false);
 });
 
 const run = () =>
   runBetterwright({
     home: "/synthetic",
-    contents: {} as WebContents,
+    contents,
     code: "return null",
     timeoutMs: 30000,
     signal: new AbortController().signal,
   });
 
 describe("Betterwright runtime errors", () => {
+  it.each([true, false])(
+    "restores the original throttling policy (%s) after the worker drains",
+    async (throttled) => {
+      vi.mocked(contents.getBackgroundThrottling).mockReturnValue(throttled);
+      mocks.run.mockImplementation(async () => {
+        if (throttled) expect(contents.setBackgroundThrottling).toHaveBeenLastCalledWith(false);
+        return { ok: true, result: null };
+      });
+      mocks.connectionClose.mockImplementation(async () => {
+        if (throttled) expect(contents.setBackgroundThrottling).toHaveBeenLastCalledWith(false);
+      });
+      await run();
+      expect(vi.mocked(contents.setBackgroundThrottling).mock.calls).toEqual(
+        throttled ? [[false], [true]] : [],
+      );
+    },
+  );
+
+  it("restores throttling when connection setup fails", async () => {
+    mocks.openConnection.mockRejectedValue(new Error("setup failed"));
+    await expect(run()).rejects.toThrow("setup failed");
+    expect(contents.setBackgroundThrottling).toHaveBeenLastCalledWith(true);
+  });
+
+  it("does not restore a destroyed renderer after a worker error", async () => {
+    mocks.run.mockImplementation(async () => {
+      vi.mocked(contents.isDestroyed).mockReturnValue(true);
+      throw new Error("renderer closed");
+    });
+    await expect(run()).rejects.toThrow("renderer closed");
+    expect(vi.mocked(contents.setBackgroundThrottling).mock.calls).toEqual([[false]]);
+  });
   it.each([
     "credential form not-found: private-page-label. Use explicit targets.",
     "credential form ambiguous: private-page-label. Use explicit targets.",
@@ -155,7 +201,7 @@ describe("Betterwright runtime errors", () => {
     );
     const result = runBetterwright({
       home: "/synthetic",
-      contents: {} as WebContents,
+      contents,
       code: "return null",
       timeoutMs: 30000,
       signal: controller.signal,

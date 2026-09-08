@@ -618,6 +618,11 @@ test("production MCP controls one persistent Electron page across visibility cha
             "({width:innerWidth,height:innerHeight,scale:devicePixelRatio})",
           )) as { width: number; height: number; scale: number };
           expect(viewport).toMatchObject({ width: 1280, height: 800 });
+          await run(
+            'await human.click(page.getByRole("button",{name:"Commit agent action",exact:true})); return true;',
+            3000,
+          );
+          expect(await read("document.body.dataset.agentClicks")).toBe("1");
           const proof = await mcp.call("browser_screenshot", {
             kind: "proof",
             fullPage,

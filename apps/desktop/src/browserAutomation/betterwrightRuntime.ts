@@ -35,6 +35,21 @@ export interface BetterwrightRunOptions {
 /** The caller must hold Synara's tab, human-control and download-denial leases. */
 export async function runBetterwright<T>(options: BetterwrightRunOptions): Promise<T> {
   options.signal.throwIfAborted();
+  const throttled = options.contents.getBackgroundThrottling();
+  // Locator stability checks require animation frames even when the agent's
+  // native view is parked behind the composer. Restore the idle policy after
+  // the worker and its CDP connection have both drained.
+  if (throttled) options.contents.setBackgroundThrottling(false);
+  try {
+    return await runConnectedBetterwright<T>(options);
+  } finally {
+    if (throttled && !options.contents.isDestroyed()) {
+      options.contents.setBackgroundThrottling(true);
+    }
+  }
+}
+
+async function runConnectedBetterwright<T>(options: BetterwrightRunOptions): Promise<T> {
   const connection = await openBetterwrightConnection(
     options.contents,
     undefined,
