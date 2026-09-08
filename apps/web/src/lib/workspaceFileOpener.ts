@@ -12,6 +12,7 @@
 import { isSupportedLocalPreviewFilePath } from "@synara/shared/localPreviewFiles";
 import {
   isLocalAbsolutePath,
+  isWindowsAbsolutePath,
   isWorkspaceRelativePathSafe,
   workspaceRelativePathOf,
 } from "@synara/shared/path";
@@ -43,6 +44,7 @@ export function useWorkspaceFileOpener(): WorkspaceFileOpener | null {
 // Trailing `:line` / `:line:col` suffix carried by resolved markdown file links.
 // The in-app viewer previews whole files, so the position is dropped.
 const FILE_POSITION_SUFFIX_PATTERN = /:\d+(?::\d+)?$/;
+const TRAILING_PATH_SEPARATOR_PATTERN = /[\\/]+$/;
 const SYNARA_PUBLIC_ASSET_PATH_PREFIXES = [
   "/central-icons-reversed/",
   "/central-icons-fill/",
@@ -59,6 +61,52 @@ function resolveSynaraPublicAssetOpenTarget(path: string, workspaceRoot: string 
   }
   const relativePath = `${SYNARA_WEB_PUBLIC_WORKSPACE_DIR}${normalizedPath}`;
   return isWorkspaceRelativePathSafe(relativePath) ? relativePath : null;
+}
+
+function normalizeComparableLocalPath(path: string): string {
+  return path.trim().replaceAll("\\", "/").replace(TRAILING_PATH_SEPARATOR_PATTERN, "");
+}
+
+function localPathsEqual(left: string, right: string): boolean {
+  const normalizedLeft = normalizeComparableLocalPath(left);
+  const normalizedRight = normalizeComparableLocalPath(right);
+  const compareCaseInsensitively = isWindowsAbsolutePath(left) && isWindowsAbsolutePath(right);
+  return compareCaseInsensitively
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight;
+}
+
+/**
+ * Maps directory references that can be identified without a filesystem probe
+ * to the workspace-relative path expected by the Explorer. The workspace root
+ * is always known to be a directory; descendants are treated as directories
+ * only when the reference keeps an explicit trailing separator.
+ *
+ * An empty string means the workspace root itself. Null means the reference is
+ * not a known in-workspace directory and should continue through file opening.
+ */
+export function resolveWorkspaceDirectoryOpenTarget(
+  rawPath: string,
+  workspaceRoot: string | null,
+): string | null {
+  if (!workspaceRoot) {
+    return null;
+  }
+  const withoutPosition = rawPath.trim().replace(FILE_POSITION_SUFFIX_PATTERN, "");
+  if (withoutPosition.length === 0) {
+    return null;
+  }
+  if (localPathsEqual(withoutPosition, workspaceRoot)) {
+    return "";
+  }
+  if (!TRAILING_PATH_SEPARATOR_PATTERN.test(withoutPosition)) {
+    return null;
+  }
+  const withoutTrailingSeparators = withoutPosition.replace(TRAILING_PATH_SEPARATOR_PATTERN, "");
+  if (isWorkspaceRelativePathSafe(withoutTrailingSeparators)) {
+    return withoutTrailingSeparators.replaceAll("\\", "/");
+  }
+  return workspaceRelativePathOf(withoutTrailingSeparators, workspaceRoot);
 }
 
 /**
