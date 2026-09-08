@@ -1185,17 +1185,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 sequence DESC,
                 created_at DESC,
                 activity_id DESC
-            ) AS activity_rank,
-            ROW_NUMBER() OVER (
-              PARTITION BY thread_id, turn_id, kind
-              ORDER BY CASE WHEN sequence IS NULL THEN 0 ELSE 1 END DESC,
-                sequence DESC, created_at DESC, activity_id DESC
-            ) AS usage_rank
+            ) AS activity_rank
           FROM projection_thread_activities
           WHERE ${liveThreadScope}
         ) AS ranked
         WHERE activity_rank <= ${MAX_SNAPSHOT_THREAD_ACTIVITIES}
-          OR (kind IN ('turn.completed', 'context-window.updated') AND usage_rank = 1)
           OR (
             kind IN ('approval.requested', 'user-input.requested')
             AND json_extract(payload_json, '$.requestId') IS NOT NULL
@@ -1289,12 +1283,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 sequence DESC,
                 created_at DESC,
                 activity_id DESC
-            ) AS activity_rank,
-            ROW_NUMBER() OVER (
-              PARTITION BY thread_id, turn_id, kind
-              ORDER BY CASE WHEN sequence IS NULL THEN 0 ELSE 1 END DESC,
-                sequence DESC, created_at DESC, activity_id DESC
-            ) AS usage_rank
+            ) AS activity_rank
           FROM projection_thread_activities
           WHERE kind IN (
             'checkpoint.revert.started',
@@ -1743,12 +1732,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 sequence DESC,
                 created_at DESC,
                 activity_id DESC
-            ) AS activity_rank,
-            ROW_NUMBER() OVER (
-              PARTITION BY thread_id, turn_id, kind
-              ORDER BY CASE WHEN sequence IS NULL THEN 0 ELSE 1 END DESC,
-                sequence DESC, created_at DESC, activity_id DESC
-            ) AS usage_rank
+            ) AS activity_rank
           FROM projection_thread_activities
           WHERE thread_id = ${threadId}
         ),
@@ -1823,7 +1807,6 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 AND (SELECT has_newer_turn FROM cutoff_turn_state)
               )
             )
-            OR (kind IN ('turn.completed', 'context-window.updated') AND usage_rank = 1)
             OR (
               kind IN ('approval.requested', 'user-input.requested')
               AND json_extract(payload_json, '$.requestId') IS NOT NULL

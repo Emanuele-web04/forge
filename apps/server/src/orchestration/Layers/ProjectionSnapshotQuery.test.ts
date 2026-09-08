@@ -919,21 +919,20 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.equal(activities.length, 2_000);
       assert.equal(activities[0]?.id, asEventId("oversized-activity-151"));
       assert.equal(activities.at(-1)?.id, asEventId("oversized-activity-2150"));
-      // Accounting summaries survive both snapshot caps, while duplicate
-      // request snapshots outside the tail are collapsed to the latest one.
+      // Enrich retained legacy usage without exempting accounting from the caps.
       yield* sql`UPDATE projection_thread_activities SET kind = 'context-window.updated'
-        WHERE activity_id IN ('oversized-activity-1', 'oversized-activity-2')`;
+        WHERE activity_id IN ('oversized-activity-1', 'oversized-activity-2000')`;
       yield* sql`UPDATE projection_thread_activities SET kind = 'turn.completed'
-        WHERE activity_id = 'oversized-activity-3'`;
+        WHERE activity_id = 'oversized-activity-2001'`;
       yield* sql`INSERT INTO provider_runtime_events (event_id, thread_id, event_type, event_json, persisted_at)
-        VALUES ('oversized-activity-2', 'thread-oversized-turn', 'thread.token-usage.updated',
+        VALUES ('oversized-activity-2000', 'thread-oversized-turn', 'thread.token-usage.updated',
           '{"provider":"codex","providerRefs":{"providerThreadId":"provider-session"},"raw":{"payload":{"tokenUsage":{"total":{"inputTokens":3000,"outputTokens":30,"cachedInputTokens":2000,"cacheWriteInputTokens":500}}}}}',
           '2026-02-24T00:00:00.000Z')`;
       const updated = yield* snapshotQuery.getThreadDetailById(asThreadId("thread-oversized-turn"));
       const retained = Option.isSome(updated) ? updated.value.activities : [];
-      assert.equal(retained.length, 2002);
+      assert.equal(retained.length, 2000);
       assert.deepEqual(
-        retained.find((activity) => activity.id === "oversized-activity-2")?.payload,
+        retained.find((activity) => activity.id === "oversized-activity-2000")?.payload,
         {
           stage: "completed",
           usageSessionId: "provider-session",
@@ -946,14 +945,15 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         },
       );
       assert.isFalse(retained.some((activity) => activity.id === "oversized-activity-1"));
-      assert.isTrue(retained.some((activity) => activity.id === "oversized-activity-2"));
-      assert.isTrue(retained.some((activity) => activity.id === "oversized-activity-3"));
+      assert.isTrue(retained.some((activity) => activity.id === "oversized-activity-2000"));
+      assert.isTrue(retained.some((activity) => activity.id === "oversized-activity-2001"));
       const bulk = yield* snapshotQuery.getSnapshot();
+      assert.equal(bulk.threads[0]?.activities.length, 500);
       assert.isTrue(
-        bulk.threads[0]?.activities.some((activity) => activity.id === "oversized-activity-2"),
+        bulk.threads[0]?.activities.some((activity) => activity.id === "oversized-activity-2000"),
       );
       assert.isTrue(
-        bulk.threads[0]?.activities.some((activity) => activity.id === "oversized-activity-3"),
+        bulk.threads[0]?.activities.some((activity) => activity.id === "oversized-activity-2001"),
       );
     }),
   );

@@ -4,10 +4,6 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./usageActivityRetention": {
-      "types": "./src/usageActivityRetention.ts",
-      "import": "./src/usageActivityRetention.ts"
-    },
     "./model": {
       "types": "./src/model.ts",
       "import": "./src/model.ts"

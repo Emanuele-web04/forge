@@ -376,3 +376,23 @@ describe("mergeReadModelThreadDetailWithLiveHotPath", () => {
     expect(merged.messages.find((message) => message.id === assistantId)?.streaming).toBe(true);
   });
 });
+
+describe("accounting activity retention", () => {
+  it("keeps 3000 accounting turns within the existing transcript cap", () => {
+    const activities = Array.from({ length: 6000 }, (_, index) =>
+      makeActivity({
+        id: "accounting-" + index,
+        turnId: TurnId.makeUnsafe("turn-" + Math.floor(index / 2)),
+        kind: index % 2 === 0 ? "context-window.updated" : "turn.completed",
+        sequence: index + 1,
+      }),
+    );
+    const normalized = normalizeActivities(activities);
+    expect(normalized).toHaveLength(2000);
+    const accumulator = createThreadActivityAccumulator(normalized);
+    accumulator.append(
+      makeActivity({ id: "new-tool", turnId: TurnId.makeUnsafe("new-turn"), sequence: 6001 }),
+    );
+    expect(accumulator.result()).toHaveLength(1999);
+  });
+});
