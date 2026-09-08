@@ -56,7 +56,7 @@ import {
   AGENT_GATEWAY_TURN_AUTHORITY_RETIRED,
   type AgentGatewaySessionLease,
 } from "./agentGateway/sessionLease.ts";
-import { isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
+import { CodexSessionStartError, isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
 import { buildCodexProcessEnv } from "./codexProcessEnv.ts";
 import { assertCodexWorkingDirectoryExists } from "./codexWorkingDirectory.ts";
 import { executableIdentity, resolveExecutable } from "./executableLookup.ts";
@@ -179,6 +179,7 @@ interface CodexSessionContext {
     | undefined;
   nextRequestId: number;
   stopping: boolean;
+  transportError?: Error;
   stopPromise?: Promise<void>;
   discovery?: boolean;
 }
@@ -1032,6 +1033,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         extraRoots: [this.synaraSkillsDir],
       });
     } catch (error) {
+      if (!this.isContextRoutable(context)) throw error;
       // Older codex builds (< extra-roots support) keep working; Synara-only
       // skills simply stay invisible to codex on those versions.
       log.warn("skills/extraRoots/set unavailable", { error });
@@ -1043,12 +1045,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const now = new Date().toISOString();
     let context: CodexSessionContext | undefined;
     let gatewaySessionLease: AgentGatewaySessionLease | undefined;
+    let previousSessionStopped = false;
 
     try {
       const existing = this.sessions.get(threadId);
       if (existing) {
         await this.stopSession(threadId);
       }
+      previousSessionStopped = true;
 
       const resolvedCwd = resolveScratchWorkspaceCwd(threadId, input.cwd);
 
@@ -1130,6 +1134,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           sparkEnabled: context.account.sparkEnabled,
         });
       } catch (error) {
+        if (!this.isContextRoutable(context)) throw error;
         log.warn("account/read failed", { error });
       }
 
@@ -1274,7 +1279,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       }).pipe(this.runPromise);
       return { ...context.session };
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to start Codex session.";
+      const cause = context?.transportError ?? error;
+      const message = cause instanceof Error ? cause.message : "Failed to start Codex session.";
       if (context) {
         this.updateSession(context, {
           status: "error",
@@ -1297,7 +1303,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           message,
         });
       }
-      throw new Error(message, { cause: error });
+      // Reaching here proves cleanup succeeded. A failed replacement barrier or
+      // teardown must remain an uncertain process failure, never a safe rejection.
+      throw previousSessionStopped
+        ? new CodexSessionStartError(message, { cause })
+        : new Error(message, { cause });
     }
   }
 
@@ -2975,9 +2985,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         if (discoveryKey) {
           this.discoverySessions.delete(discoveryKey);
         }
-      } else {
-        this.sessions.delete(context.session.threadId);
       }
+      // Keep normal sessions as non-routable replacement barriers. The root's
+      // exit alone does not prove its descendants stopped; startup cleanup or
+      // the next stop/start must still await stopSession's process-tree proof.
     });
   }
 
@@ -2989,6 +3000,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       error instanceof CodexAppServerTransportError
         ? error.message
         : `Codex app-server transport failed: ${error.message}`;
+    // Startup can report the original cause after cleanup. Pending requests
+    // keep stopSession's uncertain outcome: this error may belong to a different
+    // write, or a frame that reached the provider before the pipe closed.
+    context.transportError = error;
     this.updateSession(context, { status: "error", lastError: message });
     this.emitErrorEvent(context, "protocol/transportError", message);
 

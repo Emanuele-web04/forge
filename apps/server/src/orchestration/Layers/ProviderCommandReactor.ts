@@ -73,6 +73,7 @@ import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts
 import { AgentGatewayOperationRepository } from "../../agentGateway/Services/AgentGatewayOperationRepository.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import {
+  type ProviderAdapterProcessError,
   ProviderAdapterRequestError,
   ProviderAdapterValidationError,
   ProviderServiceError,
@@ -188,6 +189,10 @@ export function classifyProviderAttemptOutcome(
     case "ProviderUnsupportedError":
     case "ProviderSessionNotFoundError":
       return { _tag: "rejected", detail };
+    case "ProviderAdapterProcessError":
+      return (failure.value as ProviderAdapterProcessError).reason === "startup-failed"
+        ? { _tag: "rejected", detail }
+        : { _tag: "uncertain", detail };
     case "PersistenceSqlError":
     case "PersistenceDecodeError":
       return { _tag: "safe_retry", detail };

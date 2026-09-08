@@ -116,6 +116,20 @@ const asMessageId = (value: string): MessageId => MessageId.makeUnsafe(value);
 const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
 
 describe("legacy provider blocker recovery", () => {
+  it("rejects a startup failure only when process cleanup was confirmed", () => {
+    const outcome = classifyProviderAttemptOutcome(
+      Exit.fail(
+        new ProviderAdapterProcessError({
+          provider: "codex",
+          threadId: ThreadId.makeUnsafe("thread-start-failed"),
+          reason: "startup-failed",
+          detail: "Codex stdout closed during initialization.",
+        }),
+      ),
+    );
+    expect(outcome._tag).toBe("rejected");
+  });
+
   it("keeps process lifecycle failures uncertain", () => {
     const outcome = classifyProviderAttemptOutcome(
       Exit.fail(
@@ -150,6 +164,7 @@ describe("legacy provider blocker recovery", () => {
       ),
     ).toBe(false);
     expect(isSafeLegacyProviderBlocker("Provider process tree did not prove exit.")).toBe(false);
+    expect(isSafeLegacyProviderBlocker("Session stopped before request completed.")).toBe(false);
     expect(isSafeLegacyProviderBlocker("The provider rejected the prompt.")).toBe(false);
   });
 });
@@ -1854,6 +1869,55 @@ describe("ProviderCommandReactor", () => {
       harness.deliveryRepository.getConsumerState("provider-command-reactor.v1"),
     );
     expect(consumerState.pipe(Option.getOrThrow).lastAckedSequence).toBe(events.at(-1)!.sequence);
+  });
+
+  it("accepts a new message after a failed Codex startup without reconciliation", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    harness.startSession.mockImplementationOnce(() =>
+      Effect.fail(
+        new ProviderAdapterProcessError({
+          provider: "codex",
+          threadId,
+          reason: "startup-failed",
+          detail: "Codex stdout closed during initialization.",
+        }),
+      ),
+    );
+
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "startup-failed-message",
+      text: "First attempt",
+      createdAt: now,
+    });
+    await harness.drain();
+    expect((await readHarnessThread(harness))?.session).toMatchObject({
+      status: "error",
+      lastError: expect.stringContaining("Codex stdout closed during initialization."),
+    });
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    const blockers = await Effect.runPromise(
+      harness.deliveryRepository.listBlockingDeliveries({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        threadId,
+        limit: 10,
+      }),
+    );
+    expect(blockers).toEqual([]);
+
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "startup-retry-message",
+      text: "Retry after startup failure",
+      createdAt: now,
+    });
+    await harness.drain();
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId,
+      input: "Retry after startup failure",
+    });
+    expect(harness.startSession).toHaveBeenCalledTimes(2);
   });
 
   // The ambiguous command here is a conversation rollback whose provider
