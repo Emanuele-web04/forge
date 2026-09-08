@@ -313,6 +313,14 @@ function parseCursorResume(raw: unknown): { sessionId: string } | undefined {
   return { sessionId: raw.sessionId.trim() };
 }
 
+// Session marker for cumulative-cost accounting: turn.completed payloads carry
+// the persisted ACP session id so profile stats can reset cost baselines across
+// same-provider sessions (the resume session id is schema-free in the session).
+function cursorTurnProviderThreadId(session: ProviderSession): { providerThreadId: string } | {} {
+  const sessionId = parseCursorResume(session.resumeCursor)?.sessionId;
+  return sessionId ? { providerThreadId: sessionId } : {};
+}
+
 function describeCursorErrorCause(cause: unknown): string {
   if (cause instanceof Error) {
     return cause.message.trim();
@@ -557,7 +565,12 @@ export function makeCursorAdapter(
           provider: PROVIDER,
           threadId: ctx.threadId,
           turnId,
-          payload: { state: "completed", stopReason: null, ...completedCost },
+          payload: {
+            state: "completed",
+            stopReason: null,
+            ...cursorTurnProviderThreadId(ctx.session),
+            ...completedCost,
+          },
         });
         yield* Effect.ignore(ctx.acp.cancel);
         if (activePromptFiber) {
@@ -603,6 +616,7 @@ export function makeCursorAdapter(
             state: "failed",
             stopReason: null,
             errorMessage: detail,
+            ...cursorTurnProviderThreadId(ctx.session),
             ...completedCost,
           },
         });
@@ -1378,6 +1392,7 @@ export function makeCursorAdapter(
                     state: "failed",
                     stopReason: null,
                     errorMessage: detail,
+                    ...cursorTurnProviderThreadId(ctx.session),
                     ...completedCost,
                   },
                 });
@@ -1418,6 +1433,7 @@ export function makeCursorAdapter(
                       ? { errorMessage: completion.errorMessage }
                       : {}),
                     ...(result.usage ? { usage: result.usage } : {}),
+                    ...cursorTurnProviderThreadId(ctx.session),
                     ...completedCost,
                   },
                 });
@@ -1446,6 +1462,7 @@ export function makeCursorAdapter(
                 payload: {
                   state: "cancelled",
                   stopReason: "cancelled",
+                  ...cursorTurnProviderThreadId(ctx.session),
                   ...completedCost,
                 },
               });

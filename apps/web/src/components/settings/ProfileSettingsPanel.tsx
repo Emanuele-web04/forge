@@ -20,6 +20,7 @@ import { ActivityHeatmap } from "../profile/ActivityHeatmap";
 import {
   selectProfileHeatmap,
   selectProfileModelUsage,
+  selectProfileTokenProvenance,
   selectProfileTopProvider,
 } from "../profile/profileSelectors";
 import { ShareDialog } from "../profile/ShareDialog";
@@ -85,6 +86,7 @@ function ProfileContent({
   const heatmap = selectProfileHeatmap(stats, tokenStats);
   const topProvider = selectProfileTopProvider(stats, tokenStats);
   const modelUsage = selectProfileModelUsage(stats, tokenStats);
+  const tokenProvenance = selectProfileTokenProvenance(stats, tokenStats);
   const peakHourLabel = formatPeakHourLabel(stats.activeHours.startHour);
   const mostWorkedProjectLabel = formatMostWorkedProjectLabel(stats.mostWorkedProject);
 
@@ -137,6 +139,31 @@ function ProfileContent({
         <StatTile label="Current streak" value={formatDays(stats.activity.currentStreakDays)} />
         <StatTile label="Longest streak" value={formatDays(stats.activity.longestStreakDays)} />
       </div>
+
+      {/* Provenance: the token figures on this page are locally measured from
+          Synara's projected context-window updates. Providers never report
+          token totals into this surface, so the label always says so. */}
+      {tokenProvenance.source === "synara-measured" ? (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] leading-relaxed text-muted-foreground">
+          <span>Token totals are measured locally from Synara activity.</span>
+          {tokenProvenance.coverage === "partial" ? (
+            <span className="flex items-center gap-1 rounded-full bg-amber-500/12 px-2 py-0.5 text-amber-600 dark:text-amber-400">
+              Partial token coverage · {formatNumber(tokenProvenance.providersWithTokens)} of{" "}
+              {formatNumber(tokenProvenance.providersWithTurns)} providers have token telemetry
+            </span>
+          ) : null}
+          {tokenProvenance.coverage === "not-reported" ? (
+            <span className="flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-muted-foreground">
+              Providers recorded turns without token telemetry
+            </span>
+          ) : null}
+          {tokenProvenance.coverage === "complete" ? (
+            <span className="flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-muted-foreground">
+              Full token coverage
+            </span>
+          ) : null}
+        </div>
+      ) : null}
 
       {/* Heatmap */}
       <section className="flex min-w-0 flex-col gap-3">
@@ -230,7 +257,14 @@ function ProfileContent({
 
       {/* Model usage */}
       <section className="flex flex-col gap-3">
-        <h3 className="text-sm font-medium">Model usage</h3>
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h3 className="text-sm font-medium">Model usage</h3>
+          <span className="text-[11px] text-muted-foreground">
+            {modelUsage.metric === "tokens"
+              ? "By measured tokens"
+              : "By turn count (no token telemetry yet)"}
+          </span>
+        </div>
         {modelUsage.entries.length > 0 ? (
           <ul className="grid grid-cols-1 gap-x-12 gap-y-3 sm:grid-cols-2">
             {modelUsage.entries.slice(0, 6).map((entry) => (

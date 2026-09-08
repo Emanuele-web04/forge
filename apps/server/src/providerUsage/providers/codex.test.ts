@@ -10,7 +10,7 @@ import nodePath from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { outboundHttp } from "@synara/shared/outboundHttp";
-import { codexUsageFetcher } from "./codex";
+import { __authFilePathsForTests, codexUsageFetcher } from "./codex";
 
 const { readKeychainPasswordMock } = vi.hoisted(() => ({
   readKeychainPasswordMock: vi.fn(),
@@ -292,5 +292,37 @@ describe("codexUsageFetcher", () => {
     const tokens = readAuthFile(authPath).tokens as Record<string, unknown>;
     expect(tokens.access_token).toBe(freshJwt);
     expect(tokens.refresh_token).toBe("rotated-refresh-token");
+  });
+});
+
+describe("authFilePaths", () => {
+  it("prefers the configured Codex home over the environment and defaults", () => {
+    const configured = __authFilePathsForTests({
+      homeDir: "/home/tester",
+      env: {},
+      platform: "linux",
+      nowMs: NOW_MS,
+      codexHomePath: "/custom/codex-home",
+    });
+    expect(configured[0]).toBe(nodePath.join("/custom/codex-home", "auth.json"));
+
+    const defaults = __authFilePathsForTests({
+      homeDir: "/home/tester",
+      env: {},
+      platform: "linux",
+      nowMs: NOW_MS,
+    });
+    expect(defaults).toEqual([
+      nodePath.join("/home/tester", ".config", "codex", "auth.json"),
+      nodePath.join("/home/tester", ".codex", "auth.json"),
+    ]);
+
+    const withCodexHome = __authFilePathsForTests({
+      homeDir: "/home/tester",
+      env: { CODEX_HOME: "/env/codex" },
+      platform: "linux",
+      nowMs: NOW_MS,
+    });
+    expect(withCodexHome[0]).toBe(nodePath.join("/env/codex", "auth.json"));
   });
 });

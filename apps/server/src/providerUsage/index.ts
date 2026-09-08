@@ -1,8 +1,8 @@
 // FILE: providerUsage/index.ts
 // Purpose: Orchestrate the live provider-usage fetchers — defensive batch fetch (one failure never
 // blocks the others), per-provider snapshot caching with single-flight coalescing, and enrichment
-// of Codex/Claude live snapshots with the locally-derived token-total usage lines. Exposes both a
-// plain async API (for tests) and an Effect that reads ServerConfig (for the WS RPC handler).
+// of live account snapshots with safe provider-owned local activity. Exposes both a plain async
+// API (for tests) and an Effect that reads ServerConfig (for the WS RPC handler).
 
 import type {
   ProviderKind,
@@ -17,13 +17,10 @@ import { PROVIDER_USAGE_PROVIDERS } from "@synara/shared/providerUsage";
 import { ServerConfig } from "../config";
 import { buildProviderChildEnvironment, type ProviderChildKind } from "../providerChildEnvironment";
 import { ServerSettingsService } from "../serverSettings";
-import { loadLocalProviderUsageLines } from "../providerUsageSnapshot";
+import { loadLocalProviderUsageSnapshot } from "../providerUsageSnapshot";
 import { errorSnapshot } from "./parse";
 import { PROVIDER_USAGE_FETCHERS } from "./registry";
 import type { ProviderUsageContext } from "./types";
-
-// Providers whose live snapshot is enriched with on-disk token-total lines (24h/7d/30d).
-const LOCAL_ARCHIVE_PROVIDERS: ReadonlySet<ProviderKind> = new Set(["codex", "claudeAgent"]);
 
 const providerChildKind = (provider: ProviderKind): ProviderChildKind =>
   provider === "claudeAgent" ? "claude" : provider;
@@ -199,18 +196,34 @@ async function getProviderUsageSnapshot(
 async function enrichWithLocalUsage(
   snapshot: ServerProviderUsageSnapshot,
   ctx: ProviderUsageContext,
+  loadLocal: typeof loadLocalProviderUsageSnapshot = loadLocalProviderUsageSnapshot,
 ): Promise<ServerProviderUsageSnapshot> {
-  if ((snapshot.status ?? "ok") !== "ok" || !LOCAL_ARCHIVE_PROVIDERS.has(snapshot.provider)) {
-    return snapshot;
-  }
-  const localLines = await loadLocalProviderUsageLines({
+  const localSnapshot = await loadLocal({
     provider: snapshot.provider,
     homeDir: ctx.homeDir,
+    env: ctx.env,
+    ...(snapshot.provider === "codex" && ctx.codexHomePath ? { homePath: ctx.codexHomePath } : {}),
   });
-  if (localLines.length === 0) {
+  if (!localSnapshot) {
     return snapshot;
   }
-  return { ...snapshot, usageLines: [...snapshot.usageLines, ...localLines] };
+  return {
+    ...snapshot,
+    // Keep provider account limits/usage separate from local machine history.
+    // The latter is rendered from `activity`; appending its token lines here
+    // makes unsupported account sources look like account data and duplicates
+    // the same history in two UI surfaces.
+    ...(localSnapshot.activity ? { activity: localSnapshot.activity } : {}),
+  };
+}
+
+/** Test-only: verify machine activity stays out of account usage lines. */
+export function __enrichWithLocalUsageForTests(input: {
+  snapshot: ServerProviderUsageSnapshot;
+  ctx: ProviderUsageContext;
+  loadLocal?: typeof loadLocalProviderUsageSnapshot;
+}): Promise<ServerProviderUsageSnapshot> {
+  return enrichWithLocalUsage(input.snapshot, input.ctx, input.loadLocal);
 }
 
 /** Plain async batch fetch for supported providers. Never throws. */
@@ -265,6 +278,10 @@ export const listProviderUsage = Effect.fn(function* (input: ServerListProviderU
           ...buildContext(),
           homeDir: serverConfig.homeDir,
           claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
+          antigravityBinaryPath: settings.providers.antigravity.binaryPath,
+          ...(settings.providers.codex.homePath
+            ? { codexHomePath: settings.providers.codex.homePath }
+            : {}),
         },
         {
           forceRefresh: input.forceRefresh === true,

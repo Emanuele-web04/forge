@@ -486,7 +486,6 @@ export default function BranchToolbar({
     !usesFixedLocalWorkspace && !envLocked && effectiveEnvMode === "worktree",
   );
   const showEnvPicker = effectiveEnvMode === "local" || canSwitchToLocal;
-
   const usageSummary = useProviderUsageSummary({
     provider: activeProvider,
     threads,

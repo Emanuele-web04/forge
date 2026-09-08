@@ -32,20 +32,6 @@ function snapshot(input: Partial<ServerProviderUsageSnapshot> = {}): ServerProvi
   };
 }
 
-function fallbackSnapshot(): ServerProviderUsageSnapshot {
-  return snapshot({
-    limits: [
-      {
-        window: "Weekly",
-        usedPercent: 64,
-        resetsAt: "2026-06-15T12:00:00.000Z",
-        windowDurationMins: 10080,
-      },
-    ],
-    usageLines: [{ label: "24h", value: "123M tokens", subtitle: "12 recent sessions" }],
-  });
-}
-
 function renderWithQueryClient(queryClient: QueryClient, node: ReactNode) {
   return renderToStaticMarkup(
     <QueryClientProvider client={queryClient}>{node}</QueryClientProvider>,
@@ -112,10 +98,6 @@ describe("useProviderUsageSummary", () => {
     queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
       snapshot({ status: "needs-auth", detail: "Sign in with claude to see usage." }),
     ]);
-    queryClient.setQueryData(
-      serverQueryKeys.providerUsage("claudeAgent", null),
-      fallbackSnapshot(),
-    );
 
     const summary = readProviderUsageSummary({ queryClient });
 
@@ -123,21 +105,35 @@ describe("useProviderUsageSummary", () => {
     expect(summary.usageLines).toEqual([]);
   });
 
-  it("still uses local fallback rows when no live snapshot exists", () => {
+  it("does not present local archive rows as account usage when no live snapshot exists", () => {
     const queryClient = createQueryClient();
     queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
-    queryClient.setQueryData(
-      serverQueryKeys.providerUsage("claudeAgent", null),
-      fallbackSnapshot(),
-    );
 
     const summary = readProviderUsageSummary({ queryClient });
 
+    expect(summary.rateLimits).toEqual([]);
+    expect(summary.usageLines).toEqual([]);
+  });
+
+  it("keeps runtime limits visible when a provider has no safe live source", () => {
+    const queryClient = createQueryClient();
+    const summary = readProviderUsageSummary({
+      queryClient,
+      providerSnapshot: snapshot({
+        status: "unsupported",
+        detail: "No safe live limit source is configured yet.",
+      }),
+      threadRateLimits: [
+        {
+          provider: "claudeAgent",
+          updatedAt: "2026-06-09T12:00:00.000Z",
+          limits: [{ window: "5h", usedPercent: 12 }],
+        },
+      ],
+    });
+
     expect(summary.rateLimits).toHaveLength(1);
-    expect(summary.rateLimits[0]?.limits?.[0]?.window).toBe("Weekly");
-    expect(summary.usageLines).toEqual([
-      { label: "24h", value: "123M tokens", subtitle: "12 recent sessions" },
-    ]);
+    expect(summary.usageNotice).toContain("No safe live limit source");
   });
 
   it("accepts precomputed thread fallback rows from aggregate provider surfaces", () => {
@@ -204,10 +200,6 @@ describe("useProviderUsageSummary", () => {
   it("does not show fallback rows when an explicit provider card snapshot is non-ok", () => {
     const queryClient = createQueryClient();
     queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
-    queryClient.setQueryData(
-      serverQueryKeys.providerUsage("claudeAgent", null),
-      fallbackSnapshot(),
-    );
 
     const summary = readProviderUsageSummary({
       queryClient,

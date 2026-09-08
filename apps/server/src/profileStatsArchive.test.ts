@@ -567,6 +567,106 @@ describe("ProfileStatsArchive", () => {
     );
   });
 
+  it("keeps modelUsage attribution and baselines when archiving deleted threads", async () => {
+    await runArchiveTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+        const archive = yield* ProfileStatsArchive;
+
+        yield* sql`
+          INSERT INTO projection_projects (
+            project_id, title, workspace_root, scripts_json, created_at, updated_at, deleted_at
+          )
+          VALUES (
+            'project-archive-modelusage',
+            'Archive Model Usage',
+            '/work/archive-modelusage',
+            '{}',
+            '2026-06-12T09:00:00.000Z',
+            '2026-06-12T09:00:00.000Z',
+            NULL
+          )
+        `;
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at
+          )
+          VALUES (
+            'thread-archive-modelusage',
+            'project-archive-modelusage',
+            'Archive Model Usage',
+            '{"provider":"codex","model":"gpt-5-codex"}',
+            'full-access', 'default', 'local',
+            '2026-06-15T09:00:00.000Z',
+            '2026-06-15T09:00:00.000Z',
+            NULL
+          )
+        `;
+        // The modelUsage turn (M) sits between two context-window rows (A, B)
+        // AND has its own context-window row (M-row): the archive must keep the
+        // M-row in the LAG baseline (contribution zero) and add the modelUsage
+        // tokens, exactly like the live query.
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          ) VALUES
+            (
+              'archive-mu-a', 'thread-archive-modelusage', 'turn-archive-a',
+              'info', 'context-window.updated', 'Tokens updated',
+              '{"totalProcessedTokens":100,"provider":"codex"}', 1, '2026-06-15T09:05:00.000Z'
+            ),
+            (
+              'archive-mu-m', 'thread-archive-modelusage', 'turn-archive-m',
+              'info', 'turn.completed', 'Turn completed',
+              '{"modelUsage":{"openai/gpt-5":{"totalTokens":80}}}', 2, '2026-06-15T09:15:00.000Z'
+            ),
+            (
+              'archive-mu-m-row', 'thread-archive-modelusage', 'turn-archive-m',
+              'info', 'context-window.updated', 'Tokens updated',
+              '{"totalProcessedTokens":180,"provider":"codex"}', 3, '2026-06-15T09:16:00.000Z'
+            ),
+            (
+              'archive-mu-b', 'thread-archive-modelusage', 'turn-archive-b',
+              'info', 'context-window.updated', 'Tokens updated',
+              '{"totalProcessedTokens":300,"provider":"codex"}', 4, '2026-06-15T09:25:00.000Z'
+            ),
+            (
+              'archive-mu-b-turn', 'thread-archive-modelusage', 'turn-archive-b',
+              'info', 'turn.completed', 'Turn completed',
+              '{}', 5, '2026-06-15T09:26:00.000Z'
+            )
+        `;
+
+        const statsBefore = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        expect(statsBefore.lifetimeTotalTokens).toBe(300);
+        expect(statsBefore.models).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ model: "gpt-5-codex", tokens: 220 }),
+            expect.objectContaining({ model: "openai/gpt-5", tokens: 80 }),
+          ]),
+        );
+
+        const purged = yield* archive.purgeThreadWithStatsSnapshot({
+          threadId: "thread-archive-modelusage",
+        });
+        expect(purged).toBe(true);
+
+        // The archived snapshot keeps the same totals AND the modelUsage-attributed
+        // model: no double count and no fallback shift to the selected model.
+        const statsAfter = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        expect(statsAfter.lifetimeTotalTokens).toBe(300);
+        expect(statsAfter.models).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ model: "gpt-5-codex", tokens: 220 }),
+            expect.objectContaining({ model: "openai/gpt-5", tokens: 80 }),
+          ]),
+        );
+      }),
+    );
+  });
+
   it("deletes terminal gateway plans and redacts live recovery plans with a purged caller", async () => {
     await runArchiveTest(
       Effect.gen(function* () {
