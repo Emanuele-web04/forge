@@ -22,6 +22,7 @@ import {
   NonNegativeInt,
   PositiveInt,
   ProjectId,
+  ProjectSourceId,
   SpaceId,
   ProviderItemId,
   ThreadId,
@@ -479,6 +480,15 @@ export const OrchestrationSpaceShell = Schema.Struct({
 });
 export type OrchestrationSpaceShell = typeof OrchestrationSpaceShell.Type;
 
+export const ProjectSource = Schema.Struct({
+  id: ProjectSourceId,
+  path: TrimmedNonEmptyString,
+  sortOrder: NonNegativeInt,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+export type ProjectSource = typeof ProjectSource.Type;
+
 export const OrchestrationProject = Schema.Struct({
   id: ProjectId,
   kind: Schema.optional(ProjectKind).pipe(Schema.withDecodingDefault(() => "project")),
@@ -488,6 +498,10 @@ export const OrchestrationProject = Schema.Struct({
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   spaceId: Schema.optional(Schema.NullOr(SpaceId)).pipe(Schema.withDecodingDefault(() => null)),
+  sources: Schema.optional(Schema.Array(ProjectSource)).pipe(Schema.withDecodingDefault(() => [])),
+  primarySourceId: Schema.optional(Schema.NullOr(ProjectSourceId)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),
@@ -503,6 +517,10 @@ export const OrchestrationProjectShell = Schema.Struct({
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   spaceId: Schema.optional(Schema.NullOr(SpaceId)).pipe(Schema.withDecodingDefault(() => null)),
+  sources: Schema.optional(Schema.Array(ProjectSource)).pipe(Schema.withDecodingDefault(() => [])),
+  primarySourceId: Schema.optional(Schema.NullOr(ProjectSourceId)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -1084,6 +1102,14 @@ export const SpaceProjectsAssignCommand = Schema.Struct({
   ),
 });
 
+export const ProjectSourceInput = Schema.Struct({
+  id: ProjectSourceId,
+  path: TrimmedNonEmptyString,
+});
+export type ProjectSourceInput = typeof ProjectSourceInput.Type;
+
+const NonEmptyProjectSourceInputs = Schema.Array(ProjectSourceInput).check(Schema.isMinLength(1));
+
 export const ProjectCreateCommand = Schema.Struct({
   type: Schema.Literal("project.create"),
   commandId: CommandId,
@@ -1102,8 +1128,20 @@ export const ProjectCreateCommand = Schema.Struct({
    * than failing creation.
    */
   spaceId: Schema.optional(Schema.NullOr(SpaceId)),
+  sources: Schema.optional(Schema.Array(ProjectSourceInput)),
+  primarySourceId: Schema.optional(Schema.NullOr(ProjectSourceId)),
   createdAt: IsoDateTime,
 });
+
+export const ProjectSourcesUpdateCommand = Schema.Struct({
+  type: Schema.Literal("project.sources.update"),
+  commandId: CommandId,
+  projectId: ProjectId,
+  sources: NonEmptyProjectSourceInputs,
+  primarySourceId: ProjectSourceId,
+  updatedAt: IsoDateTime,
+});
+export type ProjectSourcesUpdateCommand = typeof ProjectSourcesUpdateCommand.Type;
 
 const ProjectMetaUpdateCommand = Schema.Struct({
   type: Schema.Literal("project.meta.update"),
@@ -1560,6 +1598,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   SpaceProjectsAssignCommand,
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
+  ProjectSourcesUpdateCommand,
   ProjectDeleteCommand,
   ThreadCreateCommand,
   ThreadHandoffCreateCommand,
@@ -1600,6 +1639,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   SpaceProjectsAssignCommand,
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
+  ProjectSourcesUpdateCommand,
   ProjectDeleteCommand,
   ThreadCreateCommand,
   ThreadHandoffCreateCommand,
@@ -1772,6 +1812,7 @@ export const OrchestrationEventType = Schema.Literals([
   "space.deleted",
   "project.created",
   "project.meta-updated",
+  "project.sources-updated",
   "project.deleted",
   "thread.created",
   "thread.deleted",
@@ -1853,6 +1894,8 @@ export const ProjectCreatedPayload = Schema.Struct({
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   spaceId: Schema.optional(Schema.NullOr(SpaceId)).pipe(Schema.withDecodingDefault(() => null)),
+  sources: Schema.optional(Schema.Array(ProjectSourceInput)),
+  primarySourceId: Schema.optional(Schema.NullOr(ProjectSourceId)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -1868,6 +1911,15 @@ export const ProjectMetaUpdatedPayload = Schema.Struct({
   spaceId: Schema.optional(Schema.NullOr(SpaceId)),
   updatedAt: IsoDateTime,
 });
+
+export const ProjectSourcesUpdatedPayload = Schema.Struct({
+  projectId: ProjectId,
+  sources: Schema.Array(ProjectSource),
+  primarySourceId: ProjectSourceId,
+  workspaceRoot: TrimmedNonEmptyString,
+  updatedAt: IsoDateTime,
+});
+export type ProjectSourcesUpdatedPayload = typeof ProjectSourcesUpdatedPayload.Type;
 
 export const ProjectDeletedPayload = Schema.Struct({
   projectId: ProjectId,
@@ -2271,6 +2323,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("project.meta-updated"),
     payload: ProjectMetaUpdatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("project.sources-updated"),
+    payload: ProjectSourcesUpdatedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

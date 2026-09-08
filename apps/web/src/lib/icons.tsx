@@ -25,6 +25,7 @@ import {
   IconChevronRight,
   IconChevronUp,
   IconCircleCheck,
+  IconCoffee,
   IconColumns2,
   IconDots,
   IconDownload,
@@ -145,6 +146,7 @@ export const CircleQuestionIcon: LucideIcon = centralIconWrapper("circle-questio
 export const ArrowUpCircleIcon: LucideIcon = centralIconWrapper("arrow-up-circle");
 export const CloudSyncIcon = centralIconWrapper("cloud-sync");
 export const Columns2Icon = adaptIcon(IconColumns2);
+export const CoffeeIcon = adaptIcon(IconCoffee);
 export const ChangesIcon = centralIconWrapper("changes");
 export const CopyIcon = centralIconWrapper("square-behind-square-6");
 export const LinkIcon = centralIconWrapper("chain-link-3");
@@ -202,6 +204,8 @@ export const UsersIcon: LucideIcon = centralIconWrapper("user-group");
 // local servers): the Central glyph, so it matches the other work-row icons.
 export const GlobeIcon: LucideIcon = centralIconWrapper("globe");
 export const WebSearchIcon: LucideIcon = GlobeIcon;
+// Plug for the Ports panel (listening-port groups, Orca-style).
+export const PlugIcon: LucideIcon = centralIconWrapper("plug");
 // Handset glyph for the iOS Simulator dock pane.
 export const DeviceMobileIcon: LucideIcon = centralIconWrapper("phone");
 // Hardware-button glyphs for the simulator's control rail.

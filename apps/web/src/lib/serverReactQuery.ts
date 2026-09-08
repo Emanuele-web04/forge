@@ -1,5 +1,8 @@
 import type {
   ProviderKind,
+  ResourceCleanWorkspacesInput,
+  ResourceKillSessionInput,
+  ResourceScanDiskInput,
   ServerConfig,
   ServerListProviderUsageInput,
   ServerProviderStatus,
@@ -13,6 +16,9 @@ import { EXPENSIVE_READ_RETRY_OPTIONS } from "./expensiveReadRetry";
 export const LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS = 10_000;
 const LOCAL_SERVERS_DEFAULT_STALE_TIME_MS = 3_000;
 
+/** Live resource snapshot cadence while the Environment resources section is mounted. */
+export const RESOURCE_SNAPSHOT_VISIBLE_REFETCH_INTERVAL_MS = 2_000;
+
 export const serverQueryKeys = {
   all: ["server"] as const,
   config: () => ["server", "config"] as const,
@@ -20,7 +26,11 @@ export const serverQueryKeys = {
   environment: () => ["server", "environment"] as const,
   settings: () => ["server", "settings"] as const,
   worktrees: () => ["server", "worktrees"] as const,
-  localServers: () => ["server", "localServers"] as const,
+  localServers: (includeAll?: boolean) =>
+    includeAll
+      ? (["server", "localServers", "all"] as const)
+      : (["server", "localServers"] as const),
+  resourceSnapshot: () => ["server", "resourceSnapshot"] as const,
   providerUsage: (provider: ProviderKind | null | undefined, homePath?: string | null) =>
     ["server", "providerUsage", provider ?? null, homePath ?? null] as const,
   providerUsageRoot: () => ["server", "providerUsage"] as const,
@@ -35,6 +45,11 @@ export const serverQueryKeys = {
 
 export const serverMutationKeys = {
   stopLocalServer: () => ["server", "mutation", "stopLocalServer"] as const,
+  killResourceSession: () => ["server", "mutation", "killResourceSession"] as const,
+  killAllResourceSessions: () => ["server", "mutation", "killAllResourceSessions"] as const,
+  cleanResourceWorkspaces: () => ["server", "mutation", "cleanResourceWorkspaces"] as const,
+  scanResourceDisk: () => ["server", "mutation", "scanResourceDisk"] as const,
+  restartResourceDaemon: () => ["server", "mutation", "restartResourceDaemon"] as const,
 };
 
 export function serverConfigQueryOptions() {
@@ -208,15 +223,19 @@ export function serverLocalServersQueryOptions(
         enabled?: boolean;
         refetchInterval?: number | false;
         staleTime?: number;
+        // Full Orca-style scan (every listener) vs recognized dev servers only.
+        // Keyed separately so the sidebar's dev-only snapshot is unaffected.
+        includeAll?: boolean;
       } = true,
 ) {
   const options = typeof input === "boolean" ? { enabled: input } : input;
   const enabled = options.enabled ?? true;
+  const includeAll = options.includeAll ?? false;
   return queryOptions({
-    queryKey: serverQueryKeys.localServers(),
+    queryKey: serverQueryKeys.localServers(includeAll),
     queryFn: async () => {
       const api = ensureNativeApi();
-      return api.server.listLocalServers();
+      return api.server.listLocalServers(includeAll ? { includeAll: true } : {});
     },
     enabled,
     staleTime: options.staleTime ?? LOCAL_SERVERS_DEFAULT_STALE_TIME_MS,
@@ -279,6 +298,94 @@ export function serverStopLocalServerMutationOptions(input: { queryClient: Query
     onSettled: () => {
       void input.queryClient.invalidateQueries({ queryKey: serverQueryKeys.localServers() });
     },
+  });
+}
+
+export function resourceSnapshotQueryOptions(
+  input:
+    | boolean
+    | {
+        enabled?: boolean;
+        refetchInterval?: number | false;
+      } = true,
+) {
+  const options = typeof input === "boolean" ? { enabled: input } : input;
+  const enabled = options.enabled ?? true;
+  return queryOptions({
+    queryKey: serverQueryKeys.resourceSnapshot(),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      return api.server.getResourceSnapshot();
+    },
+    enabled,
+    staleTime: 1_000,
+    refetchInterval: enabled
+      ? (options.refetchInterval ?? RESOURCE_SNAPSHOT_VISIBLE_REFETCH_INTERVAL_MS)
+      : false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: true,
+    ...EXPENSIVE_READ_RETRY_OPTIONS,
+  });
+}
+
+function invalidateResourceSnapshot(queryClient: QueryClient) {
+  void queryClient.invalidateQueries({ queryKey: serverQueryKeys.resourceSnapshot() });
+}
+
+export function resourceKillSessionMutationOptions(input: { queryClient: QueryClient }) {
+  return mutationOptions({
+    mutationKey: serverMutationKeys.killResourceSession(),
+    mutationFn: async (session: ResourceKillSessionInput) => {
+      const api = ensureNativeApi();
+      return api.server.killResourceSession(session);
+    },
+    onSettled: () => invalidateResourceSnapshot(input.queryClient),
+  });
+}
+
+export function resourceKillAllSessionsMutationOptions(input: { queryClient: QueryClient }) {
+  return mutationOptions({
+    mutationKey: serverMutationKeys.killAllResourceSessions(),
+    mutationFn: async () => {
+      const api = ensureNativeApi();
+      return api.server.killAllResourceSessions();
+    },
+    onSettled: () => invalidateResourceSnapshot(input.queryClient),
+  });
+}
+
+export function resourceCleanWorkspacesMutationOptions(input: { queryClient: QueryClient }) {
+  return mutationOptions({
+    mutationKey: serverMutationKeys.cleanResourceWorkspaces(),
+    mutationFn: async (clean: ResourceCleanWorkspacesInput) => {
+      const api = ensureNativeApi();
+      return api.server.cleanResourceWorkspaces(clean);
+    },
+    onSettled: () => {
+      invalidateResourceSnapshot(input.queryClient);
+      void input.queryClient.invalidateQueries({ queryKey: serverQueryKeys.worktrees() });
+    },
+  });
+}
+
+export function resourceScanDiskMutationOptions() {
+  return mutationOptions({
+    mutationKey: serverMutationKeys.scanResourceDisk(),
+    mutationFn: async (scan: ResourceScanDiskInput) => {
+      const api = ensureNativeApi();
+      return api.server.scanResourceDisk(scan);
+    },
+  });
+}
+
+export function resourceRestartDaemonMutationOptions(input: { queryClient: QueryClient }) {
+  return mutationOptions({
+    mutationKey: serverMutationKeys.restartResourceDaemon(),
+    mutationFn: async () => {
+      const api = ensureNativeApi();
+      return api.server.restartResourceDaemon();
+    },
+    onSettled: () => invalidateResourceSnapshot(input.queryClient),
   });
 }
 

@@ -1,4 +1,7 @@
-import type { PullRequestListEntry } from "@synara/contracts";
+import {
+  LEGACY_GITHUB_PULL_REQUEST_CAPABILITIES,
+  type PullRequestListEntry,
+} from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -7,8 +10,25 @@ import {
   updatePullRequestListEntryProjectPin,
 } from "./pullRequestList";
 
-function makeEntry(overrides: Partial<PullRequestListEntry> = {}): PullRequestListEntry {
-  const entry: PullRequestListEntry = {
+type BitbucketListEntry = Extract<PullRequestListEntry, { readonly provider: "bitbucket" }>;
+type GitHubListEntry = Exclude<PullRequestListEntry, BitbucketListEntry>;
+type EntryOverrides =
+  | (Partial<GitHubListEntry> & { readonly provider?: "github" })
+  | (Partial<BitbucketListEntry> & { readonly provider: "bitbucket" });
+
+const bitbucketReadOnlyCapabilities = {
+  detail: true,
+  diff: true,
+  comments: true,
+  checks: false,
+  comment: false,
+  resolveComment: false,
+  stateMutation: false,
+  merge: false,
+} as const;
+
+function makeEntry(overrides: EntryOverrides = {}): PullRequestListEntry {
+  const common = {
     projectId: "project-1" as PullRequestListEntry["projectId"],
     projectTitle: "Project One",
     repository: "acme/widgets",
@@ -20,35 +40,82 @@ function makeEntry(overrides: Partial<PullRequestListEntry> = {}): PullRequestLi
     baseBranch: "main",
     state: "open",
     isDraft: false,
-    additions: 1,
-    deletions: 0,
     createdAt: "2026-07-01T00:00:00.000Z",
     updatedAt: "2026-07-02T00:00:00.000Z",
     reviewDecision: null,
     viewerReviewRequested: false,
     isPinned: false,
-    projectContexts: [],
-    mergeability: "unknown",
     labels: [],
-    ...overrides,
-  };
+    stack: null,
+  } as const;
+  const projectId = overrides.projectId ?? common.projectId;
+  const projectTitle = overrides.projectTitle ?? common.projectTitle;
+  const isPinned = overrides.isPinned ?? false;
+  const projectContexts = overrides.projectContexts ?? [
+    {
+      projectId,
+      projectTitle,
+      isPinned,
+    },
+  ];
+
+  if (overrides.provider === "bitbucket") {
+    return {
+      ...common,
+      capabilities: bitbucketReadOnlyCapabilities,
+      viewerInvolvement: "unknown",
+      additions: null,
+      deletions: null,
+      mergeability: null,
+      ...overrides,
+      provider: "bitbucket",
+      projectContexts,
+    };
+  }
+
   return {
-    ...entry,
+    ...common,
+    capabilities: LEGACY_GITHUB_PULL_REQUEST_CAPABILITIES,
+    viewerInvolvement: "none",
+    additions: 1,
+    deletions: 0,
+    mergeability: "unknown",
+    ...overrides,
+    provider: "github",
     projectContexts: overrides.projectContexts ?? [
       {
-        projectId: entry.projectId,
-        projectTitle: entry.projectTitle,
-        isPinned: entry.isPinned ?? false,
+        projectId,
+        projectTitle,
+        isPinned,
       },
     ],
   };
 }
 
 describe("pull request list coalescing", () => {
-  it("uses repository and number as the remote identity", () => {
+  it("uses provider, repository, and number as the remote identity", () => {
     expect(pullRequestListRepositoryIdentity(makeEntry({ repository: " Acme/Widgets " }))).toBe(
-      "acme/widgets#1",
+      "github\u0000acme/widgets\u00001",
     );
+    expect(pullRequestListRepositoryIdentity(makeEntry({ provider: "bitbucket" }))).toBe(
+      "bitbucket\u0000acme/widgets\u00001",
+    );
+  });
+
+  it("does not collapse GitHub and Bitbucket rows sharing owner, repository, and number", () => {
+    const github = makeEntry({
+      provider: "github",
+      projectTitle: "GitHub",
+      url: "https://github.com/acme/widgets/pull/1",
+    });
+    const bitbucket = makeEntry({
+      provider: "bitbucket",
+      projectId: "project-2" as PullRequestListEntry["projectId"],
+      projectTitle: "Bitbucket",
+      url: "https://bitbucket.org/acme/widgets/pull-requests/1",
+    });
+
+    expect(coalescePullRequestListEntries([github, bitbucket])).toEqual([github, bitbucket]);
   });
 
   it("collapses shared-worktree rows and prefers the head-branch worktree", () => {

@@ -31,6 +31,12 @@ import {
   ExternalMcpRevokeIntegrationInput,
 } from "./externalMcp";
 import {
+  OutboundMcpBeginAuthorizationInput,
+  OutboundMcpBeginAuthorizationResult,
+  OutboundMcpDisconnectInput,
+  OutboundMcpListResult,
+} from "./outboundMcp";
+import {
   DEVICE_WS_METHODS,
   DeviceAttachInput,
   DeviceBootInput,
@@ -191,6 +197,16 @@ import {
   ServerConfig,
   ServerConfigStreamEvent,
   ServerDiagnosticsResult,
+  ResourceCancelDiskScanResult,
+  ResourceCleanWorkspacesInput,
+  ResourceCleanWorkspacesResult,
+  ResourceDiskUsageReport,
+  ResourceGetSnapshotResult,
+  ResourceKillAllSessionsResult,
+  ResourceKillSessionInput,
+  ResourceKillSessionResult,
+  ResourceRestartDaemonResult,
+  ResourceScanDiskInput,
   ServerGenerateAutomationIntentInput,
   ServerGenerateAutomationIntentResult,
   ServerGenerateThreadRecapInput,
@@ -202,6 +218,8 @@ import {
   ServerListProviderUsageResult,
   ServerLifecycleStreamEvent,
   ServerGetSettingsResult,
+  ServerKeepAwakeUpdatedPayload,
+  ServerListLocalServersInput,
   ServerListLocalServersResult,
   ServerListWorktreesResult,
   ServerProviderUpdateError,
@@ -1006,6 +1024,33 @@ export const WsServerRefreshExternalMcpPairingRpc = Rpc.make(
   },
 );
 
+export const WsServerListOutboundMcpConnectionsRpc = Rpc.make(
+  WS_METHODS.serverListOutboundMcpConnections,
+  {
+    payload: Schema.Struct({}),
+    success: OutboundMcpListResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsServerBeginOutboundMcpAuthorizationRpc = Rpc.make(
+  WS_METHODS.serverBeginOutboundMcpAuthorization,
+  {
+    payload: OutboundMcpBeginAuthorizationInput,
+    success: OutboundMcpBeginAuthorizationResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsServerDisconnectOutboundMcpConnectionRpc = Rpc.make(
+  WS_METHODS.serverDisconnectOutboundMcpConnection,
+  {
+    payload: OutboundMcpDisconnectInput,
+    success: Schema.Void,
+    error: WsRpcError,
+  },
+);
+
 export const WsServerListWorktreesRpc = Rpc.make(WS_METHODS.serverListWorktrees, {
   payload: Schema.Struct({}),
   success: ServerListWorktreesResult,
@@ -1013,7 +1058,7 @@ export const WsServerListWorktreesRpc = Rpc.make(WS_METHODS.serverListWorktrees,
 });
 
 export const WsServerListLocalServersRpc = Rpc.make(WS_METHODS.serverListLocalServers, {
-  payload: Schema.Struct({}),
+  payload: ServerListLocalServersInput,
   success: ServerListLocalServersResult,
   error: WsRpcError,
 });
@@ -1054,6 +1099,48 @@ export const WsStatsGetProfileTokenStatsRpc = Rpc.make(WS_METHODS.statsGetProfil
 export const WsServerGetDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetDiagnostics, {
   payload: Schema.Struct({}),
   success: ServerDiagnosticsResult,
+  error: WsRpcError,
+});
+
+export const WsResourceGetSnapshotRpc = Rpc.make(WS_METHODS.resourceGetSnapshot, {
+  payload: Schema.Struct({}),
+  success: ResourceGetSnapshotResult,
+  error: WsRpcError,
+});
+
+export const WsResourceKillSessionRpc = Rpc.make(WS_METHODS.resourceKillSession, {
+  payload: ResourceKillSessionInput,
+  success: ResourceKillSessionResult,
+  error: WsRpcError,
+});
+
+export const WsResourceKillAllSessionsRpc = Rpc.make(WS_METHODS.resourceKillAllSessions, {
+  payload: Schema.Struct({}),
+  success: ResourceKillAllSessionsResult,
+  error: WsRpcError,
+});
+
+export const WsResourceCleanWorkspacesRpc = Rpc.make(WS_METHODS.resourceCleanWorkspaces, {
+  payload: ResourceCleanWorkspacesInput,
+  success: ResourceCleanWorkspacesResult,
+  error: WsRpcError,
+});
+
+export const WsResourceScanDiskRpc = Rpc.make(WS_METHODS.resourceScanDisk, {
+  payload: ResourceScanDiskInput,
+  success: ResourceDiskUsageReport,
+  error: WsRpcError,
+});
+
+export const WsResourceCancelDiskScanRpc = Rpc.make(WS_METHODS.resourceCancelDiskScan, {
+  payload: Schema.Struct({}),
+  success: ResourceCancelDiskScanResult,
+  error: WsRpcError,
+});
+
+export const WsResourceRestartDaemonRpc = Rpc.make(WS_METHODS.resourceRestartDaemon, {
+  payload: Schema.Struct({}),
+  success: ResourceRestartDaemonResult,
   error: WsRpcError,
 });
 
@@ -1117,6 +1204,13 @@ export const WsSubscribeServerProviderStatusesRpc = Rpc.make(
 export const WsSubscribeServerSettingsRpc = Rpc.make(WS_METHODS.subscribeServerSettings, {
   payload: Schema.Struct({}),
   success: Schema.Struct({ settings: ServerGetSettingsResult }),
+  error: WsRpcError,
+  stream: true,
+});
+
+export const WsSubscribeServerKeepAwakeRpc = Rpc.make(WS_METHODS.subscribeServerKeepAwake, {
+  payload: Schema.Struct({}),
+  success: ServerKeepAwakeUpdatedPayload,
   error: WsRpcError,
   stream: true,
 });
@@ -1335,6 +1429,9 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsServerCreateExternalMcpIntegrationRpc,
   WsServerRevokeExternalMcpIntegrationRpc,
   WsServerRefreshExternalMcpPairingRpc,
+  WsServerListOutboundMcpConnectionsRpc,
+  WsServerBeginOutboundMcpAuthorizationRpc,
+  WsServerDisconnectOutboundMcpConnectionRpc,
   WsServerListWorktreesRpc,
   WsServerListLocalServersRpc,
   WsServerStopLocalServerRpc,
@@ -1343,6 +1440,13 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsStatsGetProfileStatsRpc,
   WsStatsGetProfileTokenStatsRpc,
   WsServerGetDiagnosticsRpc,
+  WsResourceGetSnapshotRpc,
+  WsResourceKillSessionRpc,
+  WsResourceKillAllSessionsRpc,
+  WsResourceCleanWorkspacesRpc,
+  WsResourceScanDiskRpc,
+  WsResourceCancelDiskScanRpc,
+  WsResourceRestartDaemonRpc,
   WsServerPrewarmVoiceRpc,
   WsServerTranscribeVoiceRpc,
   WsServerGenerateThreadRecapRpc,
@@ -1351,6 +1455,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsSubscribeServerLifecycleRpc,
   WsSubscribeServerConfigRpc,
   WsSubscribeServerProviderStatusesRpc,
+  WsSubscribeServerKeepAwakeRpc,
   WsSubscribeServerSettingsRpc,
   WsProviderGetComposerCapabilitiesRpc,
   WsProviderCompactThreadRpc,

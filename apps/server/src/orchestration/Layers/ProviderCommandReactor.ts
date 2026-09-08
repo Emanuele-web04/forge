@@ -63,6 +63,8 @@ import {
 } from "@synara/shared/providerDeliveryBlock";
 import { buildStalePendingRequestFailureDetail } from "@synara/shared/threadSummary";
 import { resolveThreadWorkspaceState } from "@synara/shared/threadEnvironment";
+import { allRoots, deriveThreadRoots } from "@synara/shared/threadRoots";
+import { buildWorkspaceRootsPreamble } from "@synara/shared/workspaceRootsPreamble";
 
 import {
   checkpointRefForThreadMessageStart,
@@ -1304,6 +1306,19 @@ const make = Effect.gen(function* () {
     return Option.getOrUndefined(yield* projectionSnapshotQuery.getThreadDetailById(threadId));
   });
 
+  const resolveRootsForThread = Effect.fnUntraced(function* (thread: OrchestrationThread) {
+    const project = Option.getOrUndefined(
+      yield* projectionSnapshotQuery.getProjectShellById(thread.projectId),
+    );
+    if (!project) return null;
+    const effectiveCwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
+    return deriveThreadRoots({
+      sources: project.sources ?? [],
+      primarySourceId: project.primarySourceId ?? null,
+      primaryWorktreePath: effectiveCwd,
+    });
+  });
+
   const resolveProviderSessionThread = (threadId: ThreadId) =>
     resolveProviderSessionThreadFromProjection(projectionSnapshotQuery, threadId);
 
@@ -1641,6 +1656,12 @@ const make = Effect.gen(function* () {
     }
     const resolvedProviderOptions = providerStartOptionsFromServerSettings(settings);
     const effectiveCwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
+    const threadRoots = yield* resolveRootsForThread(thread);
+    const additionalRoots = threadRoots?.extra.map((root) => ({
+      path: root.effectivePath,
+      label: root.label,
+      isGitRepo: root.isGitRepo,
+    }));
     const workspaceState = resolveThreadWorkspaceState({
       envMode: thread.envMode,
       worktreePath: thread.worktreePath,
@@ -1655,6 +1676,7 @@ const make = Effect.gen(function* () {
     const providerSessionOptions = {
       threadId,
       ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+      ...(additionalRoots && additionalRoots.length > 0 ? { additionalRoots } : {}),
       modelSelection: desiredModelSelection,
       providerOptions: resolvedProviderOptions,
       runtimeMode: desiredRuntimeMode,
@@ -2285,7 +2307,12 @@ const make = Effect.gen(function* () {
         }),
       );
     };
-    const normalizedInput = finalizeProviderInput(selectedBootstrapContext);
+    const baseProviderInput = finalizeProviderInput(selectedBootstrapContext);
+    const promptRoots = yield* resolveRootsForThread(thread);
+    const rootsPreamble = promptRoots ? buildWorkspaceRootsPreamble(allRoots(promptRoots)) : null;
+    const normalizedInput = rootsPreamble
+      ? `${rootsPreamble}\n\n${baseProviderInput}`
+      : baseProviderInput;
     const normalizedAttachments = yield* resolveProviderDispatchAttachments({
       attachments: input.attachments,
       attachmentsDir: serverConfig.attachmentsDir,

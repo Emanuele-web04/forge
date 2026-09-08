@@ -13,6 +13,7 @@ import {
   DEFAULT_SERVER_SETTINGS,
   DEFAULT_SERVER_SETTINGS_VIEW,
   GIT_TEXT_GENERATION_PROVIDERS,
+  KeepAwakeMode,
   TrimmedNonEmptyString,
   ProviderKind,
   type GitTextGenerationProvider,
@@ -326,6 +327,7 @@ export const AppSettingsSchema = Schema.Struct({
   enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => true)),
   autoOpenDevicePane: Schema.Boolean.pipe(withDefaults(() => true)),
   enableProviderUpdateChecks: Schema.Boolean.pipe(withDefaults(() => true)),
+  keepAwakeMode: KeepAwakeMode.pipe(withDefaults(() => "off" as const satisfies KeepAwakeMode)),
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),
   desktopAppIcon: DesktopAppIcon.pipe(withDefaults(() => "default" as const)),
   // Local desktop preference: frameless custom title bar on Windows/Linux.
@@ -668,7 +670,7 @@ export function didProviderEnablementChange(
   );
 }
 
-function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppSettings> {
+export function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppSettings> {
   return {
     claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
     codexBinaryPath: settings.providers.codex.binaryPath,
@@ -679,6 +681,7 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     defaultThreadEnvMode: settings.defaultThreadEnvMode,
     enableAssistantStreaming: settings.enableAssistantStreaming,
     enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
+    keepAwakeMode: settings.keepAwakeMode,
     antigravityBinaryPath: settings.providers.antigravity.binaryPath,
     grokBinaryPath: settings.providers.grok.binaryPath,
     droidBinaryPath: settings.providers.droid.binaryPath,
@@ -774,6 +777,13 @@ export function appSettingsPatchToServerSettingsPatch(
   }
   if (hasOwn(patch, "enableProviderUpdateChecks")) {
     serverPatch.enableProviderUpdateChecks = Boolean(patch.enableProviderUpdateChecks);
+  }
+  if (
+    patch.keepAwakeMode === "always" ||
+    patch.keepAwakeMode === "agent" ||
+    patch.keepAwakeMode === "off"
+  ) {
+    serverPatch.keepAwakeMode = patch.keepAwakeMode;
   }
   if (patch.defaultThreadEnvMode === "local" || patch.defaultThreadEnvMode === "worktree") {
     serverPatch.defaultThreadEnvMode = patch.defaultThreadEnvMode;
@@ -932,6 +942,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "defaultThreadEnvMode",
     "enableAssistantStreaming",
     "enableProviderUpdateChecks",
+    "keepAwakeMode",
     "devinBinaryPath",
     "antigravityBinaryPath",
     "grokBinaryPath",

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { PullRequestActor, PullRequestListEntry } from "@synara/contracts";
 
 import {
+  countUniqueViewerReviewRequests,
   filterPullRequestEntriesByInvolvement,
   groupPullRequestEntriesByInvolvement,
   matchesPullRequestSearchQuery,
@@ -16,9 +17,10 @@ function makeActor(login: string): PullRequestActor {
 }
 
 function makeEntry(overrides: Partial<PullRequestListEntry> = {}): PullRequestListEntry {
-  const entry: PullRequestListEntry = {
+  const entry = {
     projectId: "project-1" as PullRequestListEntry["projectId"],
     projectTitle: "Project One",
+    provider: "github",
     repository: "acme/widgets",
     number: 1,
     title: "Untitled",
@@ -50,7 +52,7 @@ function makeEntry(overrides: Partial<PullRequestListEntry> = {}): PullRequestLi
         isPinned: entry.isPinned ?? false,
       },
     ],
-  };
+  } as PullRequestListEntry;
 }
 
 describe("groupPullRequestEntriesByInvolvement", () => {
@@ -150,6 +152,28 @@ describe("pull request list identity", () => {
     });
     expect(pullRequestListEntryKey(first)).toBe(pullRequestListEntryKey(second));
   });
+
+  it("separates row identity for different providers sharing a repository and number", () => {
+    const github = makeEntry({ provider: "github" });
+    const bitbucket = makeEntry({ provider: "bitbucket" });
+    expect(pullRequestListEntryKey(github)).not.toBe(pullRequestListEntryKey(bitbucket));
+  });
+
+  it("counts one review request once across shared-project rows", () => {
+    const first = makeEntry({ viewerReviewRequested: true });
+    const duplicate = makeEntry({
+      projectId: "project-2" as PullRequestListEntry["projectId"],
+      viewerReviewRequested: true,
+    });
+    const other = makeEntry({ number: 2, viewerReviewRequested: true });
+    expect(countUniqueViewerReviewRequests([first, duplicate, other])).toBe(2);
+  });
+
+  it("counts review requests from different providers independently", () => {
+    const github = makeEntry({ provider: "github", viewerReviewRequested: true });
+    const bitbucket = makeEntry({ provider: "bitbucket", viewerReviewRequested: true });
+    expect(countUniqueViewerReviewRequests([github, bitbucket])).toBe(2);
+  });
 });
 
 describe("pullRequestPinToggleInputs", () => {
@@ -173,12 +197,14 @@ describe("pullRequestPinToggleInputs", () => {
     expect(pullRequestPinToggleInputs(entry, true)).toEqual([
       {
         projectId: "project-1",
+        provider: "github",
         repository: "acme/widgets",
         number: 1,
         isPinned: false,
       },
       {
         projectId: "project-2",
+        provider: "github",
         repository: "acme/widgets",
         number: 1,
         isPinned: false,
@@ -191,6 +217,7 @@ describe("pullRequestPinToggleInputs", () => {
     expect(pullRequestPinToggleInputs(entry, false)).toEqual([
       {
         projectId: entry.projectId,
+        provider: "github",
         repository: entry.repository,
         number: entry.number,
         isPinned: false,
@@ -216,12 +243,14 @@ describe("pullRequestPinToggleInputs", () => {
     expect(pullRequestPinToggleInputs(entry, true)).toEqual([
       {
         projectId: "project-1",
+        provider: "github",
         repository: "acme/widgets",
         number: 1,
         isPinned: true,
       },
       {
         projectId: "project-2",
+        provider: "github",
         repository: "acme/widgets",
         number: 1,
         isPinned: true,
@@ -255,6 +284,28 @@ describe("filterPullRequestEntriesByInvolvement", () => {
   it("returns no authored entries when the viewer login is unknown", () => {
     const entry = makeEntry({ author: makeActor("someone") });
     expect(filterPullRequestEntriesByInvolvement([entry], null, "authored")).toEqual([]);
+  });
+
+  it("keeps unknown viewer involvement out of reviewing and authored filters", () => {
+    const entry = makeEntry({
+      author: makeActor("viewer"),
+      viewerReviewRequested: true,
+      viewerInvolvement: "unknown",
+    });
+
+    expect(filterPullRequestEntriesByInvolvement([entry], "viewer", "all")).toEqual([entry]);
+    expect(filterPullRequestEntriesByInvolvement([entry], "viewer", "reviewing")).toEqual([]);
+    expect(filterPullRequestEntriesByInvolvement([entry], "viewer", "authored")).toEqual([]);
+  });
+
+  it("keeps Bitbucket rows in all while involvement filters exclude them", () => {
+    const bitbucket = makeEntry({ provider: "bitbucket", viewerInvolvement: "unknown" });
+
+    expect(filterPullRequestEntriesByInvolvement([bitbucket], "viewer", "all")).toEqual([
+      bitbucket,
+    ]);
+    expect(filterPullRequestEntriesByInvolvement([bitbucket], "viewer", "reviewing")).toEqual([]);
+    expect(filterPullRequestEntriesByInvolvement([bitbucket], "viewer", "authored")).toEqual([]);
   });
 });
 

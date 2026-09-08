@@ -121,12 +121,17 @@ import {
   ServerConfigUpdatedPayload,
   ServerGenerateAutomationIntentInput,
   ServerGenerateThreadRecapInput,
+  ServerKeepAwakeUpdatedPayload,
   ServerLifecycleStreamEvent,
   ServerProviderUpdateInput,
   ServerUpdateSettingsInput,
   ServerGetProviderUsageSnapshotInput,
+  ServerListLocalServersInput,
   ServerListProviderUsageInput,
   ServerProviderStatusesUpdatedPayload,
+  ResourceCleanWorkspacesInput,
+  ResourceKillSessionInput,
+  ResourceScanDiskInput,
   ServerSettingsUpdatedPayload,
   ServerStopLocalServerInput,
   ServerVoicePrewarmInput,
@@ -157,6 +162,7 @@ import {
   ExternalMcpRefreshPairingInput,
   ExternalMcpRevokeIntegrationInput,
 } from "./externalMcp";
+import { OutboundMcpBeginAuthorizationInput, OutboundMcpDisconnectInput } from "./outboundMcp";
 import {
   GitHubProjectProvisionInput,
   GitHubProjectProvisionProgressEvent,
@@ -248,6 +254,9 @@ export const WS_METHODS = {
   serverCreateExternalMcpIntegration: "server.createExternalMcpIntegration",
   serverRevokeExternalMcpIntegration: "server.revokeExternalMcpIntegration",
   serverRefreshExternalMcpPairing: "server.refreshExternalMcpPairing",
+  serverListOutboundMcpConnections: "server.listOutboundMcpConnections",
+  serverBeginOutboundMcpAuthorization: "server.beginOutboundMcpAuthorization",
+  serverDisconnectOutboundMcpConnection: "server.disconnectOutboundMcpConnection",
   serverListWorktrees: "server.listWorktrees",
   serverListLocalServers: "server.listLocalServers",
   serverStopLocalServer: "server.stopLocalServer",
@@ -256,6 +265,13 @@ export const WS_METHODS = {
   statsGetProfileStats: "stats.getProfileStats",
   statsGetProfileTokenStats: "stats.getProfileTokenStats",
   serverGetDiagnostics: "server.getDiagnostics",
+  resourceGetSnapshot: "resource.getSnapshot",
+  resourceKillSession: "resource.killSession",
+  resourceKillAllSessions: "resource.killAllSessions",
+  resourceCleanWorkspaces: "resource.cleanWorkspaces",
+  resourceScanDisk: "resource.scanDisk",
+  resourceCancelDiskScan: "resource.cancelDiskScan",
+  resourceRestartDaemon: "resource.restartDaemon",
   serverPrewarmVoice: "server.prewarmVoice",
   serverTranscribeVoice: "server.transcribeVoice",
   serverGenerateThreadRecap: "server.generateThreadRecap",
@@ -264,6 +280,7 @@ export const WS_METHODS = {
   subscribeServerLifecycle: "server.subscribeLifecycle",
   subscribeServerConfig: "server.subscribeConfig",
   subscribeServerProviderStatuses: "server.subscribeProviderStatuses",
+  subscribeServerKeepAwake: "server.subscribeKeepAwake",
   subscribeServerSettings: "server.subscribeSettings",
 
   // Streaming subscriptions
@@ -308,6 +325,7 @@ export const WS_CHANNELS = {
   serverMaintenanceUpdated: "server.maintenanceUpdated",
   serverConfigUpdated: "server.configUpdated",
   serverProviderStatusesUpdated: "server.providerStatusesUpdated",
+  serverKeepAwakeUpdated: "server.keepAwakeUpdated",
   serverSettingsUpdated: "server.settingsUpdated",
 } as const;
 
@@ -463,14 +481,27 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.serverCreateExternalMcpIntegration, ExternalMcpCreateIntegrationInput),
   tagRequestBody(WS_METHODS.serverRevokeExternalMcpIntegration, ExternalMcpRevokeIntegrationInput),
   tagRequestBody(WS_METHODS.serverRefreshExternalMcpPairing, ExternalMcpRefreshPairingInput),
+  tagRequestBody(WS_METHODS.serverListOutboundMcpConnections, Schema.Struct({})),
+  tagRequestBody(
+    WS_METHODS.serverBeginOutboundMcpAuthorization,
+    OutboundMcpBeginAuthorizationInput,
+  ),
+  tagRequestBody(WS_METHODS.serverDisconnectOutboundMcpConnection, OutboundMcpDisconnectInput),
   tagRequestBody(WS_METHODS.serverListWorktrees, Schema.Struct({})),
-  tagRequestBody(WS_METHODS.serverListLocalServers, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.serverListLocalServers, ServerListLocalServersInput),
   tagRequestBody(WS_METHODS.serverStopLocalServer, ServerStopLocalServerInput),
   tagRequestBody(WS_METHODS.serverGetProviderUsageSnapshot, ServerGetProviderUsageSnapshotInput),
   tagRequestBody(WS_METHODS.serverListProviderUsage, ServerListProviderUsageInput),
   tagRequestBody(WS_METHODS.statsGetProfileStats, StatsGetProfileStatsInput),
   tagRequestBody(WS_METHODS.statsGetProfileTokenStats, StatsGetProfileTokenStatsInput),
   tagRequestBody(WS_METHODS.serverGetDiagnostics, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.resourceGetSnapshot, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.resourceKillSession, ResourceKillSessionInput),
+  tagRequestBody(WS_METHODS.resourceKillAllSessions, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.resourceCleanWorkspaces, ResourceCleanWorkspacesInput),
+  tagRequestBody(WS_METHODS.resourceScanDisk, ResourceScanDiskInput),
+  tagRequestBody(WS_METHODS.resourceCancelDiskScan, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.resourceRestartDaemon, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverPrewarmVoice, ServerVoicePrewarmInput),
   tagRequestBody(WS_METHODS.serverTranscribeVoice, ServerVoiceTranscriptionInput),
   tagRequestBody(WS_METHODS.serverGenerateThreadRecap, ServerGenerateThreadRecapInput),
@@ -538,6 +569,7 @@ export interface WsPushPayloadByChannel {
   readonly [WS_CHANNELS.serverMaintenanceUpdated]: ServerLifecycleStreamEvent;
   readonly [WS_CHANNELS.serverConfigUpdated]: typeof ServerConfigUpdatedPayload.Type;
   readonly [WS_CHANNELS.serverProviderStatusesUpdated]: typeof ServerProviderStatusesUpdatedPayload.Type;
+  readonly [WS_CHANNELS.serverKeepAwakeUpdated]: typeof ServerKeepAwakeUpdatedPayload.Type;
   readonly [WS_CHANNELS.serverSettingsUpdated]: typeof ServerSettingsUpdatedPayload.Type;
   readonly [WS_CHANNELS.automationEvent]: typeof AutomationStreamEvent.Type;
   readonly [WS_CHANNELS.gitActionProgress]: typeof GitActionProgressEvent.Type;
@@ -582,6 +614,10 @@ export const WsPushServerSettingsUpdated = makeWsPushSchema(
   WS_CHANNELS.serverSettingsUpdated,
   ServerSettingsUpdatedPayload,
 );
+export const WsPushServerKeepAwakeUpdated = makeWsPushSchema(
+  WS_CHANNELS.serverKeepAwakeUpdated,
+  ServerKeepAwakeUpdatedPayload,
+);
 export const WsPushAutomationEvent = makeWsPushSchema(
   WS_CHANNELS.automationEvent,
   AutomationStreamEvent,
@@ -625,6 +661,7 @@ export const WsPushChannelSchema = Schema.Literals([
   WS_CHANNELS.serverMaintenanceUpdated,
   WS_CHANNELS.serverConfigUpdated,
   WS_CHANNELS.serverProviderStatusesUpdated,
+  WS_CHANNELS.serverKeepAwakeUpdated,
   WS_CHANNELS.serverSettingsUpdated,
   WS_CHANNELS.automationEvent,
   WS_CHANNELS.terminalEvent,
@@ -641,6 +678,7 @@ export const WsPush = Schema.Union([
   WsPushServerMaintenanceUpdated,
   WsPushServerConfigUpdated,
   WsPushServerProviderStatusesUpdated,
+  WsPushServerKeepAwakeUpdated,
   WsPushServerSettingsUpdated,
   WsPushAutomationEvent,
   WsPushGitActionProgress,

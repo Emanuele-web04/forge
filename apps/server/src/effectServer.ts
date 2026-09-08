@@ -41,6 +41,7 @@ import { ProviderRuntimeReconciler } from "./provider/Services/ProviderRuntimeRe
 import { ProviderService, type ProviderServiceShape } from "./provider/Services/ProviderService";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
+import { KeepAwakeService } from "./keepAwake";
 import { ServerSettingsService } from "./serverSettings";
 import { makeServerReadiness } from "./server/readiness";
 import { makeServerShutdownController, type ServerShutdownController } from "./serverShutdown";
@@ -50,6 +51,9 @@ import { recoverGitHandoffOperations } from "./gitHandoffOperations";
 import { externalMcpRouteLayer } from "./externalMcp/httpRoute";
 import { ExternalMcpGateway } from "./externalMcp/Services/ExternalMcpGateway";
 import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
+import { outboundMcpRouteLayer } from "./outboundMcp/httpRoute";
+import { OutboundMcpCallbackEndpoint } from "./outboundMcp/callbackEndpoint";
+import { McpConnectionService } from "./outboundMcp/Services/McpConnectionService";
 
 export interface ServerShape {
   readonly start: Effect.Effect<
@@ -60,9 +64,12 @@ export interface ServerShape {
     | AgentGatewayCredentials
     | ExternalMcpGateway
     | ExternalMcpService
+    | OutboundMcpCallbackEndpoint
+    | McpConnectionService
     | FileSystem.FileSystem
     | Path.Path
     | Keybindings
+    | KeepAwakeService
     | ManagedAttachmentCleanup
     | AutomationRunReactor
     | AutomationScheduler
@@ -136,7 +143,9 @@ export const createEffectServer = Effect.fn(function* (
   const providerRuntimeReconciler = yield* ProviderRuntimeReconciler;
   const runtimeStartup = yield* ServerRuntimeStartup;
   const serverSettings = yield* ServerSettingsService;
+  const keepAwake = yield* KeepAwakeService;
   const threadDeletionReactor = yield* ThreadDeletionReactor;
+  const outboundMcpCallbackEndpoint = yield* OutboundMcpCallbackEndpoint;
   const readiness = yield* makeServerReadiness;
 
   yield* keybindings.syncDefaultKeybindingsOnStartup.pipe(
@@ -169,6 +178,7 @@ export const createEffectServer = Effect.fn(function* (
     websocketRpcRouteLayer,
     agentGatewayRouteLayer,
     externalMcpRouteLayer,
+    outboundMcpRouteLayer,
   );
   const httpApp = yield* HttpRouter.toHttpEffect(routesLayer);
   yield* httpServer
@@ -176,6 +186,12 @@ export const createEffectServer = Effect.fn(function* (
     .pipe(
       Effect.mapError((cause) => new ServerLifecycleError({ operation: "httpServerServe", cause })),
     );
+
+  yield* outboundMcpCallbackEndpoint.configure({
+    config,
+    serverAddress: (nodeServer as http.Server | null)?.address() ?? null,
+  });
+  yield* Effect.addFinalizer(() => outboundMcpCallbackEndpoint.clear);
 
   const listeningPort = resolveListeningPort(
     (nodeServer as http.Server | null)?.address() ?? null,
@@ -211,6 +227,9 @@ export const createEffectServer = Effect.fn(function* (
   yield* Scope.provide(threadDeletionReactor.start(), subscriptionsScope);
   yield* Scope.provide(providerSessionReaper.start(), subscriptionsScope);
   yield* Scope.provide(providerRuntimeReconciler.start(), subscriptionsScope);
+  // Lives in the subscriptions scope so `closeServerRuntimePipeline` always
+  // reaches its finalizer and kills the caffeinate child on shutdown.
+  yield* Scope.provide(keepAwake.start, subscriptionsScope);
   yield* readiness.markOrchestrationSubscriptionsReady;
   yield* readiness.markTerminalSubscriptionsReady;
   // Heal turns orphaned by the previous process exit (their in-memory runtimes

@@ -88,9 +88,16 @@ export const SkillsServerSettings = Schema.Struct({
 });
 export type SkillsServerSettings = typeof SkillsServerSettings.Type;
 
+// Keep-awake behaviour for macOS `caffeinate`. "agent" keeps the machine awake
+// only while at least one agent turn is running.
+export const KeepAwakeMode = Schema.Literals(["always", "agent", "off"]);
+export type KeepAwakeMode = typeof KeepAwakeMode.Type;
+export const DEFAULT_KEEP_AWAKE_MODE: KeepAwakeMode = "off";
+
 export const ServerSettings = Schema.Struct({
   enableAssistantStreaming: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
+  keepAwakeMode: KeepAwakeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_KEEP_AWAKE_MODE)),
   defaultThreadEnvMode: ThreadEnvironmentMode.pipe(Schema.withDecodingDefault(() => "local")),
   addProjectBaseDirectory: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
   textGenerationModelSelection: ModelSelection.pipe(
@@ -140,6 +147,7 @@ const ProviderSettingsBasePatch = {
 export const ServerSettingsPatch = Schema.Struct({
   enableAssistantStreaming: Schema.optionalKey(Schema.Boolean),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
+  keepAwakeMode: Schema.optionalKey(KeepAwakeMode),
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvironmentMode),
   addProjectBaseDirectory: Schema.optionalKey(StringSetting),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),

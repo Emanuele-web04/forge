@@ -125,6 +125,7 @@ function commandToAggregateRef(command: OrchestrationCommand): {
       };
     case "project.create":
     case "project.meta.update":
+    case "project.sources.update":
     case "project.delete":
       return {
         aggregateKind: "project",
@@ -148,6 +149,7 @@ function isShellMetadataEvent(event: OrchestrationEvent): event is ShellMetadata
     event.type === "space.deleted" ||
     event.type === "project.created" ||
     event.type === "project.meta-updated" ||
+    event.type === "project.sources-updated" ||
     event.type === "project.deleted"
   );
 }

@@ -11,6 +11,13 @@ export const SIDEBAR_ROW_RADIUS_CLASS_NAME = "rounded-md";
 
 export const SIDEBAR_ROW_PADDING_CLASS_NAME = "px-2 py-[var(--app-density-row-padding-y,0.125rem)]";
 
+/**
+ * Pixel twins of the row paddings (`px-2` / `pl-8`) for geometry that must be
+ * computed, e.g. the hierarchy thread line that runs under a row's leading icon.
+ */
+export const SIDEBAR_ROW_PADDING_X_PX = 8;
+export const SIDEBAR_THREAD_ROW_NESTED_PADDING_LEFT_PX = 32;
+
 export const SIDEBAR_ROW_GAP_CLASS_NAME = "gap-[var(--app-density-row-gap,0.5rem)]";
 
 export const SIDEBAR_ROW_TEXT_CLASS_NAME = "text-[length:var(--app-font-size-ui,12px)] font-normal";
@@ -64,7 +71,11 @@ export const SIDEBAR_NESTED_LIST_GAP_CLASS_NAME = "gap-0.5";
 export const SIDEBAR_NESTED_LIST_OFFSET_CLASS_NAME = "pt-0.5";
 
 /** Sidebar row groups whose resting status fades to yield its slot to a hover toolbar. */
-export type SidebarHoverRevealGroup = "activity-row" | "project-header" | "thread-row";
+export type SidebarHoverRevealGroup =
+  | "activity-row"
+  | "project-header"
+  | "thread-folder-row"
+  | "thread-row";
 
 /**
  * The single rule for "fade a resting glyph out the moment its row reveals the hover
@@ -89,6 +100,8 @@ const SIDEBAR_HOVER_REVEAL_HIDE_CLASS_NAME: Record<SidebarHoverRevealGroup, stri
     "transition-opacity group-hover/activity-row:pointer-events-none group-hover/activity-row:opacity-0 group-focus-within/activity-row:pointer-events-none group-focus-within/activity-row:opacity-0",
   "project-header":
     "transition-opacity group-hover/project-header:pointer-events-none group-hover/project-header:opacity-0 group-has-[:focus-visible]/project-header:pointer-events-none group-has-[:focus-visible]/project-header:opacity-0",
+  "thread-folder-row":
+    "transition-opacity group-hover/thread-folder-row:pointer-events-none group-hover/thread-folder-row:opacity-0 group-focus-within/thread-folder-row:pointer-events-none group-focus-within/thread-folder-row:opacity-0",
   "thread-row":
     "transition-opacity group-hover/thread-row:pointer-events-none group-hover/thread-row:opacity-0 group-focus-within/thread-row:pointer-events-none group-focus-within/thread-row:opacity-0",
 };

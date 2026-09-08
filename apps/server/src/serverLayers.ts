@@ -1,5 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Layer } from "effect";
+import { Effect, Layer } from "effect";
 
 import { AgentGatewayLive } from "./agentGateway/Layers/AgentGateway";
 import { AgentGatewayOperationRepositoryLive } from "./agentGateway/Layers/AgentGatewayOperationRepository";
@@ -39,6 +39,7 @@ import { ProfileStatsQueryLive } from "./profileStats";
 import { ProfileStatsArchiveLive } from "./profileStatsArchive";
 import { ServerLifecycleEventsLive } from "./serverLifecycleEvents";
 import { ServerRuntimeStartupLive } from "./serverRuntimeStartup";
+import { KeepAwakeLive } from "./keepAwake";
 import { ServerSettingsLive } from "./serverSettings";
 import { WorkspaceLayerLive } from "./workspace/runtimeLayer";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver";
@@ -54,8 +55,31 @@ import { ProviderRuntimeEventRepositoryLive } from "./persistence/Layers/Provide
 import { ThreadDiagnosticsQueryLive } from "./diagnostics/Layers/ThreadDiagnosticsQuery";
 import { ManagedAttachmentCleanupLive } from "./managedAttachmentCleanup";
 import { PullRequestServiceLive } from "./pullRequests/Layers/PullRequestService";
+import { GitHubPullRequestProviderLive } from "./pullRequests/providers/GitHubPullRequestProvider";
+import { ParatyBitbucketPullRequestProviderLive } from "./pullRequests/providers/ParatyBitbucketPullRequestProvider";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { makeServerProviderLayer } from "./provider/runtimeLayer";
+import {
+  makeMcpConnectionService,
+  makeSdkMcpConnectionOAuthLifecycle,
+} from "./outboundMcp/Layers/McpConnectionService";
+import { McpToolClientLive } from "./outboundMcp/Layers/McpToolClient";
+import { OutboundMcpCredentialsLive } from "./outboundMcp/Layers/OutboundMcpCredentials";
+import { OutboundMcpRepositoryLive } from "./outboundMcp/Layers/OutboundMcpRepository";
+import { McpToolClient } from "./outboundMcp/Services/McpToolClient";
+import { OutboundMcpCredentials } from "./outboundMcp/Services/OutboundMcpCredentials";
+import { OutboundMcpRepository } from "./outboundMcp/Services/OutboundMcpRepository";
+import { McpConnectionService } from "./outboundMcp/Services/McpConnectionService";
+import {
+  MAX_AUTHORIZATION_ATTEMPT_TTL_MS,
+  makeAuthorizationAttemptRegistry,
+} from "./outboundMcp/authorizationAttempts";
+import { OUTBOUND_MCP_PRESETS } from "./outboundMcp/presets";
+import {
+  bindOutboundMcpCallbackEndpoint,
+  OutboundMcpCallbackEndpoint,
+  OutboundMcpCallbackEndpointLive,
+} from "./outboundMcp/callbackEndpoint";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
 
@@ -195,6 +219,44 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(ServerSettingsLive),
     Layer.provideMerge(providerHealthLayer),
   );
+  // One layer value is shared by the HTTP callback and admitted WS handlers,
+  // keeping OAuth attempts and live transport caches in the same service.
+  const outboundMcpStorageLayer = Layer.merge(
+    OutboundMcpRepositoryLive,
+    OutboundMcpCredentialsLive,
+  );
+  const outboundMcpToolClientLayer = McpToolClientLive.pipe(
+    Layer.provideMerge(outboundMcpStorageLayer),
+  );
+  const outboundMcpConnectionLayer = Layer.effect(
+    McpConnectionService,
+    Effect.gen(function* () {
+      const repository = yield* OutboundMcpRepository;
+      const credentials = yield* OutboundMcpCredentials;
+      const toolClient = yield* McpToolClient;
+      const callbackEndpoint = yield* OutboundMcpCallbackEndpoint;
+      return bindOutboundMcpCallbackEndpoint(
+        (callbackUrl) =>
+          makeMcpConnectionService({
+            repository,
+            credentials,
+            toolClient,
+            oauth: makeSdkMcpConnectionOAuthLifecycle(),
+            attempts: makeAuthorizationAttemptRegistry({
+              ttlMs: MAX_AUTHORIZATION_ATTEMPT_TTL_MS,
+            }),
+            presets: OUTBOUND_MCP_PRESETS,
+            callbackUrl,
+          }),
+        callbackEndpoint,
+      );
+    }),
+  );
+  const outboundMcpLayer = outboundMcpConnectionLayer.pipe(
+    Layer.provideMerge(outboundMcpStorageLayer),
+    Layer.provideMerge(outboundMcpToolClientLayer),
+    Layer.provideMerge(OutboundMcpCallbackEndpointLive),
+  );
   const agentGatewayLayer = AgentGatewayLive.pipe(
     Layer.provideMerge(agentGatewayCredentialsLayer),
     Layer.provideMerge(automationServiceLayer),
@@ -212,10 +274,22 @@ export function makeServerRuntimeServicesLayer(
     // resolves the service on every platform to make that decision.
     Layer.provideMerge(DeviceServiceLive),
   );
+  const githubPullRequestProviderLayer = GitHubPullRequestProviderLive.pipe(
+    Layer.provideMerge(GitLayerLive),
+  );
+  const bitbucketPullRequestProviderLayer = ParatyBitbucketPullRequestProviderLive.pipe(
+    Layer.provideMerge(outboundMcpLayer),
+  );
   const pullRequestServiceLayer = PullRequestServiceLive.pipe(
     Layer.provideMerge(GitLayerLive),
+    Layer.provideMerge(githubPullRequestProviderLayer),
+    Layer.provideMerge(bitbucketPullRequestProviderLayer),
     Layer.provideMerge(ProjectPullRequestPinsLive),
     Layer.provideMerge(OrchestrationLayerLive),
+  );
+  const keepAwakeLayer = KeepAwakeLive.pipe(
+    Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(ServerSettingsLive),
   );
 
   return Layer.mergeAll(
@@ -231,6 +305,7 @@ export function makeServerRuntimeServicesLayer(
     ExternalMcpRepositoryLive,
     externalMcpServiceLayer,
     externalMcpGatewayLayer,
+    outboundMcpLayer,
     providerHealthLayer,
     ProjectPullRequestPinsLive,
     pullRequestServiceLayer,
@@ -246,6 +321,7 @@ export function makeServerRuntimeServicesLayer(
     TerminalLayerLive,
     KeybindingsLive,
     ServerSettingsLive,
+    keepAwakeLayer,
     ServerEnvironmentLive,
     ProfileStatsQueryLive,
     authServicesLayer,

@@ -145,20 +145,48 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
       // exist, and comparing lexical paths instead would mis-handle symlinked roots. A rejected
       // command can therefore leave an empty directory behind, but never scaffolding: the
       // subdirectory prepare is deferred until the dispatch is accepted (see wsRpc).
+      // Captured once: narrowing on `input.command` does not survive into the callback below.
+      const createWorkspaceRootIfMissing = input.command.createWorkspaceRootIfMissing === true;
       const workspaceRoot = yield* options.canonicalizeProjectWorkspaceRoot(
         input.command.workspaceRoot,
-        {
-          createIfMissing: input.command.createWorkspaceRootIfMissing === true,
-        },
+        { createIfMissing: createWorkspaceRootIfMissing },
       );
+      const sources = input.command.sources
+        ? yield* Effect.forEach(
+            input.command.sources,
+            (source) =>
+              options
+                .canonicalizeProjectWorkspaceRoot(source.path, {
+                  createIfMissing: createWorkspaceRootIfMissing,
+                })
+                .pipe(Effect.map((path) => ({ ...source, path }))),
+            { concurrency: 1 },
+          )
+        : undefined;
       const command = {
         ...input.command,
         workspaceRoot,
-        createWorkspaceRootIfMissing: input.command.createWorkspaceRootIfMissing === true,
+        ...(sources !== undefined ? { sources } : {}),
+        createWorkspaceRootIfMissing,
       } satisfies OrchestrationCommand;
       return {
         command,
         prepareWorkspaceRoot: deferredPrepareWorkspaceRoot(input.command, workspaceRoot),
+      };
+    }
+
+    if (input.command.type === "project.sources.update") {
+      const sources = yield* Effect.forEach(
+        input.command.sources,
+        (source) =>
+          options
+            .canonicalizeProjectWorkspaceRoot(source.path)
+            .pipe(Effect.map((path) => ({ ...source, path }))),
+        { concurrency: 1 },
+      );
+      return {
+        command: { ...input.command, sources } satisfies OrchestrationCommand,
+        prepareWorkspaceRoot: null,
       };
     }
 

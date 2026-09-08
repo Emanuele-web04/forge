@@ -11,6 +11,114 @@ import {
   providerModelOptions,
   resetComposerDraftStore,
 } from "./composerDraftStoreTestFixtures";
+import { resolveNewChatModelSelection } from "./composerDraftModels";
+
+describe("resolveNewChatModelSelection", () => {
+  const astraLow = modelSelection("codex", "gpt-6-astra", { reasoningEffort: "low" });
+  const defaults = {
+    focusedDraft: null,
+    focusedThreadModelSelection: null,
+    stickyActiveProvider: "codex" as const,
+    stickyModelSelectionByProvider: { codex: astraLow },
+    projectModelSelection: modelSelection("codex", "gpt-5.5"),
+    defaultProvider: "codex" as const,
+  };
+
+  it("inherits the remembered model and effort over the project's default", () => {
+    expect(resolveNewChatModelSelection(defaults)).toEqual(astraLow);
+  });
+
+  it("inherits the focused chat even when another provider was remembered", () => {
+    expect(
+      resolveNewChatModelSelection({
+        ...defaults,
+        focusedThreadModelSelection: astraLow,
+        stickyActiveProvider: "claudeAgent",
+        stickyModelSelectionByProvider: {
+          claudeAgent: modelSelection("claudeAgent", "claude-sonnet-5"),
+        },
+      }),
+    ).toEqual(astraLow);
+  });
+
+  it("prefers an unsent composer selection over the focused thread's persisted model", () => {
+    expect(
+      resolveNewChatModelSelection({
+        ...defaults,
+        focusedThreadModelSelection: modelSelection("codex", "gpt-5.5"),
+        focusedDraft: {
+          activeProvider: "codex",
+          modelSelectionByProvider: { codex: astraLow },
+        },
+      }),
+    ).toEqual(astraLow);
+  });
+
+  it("remembers a provider change across projects", () => {
+    const claude = modelSelection("claudeAgent", "claude-sonnet-5", { effort: "low" });
+    expect(
+      resolveNewChatModelSelection({
+        ...defaults,
+        stickyActiveProvider: "claudeAgent",
+        stickyModelSelectionByProvider: { claudeAgent: claude },
+      }),
+    ).toEqual(claude);
+  });
+
+  it("uses the last model of an explicitly requested provider", () => {
+    expect(
+      resolveNewChatModelSelection({
+        ...defaults,
+        focusedThreadModelSelection: modelSelection("claudeAgent", "claude-sonnet-5"),
+        providerOverride: "codex",
+      }),
+    ).toEqual(astraLow);
+  });
+
+  it("uses the explicit provider's default when that provider has no remembered model", () => {
+    expect(
+      resolveNewChatModelSelection({
+        ...defaults,
+        focusedThreadModelSelection: astraLow,
+        providerOverride: "devin",
+      }),
+    ).toEqual(modelSelection("devin", "adaptive"));
+  });
+
+  it("falls back to the project when there is no remembered selection", () => {
+    expect(
+      resolveNewChatModelSelection({
+        ...defaults,
+        stickyActiveProvider: null,
+        stickyModelSelectionByProvider: {},
+      }),
+    ).toEqual(modelSelection("codex", "gpt-5.5"));
+  });
+
+  it("uses the configured provider on first launch without a project default", () => {
+    expect(
+      resolveNewChatModelSelection({
+        ...defaults,
+        stickyActiveProvider: null,
+        stickyModelSelectionByProvider: {},
+        projectModelSelection: null,
+        defaultProvider: "devin",
+      }),
+    ).toEqual(modelSelection("devin", "adaptive"));
+  });
+
+  it("does not carry thread-specific context limits into the next chat", () => {
+    expect(
+      resolveNewChatModelSelection({
+        ...defaults,
+        focusedThreadModelSelection: modelSelection("claudeAgent", "claude-sonnet-5", {
+          effort: "low",
+          contextWindow: "1m",
+        }),
+      }),
+    ).toEqual(modelSelection("claudeAgent", "claude-sonnet-5", { effort: "low" }));
+  });
+});
 
 describe("resolvePreferredComposerModelSelection", () => {
   it("preserves a case-insensitive 1M Claude model variant during normalization", () => {

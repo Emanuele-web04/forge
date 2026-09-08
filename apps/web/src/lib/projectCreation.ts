@@ -7,6 +7,7 @@ import {
   type NativeApi,
   type OrchestrationShellSnapshot,
   type ProjectId,
+  ProjectSourceId,
   type ProviderKind,
   type SpaceId,
 } from "@synara/contracts";
@@ -19,7 +20,7 @@ import {
   waitForRecoverableProjectForDuplicateCreate,
   waitForRecoverableProjectInReadModel,
 } from "./projectCreateRecovery";
-import { newCommandId, newProjectId } from "./utils";
+import { newCommandId, newProjectId, randomUUID } from "./utils";
 
 const DEFAULT_PROJECT_CREATE_RECOVERY_MAX_ATTEMPTS = 6;
 const DEFAULT_PROJECT_CREATE_RECOVERY_DELAY_MS = 50;
@@ -36,7 +37,9 @@ function buildProjectTitleFromWorkspaceRoot(workspaceRoot: string): string {
 // the create command races an already-linked workspace root.
 export async function createOrRecoverProjectFromPath(input: {
   api: NativeApi;
+  title?: string;
   workspaceRoot: string;
+  sourcePaths?: ReadonlyArray<string>;
   createIfMissing?: boolean;
   /** Overrides the active-space default; `null` files the project in Void. */
   spaceId?: SpaceId | null;
@@ -62,7 +65,20 @@ export async function createOrRecoverProjectFromPath(input: {
   const delayMs = input.delayMs ?? DEFAULT_PROJECT_CREATE_RECOVERY_DELAY_MS;
   const projectId = newProjectId();
   const createdAt = new Date().toISOString();
-  const title = buildProjectTitleFromWorkspaceRoot(workspaceRoot);
+  const title = input.title?.trim() || buildProjectTitleFromWorkspaceRoot(workspaceRoot);
+  const sourcePaths: string[] = [];
+  const seenSourcePaths = new Set<string>();
+  for (const candidate of [workspaceRoot, ...(input.sourcePaths ?? [])]) {
+    const sourcePath = candidate.trim();
+    if (!sourcePath || seenSourcePaths.has(sourcePath)) continue;
+    seenSourcePaths.add(sourcePath);
+    sourcePaths.push(sourcePath);
+  }
+  const primarySourceId = ProjectSourceId.makeUnsafe(randomUUID());
+  const sources = sourcePaths.map((sourcePath, index) => ({
+    id: index === 0 ? primarySourceId : ProjectSourceId.makeUnsafe(randomUUID()),
+    path: sourcePath,
+  }));
   const seedProvider =
     input.defaultProvider === "pi" ? "codex" : (input.defaultProvider ?? "codex");
 
@@ -74,6 +90,8 @@ export async function createOrRecoverProjectFromPath(input: {
       kind: "project",
       title,
       workspaceRoot,
+      sources,
+      primarySourceId,
       createWorkspaceRootIfMissing: input.createIfMissing === true,
       defaultModelSelection: {
         provider: seedProvider,

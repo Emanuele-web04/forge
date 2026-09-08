@@ -1,42 +1,79 @@
-import type { OrchestrationProject, ProjectId, PullRequestsListResult } from "@synara/contracts";
+import type {
+  OrchestrationProject,
+  ProjectId,
+  PullRequestProvider,
+  PullRequestsListResult,
+} from "@synara/contracts";
+import type { RemoteRepositoryRef } from "@synara/shared/remoteRepository";
 import { Effect } from "effect";
 
 import type {
   ProjectPullRequestPin,
   ProjectPullRequestPinsShape,
 } from "../persistence/Services/ProjectPullRequestPins";
-import type { GitHubRepositoryInventory, GitHubRepositoryLink } from "./repositoryResolution";
+import type { GitHubRepositoryLink } from "./repositoryResolution";
 
-export type ProjectRepositoryResolution = {
-  readonly project: OrchestrationProject;
-  readonly error: unknown | null;
-  readonly inventory: GitHubRepositoryInventory;
+type RepositoryLink = GitHubRepositoryLink | RemoteRepositoryRef;
+
+type RepositoryInventory<TRepository extends RepositoryLink> = {
+  readonly repositories: ReadonlyArray<TRepository>;
+  readonly authoritative: boolean;
 };
 
-export type ProjectRepositoryIndex = {
+export type ProjectRepositoryResolution<TRepository extends RepositoryLink = GitHubRepositoryLink> =
+  {
+    readonly project: OrchestrationProject;
+    readonly error: unknown | null;
+    readonly inventory: RepositoryInventory<TRepository>;
+  };
+
+export type ProjectRepositoryIndex<TRepository extends RepositoryLink = GitHubRepositoryLink> = {
   readonly errors: PullRequestsListResult["errors"];
   readonly repositoryKeysByProject: ReadonlyMap<ProjectId, Set<string>>;
   readonly uniqueRepositories: ReadonlyMap<
     string,
-    { repository: GitHubRepositoryLink; projects: OrchestrationProject[] }
+    { repository: TRepository; projects: OrchestrationProject[] }
   >;
 };
 
-export function resolveProjectRepositoryInventories(input: {
+function repositoryIdentityKey(repository: RepositoryLink): string {
+  return "identityKey" in repository
+    ? repository.identityKey
+    : repository.nameWithOwner.toLowerCase();
+}
+
+export function pullRequestPinRepositoryKey(
+  provider: PullRequestProvider,
+  repositoryKey: string,
+): string {
+  return `${provider}\0${repositoryKey.trim().toLowerCase()}`;
+}
+
+function repositoryPinKey(repository: RepositoryLink): string {
+  return "identityKey" in repository
+    ? pullRequestPinRepositoryKey(repository.provider, `${repository.owner}/${repository.slug}`)
+    : pullRequestPinRepositoryKey("github", repository.nameWithOwner);
+}
+
+export function resolveProjectRepositoryInventories<
+  TRepository extends RepositoryLink = GitHubRepositoryLink,
+>(input: {
   projects: ReadonlyArray<OrchestrationProject>;
-  resolve: (project: OrchestrationProject) => Effect.Effect<GitHubRepositoryInventory, unknown>;
+  resolve: (
+    project: OrchestrationProject,
+  ) => Effect.Effect<RepositoryInventory<TRepository>, unknown>;
 }) {
   return Effect.forEach(
     input.projects,
     (project) =>
       input.resolve(project).pipe(
         Effect.match({
-          onFailure: (error): ProjectRepositoryResolution => ({
+          onFailure: (error): ProjectRepositoryResolution<TRepository> => ({
             project,
             error,
             inventory: { repositories: [], authoritative: false },
           }),
-          onSuccess: (inventory): ProjectRepositoryResolution => ({
+          onSuccess: (inventory): ProjectRepositoryResolution<TRepository> => ({
             project,
             error: null,
             inventory,
@@ -47,15 +84,17 @@ export function resolveProjectRepositoryInventories(input: {
   );
 }
 
-export function indexProjectRepositoryInventories(
-  resolved: ReadonlyArray<ProjectRepositoryResolution>,
-): ProjectRepositoryIndex {
+export function indexProjectRepositoryInventories<TRepository extends RepositoryLink>(
+  resolved: ReadonlyArray<ProjectRepositoryResolution<TRepository>>,
+): ProjectRepositoryIndex<TRepository> {
   const errors = resolved.flatMap(({ project, error }) =>
     error
       ? [
           {
             projectId: project.id,
             projectTitle: project.title,
+            provider: null,
+            repository: null,
             message: error instanceof Error ? error.message : "Repository lookup failed.",
           },
         ]
@@ -63,19 +102,17 @@ export function indexProjectRepositoryInventories(
   );
   const uniqueRepositories = new Map<
     string,
-    { repository: GitHubRepositoryLink; projects: OrchestrationProject[] }
+    { repository: TRepository; projects: OrchestrationProject[] }
   >();
   const repositoryKeysByProject = new Map<ProjectId, Set<string>>();
 
   for (const item of resolved) {
     repositoryKeysByProject.set(
       item.project.id,
-      new Set(
-        item.inventory.repositories.map((repository) => repository.nameWithOwner.toLowerCase()),
-      ),
+      new Set(item.inventory.repositories.map(repositoryPinKey)),
     );
     for (const repository of item.inventory.repositories) {
-      const key = repository.nameWithOwner.toLowerCase();
+      const key = repositoryIdentityKey(repository);
       const existing = uniqueRepositories.get(key);
       if (existing) {
         if (!existing.projects.some((project) => project.id === item.project.id)) {
@@ -91,21 +128,21 @@ export function indexProjectRepositoryInventories(
 }
 
 /** Remove pins only when an explicitly authoritative inventory proves ownership ended. */
-export function cleanupUnconfiguredPullRequestPins(input: {
+export function cleanupUnconfiguredPullRequestPins<TRepository extends RepositoryLink>(input: {
   pins: ProjectPullRequestPinsShape;
   pinnedRows: ReadonlyArray<ProjectPullRequestPin>;
   projectById: ReadonlyMap<ProjectId, OrchestrationProject>;
   repositoryKeysByProject: ReadonlyMap<ProjectId, Set<string>>;
-  resolved: ReadonlyArray<ProjectRepositoryResolution>;
+  resolved: ReadonlyArray<ProjectRepositoryResolution<TRepository>>;
 }) {
   const resolutionByProject = new Map(input.resolved.map((item) => [item.project.id, item]));
   const unconfiguredPins = input.pinnedRows.filter((row) => {
     const resolution = resolutionByProject.get(row.projectId);
     return (
-      resolution?.error === null &&
-      resolution.inventory.authoritative &&
-      input.repositoryKeysByProject.get(row.projectId)?.has(row.repositoryKey.toLowerCase()) !==
-        true
+      resolution?.inventory.authoritative === true &&
+      input.repositoryKeysByProject
+        .get(row.projectId)
+        ?.has(pullRequestPinRepositoryKey(row.provider, row.repositoryKey)) !== true
     );
   });
 
@@ -115,6 +152,7 @@ export function cleanupUnconfiguredPullRequestPins(input: {
       input.pins
         .setPinned({
           projectId: row.projectId,
+          provider: row.provider,
           repositoryKey: row.repositoryKey,
           number: row.number,
           isPinned: false,
@@ -128,6 +166,8 @@ export function cleanupUnconfiguredPullRequestPins(input: {
                 ? {
                     projectId: project.id,
                     projectTitle: project.title,
+                    provider: null,
+                    repository: null,
                     message: `Stale pull request pin cleanup failed: ${error.message}`,
                   }
                 : null,

@@ -2,7 +2,7 @@ import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
 import type { ExecuteGitInput, GitCoreShape } from "../git/Services/GitCore";
-import { resolveGitHubRepositories } from "./repositoryResolution";
+import { resolveGitHubRepositories, resolveRemoteRepositories } from "./repositoryResolution";
 
 function makeGit(input: {
   branchExitCode?: number;
@@ -16,10 +16,12 @@ function makeGit(input: {
   remoteExitCode?: number;
   remoteStderr?: string;
   calls?: string[][];
+  operations?: string[];
 }): GitCoreShape {
   return {
-    execute: ({ args }: ExecuteGitInput) => {
+    execute: ({ args, operation }: ExecuteGitInput) => {
       input.calls?.push([...args]);
+      input.operations?.push(operation);
       if (args[0] === "branch") {
         return Effect.succeed({
           code: input.branchExitCode ?? 0,
@@ -146,5 +148,89 @@ describe("resolveGitHubRepositories", () => {
     await expect(Effect.runPromise(resolveGitHubRepositories(git, "/tmp/project"))).rejects.toThrow(
       "No such remote",
     );
+  });
+});
+
+describe("resolveRemoteRepositories", () => {
+  it("preserves remote precedence and deduplicates by provider-aware identity", async () => {
+    const operations: string[] = [];
+    const git = makeGit({
+      branchRemote: "upstream",
+      pushDefaultRemote: "mirror",
+      urls: {
+        origin: "https://github.com/Paraty/payment-seeker.git",
+        upstream: "git@bitbucket.org:paraty/payment-seeker.git",
+        mirror: "https://BITBUCKET.ORG/PARATY/Payment-Seeker.git",
+      },
+      operations,
+    });
+
+    await expect(
+      Effect.runPromise(resolveRemoteRepositories(git, "/tmp/project")),
+    ).resolves.toEqual({
+      authoritative: true,
+      repositories: [
+        {
+          provider: "bitbucket",
+          host: "bitbucket.org",
+          owner: "paraty",
+          slug: "payment-seeker",
+          webUrl: "https://bitbucket.org/paraty/payment-seeker",
+          identityKey: "bitbucket:bitbucket.org:paraty/payment-seeker",
+          displayName: "paraty/payment-seeker",
+        },
+        {
+          provider: "github",
+          host: "github.com",
+          owner: "Paraty",
+          slug: "payment-seeker",
+          webUrl: "https://github.com/Paraty/payment-seeker",
+          identityKey: "github:github.com:paraty/payment-seeker",
+          displayName: "Paraty/payment-seeker",
+        },
+      ],
+    });
+    expect(operations).toEqual([
+      "PullRequestService.remoteRepository.currentBranch",
+      "PullRequestService.remoteRepository.config",
+    ]);
+  });
+
+  it("expands aliases only after direct provider-neutral parsing fails", async () => {
+    const calls: string[][] = [];
+    const git = makeGit({
+      urls: {
+        origin: "bb:paraty/payment-seeker.git",
+        upstream: "https://bitbucket.org/paraty/platform.git",
+      },
+      expandedUrls: { origin: "git@bitbucket.org:paraty/payment-seeker.git" },
+      calls,
+    });
+
+    await expect(
+      Effect.runPromise(resolveRemoteRepositories(git, "/tmp/project")),
+    ).resolves.toMatchObject({
+      repositories: [
+        { identityKey: "bitbucket:bitbucket.org:paraty/payment-seeker" },
+        { identityKey: "bitbucket:bitbucket.org:paraty/platform" },
+      ],
+    });
+    expect(calls.filter((args) => args[0] === "remote")).toEqual([["remote", "get-url", "origin"]]);
+  });
+
+  it("keeps the legacy GitHub resolver projection GitHub-only", async () => {
+    const git = makeGit({
+      urls: {
+        origin: "git@bitbucket.org:paraty/payment-seeker.git",
+        upstream: "git@github.com:openai/codex.git",
+      },
+    });
+
+    await expect(
+      Effect.runPromise(resolveGitHubRepositories(git, "/tmp/project")),
+    ).resolves.toEqual({
+      authoritative: true,
+      repositories: [{ nameWithOwner: "openai/codex", url: "https://github.com/openai/codex" }],
+    });
   });
 });

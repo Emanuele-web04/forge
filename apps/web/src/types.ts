@@ -18,6 +18,8 @@ import type {
   OrchestrationThreadActivity,
   ThreadHandoff,
   ProjectScript as ContractProjectScript,
+  ProjectSource as ContractProjectSource,
+  ProjectSourceId,
   ThreadId,
   ProjectId,
   SpaceId,
@@ -47,6 +49,7 @@ export type ThreadTerminalWorkspaceTab = "terminal" | "chat";
 export type ThreadTerminalWorkspaceLayout = "both" | "terminal-only";
 export type ThreadPrimarySurface = "chat" | "terminal";
 export type ProjectScript = ContractProjectScript;
+export type ProjectSourceFolder = ContractProjectSource;
 
 export type ThreadTerminalSplitDirection = "horizontal" | "vertical";
 export type ThreadTerminalSplitPosition = "top" | "right" | "bottom" | "left";
@@ -190,12 +193,14 @@ export interface Project {
   cwd: string;
   defaultModelSelection: ModelSelection | null;
   expanded: boolean;
-  isPinned?: boolean;
+  isPinned?: boolean | undefined;
   /** Missing on renderer state written before Spaces; normalized snapshots always set it. */
-  spaceId?: SpaceId | null;
+  spaceId?: SpaceId | null | undefined;
   createdAt?: string | undefined;
   updatedAt?: string | undefined;
   scripts: ProjectScript[];
+  sources: ProjectSourceFolder[];
+  primarySourceId: ProjectSourceId | null;
 }
 
 export interface Space {
@@ -259,6 +264,7 @@ export interface Thread extends ThreadWorkspaceState {
   parentThreadId?: ThreadId | null;
   creationSource?: ThreadCreationSource | null;
   sourceThreadId?: ThreadId | null;
+  gatewayOperationId?: string | null;
   subagentAgentId?: string | null;
   subagentNickname?: string | null;
   subagentRole?: string | null;
@@ -305,6 +311,7 @@ export interface ThreadShell extends ThreadWorkspaceState {
   parentThreadId?: ThreadId | null;
   creationSource?: ThreadCreationSource | null;
   sourceThreadId?: ThreadId | null;
+  gatewayOperationId?: string | null;
   subagentAgentId?: string | null;
   subagentNickname?: string | null;
   subagentRole?: string | null;
@@ -350,6 +357,8 @@ export interface SidebarThreadSummary {
   lastVisitedAt?: string | undefined;
   parentThreadId?: ThreadId | null;
   creationSource?: ThreadCreationSource | null;
+  sourceThreadId?: ThreadId | null;
+  gatewayOperationId?: string | null;
   subagentAgentId?: string | null;
   subagentNickname?: string | null;
   subagentRole?: string | null;

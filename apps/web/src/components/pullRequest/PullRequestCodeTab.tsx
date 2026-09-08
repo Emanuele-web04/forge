@@ -34,7 +34,7 @@ export function PullRequestCodeTab({
 
   const renderablePatch = getRenderablePatch(
     diffQuery.data?.patch,
-    `pull-request:${input.projectId}:${input.number}`,
+    `pull-request:${input.projectId}:${input.provider}:${input.repository}:${input.number}`,
   );
   const renderableFiles =
     renderablePatch?.kind === "files" ? sortFileDiffsByPath(renderablePatch.files) : [];

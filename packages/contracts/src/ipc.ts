@@ -22,6 +22,12 @@ import type {
   ExternalMcpRevokeIntegrationInput,
 } from "./externalMcp";
 import type {
+  OutboundMcpBeginAuthorizationInput,
+  OutboundMcpBeginAuthorizationResult,
+  OutboundMcpDisconnectInput,
+  OutboundMcpListResult,
+} from "./outboundMcp";
+import type {
   AutomationCancelRunInput,
   AutomationCancelRunResult,
   AutomationArchiveRunInput,
@@ -173,6 +179,16 @@ import type { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from
 import type {
   ServerConfig,
   ServerDiagnosticsResult,
+  ResourceCancelDiskScanResult,
+  ResourceCleanWorkspacesInput,
+  ResourceCleanWorkspacesResult,
+  ResourceDiskUsageReport,
+  ResourceGetSnapshotResult,
+  ResourceKillAllSessionsResult,
+  ResourceKillSessionInput,
+  ResourceKillSessionResult,
+  ResourceRestartDaemonResult,
+  ResourceScanDiskInput,
   ServerGenerateAutomationIntentInput,
   ServerGenerateAutomationIntentResult,
   ServerGenerateThreadRecapInput,
@@ -183,6 +199,7 @@ import type {
   ServerListProviderUsageInput,
   ServerListProviderUsageResult,
   ServerGetSettingsResult,
+  ServerListLocalServersInput,
   ServerListLocalServersResult,
   ServerListWorktreesResult,
   ServerProviderUpdateInput,
@@ -821,10 +838,15 @@ export interface NativeApi {
     refreshExternalMcpPairing: (
       input: ExternalMcpRefreshPairingInput,
     ) => Promise<ExternalMcpCreateIntegrationResult>;
+    listOutboundMcpConnections: () => Promise<OutboundMcpListResult>;
+    beginOutboundMcpAuthorization: (
+      input: OutboundMcpBeginAuthorizationInput,
+    ) => Promise<OutboundMcpBeginAuthorizationResult>;
+    disconnectOutboundMcpConnection: (input: OutboundMcpDisconnectInput) => Promise<void>;
     refreshProviders: () => Promise<ServerRefreshProvidersResult>;
     updateProvider: (input: ServerProviderUpdateInput) => Promise<ServerProviderUpdateResult>;
     listWorktrees: () => Promise<ServerListWorktreesResult>;
-    listLocalServers: () => Promise<ServerListLocalServersResult>;
+    listLocalServers: (input: ServerListLocalServersInput) => Promise<ServerListLocalServersResult>;
     stopLocalServer: (input: ServerStopLocalServerInput) => Promise<ServerStopLocalServerResult>;
     getProviderUsageSnapshot: (
       input: ServerGetProviderUsageSnapshotInput,
@@ -833,6 +855,15 @@ export interface NativeApi {
       input: ServerListProviderUsageInput,
     ) => Promise<ServerListProviderUsageResult>;
     getDiagnostics: () => Promise<ServerDiagnosticsResult>;
+    getResourceSnapshot: () => Promise<ResourceGetSnapshotResult>;
+    killResourceSession: (input: ResourceKillSessionInput) => Promise<ResourceKillSessionResult>;
+    killAllResourceSessions: () => Promise<ResourceKillAllSessionsResult>;
+    cleanResourceWorkspaces: (
+      input: ResourceCleanWorkspacesInput,
+    ) => Promise<ResourceCleanWorkspacesResult>;
+    scanResourceDisk: (input: ResourceScanDiskInput) => Promise<ResourceDiskUsageReport>;
+    cancelResourceDiskScan: () => Promise<ResourceCancelDiskScanResult>;
+    restartResourceDaemon: () => Promise<ResourceRestartDaemonResult>;
     generateThreadRecap: (
       input: ServerGenerateThreadRecapInput,
     ) => Promise<ServerGenerateThreadRecapResult>;

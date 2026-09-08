@@ -46,6 +46,7 @@ export function pullRequestPinToggleInputs(
     return [
       {
         projectId: entry.projectId,
+        provider: entry.provider,
         repository: entry.repository,
         number: entry.number,
         isPinned: !entry.isPinned,
@@ -56,6 +57,7 @@ export function pullRequestPinToggleInputs(
     .filter((context) => !entry.isPinned || context.isPinned)
     .map((context) => ({
       projectId: context.projectId,
+      provider: entry.provider,
       repository: entry.repository,
       number: entry.number,
       isPinned: !entry.isPinned,
@@ -72,13 +74,20 @@ export function filterPullRequestEntriesByInvolvement(
   involvement: PullRequestInvolvement,
 ): PullRequestListEntry[] {
   if (involvement === "reviewing") {
-    return entries.filter((entry) => entry.viewerReviewRequested);
+    return entries.filter(
+      (entry) =>
+        entry.viewerInvolvement !== "unknown" &&
+        (entry.viewerInvolvement === "review-requested" || entry.viewerReviewRequested),
+    );
   }
   if (involvement === "authored") {
     const normalizedViewer = viewerLogin?.trim().toLowerCase() || null;
     return entries.filter(
       (entry) =>
-        normalizedViewer !== null && entry.author?.login.trim().toLowerCase() === normalizedViewer,
+        entry.viewerInvolvement !== "unknown" &&
+        normalizedViewer !== null &&
+        (entry.viewerInvolvement === "author" ||
+          entry.author?.login.trim().toLowerCase() === normalizedViewer),
     );
   }
   return [...entries];
@@ -95,6 +104,17 @@ export function matchesPullRequestSearchQuery(
     .includes(normalizedQuery);
 }
 
+export function countUniqueViewerReviewRequests(entries: readonly PullRequestListEntry[]): number {
+  return new Set(
+    entries
+      .filter(
+        (entry) =>
+          entry.viewerInvolvement !== "unknown" &&
+          (entry.viewerInvolvement === "review-requested" || entry.viewerReviewRequested),
+      )
+      .map(pullRequestListRepositoryIdentity),
+  ).size;
+}
 /** Stable partition used by ungrouped tabs after an optimistic pin toggle. */
 export function orderPullRequestEntriesPinnedFirst(
   entries: readonly PullRequestListEntry[],
@@ -125,8 +145,17 @@ export function groupPullRequestEntriesByInvolvement(
       buckets.pinned.push(entry);
       continue;
     }
+    if (entry.viewerInvolvement === "unknown") {
+      buckets.others.push(entry);
+      continue;
+    }
     const authorLogin = entry.author?.login.trim().toLowerCase() || null;
-    if (authorLogin && normalizedViewer && authorLogin === normalizedViewer) {
+    if (entry.viewerInvolvement === "review-requested") {
+      buckets.reviewRequested.push(entry);
+    } else if (
+      entry.viewerInvolvement === "author" ||
+      (authorLogin && normalizedViewer && authorLogin === normalizedViewer)
+    ) {
       buckets.authored.push(entry);
     } else if (entry.viewerReviewRequested) {
       buckets.reviewRequested.push(entry);

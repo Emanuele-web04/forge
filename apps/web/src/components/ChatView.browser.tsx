@@ -4466,6 +4466,9 @@ describe("ChatView transcript geometry (full app)", () => {
     try {
       await expect.element(page.getByText("What should we do in")).toBeInTheDocument();
       await expect.element(page.getByRole("button", { name: "Local" })).toBeInTheDocument();
+      await expect
+        .element(page.getByTestId("composer-workspace-status"))
+        .toHaveAccessibleName("Local checkout · main");
       expect(document.body.textContent).toContain("main");
     } finally {
       await mounted.cleanup();

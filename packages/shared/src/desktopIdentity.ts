@@ -50,7 +50,7 @@ export function synaraDesktopIdentity(flavor: SynaraDesktopFlavor): SynaraDeskto
   if (flavor === "canary") {
     return {
       flavor,
-      displayName: "Synara Canary",
+      displayName: "Claudex Canary",
       bundleId: SYNARA_CANARY_BUNDLE_ID,
       scheme: SYNARA_CANARY_DESKTOP_SCHEME,
       origin: SYNARA_CANARY_DESKTOP_ORIGIN,
@@ -63,7 +63,7 @@ export function synaraDesktopIdentity(flavor: SynaraDesktopFlavor): SynaraDeskto
   if (flavor === "development") {
     return {
       flavor,
-      displayName: "Synara (Dev)",
+      displayName: "Claudex (Dev)",
       bundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
       scheme: SYNARA_DESKTOP_SCHEME,
       origin: SYNARA_DESKTOP_ORIGIN,
@@ -75,7 +75,7 @@ export function synaraDesktopIdentity(flavor: SynaraDesktopFlavor): SynaraDeskto
   }
   return {
     flavor,
-    displayName: "Synara",
+    displayName: "Claudex",
     bundleId: SYNARA_PRODUCTION_BUNDLE_ID,
     scheme: SYNARA_DESKTOP_SCHEME,
     origin: SYNARA_DESKTOP_ORIGIN,

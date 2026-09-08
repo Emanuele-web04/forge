@@ -2,17 +2,21 @@
 // Purpose: Pure helpers shared by every host of the pull request detail surface (the
 //          /pull-requests route overlay and the chat right-dock pane): the canonical
 //          pane identity key, the "PR #n" tab chip label, the plain-language state
-//          descriptor, and the flattened chronological timeline event list.
+//          descriptor, the capability-driven detail model (tabs, actions, composer and
+//          control visibility), and the flattened chronological timeline event list.
 // Layer: Web domain helpers (no React)
 // Exports: pullRequestDetailInputKey, pullRequestPaneTabLabel, pullRequestDetailInputFromPane,
-//          describePullRequestState, stripHtmlComments, PullRequestTimelineEvent,
+//          describePullRequestState, stripHtmlComments, PullRequestDetailTab,
+//          PullRequestDetailModel, buildPullRequestDetailModel, PullRequestTimelineEvent,
 //          buildPullRequestTimelineEvents
 
 import type {
+  PullRequestAction,
   PullRequestDetail,
   PullRequestDetailInput,
   PullRequestState,
 } from "@synara/contracts";
+import { LEGACY_GITHUB_PULL_REQUEST_CAPABILITIES } from "@synara/contracts";
 
 import type { RightDockPane } from "~/rightDockStore.logic";
 
@@ -21,7 +25,7 @@ import { pullRequestMarkdownPreview } from "./pullRequestMarkdown.logic";
 /** Canonical identity for one detail surface — used as the React key so switching the
  *  selected pull request remounts the panel (resetting its tab and diff state). */
 export function pullRequestDetailInputKey(input: PullRequestDetailInput): string {
-  return `${input.projectId}:${input.repository}#${input.number}`;
+  return `${input.projectId}:${input.provider}:${input.repository}#${input.number}`;
 }
 
 /** Tab chip label shared by the route overlay chip and the right-dock pane tab. */
@@ -43,6 +47,7 @@ export function pullRequestDetailInputFromPane(pane: RightDockPane): PullRequest
   }
   return {
     projectId: pane.pullRequestProjectId,
+    provider: pane.pullRequestProvider ?? "github",
     repository: pane.pullRequestRepository,
     number: pane.pullRequestNumber,
   };
@@ -60,6 +65,47 @@ export function describePullRequestState(state: PullRequestState, isDraft: boole
 
 // stripHtmlComments now lives with the rest of the markdown preprocessing.
 export { stripHtmlComments } from "./pullRequestMarkdown.logic";
+
+export type PullRequestDetailTab = "summary" | "timeline" | "code";
+
+export interface PullRequestDetailModel {
+  tabs: PullRequestDetailTab[];
+  actions: PullRequestAction[];
+  showCommentComposer: boolean;
+  showResolveControls: boolean;
+  showMergeability: boolean;
+}
+
+/** Capability-driven detail affordances. Bitbucket details are read-only by schema, so they
+ * expose tabs and content but no mutation action, composer, resolve control, or mergeability
+ * signal. Details without capabilities predate the provider-aware contracts and keep the
+ * legacy GitHub presentation. */
+export function buildPullRequestDetailModel(
+  detail: Pick<PullRequestDetail, "capabilities" | "state" | "isDraft">,
+): PullRequestDetailModel {
+  const capabilities = detail.capabilities ?? LEGACY_GITHUB_PULL_REQUEST_CAPABILITIES;
+  const tabs: PullRequestDetailTab[] = [];
+  if (capabilities.detail) tabs.push("summary");
+  if (capabilities.diff) tabs.push("code");
+  if (capabilities.comments) tabs.push("timeline");
+  const actions: PullRequestAction[] = [];
+  if (detail.state === "open") {
+    if (capabilities.merge && !detail.isDraft) actions.push("merge");
+    if (capabilities.stateMutation) {
+      actions.push(detail.isDraft ? "ready" : "draft");
+      actions.push("close");
+    }
+  } else if (detail.state === "closed" && capabilities.stateMutation) {
+    actions.push("reopen");
+  }
+  return {
+    tabs,
+    actions,
+    showCommentComposer: capabilities.comment,
+    showResolveControls: capabilities.resolveComment,
+    showMergeability: capabilities.merge,
+  };
+}
 
 export interface PullRequestTimelineEvent {
   id: string;

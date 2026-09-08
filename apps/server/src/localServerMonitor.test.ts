@@ -8,12 +8,15 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildLocalServerProcesses,
   enrichLocalServerProcessesWithPageTitles,
+  excludePortsFromListeners,
   extractLocalServerPageTitle,
+  isExcludedFromFullScan,
   isIgnoredLocalServerProcess,
   detectDevServerKindFromText,
   parseProcessInfo,
   parseLsofCwdOutput,
   parseLsofTcpListenOutput,
+  resolveOwnListenerPorts,
   type LocalServerProcessInfo,
 } from "./localServerMonitor";
 
@@ -532,5 +535,138 @@ describe("localServerMonitor", () => {
 
     expect(servers).toHaveLength(1);
     expect(servers[0]?.cwd).toBeUndefined();
+  });
+});
+
+describe("full scan mode", () => {
+  function buildAllServerForCommand(commandLine: string, port: number, command = "node") {
+    const processInfo = new Map<number, LocalServerProcessInfo>([[123, { ppid: 1, commandLine }]]);
+    return buildLocalServerProcesses(
+      parseLsofTcpListenOutput(["p123", `c${command}`, "PTCP", `n127.0.0.1:${port}`].join("\n")),
+      processInfo,
+      new Map(),
+      "all",
+    );
+  }
+
+  it("reports a generic process under its executable name", () => {
+    const servers = buildAllServerForCommand(
+      "/opt/homebrew/bin/opencode.exe serve",
+      53536,
+      "opencode",
+    );
+
+    expect(servers).toHaveLength(1);
+    expect(servers[0]).toMatchObject({ displayName: "opencode.exe", ports: [53536] });
+  });
+
+  it("drops non-dev listeners in dev mode", () => {
+    const processInfo = new Map<number, LocalServerProcessInfo>([
+      [123, { ppid: 1, commandLine: "/opt/homebrew/bin/opencode.exe serve" }],
+    ]);
+    const servers = buildLocalServerProcesses(
+      parseLsofTcpListenOutput(["p123", "copencode", "PTCP", "n127.0.0.1:53536"].join("\n")),
+      processInfo,
+    );
+
+    expect(servers).toHaveLength(0);
+  });
+
+  it("keeps dev-kind labels in all mode", () => {
+    const servers = buildAllServerForCommand("node ./node_modules/.bin/vite", 5173);
+
+    expect(servers).toHaveLength(1);
+    expect(servers[0]).toMatchObject({ displayName: "Vite" });
+  });
+
+  it("includes databases and privileged ports in all mode", () => {
+    const processInfo = new Map<number, LocalServerProcessInfo>([
+      [123, { ppid: 1, commandLine: "postgres -D /usr/local/var/postgres" }],
+    ]);
+    const servers = buildLocalServerProcesses(
+      parseLsofTcpListenOutput(["p123", "cpostgres", "PTCP", "n127.0.0.1:5432"].join("\n")),
+      processInfo,
+      new Map(),
+      "all",
+    );
+
+    expect(servers).toHaveLength(1);
+    expect(servers[0]).toMatchObject({ displayName: "postgres", ports: [5432] });
+  });
+
+  it("still drops chromium children in all mode", () => {
+    const servers = buildAllServerForCommand(
+      "/Applications/Discord.app/Contents/Frameworks/Discord Helper --type=renderer --port=6463",
+      6463,
+    );
+
+    expect(servers).toHaveLength(0);
+  });
+
+  it("never probes non-dev listeners for page titles", async () => {
+    const servers = buildAllServerForCommand("/usr/local/bin/node /srv/app.js", 3000);
+    const fetchTitle = vi.fn(async () => "Unexpected browser title");
+
+    const enriched = await enrichLocalServerProcessesWithPageTitles(servers, fetchTitle);
+
+    expect(fetchTitle).not.toHaveBeenCalled();
+    expect(enriched[0]?.pageTitle).toBeUndefined();
+    expect(enriched[0]?.displayName).toBe("node");
+  });
+});
+
+describe("isExcludedFromFullScan", () => {
+  it("keeps databases and privileged ports visible", () => {
+    expect(
+      isExcludedFromFullScan({ command: "postgres", args: "postgres -D /data", ports: [5432] }),
+    ).toBe(false);
+    expect(
+      isExcludedFromFullScan({ command: "nginx", args: "nginx: master process", ports: [443] }),
+    ).toBe(false);
+  });
+
+  it("still drops chromium children, desktop helpers, and synara itself", () => {
+    expect(
+      isExcludedFromFullScan({
+        command: "Discord Helper",
+        args: "/Applications/Discord.app/Contents/Frameworks/Discord Helper --type=renderer",
+        ports: [6463],
+      }),
+    ).toBe(true);
+    expect(
+      isExcludedFromFullScan({ command: "synara", args: "synara serve", ports: [52345] }),
+    ).toBe(true);
+    expect(
+      isExcludedFromFullScan({
+        command: "Spotify",
+        args: "/Applications/Spotify.app/Contents/MacOS/Spotify",
+        ports: [4370],
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("resolveOwnListenerPorts", () => {
+  it("reads Synara's server and web ports from the environment", () => {
+    expect(resolveOwnListenerPorts({ SYNARA_PORT: "58090", PORT: "8891" })).toEqual([58090, 8891]);
+  });
+
+  it("ignores missing or invalid values", () => {
+    expect(resolveOwnListenerPorts({})).toEqual([]);
+    expect(resolveOwnListenerPorts({ SYNARA_PORT: "not-a-port", PORT: "99999" })).toEqual([]);
+  });
+});
+
+describe("excludePortsFromListeners", () => {
+  it("drops only the excluded ports, keeping sibling ports of the same process", () => {
+    const listeners = parseLsofTcpListenOutput(
+      ["p123", "cnode", "PTCP", "n127.0.0.1:8891", "n127.0.0.1:5173"].join("\n"),
+    );
+
+    expect(excludePortsFromListeners(listeners, [8891]).map((listener) => listener.port)).toEqual([
+      5173,
+    ]);
+    expect(excludePortsFromListeners(listeners, undefined)).toHaveLength(2);
+    expect(excludePortsFromListeners(listeners, [])).toHaveLength(2);
   });
 });

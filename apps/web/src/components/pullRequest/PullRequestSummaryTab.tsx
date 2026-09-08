@@ -20,7 +20,7 @@ import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
 import { ChatBubbleIcon, GitBranchIcon, UsersIcon } from "~/lib/icons";
 import { formatRelativeTime } from "~/lib/relativeTime";
 import { ensureNativeApi } from "~/nativeApi";
-import { describePullRequestState } from "./pullRequestDetail.logic";
+import { describePullRequestState, buildPullRequestDetailModel } from "./pullRequestDetail.logic";
 import { PullRequestActorLabel } from "./PullRequestActorLabel";
 import { PullRequestCheckStatusIcon } from "./PullRequestCheckStatusIcon";
 import { PullRequestConflictIcon } from "./pullRequestStatePresentation";
@@ -71,6 +71,21 @@ function MetaRow({
   );
 }
 
+function pullRequestProviderLabel(provider: PullRequestDetail["provider"]): string {
+  return provider === "bitbucket" ? "Bitbucket" : "GitHub";
+}
+
+function commentsAvailabilityWarning(detail: PullRequestDetail): string | null {
+  const providerLabel = pullRequestProviderLabel(detail.provider);
+  if (detail.commentsIncomplete) {
+    return `Some unresolved review comments could not be loaded. Check ${providerLabel} for the complete review.`;
+  }
+  if (detail.commentsTruncated) {
+    return `More unresolved review comments may be available on ${providerLabel}.`;
+  }
+  return null;
+}
+
 function DisclosureSection({
   label,
   count,
@@ -78,7 +93,7 @@ function DisclosureSection({
   defaultOpen: defaultOpenProp,
 }: {
   label: string;
-  count?: number;
+  count?: number | undefined;
   children: ReactNode;
   defaultOpen?: boolean;
 }) {
@@ -110,6 +125,9 @@ function DisclosureSection({
 }
 
 export function PullRequestSummaryTab({ detail }: { detail: PullRequestDetail }) {
+  const checks = detail.checks ?? [];
+  const commentsWarning = commentsAvailabilityWarning(detail);
+  const detailModel = buildPullRequestDetailModel(detail);
   return (
     <div className="h-full overflow-y-auto">
       <section className="space-y-4 px-5 py-5">
@@ -169,8 +187,8 @@ export function PullRequestSummaryTab({ detail }: { detail: PullRequestDetail })
           </MetaRow>
           {/* Tone tinting intentionally omitted: the summary reads as plain metadata
               here, matching the muted meta rows around it. */}
-          <MetaRow icon={<PullRequestChecksRing checks={detail.checks} />} label="Checks">
-            {summarizePullRequestChecks(detail.checks).label}
+          <MetaRow icon={<PullRequestChecksRing checks={checks} />} label="Checks">
+            {detail.checks === null ? "Unavailable" : summarizePullRequestChecks(checks).label}
           </MetaRow>
         </div>
       </section>
@@ -182,14 +200,18 @@ export function PullRequestSummaryTab({ detail }: { detail: PullRequestDetail })
           cwd={detail.workspaceRoot}
         />
       </DisclosureSection>
-      <DisclosureSection label="Checks" count={detail.checks.length}>
+      <DisclosureSection label="Checks" count={detail.checks === null ? undefined : checks.length}>
         <div className="space-y-1">
-          {detail.checks.length === 0 ? (
+          {detail.checks === null ? (
+            <p className={cn(PR_META_TEXT_CLASS_NAME, "text-muted-foreground")}>
+              Checks are unavailable from this provider.
+            </p>
+          ) : checks.length === 0 ? (
             <p className={cn(PR_META_TEXT_CLASS_NAME, "text-muted-foreground")}>
               No checks reported.
             </p>
           ) : (
-            withStableCheckKeys(detail.checks).map(({ key, check }) => (
+            withStableCheckKeys(checks).map(({ key, check }) => (
               <button
                 key={key}
                 type="button"
@@ -217,12 +239,8 @@ export function PullRequestSummaryTab({ detail }: { detail: PullRequestDetail })
       {/* Open by default so the comment composer is immediately reachable. */}
       <DisclosureSection label="Comments" count={detail.comments.length}>
         <div className="space-y-2">
-          {detail.commentsTruncated || detail.commentsIncomplete ? (
-            <PullRequestWarningNote>
-              {detail.commentsIncomplete
-                ? "Some unresolved review comments could not be loaded. Check GitHub for the complete review."
-                : "More unresolved review comments may be available on GitHub."}
-            </PullRequestWarningNote>
+          {commentsWarning ? (
+            <PullRequestWarningNote>{commentsWarning}</PullRequestWarningNote>
           ) : null}
           {detail.comments.length === 0 ? (
             <p className={cn(PR_BODY_TEXT_CLASS_NAME, "py-4 text-center text-muted-foreground")}>
@@ -236,12 +254,13 @@ export function PullRequestSummaryTab({ detail }: { detail: PullRequestDetail })
                   comment={comment}
                   prUrl={detail.url}
                   workspaceRoot={detail.workspaceRoot}
+                  canReply={detailModel.showCommentComposer}
                   defaultOpen={index >= detail.comments.length - 2}
                 />
               ))}
             </div>
           )}
-          <PullRequestCommentComposer detail={detail} />
+          {detailModel.showCommentComposer ? <PullRequestCommentComposer detail={detail} /> : null}
         </div>
       </DisclosureSection>
     </div>

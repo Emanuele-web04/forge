@@ -29,7 +29,16 @@ import {
 } from "../sidebarRowStyles";
 import { isDuplicateProjectCreateError } from "../lib/projectCreateRecovery";
 import {
+  buildThreadHierarchyIndex,
+  collectRevealThreadIds,
+  getDirectChildThreadCount,
+  getThreadEdgeKind,
+  resolveVisibleChildThreadIds,
+  type ThreadHierarchyEdgeKind,
+} from "./sidebarThreadHierarchy";
+import {
   canSessionAnswerPendingRequests,
+  formatClockDuration,
   hasLiveLatestTurn,
   findLatestProposedPlan,
   hasActionableProposedPlan,
@@ -299,6 +308,9 @@ export type SidebarProjectEntry = {
   rootRowId: ThreadId;
   thread: SidebarThreadSummary;
   depth: number;
+  /** Direct children available for this row (counter source; views paginate the branch). */
+  directChildCount?: number;
+  edgeKind?: ThreadHierarchyEdgeKind | undefined;
 };
 
 export type SidebarThreadHoverAnchorScope = "pinned" | "chat" | "project" | "activity";
@@ -336,6 +348,11 @@ export interface ThreadStatusPill {
   pulse: boolean;
   dismissible?: boolean;
   dismissalKey?: string;
+}
+
+/** A status that still requires attention or represents active output. */
+export function isUrgentThreadStatusPill(pill: ThreadStatusPill): boolean {
+  return pill.label !== "Completed";
 }
 
 /**
@@ -504,50 +521,62 @@ export function pruneProjectThreadListPagingForCollapsedProjects<
   return changed ? nextThreadListExtraPagesByProjectCwd : threadListExtraPagesByProjectCwd;
 }
 
-/**
- * Trailing padding that protects the title from the absolutely-positioned
- * trailing cluster, sized to what the slot ACTUALLY shows so the title runs as
- * far right as the on-screen content allows:
- *
- * - The relative time now lives in the row hover card, so an idle row with no
- *   status/jump glyph and no meta chips reserves almost nothing — the title runs
- *   to the row edge instead of truncating against permanently reserved space.
- * - A status/loader (or keyboard-jump) glyph occupies a ~2.25rem slot, and each
- *   fork/worktree/handoff meta chip adds width; the reserve grows only for the
- *   badges that are present.
- * - The wider reserve that clears the hover pin/archive actions is applied only
- *   on hover/focus (mirroring the project header row), so the title gives up that
- *   width exactly when those actions appear and not a moment sooner.
- *
- * Literal class strings are required so Tailwind's JIT scanner emits them.
- */
-export function resolveThreadRowTrailingReserveClass(input: {
-  metaChipCount: number;
-  hasTrailingGlyph: boolean;
-}): string {
-  // Hover/focus reveals the pin/archive actions; the meta chips + glyph fade out
-  // at the same time, so the hover reserve is constant regardless of rest content.
-  const hoverReserve =
-    "transition-[padding] duration-150 ease-out group-hover/thread-row:pr-[4.75rem] group-focus-within/thread-row:pr-[4.75rem]";
-  const { metaChipCount, hasTrailingGlyph } = input;
-  if (metaChipCount <= 0) {
-    return cn(hasTrailingGlyph ? "pr-[1.75rem]" : "pr-2", hoverReserve);
+// Id-keyed twin of the cwd prune above: drops remembered "show more" paging for
+// projects that are currently collapsed. Entries for unknown ids are kept, matching
+// the legacy behavior for cwds that no longer match a project.
+export function pruneProjectThreadListExtraPagesById(input: {
+  threadListExtraPagesByProjectId: ReadonlyMap<Project["id"], number>;
+  projects: readonly Pick<Project, "id" | "expanded">[];
+}): ReadonlyMap<Project["id"], number> {
+  const { projects, threadListExtraPagesByProjectId } = input;
+  const collapsedProjectIds = new Set(
+    projects.filter((project) => !project.expanded).map((project) => project.id),
+  );
+
+  if (collapsedProjectIds.size === 0) {
+    return threadListExtraPagesByProjectId;
   }
-  if (metaChipCount === 1) {
-    return cn(hasTrailingGlyph ? "pr-[3rem]" : "pr-[1.75rem]", hoverReserve);
+
+  let changed = false;
+  const nextThreadListExtraPagesByProjectId = new Map<Project["id"], number>();
+  for (const [projectId, extraPages] of threadListExtraPagesByProjectId) {
+    if (collapsedProjectIds.has(projectId)) {
+      changed = true;
+      continue;
+    }
+    nextThreadListExtraPagesByProjectId.set(projectId, extraPages);
   }
-  if (metaChipCount === 2) {
-    return cn(hasTrailingGlyph ? "pr-[4rem]" : "pr-[3rem]", hoverReserve);
-  }
-  return cn(hasTrailingGlyph ? "pr-[4.5rem]" : "pr-[4.25rem]", hoverReserve);
+
+  return changed ? nextThreadListExtraPagesByProjectId : threadListExtraPagesByProjectId;
+}
+
+// Tailwind only emits classes it can see, so the reserve is a static table:
+// rows = kbd count (≤2 covers "⌘1"; 3 covers "⇧⌘1" / "Ctrl+Shift+1"), columns =
+// meta chips (18px each). Widths include the 6px right offset of the cluster.
+// Used by the Activity title line, whose ⌘N hint is still absolutely positioned.
+const JUMP_HINT_RESERVE_CLASS_BY_PART_COUNT: Record<
+  number,
+  readonly [string, string, string, string]
+> = {
+  2: ["pr-[3.75rem]", "pr-[4.75rem]", "pr-[6rem]", "pr-[7rem]"],
+  3: ["pr-[5.25rem]", "pr-[6.25rem]", "pr-[7.5rem]", "pr-[8.5rem]"],
+  4: ["pr-[6.75rem]", "pr-[7.75rem]", "pr-[9rem]", "pr-[10rem]"],
+};
+
+/** Trailing padding a row needs so the absolute ⌘N kbd group never covers its title. */
+export function resolveJumpHintReserveClass(
+  metaChipCount: number,
+  jumpLabelPartCount: number,
+): string {
+  const row = JUMP_HINT_RESERVE_CLASS_BY_PART_COUNT[Math.min(Math.max(jumpLabelPartCount, 2), 4)]!;
+  return row[Math.min(Math.max(metaChipCount, 0), 3)]!;
 }
 
 export function resolveThreadRowClassName(input: {
   isActive: boolean;
   isSelected: boolean;
 }): string {
-  // Trailing reserve for the absolute cluster is applied separately by callers
-  // via resolveThreadRowTrailingReserveClass so it can flex with the chip count.
+  // The caller lays out trailing metadata and branch controls in flow.
   const baseClassName = SIDEBAR_THREAD_ROW_BASE_CLASS_NAME;
 
   if (input.isSelected && input.isActive) {
@@ -581,6 +610,79 @@ export function isThreadActivelyWorking(thread: {
     session?.status === "running" &&
     (thread.latestTurn == null || hasLiveLatestTurn(thread.latestTurn, session))
   );
+}
+
+/**
+ * Elapsed wall-clock time of the thread's unfinished turn, for "running for Xm"
+ * row labels. Null once the turn completes (recency labels take over) or when
+ * no start timestamp exists — callers fall back to the recency label.
+ */
+export function resolveThreadElapsedMs(
+  thread: Pick<Thread, "latestTurn">,
+  nowMs: number,
+): number | null {
+  const turn = thread.latestTurn;
+  if (turn == null || turn.completedAt != null) {
+    return null;
+  }
+  const startIso = turn.startedAt ?? turn.requestedAt ?? null;
+  if (startIso == null) {
+    return null;
+  }
+  const startMs = Date.parse(startIso);
+  if (Number.isNaN(startMs)) {
+    return null;
+  }
+  return Math.max(0, nowMs - startMs);
+}
+
+/** Compact elapsed label; same formatter the chat "Working for" header uses. */
+export function formatThreadElapsed(elapsedMs: number): string {
+  return formatClockDuration(elapsedMs);
+}
+
+/**
+ * Whether a running row is still waiting for its new turn (shows "Starting…").
+ * A finished latest turn means the run is over even if the running flags lag a
+ * frame behind — without this gate the row flashes "0s" on completion instead
+ * of simply dropping the elapsed label.
+ */
+export function shouldShowThreadStartingLabel(thread: {
+  hasLiveTailWork?: boolean | undefined;
+  session?: Thread["session"] | undefined;
+  latestTurn?: Thread["latestTurn"] | undefined;
+}): boolean {
+  const turn = thread.latestTurn;
+  if (turn != null && turn.completedAt != null) {
+    return false;
+  }
+  return isThreadActivelyWorking(thread) || thread.session?.status === "connecting";
+}
+
+export type UrgentThreadTimeLabel = {
+  text: string;
+  title?: string | undefined;
+};
+
+/**
+ * Which time label an urgent row shows. A running thread whose new turn has
+ * not arrived yet (stale finished turn still in the summary) must not flash
+ * the old recency ("6m") for a frame and then jump to "0s" — it reads as
+ * starting instead.
+ */
+export function resolveUrgentThreadTimeLabel(input: {
+  elapsedMs: number | null;
+  isStarting: boolean;
+  recencyLabel: string | null;
+}): UrgentThreadTimeLabel | null {
+  if (input.elapsedMs !== null) {
+    const text = formatThreadElapsed(input.elapsedMs);
+    return { text, title: `Running for ${text}` };
+  }
+  if (input.isStarting) {
+    return { text: "0s", title: "Starting…" };
+  }
+  return input.recencyLabel !== null ? { text: input.recencyLabel } : null;
 }
 
 export function resolveThreadStatusPill(input: {
@@ -845,91 +947,154 @@ export function resolveSidebarThreadListPaging(input: {
   };
 }
 
+// The sidebar can render beside a split chat, where the focused pane differs from
+// the route owner. Preview folding must retain the thread the user is actually viewing.
+export function resolveActiveSidebarThreadId(input: {
+  focusedThreadId: ThreadId | null;
+  optimisticThreadId: ThreadId | null;
+  routeThreadId: ThreadId | null;
+}): ThreadId | null {
+  return input.optimisticThreadId ?? input.focusedThreadId ?? input.routeThreadId;
+}
+
+export function getVisibleThreadsForProject<T extends Pick<SidebarThreadSummary, "id">>(input: {
+  threads: readonly T[];
+  activeThreadId: Thread["id"] | undefined;
+  previewLimit: number;
+}): {
+  hasHiddenThreads: boolean;
+  visibleThreads: T[];
+} {
+  const { activeThreadId, previewLimit, threads } = input;
+  const hasHiddenThreads = threads.length > previewLimit;
+
+  if (!hasHiddenThreads) {
+    return {
+      hasHiddenThreads,
+      visibleThreads: [...threads],
+    };
+  }
+
+  const previewThreads = threads.slice(0, previewLimit);
+  if (!activeThreadId || previewThreads.some((thread) => thread.id === activeThreadId)) {
+    return {
+      hasHiddenThreads: true,
+      visibleThreads: previewThreads,
+    };
+  }
+
+  const activeThread = threads.find((thread) => thread.id === activeThreadId);
+  if (!activeThread) {
+    return {
+      hasHiddenThreads: true,
+      visibleThreads: previewThreads,
+    };
+  }
+
+  const visibleThreadIds = new Set([...previewThreads, activeThread].map((thread) => thread.id));
+
+  return {
+    hasHiddenThreads: true,
+    visibleThreads: threads.filter((thread) => visibleThreadIds.has(thread.id)),
+  };
+}
 export interface SidebarThreadTreeRow<
   T extends Pick<SidebarThreadSummary, "id" | "parentThreadId">,
 > {
   thread: T;
   depth: number;
   rootThreadId: T["id"];
+  /** Direct children available for this row, including collapsed or paged ones. */
+  directChildCount: number;
+  /** Frontend-only edge kind: subagent (parentThreadId) vs batch (sourceThreadId). */
+  edgeKind: ThreadHierarchyEdgeKind | undefined;
 }
 
-function collectActiveThreadAncestorIds<
-  T extends Pick<SidebarThreadSummary, "id" | "parentThreadId">,
->(threadById: Map<T["id"], T>, forceVisibleThreadId: T["id"] | undefined): Set<T["id"]> {
-  const ancestorIds = new Set<T["id"]>();
-  let currentThreadId = forceVisibleThreadId;
-
-  while (currentThreadId) {
-    const parentThreadId = threadById.get(currentThreadId)?.parentThreadId ?? undefined;
-    if (!parentThreadId) {
-      break;
-    }
-    ancestorIds.add(parentThreadId);
-    currentThreadId = parentThreadId;
-  }
-
-  return ancestorIds;
-}
-
-// Build the project-local parent/child thread tree while preserving sort order from the input list.
+// Build the project-local parent/child thread tree while preserving root order from the input list.
+//
+// The forest comes from the shared sidebarThreadHierarchy index: kinship is
+// `parentThreadId` (subagent) or `sourceThreadId` (nested batch) within the
+// same project only, orphans stay hidden, and cycles/duplicates cannot loop
+// the walk. Direct siblings sort by creation time, then id. Roots always
+// render; children render only under an expanded parent. Branches start
+// closed: expansion is explicit (`expandedThreadIds`, persisted in
+// Sidebar.uiState.ts) plus a transient reveal of the `forceVisibleThreadId`
+// ancestor path, which an explicit close (`collapsedThreadIds`) can override
+// until the active thread changes. Each open branch shows an initial prefix
+// of five direct children via `childVisibleCountByParentId`; a revealed
+// active descendant enlarges the prefix through its position.
 export function buildProjectThreadTree<
-  T extends Pick<SidebarThreadSummary, "id" | "parentThreadId">,
+  T extends Pick<SidebarThreadSummary, "id" | "parentThreadId"> &
+    Partial<
+      Pick<
+        SidebarThreadSummary,
+        "projectId" | "sourceThreadId" | "gatewayOperationId" | "createdAt"
+      >
+    >,
 >(input: {
   threads: readonly T[];
   forceVisibleThreadId?: T["id"] | undefined;
+  expandedThreadIds?: ReadonlySet<T["id"]> | undefined;
+  collapsedThreadIds?: ReadonlySet<T["id"]> | undefined;
+  childVisibleCountByParentId?: ReadonlyMap<T["id"], number> | undefined;
 }): SidebarThreadTreeRow<T>[] {
   const { forceVisibleThreadId, threads } = input;
-  const threadById = new Map(threads.map((thread) => [thread.id, thread] as const));
-  const childrenByParentId = new Map<T["id"], T[]>();
-  const roots: T[] = [];
-
-  for (const thread of threads) {
-    const parentThreadId = thread.parentThreadId ?? null;
-    if (!parentThreadId) {
-      roots.push(thread);
-      continue;
+  const index = buildThreadHierarchyIndex(threads);
+  const collapsedThreadIds = input.collapsedThreadIds ?? new Set<T["id"]>();
+  const revealedThreadIds = collectRevealThreadIds(index, forceVisibleThreadId);
+  const expandedThreadIds = new Set<T["id"]>(input.expandedThreadIds ?? []);
+  for (const revealedThreadId of revealedThreadIds) {
+    if (!collapsedThreadIds.has(revealedThreadId)) {
+      expandedThreadIds.add(revealedThreadId);
     }
-    // Subagent threads are only reachable through their parent. When the parent
-    // is not in the list (archived or deleted), its subtree stays hidden instead
-    // of being promoted to top-level rows.
-    if (!threadById.has(parentThreadId)) {
-      continue;
-    }
-    const siblings = childrenByParentId.get(parentThreadId) ?? [];
-    siblings.push(thread);
-    childrenByParentId.set(parentThreadId, siblings);
   }
 
-  const activeThreadAncestorIds = collectActiveThreadAncestorIds(threadById, forceVisibleThreadId);
   const orderedRows: SidebarThreadTreeRow<T>[] = [];
+  // Explicit iterative preorder walk so abnormal depth cannot overflow the stack.
+  const stack: { threadId: T["id"]; depth: number; rootThreadId: T["id"] }[] = [];
+  for (let rootPosition = index.rootIds.length - 1; rootPosition >= 0; rootPosition -= 1) {
+    const rootId = index.rootIds[rootPosition] as T["id"];
+    stack.push({ threadId: rootId, depth: 0, rootThreadId: rootId });
+  }
 
-  const visit = (thread: T, depth: number, rootThreadId: T["id"]) => {
-    const childThreads = childrenByParentId.get(thread.id) ?? [];
-    const revealsActiveDescendant =
-      childThreads.length > 0 && activeThreadAncestorIds.has(thread.id);
-
+  while (stack.length > 0) {
+    const { depth, rootThreadId, threadId } = stack.pop() as {
+      threadId: T["id"];
+      depth: number;
+      rootThreadId: T["id"];
+    };
+    const thread = index.nodesById.get(threadId);
+    if (!thread) {
+      continue;
+    }
     orderedRows.push({
       thread,
       depth,
       rootThreadId,
+      directChildCount: getDirectChildThreadCount(index, threadId),
+      edgeKind: getThreadEdgeKind(index, threadId),
     });
 
-    if (!revealsActiveDescendant) {
-      return;
+    if (expandedThreadIds.has(threadId) && !collapsedThreadIds.has(threadId)) {
+      const { visibleChildIds } = resolveVisibleChildThreadIds({
+        index,
+        parentId: threadId,
+        requestedVisibleCount: input.childVisibleCountByParentId?.get(threadId),
+        revealedThreadIds,
+      });
+      for (let childPosition = visibleChildIds.length - 1; childPosition >= 0; childPosition -= 1) {
+        const childId = visibleChildIds[childPosition] as T["id"];
+        stack.push({ threadId: childId, depth: depth + 1, rootThreadId });
+      }
     }
-
-    for (const child of childThreads) {
-      visit(child, depth + 1, rootThreadId);
-    }
-  };
-
-  for (const root of roots) {
-    visit(root, 0, root.id);
   }
 
   return orderedRows;
 }
 
+// Roots are paged before they expand: `previewLimit` counts families, and every
+// visible row of an included root renders. Children never consume root slots
+// and no subtree is ever cut mid-family by the preview.
 export function getVisibleSidebarEntriesForPreview<
   T extends {
     rowId: Thread["id"];
@@ -944,52 +1109,39 @@ export function getVisibleSidebarEntriesForPreview<
   visibleEntries: T[];
 } {
   const { activeEntryId, entries, previewLimit } = input;
-  const hasHiddenEntries = entries.length > previewLimit;
-
-  if (!hasHiddenEntries) {
-    return {
-      hasHiddenEntries,
-      visibleEntries: [...entries],
-    };
+  const rootOrder: Thread["id"][] = [];
+  const seenRootIds = new Set<Thread["id"]>();
+  for (const entry of entries) {
+    if (!seenRootIds.has(entry.rootRowId)) {
+      seenRootIds.add(entry.rootRowId);
+      rootOrder.push(entry.rootRowId);
+    }
   }
 
-  const previewEntries = entries.slice(0, previewLimit);
-  const visibleEntryIds = new Set(previewEntries.map((entry) => entry.rowId));
+  const previewRootIds = new Set(rootOrder.slice(0, Math.max(0, previewLimit)));
+  const forcedVisibleRowIds = new Set<Thread["id"]>();
 
-  if (!activeEntryId || visibleEntryIds.has(activeEntryId)) {
-    return {
-      hasHiddenEntries: true,
-      visibleEntries: previewEntries,
-    };
+  if (activeEntryId !== undefined && !previewRootIds.has(activeEntryId)) {
+    const activeEntry = entries.find((entry) => entry.rowId === activeEntryId);
+    if (activeEntry && !previewRootIds.has(activeEntry.rootRowId)) {
+      // Reveal the active entry with its ancestor chain inside the current scope.
+      const rootEntryIndex = entries.findIndex((entry) => entry.rowId === activeEntry.rootRowId);
+      const activeEntryIndex = entries.findIndex((entry) => entry.rowId === activeEntryId);
+      if (rootEntryIndex !== -1 && activeEntryIndex !== -1) {
+        for (const entry of entries.slice(rootEntryIndex, activeEntryIndex + 1)) {
+          forcedVisibleRowIds.add(entry.rowId);
+        }
+      }
+    }
   }
 
-  const activeEntryIndex = entries.findIndex((entry) => entry.rowId === activeEntryId);
-  if (activeEntryIndex === -1) {
-    return {
-      hasHiddenEntries: true,
-      visibleEntries: previewEntries,
-    };
-  }
-
-  const activeEntry = entries[activeEntryIndex];
-  if (!activeEntry) {
-    return {
-      hasHiddenEntries: true,
-      visibleEntries: previewEntries,
-    };
-  }
-
-  const rootEntryIndex = entries.findIndex((entry) => entry.rowId === activeEntry.rootRowId);
-  const forcedVisibleEntries =
-    rootEntryIndex === -1 ? [activeEntry] : entries.slice(rootEntryIndex, activeEntryIndex + 1);
-
-  for (const entry of forcedVisibleEntries) {
-    visibleEntryIds.add(entry.rowId);
-  }
+  const visibleEntries = entries.filter(
+    (entry) => previewRootIds.has(entry.rootRowId) || forcedVisibleRowIds.has(entry.rowId),
+  );
 
   return {
-    hasHiddenEntries: true,
-    visibleEntries: entries.filter((entry) => visibleEntryIds.has(entry.rowId)),
+    hasHiddenEntries: visibleEntries.length < entries.length,
+    visibleEntries,
   };
 }
 
@@ -1061,29 +1213,85 @@ export function orderPinnedProjectsForSidebar<T extends Pick<Project, "id">>(
 }
 
 // Hide globally pinned rows from the per-project lists so the sidebar doesn't duplicate chats.
-// Exception: a pinned parent whose children are in the list stays in the tree.
-// The pinned section renders flat rows only, and buildProjectThreadTree hides
-// children with a missing parent — hiding such a parent would make its
-// descendants unreachable anywhere in the sidebar.
+// A family appears exactly once per view: pinning any member moves the whole
+// family to the Pinned section, so every thread whose family root contains a
+// pinned member is excluded here. Families resolve through the shared
+// hierarchy index (parentThreadId → subagent, sourceThreadId → batch) within
+// the same project; orphans and cross-project links stay hidden as usual.
 export function getUnpinnedThreadsForSidebar<
-  T extends Pick<Thread, "id"> & Partial<Pick<SidebarThreadSummary, "parentThreadId">>,
+  T extends Pick<Thread, "id"> &
+    Partial<
+      Pick<
+        SidebarThreadSummary,
+        "parentThreadId" | "projectId" | "sourceThreadId" | "gatewayOperationId"
+      >
+    >,
 >(threads: readonly T[], pinnedThreadIds: readonly T["id"][]): T[] {
   if (pinnedThreadIds.length === 0) {
     return [...threads];
   }
 
-  const parentThreadIds = new Set<T["id"]>();
-  for (const thread of threads) {
-    const parentThreadId = thread.parentThreadId ?? null;
-    if (parentThreadId !== null) {
-      parentThreadIds.add(parentThreadId as T["id"]);
+  const pinnedThreadIdSet = new Set<T["id"]>(pinnedThreadIds);
+  const index = buildThreadHierarchyIndex(threads);
+  const pinnedRootIds = new Set<T["id"]>();
+  for (const pinnedThreadId of pinnedThreadIdSet) {
+    const rootId = index.rootIdByThreadId.get(pinnedThreadId);
+    if (rootId !== undefined) {
+      pinnedRootIds.add(rootId);
+      continue;
+    }
+    // Hidden or unknown pinned ids (orphans, other projects, not yet
+    // hydrated) still hide their own row to avoid duplicates in Pinned.
+    if (index.nodesById.has(pinnedThreadId)) {
+      pinnedRootIds.add(pinnedThreadId);
     }
   }
+  if (pinnedRootIds.size === 0) {
+    return threads.filter((thread) => !pinnedThreadIdSet.has(thread.id));
+  }
 
-  const hiddenThreadIds = new Set(
-    pinnedThreadIds.filter((threadId) => !parentThreadIds.has(threadId)),
-  );
-  return threads.filter((thread) => !hiddenThreadIds.has(thread.id));
+  return threads.filter((thread) => {
+    const rootId = index.rootIdByThreadId.get(thread.id);
+    if (rootId !== undefined) {
+      return !pinnedRootIds.has(rootId);
+    }
+    // Hidden threads never render in ordinary lists; keep the direct pinned
+    // check so they don't leak back as roots.
+    return !pinnedThreadIdSet.has(thread.id);
+  });
+}
+
+/**
+ * Family roots for the Pinned section, in first-pinned-position order: if any
+ * member of a family is pinned, the whole family renders once under its root.
+ * Returns the root thread for each pinned family plus ungroupable pinned ids.
+ */
+export function getPinnedFamilyRootIdsForSidebar<
+  T extends Pick<Thread, "id"> &
+    Partial<
+      Pick<
+        SidebarThreadSummary,
+        "parentThreadId" | "projectId" | "sourceThreadId" | "gatewayOperationId"
+      >
+    >,
+>(threads: readonly T[], pinnedThreadIds: readonly T["id"][]): T["id"][] {
+  if (pinnedThreadIds.length === 0) {
+    return [];
+  }
+  const index = buildThreadHierarchyIndex(threads);
+  const seenRoots = new Set<T["id"]>();
+  const rootIds: T["id"][] = [];
+  for (const pinnedThreadId of pinnedThreadIds) {
+    const rootId =
+      index.rootIdByThreadId.get(pinnedThreadId) ??
+      (index.nodesById.has(pinnedThreadId) ? pinnedThreadId : undefined);
+    if (rootId === undefined || seenRoots.has(rootId)) {
+      continue;
+    }
+    seenRoots.add(rootId);
+    rootIds.push(rootId);
+  }
+  return rootIds;
 }
 
 // Only prune persisted pins after the thread snapshot has hydrated.
@@ -1395,6 +1603,9 @@ export function deriveSidebarProjectData(input: {
   activeSidebarThreadId: ThreadId | undefined;
   previewLimit: number;
   previewPageSize: number;
+  expandedThreadIds?: ReadonlySet<ThreadId> | undefined;
+  collapsedThreadIds?: ReadonlySet<ThreadId> | undefined;
+  childVisibleCountByParentId?: ReadonlyMap<ThreadId, number> | undefined;
   resolveThreadStatus?: (
     thread: SidebarThreadSummary,
   ) => ReturnType<typeof resolveThreadStatusPill>;
@@ -1457,14 +1668,19 @@ export function deriveSidebarProjectData(input: {
     const projectThreadTree = buildProjectThreadTree({
       threads: projectThreads,
       forceVisibleThreadId: input.activeSidebarThreadId,
+      expandedThreadIds: input.expandedThreadIds,
+      collapsedThreadIds: input.collapsedThreadIds,
+      childVisibleCountByParentId: input.childVisibleCountByParentId,
     });
     const orderedEntries: SidebarProjectEntry[] = projectThreadTree.map(
-      ({ thread, depth, rootThreadId }) => ({
+      ({ thread, depth, rootThreadId, directChildCount, edgeKind }) => ({
         kind: "thread",
         rowId: thread.id,
         rootRowId: rootThreadId,
         thread,
         depth,
+        directChildCount,
+        edgeKind,
       }),
     );
 
@@ -1472,8 +1688,11 @@ export function deriveSidebarProjectData(input: {
       input.activeSidebarThreadId === undefined
         ? null
         : (orderedEntries.find((entry) => entry.rowId === input.activeSidebarThreadId) ?? null);
+    // Preview pages roots (families), not expanded rows: children never consume
+    // root slots and no subtree is cut mid-family by the preview.
+    const rootCount = new Set(orderedEntries.map((entry) => entry.rootRowId)).size;
     const paging = resolveSidebarThreadListPaging({
-      totalCount: orderedEntries.length,
+      totalCount: rootCount,
       baseLimit: input.previewLimit,
       pageSize: input.previewPageSize,
       requestedExtraPages,

@@ -1,6 +1,7 @@
 // FILE: SidebarActivityView.tsx
-// Purpose: Task-feed sidebar surface — every thread is a 2-line task row
-//          (provider + title / project + branch) grouped by status, with settle.
+// Purpose: Task-feed sidebar surface — root threads are 2-line task rows
+//          (provider + title / project · branch · subagents · time) grouped by
+//          status, with settle; subagents nest as 1-line rows under a thread line.
 // Layer: Sidebar UI component
 // Exports: SidebarActivityView
 
@@ -27,6 +28,7 @@ import {
   WorktreeIcon,
 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { splitShortcutLabel } from "../keybindings";
 import {
   SIDEBAR_ROW_ACTIVE_CLASS_NAME,
   SIDEBAR_ROW_FOCUS_CLASS_NAME,
@@ -42,29 +44,56 @@ import { FolderClosed } from "./FolderClosed";
 import { ProviderIcon } from "./ProviderIcon";
 import { PrStateChip } from "./pullRequest/PrStateChip";
 import {
+  buildProjectThreadTree,
   createSidebarThreadHoverAnchorId,
+  resolveJumpHintReserveClass,
   resolveSidebarThreadListPaging,
   resolveThreadDisplayBranch,
   resolveThreadProjectLabel,
   resolveThreadStatusTrailingIndicator,
+  type SidebarThreadTreeRow,
   type ThreadStatusPill,
 } from "./Sidebar.logic";
 import {
+  buildThreadHierarchyIndex,
+  resolveBranchPagingState,
+  type ThreadHierarchyEdgeKind,
+} from "./sidebarThreadHierarchy";
+import { buildHiddenBranchSummaries } from "./sidebarThreadHierarchyPresentation";
+import {
   buildActivityViewModel,
   collectActivityScopeOptions,
-  collectUnreadActivityThreads,
+  collectUnreadActivityFamilyThreads,
   collectVisibleActivityThreadIds,
+  formatActivityRowTime,
   groupActivityThreadsByProject,
   isThreadSettledForActivity,
   resolveActivityScope,
   splitActivityThreadsByDateBucket,
   splitPriorityActivityThreads,
   splitRecentActivityThreads,
+  type ActivityFamily,
   type ActivityGroupMode,
   type ActivityProjectGroup,
   type ActivityScopeOption,
   type ActivityScopeSelection,
 } from "./SidebarActivityView.logic";
+import {
+  DEFAULT_SIDEBAR_THREAD_SORT_ORDER,
+  DEFAULT_TIMESTAMP_FORMAT,
+  type SidebarThreadSortOrder,
+  type TimestampFormat,
+} from "../appSettings";
+import { useStableValue } from "../hooks/useStableValue";
+import {
+  hierarchyThreadLineOffsetPx,
+  nestSidebarEntriesByDepth,
+  SidebarThreadHierarchyBranch,
+  type NestedSidebarEntry,
+  type SidebarThreadHierarchyBranchRenderSlot,
+} from "./SidebarThreadBranch";
+import { SidebarThreadBranchPaging } from "./SidebarThreadBranchPaging";
+import { SidebarSubagentLabel } from "./SidebarThreadRowContent";
 import { SIDEBAR_TRAILING_ICON_CLASS, sidebarGlyphClass } from "./sidebarGlyphs";
 import { SIDEBAR_HOVER_CARD_TRIGGER_PROPS } from "./sidebarHoverCardStyles";
 import {
@@ -78,6 +107,7 @@ import { ThreadArchiveActionButton } from "./ThreadArchiveActionButton";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
 import { DisclosureRegion } from "./ui/DisclosureRegion";
+import { Kbd, KbdGroup } from "./ui/kbd";
 import {
   Menu,
   MenuGroup,
@@ -91,7 +121,65 @@ import { Tooltip, TooltipTrigger } from "./ui/tooltip";
 
 const ACTIVITY_LIST_BASE_LIMIT = 20;
 const ACTIVITY_LIST_PAGE_SIZE = 20;
+const ACTIVITY_ACTION_TONE_CLASS_NAME = "text-muted-foreground/42";
+/** Pixel twin of the row's `px-2.5`; the hierarchy thread line is derived from it. */
+const ACTIVITY_ROW_PADDING_X_PX = 10;
+/**
+ * Meta line of a root row, in fixed order: project (flex 1) · branch · subagent
+ * toggle · status · time. Only the time column (34px) is rigid; branch, toggle
+ * and status are optional, reserve nothing when absent and therefore always sit
+ * flush against the time (`branch · › 2 · 4:29`). The branch caps at 150px and
+ * shrinks with the project on narrow sidebars so nothing overflows.
+ */
+const ACTIVITY_META_PROJECT_COLUMN_CLASS_NAME = "flex min-w-0 flex-1 items-center gap-1.5";
+const ACTIVITY_META_BRANCH_COLUMN_CLASS_NAME = "flex min-w-0 max-w-[150px] items-center gap-1";
+const ACTIVITY_META_STATUS_CLASS_NAME = "flex size-3 shrink-0 items-center justify-center";
+const ACTIVITY_META_TIME_COLUMN_CLASS_NAME =
+  "w-[34px] shrink-0 text-right whitespace-nowrap text-[length:var(--app-font-size-ui-sm,11px)] tabular-nums text-muted-foreground/60";
+/** Descendant rows are one line; the spec fixes them at 30px under the 2-line parent. */
+const ACTIVITY_CHILD_ROW_HEIGHT_CLASS_NAME = "h-[30px]";
+const ACTIVITY_META_TEXT_CLASS_NAME =
+  "min-w-0 truncate text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/70";
 const EMPTY_PROJECT_GROUPS: ActivityProjectGroup[] = [];
+const EMPTY_EXPANDED_THREAD_IDS: ReadonlySet<ThreadId> = new Set();
+const EMPTY_COLLAPSED_THREAD_IDS: ReadonlySet<ThreadId> = new Set();
+const EMPTY_CHILD_VISIBLE_COUNTS: ReadonlyMap<ThreadId, number> = new Map();
+
+function areThreadIdListsEqual(a: readonly ThreadId[], b: readonly ThreadId[]): boolean {
+  return a.length === b.length && a.every((id, position) => id === b[position]);
+}
+
+type ActivityHierarchyEntry = {
+  thread: SidebarThreadSummary;
+  depth: number;
+  directChildCount?: number | undefined;
+  edgeKind?: ThreadHierarchyEdgeKind | undefined;
+};
+
+/** Roots paged before they expand: families count, children never consume root slots. */
+function getVisibleFamiliesForPreview(input: {
+  families: readonly ActivityFamily[];
+  activeThreadId: ThreadId | null;
+  familyByThreadId: ReadonlyMap<ThreadId, ActivityFamily>;
+  previewLimit: number;
+}): { visibleFamilies: ActivityFamily[]; hasHiddenFamilies: boolean } {
+  const { families, activeThreadId, familyByThreadId, previewLimit } = input;
+  if (families.length <= previewLimit) {
+    return { visibleFamilies: [...families], hasHiddenFamilies: false };
+  }
+  const previewFamilies = families.slice(0, previewLimit);
+  const previewRootIds = new Set(previewFamilies.map((family) => family.rootId));
+  if (activeThreadId !== null) {
+    const activeFamily = familyByThreadId.get(activeThreadId);
+    if (activeFamily && !previewRootIds.has(activeFamily.rootId)) {
+      return {
+        visibleFamilies: [...previewFamilies, activeFamily],
+        hasHiddenFamilies: true,
+      };
+    }
+  }
+  return { visibleFamilies: previewFamilies, hasHiddenFamilies: true };
+}
 
 /** Keeps a row action (pin, archive, done) from also opening the thread. */
 function stopRowActivation(event: MouseEvent) {
@@ -105,8 +193,11 @@ function ActivityThreadRow({
   isActive,
   isSettled,
   isPinned,
+  isHierarchyChild,
   pr,
   status,
+  threadJumpLabel,
+  rowTime,
   onOpen,
   onSetSettled,
   onTogglePinned,
@@ -115,14 +206,20 @@ function ActivityThreadRow({
   onRenamePointerUp,
   onContextMenu,
   renderHoverCard,
+  branchControl,
 }: {
   thread: SidebarThreadSummary;
   project: Project | undefined;
   isActive: boolean;
   isSettled: boolean;
   isPinned: boolean;
+  /** Descendants render as one line (icon · title · toggle · status · time). */
+  isHierarchyChild: boolean;
   pr: OrchestrationThreadPullRequest | null;
   status: ThreadStatusPill | null;
+  threadJumpLabel: string | null;
+  /** Pre-computed by the parent so every row in a section shares one clock. */
+  rowTime: string;
   onOpen: () => void;
   onSetSettled: (settled: boolean) => void;
   onTogglePinned: () => void;
@@ -131,8 +228,11 @@ function ActivityThreadRow({
   onRenamePointerUp: (event: ReactPointerEvent<HTMLElement>, threadId: ThreadId) => void;
   onContextMenu: (threadId: ThreadId, position: SidebarRowContextMenuPosition) => void;
   renderHoverCard: (anchorId: string) => ReactNode;
+  /** Subagent toggle placed right before the time; null when the row has no children. */
+  branchControl: ReactNode;
 }) {
   const provider = thread.session?.provider ?? thread.modelSelection.provider;
+  const isNativeSubagent = Boolean(thread.parentThreadId);
   const branch = resolveThreadDisplayBranch(thread);
   const isWorktree =
     resolveThreadEnvironmentMode({
@@ -144,11 +244,15 @@ function ActivityThreadRow({
     scope: "activity",
     threadId: thread.id,
   });
-  const actionToneClassName = "text-muted-foreground/42";
-  // One trailing slot, top-right, shared by every status: the accent dot for an
-  // unread completion and the running spinner (or state dot) for everything
-  // else — same rule and same glyphs the classic thread/project rows use.
-  const trailingStatus = resolveThreadStatusTrailingIndicator({ status, isActive });
+  const actionToneClassName = ACTIVITY_ACTION_TONE_CLASS_NAME;
+  // The status glyph lives inline next to the time instead of the absolute
+  // top-right slot, so it stays visible while the hover actions appear — the
+  // classic rows fade it out exactly when it is most needed.
+  const trailingStatus = resolveThreadStatusTrailingIndicator({
+    status,
+    isActive,
+  });
+  const threadJumpLabelParts = threadJumpLabel ? splitShortcutLabel(threadJumpLabel) : [];
   // Rename/context-menu gestures live on the row wrapper (not the title button) so
   // they also fire over the trailing status and hover-action cluster, which are
   // absolutely positioned siblings of the button.
@@ -159,6 +263,65 @@ function ActivityThreadRow({
     onContextMenu,
   });
 
+  const titleButton = (
+    <button
+      type="button"
+      onClick={onOpen}
+      data-testid={`activity-thread-${thread.id}`}
+      aria-label={thread.title}
+      aria-current={isActive ? "page" : undefined}
+      className={cn(
+        "flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md text-left select-none",
+        SIDEBAR_ROW_FOCUS_CLASS_NAME,
+      )}
+    >
+      <ProviderIcon
+        provider={provider}
+        className="size-3 shrink-0"
+        fallback={
+          <span className="size-3 shrink-0 rounded-full border border-dashed border-muted-foreground/40" />
+        }
+      />
+      <span
+        className={cn(
+          "min-w-0 shrink truncate text-[length:var(--app-font-size-ui,12px)] leading-5 font-normal",
+          isActive ? "text-foreground" : SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
+        )}
+      >
+        {isNativeSubagent ? <SidebarSubagentLabel thread={thread} /> : thread.title}
+      </span>
+    </button>
+  );
+  // Optional columns glued to the time so they never float mid-row; the time is
+  // the only fixed-width column and lines up across parents and children.
+  const trailingCluster = (
+    <>
+      {branchControl}
+      {trailingStatus ? (
+        <span className={ACTIVITY_META_STATUS_CLASS_NAME}>
+          <SidebarStatusTrailingGlyph status={trailingStatus} />
+        </span>
+      ) : null}
+      <span className={ACTIVITY_META_TIME_COLUMN_CLASS_NAME} data-activity-row-time>
+        {rowTime}
+      </span>
+    </>
+  );
+  const jumpHint =
+    threadJumpLabelParts.length > 0 ? (
+      <KbdGroup
+        className={cn(
+          "pointer-events-none",
+          isHierarchyChild ? "shrink-0" : "absolute top-1 right-1",
+          sidebarHoverRevealHideClassName("activity-row"),
+        )}
+      >
+        {threadJumpLabelParts.map((part) => (
+          <Kbd key={part}>{part}</Kbd>
+        ))}
+      </KbdGroup>
+    ) : null;
+
   return (
     <Tooltip>
       <TooltipTrigger
@@ -166,78 +329,96 @@ function ActivityThreadRow({
         render={
           <div
             data-thread-hover-anchor={hoverAnchorId}
-            className="group/activity-row relative"
+            className={cn(
+              "group/activity-row relative rounded-lg",
+              isActive ? SIDEBAR_ROW_ACTIVE_CLASS_NAME : SIDEBAR_ROW_HOVER_CLASS_NAME,
+              // Pinned rows never dim: dimming means "settled/done" in this feed,
+              // and a pinned-but-settled thread must not read as finished.
+              isSettled && !isPinned && "opacity-55 transition-opacity hover:opacity-85",
+            )}
             data-thread-item
             {...rowGestures}
           />
         }
       >
-        <button
-          type="button"
-          onClick={onOpen}
-          data-testid={`activity-thread-${thread.id}`}
-          className={cn(
-            "flex w-full min-w-0 cursor-pointer flex-col gap-1 rounded-lg px-2.5 py-2 text-left select-none",
-            SIDEBAR_ROW_FOCUS_CLASS_NAME,
-            isActive ? SIDEBAR_ROW_ACTIVE_CLASS_NAME : SIDEBAR_ROW_HOVER_CLASS_NAME,
-            isSettled && "opacity-55 transition-opacity hover:opacity-85",
-          )}
-        >
-          <span
+        {isHierarchyChild ? (
+          // One line: the child inherits project and branch from its parent; model
+          // and effort live in the hover card. The jump hint sits in flow so it
+          // never covers the time.
+          <div
             className={cn(
-              "flex min-w-0 items-center gap-1.5 overflow-hidden pr-5 transition-[padding] duration-150 ease-out",
-              // Yield the title row to the hover action cluster (pin + archive + done).
-              "group-hover/activity-row:pr-[4.25rem] group-focus-within/activity-row:pr-[4.25rem]",
+              "flex min-w-0 items-center gap-2 px-2.5",
+              ACTIVITY_CHILD_ROW_HEIGHT_CLASS_NAME,
             )}
           >
-            <ProviderIcon
-              provider={provider}
-              className="size-3 shrink-0"
-              fallback={
-                <span className="size-3 shrink-0 rounded-full border border-dashed border-muted-foreground/40" />
-              }
-            />
-            <span
+            {titleButton}
+            {jumpHint}
+            {trailingCluster}
+          </div>
+        ) : (
+          <>
+            <div
               className={cn(
-                "min-w-0 shrink truncate text-[length:var(--app-font-size-ui,12px)] leading-5 font-normal",
-                isActive ? "text-foreground" : SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
+                "mr-2.5 flex min-w-0 items-center pt-2 pb-1 pl-2.5",
+                // Reserve actions at rest too; longer shortcuts require more room.
+                threadJumpLabelParts.length > 2
+                  ? resolveJumpHintReserveClass(0, threadJumpLabelParts.length)
+                  : "pr-[4.25rem]",
               )}
             >
-              {thread.title}
-            </span>
-          </span>
-          <span className="flex min-w-0 items-center gap-1.5">
-            <ProjectGlyph
-              className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
-              aria-hidden
-            />
-            <span className="min-w-0 truncate text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/80">
-              {resolveThreadProjectLabel(project)}
-            </span>
-            <span className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
-              {pr ? <PrStateChip pr={pr} className="[&_svg]:size-2.5" /> : null}
-              {branch ? (
-                <span className="flex min-w-0 items-center gap-1 text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/70">
-                  <GitBranchIcon className={sidebarGlyphClass("meta")} aria-hidden />
-                  <span className="max-w-36 truncate">{branch}</span>
+              {titleButton}
+            </div>
+            {/* Meta line starts under the title text (icon + gap). */}
+            <span className="flex min-w-0 items-center gap-2 pr-2.5 pb-2 pl-7">
+              <button
+                type="button"
+                onClick={onOpen}
+                aria-label={`${thread.title} in ${resolveThreadProjectLabel(project)}`}
+                className={cn(
+                  ACTIVITY_META_PROJECT_COLUMN_CLASS_NAME,
+                  "cursor-pointer text-left select-none",
+                  SIDEBAR_ROW_FOCUS_CLASS_NAME,
+                )}
+              >
+                <ProjectGlyph
+                  className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
+                  aria-hidden
+                />
+                <span
+                  className={cn(ACTIVITY_META_TEXT_CLASS_NAME, "flex-1 text-muted-foreground/80")}
+                >
+                  {resolveThreadProjectLabel(project)}
+                </span>
+              </button>
+              {/* The PR chip belongs to the branch it was opened from, so it leads
+                  the branch name. Without a branch or PR the column is omitted. */}
+              {branch || pr ? (
+                <span
+                  className={ACTIVITY_META_BRANCH_COLUMN_CLASS_NAME}
+                  data-activity-branch-column
+                >
+                  {pr ? <PrStateChip pr={pr} className="[&_svg]:size-2.5" /> : null}
+                  {branch ? (
+                    <>
+                      <GitBranchIcon
+                        className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
+                        aria-hidden
+                      />
+                      <span className={ACTIVITY_META_TEXT_CLASS_NAME}>{branch}</span>
+                    </>
+                  ) : null}
                 </span>
               ) : null}
+              {trailingCluster}
             </span>
-          </span>
-        </button>
-        {trailingStatus ? (
-          <span
-            data-slot="activity-completion-status"
-            className={cn(
-              "pointer-events-none absolute top-1 right-1 inline-flex size-5 items-center justify-center",
-              sidebarHoverRevealHideClassName("activity-row"),
-            )}
-          >
-            <SidebarStatusTrailingGlyph status={trailingStatus} />
-          </span>
-        ) : null}
+            {jumpHint}
+          </>
+        )}
         <span
-          className="absolute top-1 right-1 inline-flex items-center gap-1 opacity-0 transition-opacity group-hover/activity-row:opacity-100 group-focus-within/activity-row:opacity-100"
+          className={cn(
+            "absolute right-1 inline-flex items-center gap-1 opacity-0 transition-opacity group-hover/activity-row:opacity-100 group-focus-within/activity-row:opacity-100 pointer-coarse:opacity-100 pointer-coarse:pointer-events-auto",
+            isHierarchyChild ? "inset-y-0" : "top-1",
+          )}
           // Double-clicking an action button toggles it twice; it must not also open
           // the row's rename dialog. Pointer-up is the touch/pen double-tap signal,
           // so keep action taps out of that detector too.
@@ -485,22 +666,31 @@ function ActivityFilterMenu({
 function ActivityShowMoreRow({
   canShowMore,
   canShowLess,
+  hiddenCount,
+  pageSize,
   onShowMore,
   onShowLess,
 }: {
   canShowMore: boolean;
   canShowLess: boolean;
+  /** Rows still hidden; drives the "Show N more (M)" label. */
+  hiddenCount: number;
+  pageSize: number;
   onShowMore: () => void;
   onShowLess: () => void;
 }) {
   if (!canShowMore && !canShowLess) return null;
+  const visibleHiddenCount = Math.max(0, hiddenCount);
+  const nextPageCount = Math.min(pageSize, visibleHiddenCount);
+  const moreLabel =
+    nextPageCount > 0 ? `Show ${nextPageCount} more (${visibleHiddenCount})` : "Show more";
   const buttonClassName =
     "h-7 cursor-pointer rounded-lg px-2.5 text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/79 hover:text-foreground";
   return (
     <div className="flex w-full items-center gap-1">
       {canShowMore ? (
         <button type="button" className={cn(buttonClassName, "flex-1")} onClick={onShowMore}>
-          Show more
+          {moreLabel}
         </button>
       ) : null}
       {canShowLess ? (
@@ -535,9 +725,18 @@ export function SidebarActivityView({
   onProjectContextMenu,
   renderThreadHoverCard,
   prByThreadId,
+  threadJumpLabelByThreadId,
   onVisibleThreadIdsChange,
   onCreateChat,
   onAddProject,
+  timestampFormat: timestampFormatProp,
+  expandedThreadIds: expandedThreadIdsProp,
+  collapsedThreadIds: collapsedThreadIdsProp,
+  childVisibleCountByParentId: childVisibleCountByParentIdProp,
+  onToggleBranch,
+  onShowMoreChildren,
+  onShowLessChildren,
+  sortOrder: sortOrderProp,
 }: {
   threads: readonly SidebarThreadSummary[];
   projectById: ReadonlyMap<ProjectId, Project>;
@@ -546,6 +745,7 @@ export function SidebarActivityView({
   settledOverrideByThreadId: ReadonlyMap<ThreadId, boolean>;
   threadsHydrated: boolean;
   prByThreadId: ReadonlyMap<ThreadId, OrchestrationThreadPullRequest | null>;
+  threadJumpLabelByThreadId: ReadonlyMap<ThreadId, string>;
   onVisibleThreadIdsChange: (threadIds: readonly ThreadId[]) => void;
   resolveThreadStatus: (thread: SidebarThreadSummary) => ThreadStatusPill | null;
   onOpenThread: (threadId: ThreadId) => void;
@@ -568,7 +768,24 @@ export function SidebarActivityView({
   onCreateChat: () => void;
   /** Same "Add project" action the Projects section header runs. */
   onAddProject: () => void;
+  /** Clock format for row timestamps; defaults to the app locale setting. */
+  timestampFormat?: TimestampFormat;
+  /** Shared branch expansion (same set as the normal sidebar). */
+  expandedThreadIds?: ReadonlySet<ThreadId>;
+  collapsedThreadIds?: ReadonlySet<ThreadId>;
+  childVisibleCountByParentId?: ReadonlyMap<ThreadId, number>;
+  onToggleBranch?: (threadId: ThreadId, isCurrentlyOpen: boolean) => void;
+  onShowMoreChildren?: (parentId: ThreadId, totalChildCount: number) => void;
+  onShowLessChildren?: (parentId: ThreadId) => void;
+  sortOrder?: SidebarThreadSortOrder;
 }) {
+  // Default resolved in the body, not the destructuring pattern: an
+  // AssignmentPattern in the parameter list makes React Compiler bail out.
+  const timestampFormat = timestampFormatProp ?? DEFAULT_TIMESTAMP_FORMAT;
+  const expandedThreadIds = expandedThreadIdsProp ?? EMPTY_EXPANDED_THREAD_IDS;
+  const collapsedThreadIds = collapsedThreadIdsProp ?? EMPTY_COLLAPSED_THREAD_IDS;
+  const childVisibleCountByParentId = childVisibleCountByParentIdProp ?? EMPTY_CHILD_VISIBLE_COUNTS;
+  const sortOrder = sortOrderProp ?? DEFAULT_SIDEBAR_THREAD_SORT_ORDER;
   const [scopeSelection, setScopeSelection] = useState<ActivityScopeSelection>(null);
   const [groupMode, setGroupMode] = useState<ActivityGroupMode>("time");
   const [pinnedOpen, setPinnedOpen] = useState(true);
@@ -581,10 +798,9 @@ export function SidebarActivityView({
   );
 
   const isRealProject = (projectId: ProjectId) => projectById.get(projectId)?.kind === "project";
-  // Scope options and the unread sweep intentionally ignore the active scope:
-  // the menu must keep offering every project, and "Mark all as read" means all.
-  const scopeOptions = collectActivityScopeOptions(threads, isRealProject);
-  const unreadThreads = collectUnreadActivityThreads(threads);
+  // Scope menu counts families so a parent with subagents occupies one slot;
+  // the menu itself ignores the active scope so it keeps offering every project.
+  const scopeOptions = collectActivityScopeOptions(threads, isRealProject, sortOrder);
 
   const { scope: activeScope, projectFilterIds } = resolveActivityScope(
     scopeSelection,
@@ -599,17 +815,25 @@ export function SidebarActivityView({
     pinnedThreadIdSet,
     settledOverrideByThreadId,
     projectFilterIds,
+    sortOrder,
   });
-  const scopedPinnedThreads = model.pinned;
+  const scopedPinnedFamilies = model.pinned;
+  // Mark-all-as-read reaches eligible members in closed branches: it sweeps the
+  // current scope's families, not just mounted rows, using individual IDs/times.
+  const unreadThreads = collectUnreadActivityFamilyThreads([
+    ...model.pinned,
+    ...model.active,
+    ...model.settled,
+  ]);
   const nowMs = Date.now();
-  const { priority: priorityThreads, seen: seenThreads } = splitPriorityActivityThreads(
+  const { priority: priorityFamilies, seen: seenFamilies } = splitPriorityActivityThreads(
     model.active,
   );
-  const { recent: recentThreads, rest: remainingActiveThreads } = splitRecentActivityThreads(
-    seenThreads,
+  const { recent: recentFamilies, rest: remainingActiveFamilies } = splitRecentActivityThreads(
+    seenFamilies,
     { nowMs },
   );
-  const dateBuckets = splitActivityThreadsByDateBucket(remainingActiveThreads, nowMs);
+  const dateBuckets = splitActivityThreadsByDateBucket(remainingActiveFamilies, nowMs);
   const projectGroups =
     groupMode === "project"
       ? groupActivityThreadsByProject(model.active, isRealProject, { nowMs })
@@ -627,52 +851,160 @@ export function SidebarActivityView({
     pageSize: ACTIVITY_LIST_PAGE_SIZE,
     requestedExtraPages: settledExtraPages,
   });
+  const familyByThreadId = useMemo(() => {
+    const byThreadId = new Map<ThreadId, ActivityFamily>();
+    for (const family of [...model.pinned, ...model.active, ...model.settled]) {
+      for (const thread of family.threads) {
+        if (!byThreadId.has(thread.id)) byThreadId.set(thread.id, family);
+      }
+    }
+    return byThreadId;
+  }, [model.active, model.pinned, model.settled]);
+
+  // Transient section reveal: navigating to a child hidden by a closed
+  // Activity section opens that section without changing the chosen scope.
+  // A manual close afterwards stays valid until the active thread changes.
+  useEffect(() => {
+    if (activeThreadId === null) return;
+    const family = familyByThreadId.get(activeThreadId);
+    if (!family) return;
+    const isIn = (families: readonly ActivityFamily[]) =>
+      families.some((entry) => entry.rootId === family.rootId);
+    if (isIn(model.pinned) && !pinnedOpen) setPinnedOpen(true);
+    if (isIn(dateBuckets.earlier) && !earlierOpen) setEarlierOpen(true);
+    if (isIn(model.settled) && !settledOpen) setSettledOpen(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeThreadId]);
+
   const pagedProjectGroups = projectGroups.map((group) => {
     const paging = resolveSidebarThreadListPaging({
-      totalCount: group.threads.length,
+      totalCount: group.families.length,
       baseLimit: ACTIVITY_LIST_BASE_LIMIT,
       pageSize: ACTIVITY_LIST_PAGE_SIZE,
       requestedExtraPages: projectExtraPagesByKey.get(group.key) ?? 0,
     });
+    const { visibleFamilies } = getVisibleFamiliesForPreview({
+      families: group.families,
+      activeThreadId,
+      familyByThreadId,
+      previewLimit: paging.previewLimit,
+    });
     return {
       group,
       paging,
-      threads: group.threads.slice(0, paging.previewLimit),
+      families: visibleFamilies,
+      hasHiddenFamilies: visibleFamilies.length < group.families.length || paging.canShowMore,
     };
   });
 
-  const visibleThreadIds = useMemo(
+  const visibleEarlierFamilies = getVisibleFamiliesForPreview({
+    families: dateBuckets.earlier,
+    activeThreadId,
+    familyByThreadId,
+    previewLimit: earlierPaging.previewLimit,
+  }).visibleFamilies;
+  const visibleSettledFamilies = getVisibleFamiliesForPreview({
+    families: model.settled,
+    activeThreadId,
+    familyByThreadId,
+    previewLimit: settledPaging.previewLimit,
+  }).visibleFamilies;
+
+  // Single visible-row source for the mounted surface: every included family
+  // resolves its tree once here; render/nest and the reported visible IDs both
+  // consume these rows, so shortcuts, prewarming, and navigation can never
+  // disagree with what is mounted. Closed branches and closed sections are
+  // excluded even though their DOM may linger for the disclosure animation.
+  const activityFamilyTreeByRootId = useMemo(() => {
+    const trees = new Map<ThreadId, SidebarThreadTreeRow<SidebarThreadSummary>[]>();
+    for (const family of [...model.pinned, ...model.active, ...model.settled]) {
+      trees.set(
+        family.rootId,
+        buildProjectThreadTree({
+          threads: family.threads,
+          forceVisibleThreadId: activeThreadId ?? undefined,
+          expandedThreadIds,
+          collapsedThreadIds,
+          childVisibleCountByParentId,
+        }),
+      );
+    }
+    return trees;
+  }, [
+    activeThreadId,
+    childVisibleCountByParentId,
+    collapsedThreadIds,
+    expandedThreadIds,
+    model.active,
+    model.pinned,
+    model.settled,
+  ]);
+
+  const computedVisibleThreadIds = useMemo(
     () =>
       collectVisibleActivityThreadIds({
         groupMode,
         pinnedOpen,
-        pinned: scopedPinnedThreads,
-        priority: priorityThreads,
-        recent: recentThreads,
+        pinned: scopedPinnedFamilies,
+        priority: priorityFamilies,
+        recent: recentFamilies,
         today: dateBuckets.today,
         yesterday: dateBuckets.yesterday,
         earlierOpen,
-        earlier: dateBuckets.earlier.slice(0, earlierPaging.previewLimit),
-        projectGroups: pagedProjectGroups.map((group) => group.threads),
+        earlier: visibleEarlierFamilies,
+        projectGroups: pagedProjectGroups.map((group) => group.families),
         settledOpen,
-        settled: model.settled.slice(0, settledPaging.previewLimit),
+        settled: visibleSettledFamilies,
+        rowsByRootId: activityFamilyTreeByRootId,
       }),
     [
-      dateBuckets.earlier,
+      activityFamilyTreeByRootId,
       dateBuckets.today,
       dateBuckets.yesterday,
       earlierOpen,
-      earlierPaging.previewLimit,
       groupMode,
-      model.settled,
       pagedProjectGroups,
       pinnedOpen,
-      priorityThreads,
-      recentThreads,
-      scopedPinnedThreads,
+      priorityFamilies,
+      recentFamilies,
+      scopedPinnedFamilies,
       settledOpen,
-      settledPaging.previewLimit,
+      visibleEarlierFamilies,
+      visibleSettledFamilies,
     ],
+  );
+  // The family splits above are rebuilt per render, so keep the reported list
+  // referentially stable while its contents are equal: the hidden-descendant
+  // summary and the visible-ids effect below only rerun on a real change.
+  const visibleThreadIds = useStableValue(computedVisibleThreadIds, areThreadIdListsEqual);
+
+  const activityHierarchyIndex = useMemo(() => buildThreadHierarchyIndex(threads), [threads]);
+  const activityStatusByThreadId = useMemo(() => {
+    const statusByThreadId = new Map<ThreadId, ThreadStatusPill | null>();
+    for (const family of [...model.pinned, ...model.active, ...model.settled]) {
+      for (const thread of family.threads) {
+        if (!statusByThreadId.has(thread.id)) {
+          statusByThreadId.set(
+            thread.id,
+            resolveThreadStatusTrailingIndicator({
+              status: resolveThreadStatus(thread),
+              isActive: thread.id === activeThreadId,
+            }),
+          );
+        }
+      }
+    }
+    return statusByThreadId;
+  }, [activeThreadId, model.active, model.pinned, model.settled, resolveThreadStatus]);
+  const activityHiddenSummaryByThreadId = useMemo(
+    () =>
+      buildHiddenBranchSummaries({
+        index: activityHierarchyIndex,
+        visibleThreadIds: new Set(visibleThreadIds),
+        statusByThreadId: activityStatusByThreadId,
+        activeThreadId: activeThreadId ?? null,
+      }),
+    [activeThreadId, activityHierarchyIndex, activityStatusByThreadId, visibleThreadIds],
   );
   const visibleThreadIdsFingerprint = visibleThreadIds.join("\0");
   const visibleThreadIdsRef = useRef(visibleThreadIds);
@@ -693,49 +1025,140 @@ export function SidebarActivityView({
     }
   };
 
-  const renderRow = (thread: SidebarThreadSummary, isSettled: boolean) => (
-    <ActivityThreadRow
-      key={thread.id}
-      thread={thread}
-      project={projectById.get(thread.projectId)}
-      isActive={activeThreadId === thread.id}
-      isSettled={isSettled}
-      isPinned={pinnedThreadIdSet.has(thread.id)}
-      pr={
-        // An explicit null from the resolver means the persisted PR was ruled out (e.g. the
-        // checkout moved on); falling back to raw lastKnownPr would resurrect that stale
-        // badge. Rows not yet covered (revealed by paging a paint before the parent's map
-        // catches up) get the same resolution without live status instead.
-        prByThreadId.has(thread.id)
-          ? (prByThreadId.get(thread.id) ?? null)
-          : resolveThreadPullRequestFallback({
-              branch: thread.branch,
-              hasDedicatedWorktree: thread.worktreePath !== null,
-              lastKnownPr: thread.lastKnownPr ?? null,
-            })
-      }
-      status={resolveThreadStatus(thread)}
-      onOpen={() => onOpenThread(thread.id)}
-      onSetSettled={(settled) => {
-        if (settled) onMarkThreadRead(thread.id, thread.latestTurn?.completedAt ?? undefined);
-        onSetThreadSettled(thread.id, settled);
-      }}
-      onTogglePinned={() => onToggleThreadPinned(thread.id)}
-      onArchive={() => onArchiveThread(thread.id)}
-      onRename={onRenameThread}
-      onRenamePointerUp={onThreadRenamePointerUp}
-      onContextMenu={onThreadContextMenu}
-      renderHoverCard={(anchorId) => renderThreadHoverCard(thread, anchorId)}
-    />
-  );
-  const renderActiveRow = (thread: SidebarThreadSummary) =>
-    renderRow(thread, isThreadSettledForActivity(thread, settledOverrideByThreadId));
+  // Roots are two-line task rows; descendants collapse to one line (icon · title
+  // · toggle · status · time) and the branch list indents them under the
+  // parent's thread line.
+  const renderRow = (
+    thread: SidebarThreadSummary,
+    isSettled: boolean,
+    slot: SidebarThreadHierarchyBranchRenderSlot,
+  ) => {
+    return (
+      <ActivityThreadRow
+        key={thread.id}
+        thread={thread}
+        project={projectById.get(thread.projectId)}
+        isActive={activeThreadId === thread.id}
+        isSettled={isSettled}
+        isPinned={pinnedThreadIdSet.has(thread.id)}
+        isHierarchyChild={slot.isHierarchyChild}
+        pr={
+          // An explicit null from the resolver means the persisted PR was ruled out (e.g. the
+          // checkout moved on); falling back to raw lastKnownPr would resurrect that stale
+          // badge. Rows not yet covered (revealed by paging a paint before the parent's map
+          // catches up) get the same resolution without live status instead.
+          prByThreadId.has(thread.id)
+            ? (prByThreadId.get(thread.id) ?? null)
+            : resolveThreadPullRequestFallback({
+                branch: thread.branch,
+                hasDedicatedWorktree: thread.worktreePath !== null,
+                lastKnownPr: thread.lastKnownPr ?? null,
+              })
+        }
+        status={resolveThreadStatus(thread)}
+        threadJumpLabel={threadJumpLabelByThreadId.get(thread.id) ?? null}
+        rowTime={formatActivityRowTime({ thread, nowMs, timestampFormat })}
+        onOpen={() => onOpenThread(thread.id)}
+        onSetSettled={(settled) => {
+          if (settled) onMarkThreadRead(thread.id, thread.latestTurn?.completedAt ?? undefined);
+          onSetThreadSettled(thread.id, settled);
+        }}
+        onTogglePinned={() => onToggleThreadPinned(thread.id)}
+        onArchive={() => onArchiveThread(thread.id)}
+        onRename={onRenameThread}
+        onRenamePointerUp={onThreadRenamePointerUp}
+        onContextMenu={onThreadContextMenu}
+        renderHoverCard={(anchorId) => renderThreadHoverCard(thread, anchorId)}
+        branchControl={slot.branchControl}
+      />
+    );
+  };
+  function renderBranchChildPaging(
+    parentId: ThreadId,
+    totalChildCount: number,
+    renderedDirectCount: number,
+  ) {
+    const paging = resolveBranchPagingState({
+      totalChildCount,
+      renderedDirectCount,
+      requestedVisibleCount: childVisibleCountByParentId.get(parentId),
+    });
+    if (paging === null) return null;
+    return (
+      <SidebarThreadBranchPaging
+        hiddenCount={paging.hiddenCount}
+        canShowLess={paging.canShowLess}
+        onShowMore={() => onShowMoreChildren?.(parentId, totalChildCount)}
+        onShowLess={() => onShowLessChildren?.(parentId)}
+      />
+    );
+  }
+
+  function renderNestedFamilyNode(
+    node: NestedSidebarEntry<ActivityHierarchyEntry>,
+    isSettledRow: (thread: SidebarThreadSummary) => boolean,
+  ): ReactNode {
+    const { entry } = node;
+    const totalChildCount = entry.directChildCount ?? 0;
+    const isOpen = node.children.length > 0;
+    const threadId = entry.thread.id;
+    return (
+      <SidebarThreadHierarchyBranch
+        key={threadId}
+        threadId={threadId}
+        title={entry.thread.title}
+        depth={entry.depth}
+        directChildCount={totalChildCount}
+        expanded={isOpen}
+        layout="activity"
+        threadLineOffsetPx={hierarchyThreadLineOffsetPx(ACTIVITY_ROW_PADDING_X_PX)}
+        onToggle={(id) => onToggleBranch?.(id, isOpen)}
+        renderRow={(branchSlot) => renderRow(entry.thread, isSettledRow(entry.thread), branchSlot)}
+        hiddenSummary={activityHiddenSummaryByThreadId.get(threadId)}
+        childPaging={
+          isOpen
+            ? renderBranchChildPaging(threadId, totalChildCount, node.children.length)
+            : undefined
+        }
+        surface="activity"
+      >
+        {node.children.map((child) => renderNestedFamilyNode(child, isSettledRow))}
+      </SidebarThreadHierarchyBranch>
+    );
+  }
+
+  function renderFamilyBranches(
+    families: readonly ActivityFamily[],
+    isSettledRow: (thread: SidebarThreadSummary) => boolean,
+  ): ReactNode {
+    return (
+      <ul className="flex w-full min-w-0 flex-col gap-0.5">
+        {families.flatMap((family) => {
+          const rows = activityFamilyTreeByRootId.get(family.rootId) ?? [];
+          const entries: ActivityHierarchyEntry[] = rows.map((row) => ({
+            thread: row.thread,
+            depth: row.depth,
+            directChildCount: row.directChildCount,
+            edgeKind: row.edgeKind,
+          }));
+          return nestSidebarEntriesByDepth(entries).map((node) =>
+            renderNestedFamilyNode(node, isSettledRow),
+          );
+        })}
+      </ul>
+    );
+  }
+
+  const renderActiveFamilyBranches = (families: readonly ActivityFamily[]) =>
+    renderFamilyBranches(families, (thread) =>
+      isThreadSettledForActivity(thread, settledOverrideByThreadId),
+    );
 
   // The placeholder speaks for the whole surface, so it may only appear when no
   // section has rows — a feed with nothing active but a populated Pinned or Done
   // section is not empty.
   const isEmpty =
-    model.active.length === 0 && model.settled.length === 0 && scopedPinnedThreads.length === 0;
+    model.active.length === 0 && model.settled.length === 0 && scopedPinnedFamilies.length === 0;
   const emptyLabel =
     activeScope === null
       ? "No activity yet"
@@ -745,14 +1168,14 @@ export function SidebarActivityView({
 
   return (
     <div className="flex flex-col gap-3">
-      {scopedPinnedThreads.length > 0 ? (
+      {scopedPinnedFamilies.length > 0 ? (
         <ActivityCollapsibleSection
           label="Pinned"
           open={pinnedOpen}
           onToggle={() => setPinnedOpen((open) => !open)}
         >
-          {scopedPinnedThreads.map((thread) =>
-            renderRow(thread, isThreadSettledForActivity(thread, settledOverrideByThreadId)),
+          {renderFamilyBranches(scopedPinnedFamilies, (thread) =>
+            isThreadSettledForActivity(thread, settledOverrideByThreadId),
           )}
         </ActivityCollapsibleSection>
       ) : null}
@@ -795,7 +1218,7 @@ export function SidebarActivityView({
           {threadsHydrated ? emptyLabel : "Loading activity..."}
         </div>
       ) : groupMode === "project" ? (
-        pagedProjectGroups.map(({ group, paging, threads: visibleThreads }) => (
+        pagedProjectGroups.map(({ group, paging, families: visibleFamilies }) => (
           <div key={group.key}>
             <ActivitySectionLabel
               label={
@@ -811,10 +1234,12 @@ export function SidebarActivityView({
                 : {})}
             />
             <div className="flex flex-col gap-0.5">
-              {visibleThreads.map(renderActiveRow)}
+              {renderActiveFamilyBranches(visibleFamilies)}
               <ActivityShowMoreRow
                 canShowMore={paging.canShowMore}
                 canShowLess={paging.canShowLess}
+                hiddenCount={group.families.length - paging.previewLimit}
+                pageSize={ACTIVITY_LIST_PAGE_SIZE}
                 onShowMore={() => {
                   setProjectExtraPagesByKey((current) => {
                     const next = new Map(current);
@@ -837,26 +1262,28 @@ export function SidebarActivityView({
         ))
       ) : (
         <>
-          {priorityThreads.length > 0 || recentThreads.length > 0 ? (
+          {priorityFamilies.length > 0 || recentFamilies.length > 0 ? (
             <div>
               <ActivitySectionLabel label="Recent" />
               <div className="flex flex-col gap-0.5">
-                {priorityThreads.map(renderActiveRow)}
-                {recentThreads.map(renderActiveRow)}
+                {renderActiveFamilyBranches(priorityFamilies)}
+                {renderActiveFamilyBranches(recentFamilies)}
               </div>
             </div>
           ) : null}
           {dateBuckets.today.length > 0 ? (
             <div>
               <ActivitySectionLabel label="Today" />
-              <div className="flex flex-col gap-0.5">{dateBuckets.today.map(renderActiveRow)}</div>
+              <div className="flex flex-col gap-0.5">
+                {renderActiveFamilyBranches(dateBuckets.today)}
+              </div>
             </div>
           ) : null}
           {dateBuckets.yesterday.length > 0 ? (
             <div>
               <ActivitySectionLabel label="Yesterday" />
               <div className="flex flex-col gap-0.5">
-                {dateBuckets.yesterday.map(renderActiveRow)}
+                {renderActiveFamilyBranches(dateBuckets.yesterday)}
               </div>
             </div>
           ) : null}
@@ -866,10 +1293,12 @@ export function SidebarActivityView({
               open={earlierOpen}
               onToggle={() => setEarlierOpen((open) => !open)}
             >
-              {dateBuckets.earlier.slice(0, earlierPaging.previewLimit).map(renderActiveRow)}
+              {renderActiveFamilyBranches(visibleEarlierFamilies)}
               <ActivityShowMoreRow
                 canShowMore={earlierPaging.canShowMore}
                 canShowLess={earlierPaging.canShowLess}
+                hiddenCount={dateBuckets.earlier.length - earlierPaging.previewLimit}
+                pageSize={ACTIVITY_LIST_PAGE_SIZE}
                 onShowMore={() => setEarlierExtraPages(earlierPaging.effectiveExtraPages + 1)}
                 onShowLess={() =>
                   setEarlierExtraPages(Math.max(0, earlierPaging.effectiveExtraPages - 1))
@@ -886,12 +1315,12 @@ export function SidebarActivityView({
           open={settledOpen}
           onToggle={() => setSettledOpen((open) => !open)}
         >
-          {model.settled
-            .slice(0, settledPaging.previewLimit)
-            .map((thread) => renderRow(thread, true))}
+          {renderFamilyBranches(visibleSettledFamilies, () => true)}
           <ActivityShowMoreRow
             canShowMore={settledPaging.canShowMore}
             canShowLess={settledPaging.canShowLess}
+            hiddenCount={model.settled.length - settledPaging.previewLimit}
+            pageSize={ACTIVITY_LIST_PAGE_SIZE}
             onShowMore={() => setSettledExtraPages(settledPaging.effectiveExtraPages + 1)}
             onShowLess={() =>
               setSettledExtraPages(Math.max(0, settledPaging.effectiveExtraPages - 1))

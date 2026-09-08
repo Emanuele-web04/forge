@@ -144,7 +144,12 @@ function invalidatePullRequestActionDetails(
   return queryClient.invalidateQueries({
     predicate: (query) => {
       const key = query.queryKey;
-      return key[0] === "pull-requests" && key[1] === "detail" && key[3] === input.repository;
+      return (
+        key[0] === "pull-requests" &&
+        key[1] === "detail" &&
+        key[3] === input.provider &&
+        key[4] === input.repository
+      );
     },
   });
 }

@@ -168,6 +168,8 @@ const PROJECT: Project = {
       runOnWorktreeCreate: false,
     },
   ],
+  sources: [],
+  primarySourceId: null,
 };
 const projectById = new Map([[PROJECT_ID, PROJECT]]);
 

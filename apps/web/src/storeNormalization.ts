@@ -48,6 +48,8 @@ export type ProjectNormalizationInput = Pick<
   | "scripts"
   | "isPinned"
   | "spaceId"
+  | "sources"
+  | "primarySourceId"
   | "createdAt"
   | "updatedAt"
 >;
@@ -168,6 +170,7 @@ export function threadShellsEqual(left: ThreadShell | undefined, right: ThreadSh
     (left.parentThreadId ?? null) === (right.parentThreadId ?? null) &&
     (left.creationSource ?? null) === (right.creationSource ?? null) &&
     (left.sourceThreadId ?? null) === (right.sourceThreadId ?? null) &&
+    (left.gatewayOperationId ?? null) === (right.gatewayOperationId ?? null) &&
     (left.subagentAgentId ?? null) === (right.subagentAgentId ?? null) &&
     (left.subagentNickname ?? null) === (right.subagentNickname ?? null) &&
     (left.subagentRole ?? null) === (right.subagentRole ?? null) &&
@@ -375,6 +378,14 @@ export function normalizeProject(
       ? null
       : normalizeModelSelection(incoming.defaultModelSelection, previous?.defaultModelSelection);
   const scripts = normalizeProjectScripts(incoming.scripts, previous?.scripts);
+  // `sources` and `primarySourceId` are optional on the read model (snapshots written before
+  // multi-folder projects omit them), so normalize them to the empty/null form the store relies on.
+  const incomingSources = incoming.sources ?? [];
+  const incomingPrimarySourceId = incoming.primarySourceId ?? null;
+  const sources =
+    previous?.sources && deepEqualJson(previous.sources, incomingSources)
+      ? previous.sources
+      : [...incomingSources];
   const persistedProjectOrderIndex = rememberedUiState.projectOrderIndexForCwd(workspaceRootKey);
   const hasKnownLegacyExpansion =
     rememberedUiState.projectOrderCount === 0 &&
@@ -412,7 +423,9 @@ export function normalizeProject(
     (previous.spaceId ?? null) === (incoming.spaceId ?? null) &&
     previous.createdAt === incoming.createdAt &&
     previous.updatedAt === incoming.updatedAt &&
-    previous.scripts === scripts
+    previous.scripts === scripts &&
+    previous.sources === sources &&
+    previous.primarySourceId === incomingPrimarySourceId
   ) {
     return previous;
   }
@@ -432,7 +445,9 @@ export function normalizeProject(
     createdAt: incoming.createdAt,
     updatedAt: incoming.updatedAt,
     scripts,
-  };
+    sources,
+    primarySourceId: incomingPrimarySourceId,
+  } satisfies Project;
 }
 
 export function normalizeSpace(
@@ -1672,6 +1687,7 @@ export function normalizeThreadFromReadModel(
     (previous.parentThreadId ?? null) === (incoming.parentThreadId ?? null) &&
     (previous.creationSource ?? null) === (incoming.creationSource ?? null) &&
     (previous.sourceThreadId ?? null) === (incoming.sourceThreadId ?? null) &&
+    (previous.gatewayOperationId ?? null) === (incoming.gatewayOperationId ?? null) &&
     (previous.subagentAgentId ?? null) === (incoming.subagentAgentId ?? null) &&
     (previous.subagentNickname ?? null) === (incoming.subagentNickname ?? null) &&
     (previous.subagentRole ?? null) === (incoming.subagentRole ?? null) &&
@@ -1730,6 +1746,7 @@ export function normalizeThreadFromReadModel(
     parentThreadId: incoming.parentThreadId ?? null,
     creationSource: incoming.creationSource ?? null,
     sourceThreadId: incoming.sourceThreadId ?? null,
+    gatewayOperationId: incoming.gatewayOperationId ?? null,
     subagentAgentId: incoming.subagentAgentId ?? null,
     subagentNickname: incoming.subagentNickname ?? null,
     subagentRole: incoming.subagentRole ?? null,
@@ -1848,6 +1865,7 @@ export function normalizeThreadShellSnapshot(
     parentThreadId: incoming.parentThreadId ?? null,
     creationSource: incoming.creationSource ?? null,
     sourceThreadId: incoming.sourceThreadId ?? null,
+    gatewayOperationId: incoming.gatewayOperationId ?? null,
     subagentAgentId: incoming.subagentAgentId ?? null,
     subagentNickname: incoming.subagentNickname ?? null,
     subagentRole: incoming.subagentRole ?? null,

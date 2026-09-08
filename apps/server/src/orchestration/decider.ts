@@ -11,6 +11,7 @@ import {
   EventId,
   MAX_PINNED_PROJECTS,
   PINNED_MESSAGES_MAX_COUNT,
+  ProjectSourceId,
   RESERVED_VOID_SPACE_ID,
   SPACES_MAX_COUNT,
   THREAD_GOAL_ACHIEVEMENTS_MAX_COUNT,
@@ -36,6 +37,7 @@ import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import { buildForkThreadTitle } from "./forkThreadTitle.ts";
 import { hasNativeHandoffMessages } from "./handoff.ts";
 import { resolveStableMessageTurnId } from "./messageTurnId.ts";
+import { validateProjectSources } from "./projectSourceValidation.ts";
 import {
   isExpiredSidechat,
   latestSidechatActivityAt,
@@ -697,6 +699,35 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const events: Array<Omit<OrchestrationEvent, "sequence">> = [];
       const staleProjects: Array<OrchestrationReadModel["projects"][number]> = [];
       const nextProjectKind = command.kind ?? "project";
+      const requestedSources =
+        command.sources && command.sources.length > 0
+          ? command.sources
+          : [
+              {
+                id: ProjectSourceId.makeUnsafe(`src-${command.projectId}`),
+                path: command.workspaceRoot,
+              },
+            ];
+      const requestedPrimarySourceId = command.primarySourceId ?? requestedSources[0]!.id;
+      const sourceValidationError = validateProjectSources(
+        requestedSources,
+        requestedPrimarySourceId,
+      );
+      if (sourceValidationError !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: sourceValidationError,
+        });
+      }
+      const primaryWorkspaceRoot = requestedSources.find(
+        (source) => source.id === requestedPrimarySourceId,
+      )!.path;
+      if (!workspaceRootsEqual(command.workspaceRoot, primaryWorkspaceRoot)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "workspaceRoot must match the primary source folder.",
+        });
+      }
       if (nextProjectKind === "project") {
         // The app-managed Studio container owns its root exclusively and is never retired here:
         // silently deleting it would orphan Studio threads, so adding its folder as a project
@@ -805,6 +836,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           scripts: [],
           isPinned: command.isPinned,
           spaceId: creationSpaceId,
+          sources: requestedSources,
+          primarySourceId: requestedPrimarySourceId,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -2644,6 +2677,54 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           activity: command.activity,
+        },
+      };
+    }
+
+    case "project.sources.update": {
+      const validationError = validateProjectSources(command.sources, command.primarySourceId);
+      if (validationError !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: validationError,
+        });
+      }
+      const existingProject = yield* requireProject({
+        readModel,
+        command,
+        projectId: command.projectId,
+      });
+      const primaryWorkspaceRoot = command.sources.find(
+        (source) => source.id === command.primarySourceId,
+      )!.path;
+      yield* requireProjectWorkspaceRootAvailable({
+        readModel,
+        command,
+        workspaceRoot: primaryWorkspaceRoot,
+        excludeProjectId: command.projectId,
+        kinds: WORKSPACE_OWNING_PROJECT_KIND_SET,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "project",
+          aggregateId: command.projectId,
+          occurredAt: command.updatedAt,
+          commandId: command.commandId,
+        }),
+        type: "project.sources-updated",
+        payload: {
+          projectId: command.projectId,
+          sources: command.sources.map((source, sortOrder) => ({
+            ...source,
+            sortOrder,
+            createdAt:
+              (existingProject.sources ?? []).find((existing) => existing.id === source.id)
+                ?.createdAt ?? command.updatedAt,
+            updatedAt: command.updatedAt,
+          })),
+          primarySourceId: command.primarySourceId,
+          workspaceRoot: primaryWorkspaceRoot,
+          updatedAt: command.updatedAt,
         },
       };
     }

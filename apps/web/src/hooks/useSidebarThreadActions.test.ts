@@ -200,6 +200,8 @@ const PROJECT = {
   defaultModelSelection: null,
   expanded: true,
   scripts: [],
+  sources: [],
+  primarySourceId: null,
 } satisfies Project;
 
 function makeThread(id: ThreadId, overrides: Partial<SidebarThreadSummary> = {}) {

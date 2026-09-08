@@ -83,6 +83,8 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     expanded: false,
     spaceId: null,
     scripts: [],
+    sources: [],
+    primarySourceId: null,
     ...overrides,
   };
 }

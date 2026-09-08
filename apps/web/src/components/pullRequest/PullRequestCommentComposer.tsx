@@ -36,6 +36,7 @@ export function PullRequestCommentComposer({ detail }: { detail: PullRequestDeta
     void mutation
       .mutateAsync({
         projectId: detail.projectId,
+        provider: detail.provider,
         repository: detail.repository,
         number: detail.number,
         body: trimmed,

@@ -34,6 +34,24 @@ describe("ServerSettingsService", () => {
     expect(settings.providers.grok.binaryPath).toBe("grok");
     expect(settings.defaultThreadEnvMode).toBe("local");
     expect(settings.enableProviderUpdateChecks).toBe(true);
+    expect(settings.keepAwakeMode).toBe("off");
+  });
+
+  it("persists keepAwakeMode and reloads it", async () => {
+    const result = await runWithSettings(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        const { settingsPath } = yield* ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        yield* service.start;
+        const updated = yield* service.updateSettings({ keepAwakeMode: "agent" });
+        const raw = yield* fs.readFileString(settingsPath);
+        return { updated, parsed: JSON.parse(raw) as unknown };
+      }),
+    );
+
+    expect(result.updated.keepAwakeMode).toBe("agent");
+    expect(result.parsed).toMatchObject({ settings: { keepAwakeMode: "agent" } });
   });
 
   it("persists updates and reloads them", async () => {

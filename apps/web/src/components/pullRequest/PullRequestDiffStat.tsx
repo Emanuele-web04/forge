@@ -19,11 +19,14 @@ export function PullRequestDiffStat({
   tone: toneProp,
   className,
 }: {
-  additions: number;
-  deletions: number;
+  additions: number | null;
+  deletions: number | null;
   tone?: "muted" | "diff";
   className?: string;
 }) {
+  if (additions === null && deletions === null) {
+    return null;
+  }
   const tone = toneProp ?? "muted";
   return (
     <span
@@ -33,12 +36,16 @@ export function PullRequestDiffStat({
         className,
       )}
     >
-      <span className={tone === "diff" ? "text-[var(--color-decoration-added)]" : undefined}>
-        +{formatCount(additions)}
-      </span>
-      <span className={tone === "diff" ? "text-[var(--color-decoration-deleted)]" : undefined}>
-        -{formatCount(deletions)}
-      </span>
+      {additions === null ? null : (
+        <span className={tone === "diff" ? "text-[var(--color-decoration-added)]" : undefined}>
+          +{formatCount(additions)}
+        </span>
+      )}
+      {deletions === null ? null : (
+        <span className={tone === "diff" ? "text-[var(--color-decoration-deleted)]" : undefined}>
+          -{formatCount(deletions)}
+        </span>
+      )}
     </span>
   );
 }

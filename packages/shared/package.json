@@ -24,6 +24,10 @@
       "types": "./src/githubRepository.ts",
       "import": "./src/githubRepository.ts"
     },
+    "./remoteRepository": {
+      "types": "./src/remoteRepository.ts",
+      "import": "./src/remoteRepository.ts"
+    },
     "./logging": {
       "types": "./src/logging.ts",
       "import": "./src/logging.ts"
@@ -183,6 +187,18 @@
     "./threadWorkspace": {
       "types": "./src/threadWorkspace.ts",
       "import": "./src/threadWorkspace.ts"
+    },
+    "./projectSources": {
+      "types": "./src/projectSources.ts",
+      "import": "./src/projectSources.ts"
+    },
+    "./threadRoots": {
+      "types": "./src/threadRoots.ts",
+      "import": "./src/threadRoots.ts"
+    },
+    "./workspaceRootsPreamble": {
+      "types": "./src/workspaceRootsPreamble.ts",
+      "import": "./src/workspaceRootsPreamble.ts"
     },
     "./threadHierarchy": {
       "types": "./src/threadHierarchy.ts",

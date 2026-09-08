@@ -21,6 +21,7 @@ function makeEntry(isPinned: boolean): PullRequestListEntry {
   return {
     projectId: "project-1" as PullRequestListEntry["projectId"],
     projectTitle: "Project One",
+    provider: "github",
     repository: "acme/widgets",
     number: 42,
     title: "Prioritize this pull request",
@@ -57,6 +58,7 @@ function StatefulGroupedList() {
       entries={[entry]}
       grouped={groupPullRequestEntriesByInvolvement([entry], null)}
       selectedProjectId={undefined}
+      selectedProvider={undefined}
       selectedRepo={undefined}
       selectedNumber={undefined}
       onSelect={() => {}}
@@ -262,6 +264,117 @@ describe("PullRequestRow pin control", () => {
     );
   });
 
+  it("does not fabricate unavailable diff statistic sides", async () => {
+    await render(
+      <PullRequestRow
+        entry={{
+          ...makeEntry(false),
+          provider: "bitbucket",
+          url: "https://bitbucket.org/acme/widgets/pull-requests/42",
+          additions: null,
+          deletions: 1,
+          mergeability: null,
+          capabilities: {
+            detail: true,
+            diff: true,
+            comments: true,
+            checks: false,
+            comment: false,
+            resolveComment: false,
+            stateMutation: false,
+            merge: false,
+          },
+          viewerInvolvement: "unknown",
+        }}
+        selected={false}
+        onClick={vi.fn()}
+        onTogglePinned={vi.fn()}
+      />,
+    );
+
+    expect(document.body.textContent).not.toContain("+0");
+    expect(page.getByText("-1", { exact: true })).toBeVisible();
+  });
+
+  it("identifies each provider with accessible text and keeps Bitbucket stats honest", async () => {
+    const bitbucket = {
+      ...makeEntry(false),
+      projectId: "project-2" as PullRequestListEntry["projectId"],
+      provider: "bitbucket",
+      url: "https://bitbucket.org/acme/widgets/pull-requests/42",
+      additions: null,
+      deletions: null,
+      mergeability: null,
+      capabilities: {
+        detail: true,
+        diff: true,
+        comments: true,
+        checks: false,
+        comment: false,
+        resolveComment: false,
+        stateMutation: false,
+        merge: false,
+      },
+      viewerInvolvement: "unknown",
+    } as const;
+    await render(
+      <>
+        <PullRequestRow
+          entry={makeEntry(false)}
+          selected={false}
+          onClick={vi.fn()}
+          onTogglePinned={vi.fn()}
+        />
+        <PullRequestRow
+          entry={bitbucket}
+          selected={false}
+          onClick={vi.fn()}
+          onTogglePinned={vi.fn()}
+        />
+      </>,
+    );
+
+    expect(page.getByText("GitHub", { exact: true })).toBeVisible();
+    expect(page.getByText("Bitbucket", { exact: true })).toBeVisible();
+    expect(document.body.textContent).not.toContain("+0");
+  });
+
+  it("reports the provider identity when a Bitbucket row is selected", async () => {
+    const onSelect = vi.fn();
+    const bitbucket = {
+      ...makeEntry(false),
+      provider: "bitbucket",
+      url: "https://bitbucket.org/acme/widgets/pull-requests/42",
+      additions: null,
+      deletions: null,
+      mergeability: null,
+      capabilities: {
+        detail: true,
+        diff: true,
+        comments: true,
+        checks: false,
+        comment: false,
+        resolveComment: false,
+        stateMutation: false,
+        merge: false,
+      },
+      viewerInvolvement: "unknown",
+    } as const;
+    await render(
+      <PullRequestRow
+        entry={bitbucket}
+        selected={false}
+        onClick={onSelect}
+        onTogglePinned={vi.fn()}
+      />,
+    );
+
+    document.querySelector<HTMLButtonElement>('button[data-provider="bitbucket"]')?.click();
+
+    expect(onSelect).toHaveBeenCalledOnce();
+    expect(onSelect.mock.calls[0]?.[0]).toMatchObject({ provider: "bitbucket", number: 42 });
+  });
+
   it("restores focus by remote identity when aggregate project context changes", async () => {
     const entry = makeEntry(false);
     await render(
@@ -275,6 +388,54 @@ describe("PullRequestRow pin control", () => {
       }),
     ).toBe(true);
     expect(document.activeElement?.getAttribute("data-pull-request-number")).toBe("42");
+  });
+
+  it("restores focus to the matching provider when remote slugs collide", async () => {
+    const github = makeEntry(false);
+    const bitbucket = {
+      ...github,
+      projectId: "project-2" as PullRequestListEntry["projectId"],
+      provider: "bitbucket",
+      url: "https://bitbucket.org/acme/widgets/pull-requests/42",
+      additions: null,
+      deletions: null,
+      mergeability: null,
+      capabilities: {
+        detail: true,
+        diff: true,
+        comments: true,
+        checks: false,
+        comment: false,
+        resolveComment: false,
+        stateMutation: false,
+        merge: false,
+      },
+      viewerInvolvement: "unknown",
+    } as const;
+    await render(
+      <>
+        <PullRequestRow
+          entry={github}
+          selected={false}
+          onClick={vi.fn()}
+          onTogglePinned={vi.fn()}
+        />
+        <PullRequestRow
+          entry={bitbucket}
+          selected={false}
+          onClick={vi.fn()}
+          onTogglePinned={vi.fn()}
+        />
+      </>,
+    );
+
+    expect(
+      focusPullRequestRow(document, {
+        ...bitbucket,
+        projectId: "different-project" as PullRequestListEntry["projectId"],
+      }),
+    ).toBe(true);
+    expect(document.activeElement?.getAttribute("data-provider")).toBe("bitbucket");
   });
 
   it("returns focus to the selected row when the focused dock closes", async () => {

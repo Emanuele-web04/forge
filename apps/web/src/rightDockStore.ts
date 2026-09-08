@@ -48,6 +48,7 @@ interface RightDockStore {
         | "filePath"
         | "threadId"
         | "pullRequestProjectId"
+        | "pullRequestProvider"
         | "pullRequestRepository"
         | "pullRequestNumber"
         | "pullRequestInitialTab"

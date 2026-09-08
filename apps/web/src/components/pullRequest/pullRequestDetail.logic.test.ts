@@ -9,6 +9,7 @@ import type {
 import type { RightDockPane } from "~/rightDockStore.logic";
 
 import {
+  buildPullRequestDetailModel,
   buildPullRequestTimelineEvents,
   describePullRequestState,
   pullRequestDetailInputFromPane,
@@ -55,13 +56,14 @@ function makeTimelineSource() {
 }
 
 describe("pullRequestDetailInputKey", () => {
-  it("builds a stable projectId:repository#number identity", () => {
+  it("builds a stable projectId:provider:repository#number identity", () => {
     const input: PullRequestDetailInput = {
       projectId: "project-1" as PullRequestDetailInput["projectId"],
+      provider: "bitbucket",
       repository: "acme/widgets",
       number: 350,
     };
-    expect(pullRequestDetailInputKey(input)).toBe("project-1:acme/widgets#350");
+    expect(pullRequestDetailInputKey(input)).toBe("project-1:bitbucket:acme/widgets#350");
   });
 });
 
@@ -141,6 +143,7 @@ describe("pullRequestDetailInputFromPane", () => {
     diffFilePath: null,
     filePath: null,
     pullRequestProjectId: "project-1" as RightDockPane["pullRequestProjectId"],
+    pullRequestProvider: "bitbucket",
     pullRequestRepository: "acme/widgets",
     pullRequestNumber: 350,
     pullRequestInitialTab: null,
@@ -149,6 +152,7 @@ describe("pullRequestDetailInputFromPane", () => {
   it("builds the detail input from a fully-populated pull request pane", () => {
     expect(pullRequestDetailInputFromPane(basePane)).toEqual({
       projectId: "project-1",
+      provider: "bitbucket",
       repository: "acme/widgets",
       number: 350,
     });
@@ -180,5 +184,87 @@ describe("stripHtmlComments", () => {
 
   it("passes plain markdown through untouched", () => {
     expect(stripHtmlComments("## Summary\n- item")).toBe("## Summary\n- item");
+  });
+});
+
+const GITHUB_DETAIL_CAPABILITIES = {
+  detail: true,
+  diff: true,
+  comments: true,
+  checks: true,
+  comment: true,
+  resolveComment: true,
+  stateMutation: true,
+  merge: true,
+} as const;
+
+const READ_ONLY_DETAIL_CAPABILITIES = {
+  detail: true,
+  diff: true,
+  comments: true,
+  checks: false,
+  comment: false,
+  resolveComment: false,
+  stateMutation: false,
+  merge: false,
+} as const;
+
+describe("buildPullRequestDetailModel", () => {
+  it("hides every mutation affordance for a read-only Bitbucket detail", () => {
+    const model = buildPullRequestDetailModel({
+      capabilities: { ...READ_ONLY_DETAIL_CAPABILITIES },
+      state: "open",
+      isDraft: false,
+    });
+
+    expect(model.tabs).toEqual(["summary", "code", "timeline"]);
+    expect(model.actions).toEqual([]);
+    expect(model.showCommentComposer).toBe(false);
+    expect(model.showResolveControls).toBe(false);
+    expect(model.showMergeability).toBe(false);
+  });
+
+  it("exposes merge, draft, and close actions for an open GitHub pull request", () => {
+    const model = buildPullRequestDetailModel({
+      capabilities: { ...GITHUB_DETAIL_CAPABILITIES },
+      state: "open",
+      isDraft: false,
+    });
+
+    expect(model.tabs).toEqual(["summary", "code", "timeline"]);
+    expect(model.actions).toEqual(["merge", "draft", "close"]);
+    expect(model.showCommentComposer).toBe(true);
+    expect(model.showResolveControls).toBe(true);
+    expect(model.showMergeability).toBe(true);
+  });
+
+  it("offers ready instead of merge and draft for a GitHub draft", () => {
+    const model = buildPullRequestDetailModel({
+      capabilities: { ...GITHUB_DETAIL_CAPABILITIES },
+      state: "open",
+      isDraft: true,
+    });
+
+    expect(model.actions).toEqual(["ready", "close"]);
+  });
+
+  it("offers only reopen for a closed GitHub pull request", () => {
+    const model = buildPullRequestDetailModel({
+      capabilities: { ...GITHUB_DETAIL_CAPABILITIES },
+      state: "closed",
+      isDraft: false,
+    });
+
+    expect(model.actions).toEqual(["reopen"]);
+  });
+
+  it("exposes no action for a merged pull request", () => {
+    const model = buildPullRequestDetailModel({
+      capabilities: { ...GITHUB_DETAIL_CAPABILITIES },
+      state: "merged",
+      isDraft: false,
+    });
+
+    expect(model.actions).toEqual([]);
   });
 });

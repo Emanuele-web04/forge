@@ -13,9 +13,9 @@ import {
 import {
   type ComposerThreadDraftState,
   type DraftThreadState,
-  resolvePreferredComposerModelSelection,
   useComposerDraftStore,
 } from "../composerDraftStore";
+import { resolveNewChatModelSelection } from "../composerDraftModels";
 import {
   findProviderStatus,
   isProviderUsable,
@@ -40,6 +40,7 @@ import { newCommandId, newThreadId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { useFocusedChatContext } from "../focusedChatContext";
 import { useStore } from "../store";
+import { getThreadFromState } from "../threadDerivation";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 
@@ -125,6 +126,25 @@ export function useHandleNewThread() {
         model: defaultModel,
       });
     };
+    const applyInitialModelSelection = (threadId: ThreadId) => {
+      // Replace the seeded entry so options from an older same-provider model
+      // cannot be merged into the focused chat's selection.
+      useComposerDraftStore.setState((state) => {
+        const draft = state.draftsByThreadId[threadId];
+        if (!draft) {
+          return state;
+        }
+        const modelSelectionByProvider = { ...draft.modelSelectionByProvider };
+        delete modelSelectionByProvider[initialModelSelection.provider];
+        return {
+          draftsByThreadId: {
+            ...state.draftsByThreadId,
+            [threadId]: { ...draft, modelSelectionByProvider },
+          },
+        };
+      });
+      setModelSelection(threadId, initialModelSelection);
+    };
     const restoreComposerDraft = (
       threadId: ThreadId,
       draftState: ComposerThreadDraftState | null,
@@ -190,46 +210,43 @@ export function useHandleNewThread() {
     const projectDefaultModelSelection =
       useStore.getState().projects.find((project) => project.id === projectId)
         ?.defaultModelSelection ?? null;
-    const applyUsableStickyState = (threadId: ThreadId) => {
-      applyStickyState(threadId);
-      if (options?.provider || !hasReconciledServerProviderStatuses(queryClient)) {
-        return;
-      }
-
-      const draft = useComposerDraftStore.getState().draftsByThreadId[threadId] ?? null;
-      const stickyProvider = draft?.activeProvider ?? null;
-      if (
-        !stickyProvider ||
-        isProviderUsable(findProviderStatus(providerStatuses, stickyProvider))
-      ) {
-        return;
-      }
-
-      const fallbackProvider = resolveAvailableProviderPreference({
-        preferredProvider: projectDefaultModelSelection?.provider ?? settings.defaultProvider,
-        statuses: providerStatuses,
-        providerOrder: settings.providerOrder,
-        hiddenProviders: settings.hiddenProviders,
-      });
-      if (!isProviderUsable(findProviderStatus(providerStatuses, fallbackProvider))) {
-        return;
-      }
-
-      setModelSelection(
-        threadId,
-        resolvePreferredComposerModelSelection({
-          draft: draft
-            ? {
-                modelSelectionByProvider: draft.modelSelectionByProvider,
-                activeProvider: fallbackProvider,
-              }
-            : null,
-          threadModelSelection: null,
-          projectModelSelection: projectDefaultModelSelection,
-          defaultProvider: fallbackProvider,
-        }),
-      );
-    };
+    const composerState = useComposerDraftStore.getState();
+    const newChatModelInput = {
+      focusedDraft: focusedThreadId
+        ? (composerState.draftsByThreadId[focusedThreadId] ?? null)
+        : null,
+      focusedThreadModelSelection: focusedThreadId
+        ? (getThreadFromState(useStore.getState(), focusedThreadId)?.modelSelection ?? null)
+        : null,
+      stickyActiveProvider: composerState.stickyActiveProvider,
+      stickyModelSelectionByProvider: composerState.stickyModelSelectionByProvider,
+      projectModelSelection: projectDefaultModelSelection,
+      defaultProvider: settings.defaultProvider,
+    } as const;
+    const preferredInitialModelSelection = resolveNewChatModelSelection({
+      ...newChatModelInput,
+      ...(options?.provider ? { providerOverride: options.provider } : {}),
+    });
+    const fallbackProvider =
+      !options?.provider &&
+      providerStatusesReconciled &&
+      !isProviderUsable(
+        findProviderStatus(providerStatuses, preferredInitialModelSelection.provider),
+      )
+        ? resolveAvailableProviderPreference({
+            preferredProvider: projectDefaultModelSelection?.provider ?? settings.defaultProvider,
+            statuses: providerStatuses,
+            providerOrder: settings.providerOrder,
+            hiddenProviders: settings.hiddenProviders,
+          })
+        : null;
+    const initialModelSelection =
+      fallbackProvider && isProviderUsable(findProviderStatus(providerStatuses, fallbackProvider))
+        ? resolveNewChatModelSelection({
+            ...newChatModelInput,
+            providerOverride: fallbackProvider,
+          })
+        : preferredInitialModelSelection;
     const activeThreadSnapshot = createActiveThreadSnapshot(activeThread, projectId);
     const activeDraftThreadSnapshot = createActiveDraftThreadSnapshot(activeDraftThread, projectId);
     const resolveCreationState = (
@@ -373,10 +390,8 @@ export function useHandleNewThread() {
         stage: () => {
           registerDraftThread(threadId, { projectId, ...draftSeed });
           activateThreadEntryPoint(threadId);
-          // Seed the draft from the sticky (last-used) selection so a new chat
-          // reopens with the model and options used most recently.
-          applyUsableStickyState(threadId);
-          applyProviderOverride(threadId);
+          applyStickyState(threadId);
+          applyInitialModelSelection(threadId);
         },
         // Mark the draft-landing navigation as a transition so the new route
         // subtree renders interruptibly and the browser can paint the chat

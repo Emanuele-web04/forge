@@ -80,8 +80,22 @@ import {
 } from "./gitHandoffOperations";
 import { Keybindings } from "./keybindings";
 import { createLocalPreviewGrant } from "./localImageFiles";
-import { listLocalServers, stopLocalServer } from "./localServerMonitor";
-import { listManagedWorktrees, pruneProjectedArchivedManagedWorktrees } from "./managedWorktrees";
+import { listLocalServers, resolveOwnListenerPorts, stopLocalServer } from "./localServerMonitor";
+import {
+  defaultManagedWorktreeSnapshotsDir,
+  listManagedWorktrees,
+  listManagedWorktreeRemovalCandidates,
+  pruneProjectedArchivedManagedWorktrees,
+  removeManagedWorktreeRemovalCandidate,
+} from "./managedWorktrees";
+import {
+  cancelResourceDiskScan,
+  killResourceProcessTree,
+  measureDirectoryBytes,
+  sampleResourceSnapshot,
+  scanResourceDiskUsage,
+} from "./resourceMonitor";
+import { listRegisteredProviderProcesses } from "./providerProcessRegistry";
 import {
   attachmentPrincipalForSession,
   CurrentManagedAttachmentPrincipal,
@@ -110,8 +124,13 @@ import { ProfileStatsQuery } from "./profileStats";
 import { redactSensitiveProcessArgs } from "./processArgumentRedaction";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
 import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
+import {
+  McpConnectionService,
+  type McpConnectionServiceShape,
+} from "./outboundMcp/Services/McpConnectionService";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
+import { KeepAwakeService } from "./keepAwake";
 import { ServerSettingsService } from "./serverSettings";
 import { isLoopbackHost } from "./startupAccess";
 import { TerminalManager } from "./terminal/Services/Manager";
@@ -157,6 +176,7 @@ import {
   makeResnapshotEscalationTracker,
 } from "./wsSnapshotLiveStream";
 import { PullRequestService } from "./pullRequests/Services/PullRequestService";
+import { PullRequestProviderError } from "./pullRequests/Services/PullRequestProvider";
 import { resolveGitHubRepository } from "./pullRequests/repositoryResolution";
 import {
   GitHubProjectProvisioningError,
@@ -308,6 +328,50 @@ function toWsRpcError(cause: unknown, fallbackMessage: string) {
   });
 }
 
+export function toPullRequestsRpcError(cause: unknown, fallbackMessage: string) {
+  const githubUnavailable =
+    (cause instanceof GitHubCliError &&
+      (cause.reason === "not-installed" || cause.reason === "not-authenticated")) ||
+    (cause instanceof PullRequestProviderError &&
+      cause.provider === "github" &&
+      (cause.reason === "not-installed" || cause.reason === "not-authenticated"));
+  if (githubUnavailable) {
+    return new PullRequestsUnavailableError({
+      reason: cause.reason === "not-installed" ? "gh-not-installed" : "gh-not-authenticated",
+      message: cause instanceof GitHubCliError ? cause.detail : cause.message,
+    });
+  }
+  return toWsRpcError(cause, fallbackMessage);
+}
+
+export function makeOutboundMcpLifecycleRpcHandlers<AuthorizationError, AuthorizationRequirements>(
+  outboundMcp: McpConnectionServiceShape,
+  authorizeManagement: Effect.Effect<void, AuthorizationError, AuthorizationRequirements>,
+) {
+  const rpcEffect = <A, E, R>(effect: Effect.Effect<A, E, R>, fallbackMessage: string) =>
+    effect.pipe(Effect.mapError((cause) => toWsRpcError(cause, fallbackMessage)));
+  const managedEffect = <A, E, R>(
+    operation: () => Effect.Effect<A, E, R>,
+    fallbackMessage: string,
+  ) =>
+    rpcEffect(authorizeManagement.pipe(Effect.andThen(Effect.suspend(operation))), fallbackMessage);
+  return {
+    [WS_METHODS.serverListOutboundMcpConnections]: () =>
+      managedEffect(
+        () => outboundMcp.list().pipe(Effect.map((connections) => ({ connections }))),
+        "Failed to load outbound MCP connections",
+      ),
+    [WS_METHODS.serverBeginOutboundMcpAuthorization]: (input: { readonly presetId: string }) =>
+      managedEffect(
+        () => outboundMcp.beginAuthorization(input),
+        "Failed to start MCP authorization",
+      ),
+    [WS_METHODS.serverDisconnectOutboundMcpConnection]: (input: {
+      readonly connectionId: string;
+    }) => managedEffect(() => outboundMcp.disconnect(input), "Failed to disconnect MCP service"),
+  } as const;
+}
+
 // Process-wide so a subscriber's restart chain survives its own reconnects
 // (the client id is stable across a socket reconnect), but keyed per
 // subscriber inside the tracker — see makeResnapshotEscalationTracker.
@@ -331,6 +395,7 @@ function isShellRelevantEvent(event: OrchestrationEvent): boolean {
     event.type === "space.deleted" ||
     event.type === "project.created" ||
     event.type === "project.meta-updated" ||
+    event.type === "project.sources-updated" ||
     event.type === "project.deleted" ||
     event.type === "thread.deleted" ||
     (event.aggregateKind === "thread" && shouldPublishThreadShellForEvent(event))
@@ -346,6 +411,7 @@ const makeWsRpcHandlersLayer = () =>
       const devServerManager = yield* DevServerManager;
       const fileSystem = yield* FileSystem.FileSystem;
       const externalMcp = yield* ExternalMcpService;
+      const outboundMcp = yield* McpConnectionService;
       const git = yield* GitCore;
       const github = yield* GitHubCli;
       const gitManager = yield* GitManager;
@@ -367,6 +433,7 @@ const makeWsRpcHandlersLayer = () =>
       const runtimeStartup = yield* ServerRuntimeStartup;
       const serverEnvironment = yield* ServerEnvironment;
       const serverSettings = yield* ServerSettingsService;
+      const keepAwake = yield* KeepAwakeService;
       const terminalManager = yield* TerminalManager;
       const textGeneration = yield* TextGeneration;
       const workspaceEntries = yield* WorkspaceEntries;
@@ -491,20 +558,6 @@ const makeWsRpcHandlersLayer = () =>
             yield* Effect.sleep(THREAD_DETAIL_SNAPSHOT_BOOTSTRAP_POLL_MS);
           }
         });
-
-      const isGlobalGitHubCliError = (error: unknown): error is GitHubCliError =>
-        error instanceof GitHubCliError &&
-        (error.reason === "not-installed" || error.reason === "not-authenticated");
-
-      const toPullRequestsRpcError = (cause: unknown, fallbackMessage: string) => {
-        if (isGlobalGitHubCliError(cause)) {
-          return new PullRequestsUnavailableError({
-            reason: cause.reason === "not-installed" ? "gh-not-installed" : "gh-not-authenticated",
-            message: cause.detail,
-          });
-        }
-        return toWsRpcError(cause, fallbackMessage);
-      };
 
       const pullRequestsEffect = <A, E, R>(
         effect: Effect.Effect<A, E, R>,
@@ -669,7 +722,7 @@ const makeWsRpcHandlersLayer = () =>
         port: number;
       }) {
         const localServer =
-          (yield* Effect.promise(() => listLocalServers())).servers.find(
+          (yield* Effect.promise(() => listLocalServers({ includeAll: true }))).servers.find(
             (server) => server.pid === input.pid && server.ports.includes(input.port),
           ) ?? null;
         const result = yield* Effect.promise(() => stopLocalServer(input, localServer));
@@ -784,6 +837,7 @@ const makeWsRpcHandlersLayer = () =>
             );
           case "project.created":
           case "project.meta-updated":
+          case "project.sources-updated":
             return projectionReadModelQuery.getProjectShellById(event.payload.projectId).pipe(
               Effect.map((project) =>
                 Option.map(project, (nextProject) => ({
@@ -854,7 +908,7 @@ const makeWsRpcHandlersLayer = () =>
             ),
           );
 
-      const requireOwner = Effect.gen(function* () {
+      const requireLocalMcpOwner = Effect.gen(function* () {
         if (!canManageExternalMcp(yield* CurrentWsSessionRole)) {
           return yield* Effect.fail(
             new WsRpcError({ message: "Owner authorization is required for this operation." }),
@@ -1696,17 +1750,17 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.serverUpdateProvider]: (input) => providerHealth.updateProvider(input),
         [WS_METHODS.serverListExternalMcpIntegrations]: () =>
           rpcEffect(
-            requireOwner.pipe(Effect.andThen(externalMcp.listIntegrations())),
+            requireLocalMcpOwner.pipe(Effect.andThen(externalMcp.listIntegrations())),
             "Failed to list external MCP integrations",
           ),
         [WS_METHODS.serverCreateExternalMcpIntegration]: (input) =>
           rpcEffect(
-            requireOwner.pipe(Effect.andThen(externalMcp.createIntegration(input))),
+            requireLocalMcpOwner.pipe(Effect.andThen(externalMcp.createIntegration(input))),
             "Failed to create external MCP integration",
           ),
         [WS_METHODS.serverRevokeExternalMcpIntegration]: (input) =>
           rpcEffect(
-            requireOwner.pipe(
+            requireLocalMcpOwner.pipe(
               Effect.andThen(externalMcp.revokeIntegration(input.integrationId)),
               Effect.map((revoked) => ({ revoked })),
             ),
@@ -1714,17 +1768,23 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [WS_METHODS.serverRefreshExternalMcpPairing]: (input) =>
           rpcEffect(
-            requireOwner.pipe(Effect.andThen(externalMcp.refreshPairing(input))),
+            requireLocalMcpOwner.pipe(Effect.andThen(externalMcp.refreshPairing(input))),
             "Failed to refresh external MCP pairing",
           ),
+        ...makeOutboundMcpLifecycleRpcHandlers(outboundMcp, requireLocalMcpOwner),
         [WS_METHODS.serverListWorktrees]: () =>
           rpcEffect(
             pruneManagedWorktrees.pipe(Effect.map((worktrees) => ({ worktrees }))),
             "Failed to list managed worktrees",
           ),
-        [WS_METHODS.serverListLocalServers]: () =>
+        [WS_METHODS.serverListLocalServers]: (input) =>
           rpcEffect(
-            Effect.promise(() => listLocalServers()),
+            Effect.promise(() =>
+              listLocalServers({
+                includeAll: input.includeAll ?? false,
+                excludePorts: input.includeAll ? resolveOwnListenerPorts() : undefined,
+              }),
+            ),
             "Failed to list local servers",
           ),
         [WS_METHODS.serverStopLocalServer]: (input) =>
@@ -1740,6 +1800,255 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(getProviderUsageSnapshot(input), "Failed to load provider usage"),
         [WS_METHODS.serverListProviderUsage]: (input) =>
           rpcEffect(listProviderUsage(input), "Failed to load provider usage"),
+        [WS_METHODS.resourceGetSnapshot]: () =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const terminals = yield* terminalManager.listActiveSessions();
+              const inventory = yield* listManagedWorktrees({
+                worktreesDir: config.worktreesDir,
+                git,
+              }).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("resource snapshot worktree inventory failed", {
+                    cause: String(cause),
+                  }).pipe(Effect.as([])),
+                ),
+              );
+              // Thread -> worktree attribution for single-owner provider
+              // runtimes. Best effort: unknown threads land in Providers/Shared.
+              const threadWorktrees = yield* projectionReadModelQuery
+                .listManagedWorktreeThreads()
+                .pipe(
+                  Effect.map((threads) => {
+                    const byThread = new Map<string, string>();
+                    for (const thread of threads) {
+                      const worktreePath = thread.associatedWorktreePath ?? thread.worktreePath;
+                      if (worktreePath) byThread.set(thread.id, worktreePath);
+                    }
+                    return byThread;
+                  }),
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("resource snapshot thread worktrees failed", {
+                      cause: String(cause),
+                    }).pipe(Effect.as(new Map<string, string>())),
+                  ),
+                );
+              const providers = listRegisteredProviderProcesses().map((entry) => ({
+                pid: entry.pid,
+                provider: entry.provider,
+                threadIds: [...entry.threadIds],
+                commandBaseline: entry.commandBaseline,
+              }));
+              return yield* Effect.promise(() =>
+                sampleResourceSnapshot({
+                  terminals,
+                  worktrees: inventory,
+                  providers,
+                  threadWorktrees,
+                }),
+              );
+            }),
+            "Failed to load resource snapshot",
+          ),
+        [WS_METHODS.resourceKillSession]: (input) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              if (!input.terminalId && !input.pid) {
+                return yield* Effect.fail(new Error("Provide a terminalId or pid to kill."));
+              }
+              if (input.terminalId) {
+                const terminals = yield* terminalManager.listActiveSessions();
+                const match = terminals.find((session) => session.terminalId === input.terminalId);
+                if (!match) {
+                  return yield* Effect.fail(
+                    new Error(`Terminal session '${input.terminalId}' was not found.`),
+                  );
+                }
+                if (match.status !== "exited" && match.pid !== null) {
+                  yield* terminalManager.close({
+                    threadId: match.threadId,
+                    terminalId: match.terminalId,
+                  });
+                  return { pid: match.pid, killed: true as const };
+                }
+              }
+              // Exited/unknown session, or explicit pid kill (orphans): drop to
+              // the reuse-guarded process-tree killer.
+              const pid = input.pid;
+              if (!pid) {
+                return yield* Effect.fail(new Error("Terminal session already exited."));
+              }
+              return yield* Effect.promise(() => killResourceProcessTree(pid));
+            }),
+            "Failed to kill session",
+          ),
+        [WS_METHODS.resourceKillAllSessions]: () =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const terminals = yield* terminalManager.listActiveSessions();
+              const live = terminals.filter(
+                (session) => session.status !== "exited" && session.pid !== null,
+              );
+              yield* Effect.forEach(
+                live,
+                (session) =>
+                  terminalManager
+                    .close({ threadId: session.threadId, terminalId: session.terminalId })
+                    .pipe(
+                      Effect.catchCause((cause) =>
+                        Effect.logWarning("resource kill-all could not close a session", {
+                          threadId: session.threadId,
+                          terminalId: session.terminalId,
+                          cause: String(cause),
+                        }).pipe(Effect.asVoid),
+                      ),
+                    ),
+                { concurrency: 4, discard: true },
+              );
+              const remaining = yield* terminalManager.listActiveSessions();
+              const remainingKeys = new Set(
+                remaining.map((session) => `${session.threadId}${session.terminalId}`),
+              );
+              const killed = live.filter(
+                (session) => !remainingKeys.has(`${session.threadId}${session.terminalId}`),
+              );
+              return {
+                killedCount: killed.length,
+                pids: killed.flatMap((session) => (session.pid !== null ? [session.pid] : [])),
+              };
+            }),
+            "Failed to kill all sessions",
+          ),
+        [WS_METHODS.resourceCleanWorkspaces]: (input) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const listCandidates = Effect.gen(function* () {
+                const threads = yield* projectionReadModelQuery.listManagedWorktreeThreads();
+                return yield* listManagedWorktreeRemovalCandidates({
+                  worktreesDir: config.worktreesDir,
+                  threads,
+                  git,
+                });
+              });
+              const withSizes = (candidates: ReadonlyArray<{ entry: { path: string } }>) =>
+                Effect.forEach(
+                  candidates,
+                  (candidate) =>
+                    Effect.promise(() => measureDirectoryBytes(candidate.entry.path)).pipe(
+                      Effect.map((bytes) => ({ candidate, bytes: bytes ?? 0 })),
+                    ),
+                  { concurrency: 2 },
+                );
+              const describe = (
+                sized: ReadonlyArray<{ candidate: { entry: { path: string } }; bytes: number }>,
+              ) =>
+                sized.map(({ candidate, bytes }) => ({
+                  path: candidate.entry.path,
+                  name: path.basename(candidate.entry.path),
+                  bytes,
+                  protected: false,
+                }));
+              const candidates = yield* listCandidates;
+              const sized = yield* withSizes(candidates);
+              const resourceCandidates = describe(sized);
+              if (input.dryRun) {
+                return {
+                  dryRun: true as const,
+                  candidates: resourceCandidates,
+                  reclaimedBytes: sized.reduce((sum, entry) => sum + entry.bytes, 0),
+                  removedPaths: [],
+                };
+              }
+              // Re-derive at execute time and intersect with the confirmed paths
+              // so a stale dry-run can never delete a revived worktree.
+              const fresh = yield* listCandidates;
+              const wanted = new Set(input.paths ?? fresh.map((entry) => entry.entry.path));
+              const selected = fresh.filter((entry) => wanted.has(entry.entry.path));
+              const snapshotsDir = defaultManagedWorktreeSnapshotsDir(config.homeDir);
+              const removedPaths: string[] = [];
+              let reclaimedBytes = 0;
+              for (const candidate of selected) {
+                const removed = yield* removeManagedWorktreeRemovalCandidate({
+                  snapshotsDir,
+                  candidate,
+                  git,
+                }).pipe(
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("resource workspace cleanup skipped an unsafe removal", {
+                      worktreePath: candidate.entry.path,
+                      cause: String(cause),
+                    }).pipe(Effect.as(false)),
+                  ),
+                );
+                if (removed) {
+                  removedPaths.push(candidate.entry.path);
+                  reclaimedBytes +=
+                    sized.find((entry) => entry.candidate.entry.path === candidate.entry.path)
+                      ?.bytes ?? 0;
+                }
+              }
+              return {
+                dryRun: false as const,
+                candidates: resourceCandidates,
+                reclaimedBytes,
+                removedPaths,
+              };
+            }),
+            "Failed to clean workspaces",
+          ),
+        [WS_METHODS.resourceScanDisk]: (input) =>
+          rpcEffect(
+            Effect.promise(() => scanResourceDiskUsage(input.paths ?? [config.worktreesDir])),
+            "Failed to scan disk usage",
+          ),
+        [WS_METHODS.resourceCancelDiskScan]: () =>
+          rpcEffect(
+            Effect.sync(() => cancelResourceDiskScan()),
+            "Failed to cancel disk scan",
+          ),
+        [WS_METHODS.resourceRestartDaemon]: () =>
+          rpcEffect(
+            Effect.gen(function* () {
+              // Restart = stop every provider session and adapter runtime; they
+              // respawn lazily on the next turn. The Synara server itself is
+              // never touched.
+              const sessions = yield* providerService.listSessions();
+              yield* Effect.forEach(
+                sessions,
+                (session) =>
+                  providerService.stopSession({ threadId: session.threadId }).pipe(
+                    Effect.catchCause((cause) =>
+                      Effect.logWarning("resource restart could not stop a provider session", {
+                        threadId: session.threadId,
+                        provider: session.provider,
+                        cause: String(cause),
+                      }).pipe(Effect.asVoid),
+                    ),
+                  ),
+                { concurrency: "unbounded", discard: true },
+              );
+              const providers = [...new Set(sessions.map((session) => session.provider))];
+              yield* Effect.forEach(
+                providers,
+                (provider) =>
+                  providerAdapterRegistry
+                    .getByProvider(provider)
+                    .pipe(Effect.flatMap((adapter) => adapter.stopAll()))
+                    .pipe(
+                      Effect.catchCause((cause) =>
+                        Effect.logWarning("resource restart could not stop a provider runtime", {
+                          provider,
+                          cause: String(cause),
+                        }).pipe(Effect.asVoid),
+                      ),
+                    ),
+                { concurrency: "unbounded", discard: true },
+              );
+              yield* providerHealth.refresh;
+              return { restarted: true as const };
+            }),
+            "Failed to restart provider runtime",
+          ),
         [WS_METHODS.serverGetDiagnostics]: () =>
           rpcEffect(
             Effect.gen(function* () {
@@ -1961,6 +2270,22 @@ const makeWsRpcHandlersLayer = () =>
               }).pipe(Stream.map((settings) => ({ settings }))),
             ).pipe(
               Stream.mapError((cause) => toWsRpcError(cause, "Server settings stream failed")),
+            ),
+          ),
+        [WS_METHODS.subscribeServerKeepAwake]: (_, { clientId }) =>
+          streamAdmission.guard(
+            clientId,
+            { key: "server.keep-awake" },
+            Stream.concat(
+              Stream.fromEffect(
+                keepAwake.getState.pipe(Effect.map((state) => ({ keepAwake: state }))),
+              ),
+              bufferLiveUiStream(keepAwake.streamChanges, {
+                label: "server.keep-awake",
+                onDroppedEvents: failLiveUiStreamForSnapshotResync,
+              }).pipe(Stream.map((state) => ({ keepAwake: state }))),
+            ).pipe(
+              Stream.mapError((cause) => toWsRpcError(cause, "Server keep-awake stream failed")),
             ),
           ),
 

@@ -741,6 +741,42 @@ export function deriveEffectiveComposerModelState(input: {
   };
 }
 
+// A new chat continues the focused composer's choice, including unsent changes.
+// With no focused chat, the persisted sticky selection provides the last choice.
+export function resolveNewChatModelSelection(input: {
+  focusedDraft: Pick<
+    ComposerThreadDraftState,
+    "modelSelectionByProvider" | "activeProvider"
+  > | null;
+  focusedThreadModelSelection: ModelSelection | null;
+  stickyModelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>>;
+  stickyActiveProvider: ProviderKind | null;
+  projectModelSelection: ModelSelection | null;
+  defaultProvider: ProviderKind;
+  providerOverride?: ProviderKind;
+}): ModelSelection {
+  const focusedProvider =
+    input.focusedDraft?.activeProvider ?? input.focusedThreadModelSelection?.provider;
+  const focusedSelection =
+    (focusedProvider ? input.focusedDraft?.modelSelectionByProvider[focusedProvider] : null) ??
+    input.focusedThreadModelSelection;
+  const rememberedProvider = input.providerOverride ?? input.stickyActiveProvider;
+  const rememberedSelection = rememberedProvider
+    ? input.stickyModelSelectionByProvider[rememberedProvider]
+    : null;
+  const selection = [focusedSelection, rememberedSelection, input.projectModelSelection].find(
+    (candidate) =>
+      candidate && (!input.providerOverride || candidate.provider === input.providerOverride),
+  );
+  const resolvedSelection = resolvePreferredComposerModelSelection({
+    draft: null,
+    threadModelSelection: selection,
+    projectModelSelection: null,
+    defaultProvider: input.providerOverride ?? input.defaultProvider,
+  });
+  return stripNonStickyModelOptions(resolvedSelection);
+}
+
 export function resolvePreferredComposerModelSelection(input: {
   draft:
     | Pick<ComposerThreadDraftState, "modelSelectionByProvider" | "activeProvider">

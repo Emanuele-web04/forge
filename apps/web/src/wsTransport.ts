@@ -42,6 +42,7 @@ import {
   type ServerConfigStreamEvent,
   type ServerLifecycleStreamEvent,
   type ServerProviderStatusesUpdatedPayload,
+  type ServerKeepAwakeUpdatedPayload,
   type ServerSettingsUpdatedPayload,
   type DeviceEvent,
   type TerminalEvent,
@@ -1525,6 +1526,15 @@ export class WsTransport {
               this.emit(WS_CHANNELS.serverSettingsUpdated, payload),
             restartChannel,
           );
+        } else if (channel === WS_CHANNELS.serverKeepAwakeUpdated) {
+          this.startStream(
+            client,
+            "server.keep-awake",
+            client[WS_METHODS.subscribeServerKeepAwake]({}),
+            (payload: ServerKeepAwakeUpdatedPayload) =>
+              this.emit(WS_CHANNELS.serverKeepAwakeUpdated, payload),
+            restartChannel,
+          );
         } else if (channel === WS_CHANNELS.terminalEvent) {
           this.startStream(
             client,
@@ -1587,6 +1597,7 @@ export class WsTransport {
     else if (channel === WS_CHANNELS.serverProviderStatusesUpdated)
       this.stopStream("server.providers");
     else if (channel === WS_CHANNELS.serverSettingsUpdated) this.stopStream("server.settings");
+    else if (channel === WS_CHANNELS.serverKeepAwakeUpdated) this.stopStream("server.keep-awake");
     else if (channel === WS_CHANNELS.terminalEvent) this.stopStream("terminal.events");
     else if (channel === WS_CHANNELS.projectDevServerEvent) this.stopStream("project.devServers");
     else if (channel === WS_CHANNELS.automationEvent) this.stopStream("automation.events");

@@ -6,7 +6,7 @@
 // Layer: Pull request presentation
 // Exports: PullRequestList
 
-import type { ProjectId, PullRequestListEntry } from "@synara/contracts";
+import type { ProjectId, PullRequestListEntry, PullRequestProvider } from "@synara/contracts";
 import { pullRequestListEntryKey, type PullRequestListGroup } from "./pullRequestList.logic";
 import { PullRequestRow } from "./PullRequestRow";
 import { PR_FINE_TEXT_CLASS_NAME, PR_QUIET_INK_CLASS_NAME } from "./pullRequestText";
@@ -16,6 +16,7 @@ export const PullRequestList = function PullRequestList({
   entries,
   grouped,
   selectedProjectId,
+  selectedProvider,
   selectedRepo,
   selectedNumber,
   showProjectTitle: showProjectTitleProp,
@@ -26,6 +27,7 @@ export const PullRequestList = function PullRequestList({
   entries: PullRequestListEntry[];
   grouped: PullRequestListGroup[] | null;
   selectedProjectId: ProjectId | undefined;
+  selectedProvider: PullRequestProvider | undefined;
   selectedRepo: string | undefined;
   selectedNumber: number | undefined;
   showProjectTitle?: boolean;
@@ -35,6 +37,7 @@ export const PullRequestList = function PullRequestList({
 }) {
   const showProjectTitle = showProjectTitleProp ?? false;
   const showDiffColors = showDiffColorsProp ?? true;
+  const normalizedSelectedProvider = selectedProvider ?? "github";
   const renderEntry = (entry: PullRequestListEntry) => (
     <PullRequestRow
       key={pullRequestListEntryKey(entry)}
@@ -43,6 +46,7 @@ export const PullRequestList = function PullRequestList({
       showDiffColors={showDiffColors}
       selected={
         selectedProjectId === entry.projectId &&
+        normalizedSelectedProvider === entry.provider &&
         selectedRepo === entry.repository &&
         selectedNumber === entry.number
       }

@@ -300,6 +300,7 @@ describe("wsNativeApi", () => {
       settings: {
         enableAssistantStreaming: true,
         enableProviderUpdateChecks: true,
+        keepAwakeMode: "off",
         defaultThreadEnvMode: "local",
         addProjectBaseDirectory: "",
         textGenerationModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
@@ -331,6 +332,27 @@ describe("wsNativeApi", () => {
 
     const lateListener = vi.fn();
     onServerSettingsUpdated(lateListener);
+    expect(lateListener).toHaveBeenCalledTimes(1);
+    expect(lateListener).toHaveBeenCalledWith(payload);
+  });
+
+  it("delivers and caches keep-awake updates", async () => {
+    const { createWsNativeApi, onServerKeepAwakeUpdated } = await import("./wsNativeApi");
+
+    createWsNativeApi();
+    const listener = vi.fn();
+    onServerKeepAwakeUpdated(listener);
+
+    const payload = {
+      keepAwake: { available: true, mode: "agent", active: true, error: null },
+    } as const;
+    emitPush(WS_CHANNELS.serverKeepAwakeUpdated, payload);
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith(payload);
+
+    const lateListener = vi.fn();
+    onServerKeepAwakeUpdated(lateListener);
     expect(lateListener).toHaveBeenCalledTimes(1);
     expect(lateListener).toHaveBeenCalledWith(payload);
   });
@@ -721,6 +743,32 @@ describe("wsNativeApi", () => {
       integrationId: "integration-1",
     });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("forwards outbound MCP lifecycle requests to their websocket server methods", async () => {
+    requestMock
+      .mockResolvedValueOnce({ connections: [] })
+      .mockResolvedValueOnce({
+        attemptId: "attempt-1",
+        authorizationUrl: "https://auth.example.test/authorize",
+      })
+      .mockResolvedValueOnce(undefined);
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+
+    await api.server.listOutboundMcpConnections();
+    await api.server.beginOutboundMcpAuthorization({ presetId: "paraty" });
+    await api.server.disconnectOutboundMcpConnection({ connectionId: "paraty" });
+
+    expect(requestMock).toHaveBeenNthCalledWith(1, WS_METHODS.serverListOutboundMcpConnections);
+    expect(requestMock).toHaveBeenNthCalledWith(2, WS_METHODS.serverBeginOutboundMcpAuthorization, {
+      presetId: "paraty",
+    });
+    expect(requestMock).toHaveBeenNthCalledWith(
+      3,
+      WS_METHODS.serverDisconnectOutboundMcpConnection,
+      { connectionId: "paraty" },
+    );
   });
 
   it("fetches auth session state over HTTP", async () => {

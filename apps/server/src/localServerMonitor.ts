@@ -53,6 +53,17 @@ interface DevServerCandidateInput {
   readonly ports: readonly number[];
 }
 
+export type LocalServerScanMode = "dev" | "all";
+
+export interface ListLocalServersOptions {
+  // "dev" (default) reports recognized dev servers only; "all" reports every
+  // listening process except app internals (Orca-style "Puertos" view).
+  readonly includeAll?: boolean;
+  // Listener ports to drop from the result (e.g. Synara's own server/web
+  // ports so the app never lists itself).
+  readonly excludePorts?: readonly number[] | undefined;
+}
+
 interface CachedPageTitle {
   readonly title: string | null;
   readonly expiresAtMs: number;
@@ -125,6 +136,10 @@ const pageTitleCache = new Map<string, CachedPageTitle>();
 const pageTitleInFlight = new Map<string, Promise<string | null>>();
 // Preserve lineage-only command context without extending the public local-server contract.
 const pageTitleProbeArgs = new WeakMap<ServerLocalServerProcess, string>();
+// Servers whose display name came from dev-tool detection. Page-title HTTP
+// probes only make sense for those — never for arbitrary "all"-scan listeners
+// (databases, system daemons, …).
+const pageTitleProbeEligible = new WeakSet<ServerLocalServerProcess>();
 
 function execFileText(command: string, args: readonly string[]): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -422,6 +437,36 @@ export function detectDevServerKindFromText(input: DevServerCandidateInput): str
   return null;
 }
 
+export function isLikelyDevServerProcess(input: DevServerCandidateInput): boolean {
+  return !isIgnoredLocalServerProcess(input) && detectDevServerKindFromText(input) !== null;
+}
+
+// Exclusions for the full ("all") scan: no dev-kind requirement and no
+// database/port-range filtering, but app internals (Chromium children, desktop
+// helpers, the Synara server itself) are still never reported.
+export function isExcludedFromFullScan(input: DevServerCandidateInput): boolean {
+  const text = normalizeProcessText(input.command, input.args);
+  const commandName = normalizeCommandName(input.command, input.args);
+  if (
+    CHROMIUM_CHILD_ARGS_PATTERN.test(input.args) ||
+    APP_HELPER_COMMAND_PATTERN.test(input.command)
+  ) {
+    return true;
+  }
+  if (EXCLUDED_PROCESS_COMMANDS.has(commandName)) {
+    return true;
+  }
+  return EXCLUDED_PROCESS_PATTERNS.some((pattern) => text.includes(pattern));
+}
+
+// Human label for a non-dev listener: argv[0] basename with original casing
+// ("node", "opencode.exe"). lsof's `c` field can be truncated, so prefer the
+// full command line when available.
+function friendlyProcessName(command: string, args: string): string {
+  const firstToken = tokenizeCommandLine(args)[0] ?? command;
+  const base = firstToken.replaceAll("\\", "/").split("/").pop()?.trim() ?? "";
+  return base.length > 0 ? base : command;
+}
 function addressUrl(address: Omit<ServerLocalServerAddress, "url">): string | null {
   if (address.port <= 0) {
     return null;
@@ -704,6 +749,9 @@ function pageTitleCandidateUrls(server: ServerLocalServerProcess): string[] {
 }
 
 function allowsPageTitleProbe(server: ServerLocalServerProcess): boolean {
+  if (!pageTitleProbeEligible.has(server)) {
+    return false;
+  }
   const detectionArgs = pageTitleProbeArgs.get(server) ?? server.args;
   if (server.displayName === "Expo" || isExpoDevServerCommand(server.command, detectionArgs)) {
     return tokenizeCommandLine(detectionArgs).includes("--web");
@@ -796,6 +844,7 @@ function toServerProcess(
   listeners: readonly ParsedLsofListener[],
   processInfoByPid: ReadonlyMap<number, LocalServerProcessInfo>,
   cwdByPid: ReadonlyMap<number, string>,
+  mode: LocalServerScanMode = "dev",
 ): ServerLocalServerProcess | null {
   if (pid === process.pid) {
     return null;
@@ -810,10 +859,11 @@ function toServerProcess(
   const args = processInfo?.commandLine ?? command;
   const detectionArgs = processLineageCommandLines(pid, processInfoByPid) ?? args;
   const candidate = { command, args: detectionArgs, ports };
-  if (isIgnoredLocalServerProcess(candidate)) {
+  if (mode === "all" ? isExcludedFromFullScan(candidate) : isIgnoredLocalServerProcess(candidate)) {
     return null;
   }
-  const displayName = detectDevServerKindFromText(candidate);
+  const devKind = detectDevServerKindFromText(candidate);
+  const displayName = devKind ?? (mode === "all" ? friendlyProcessName(command, args) : null);
   if (!displayName) {
     return null;
   }
@@ -836,6 +886,9 @@ function toServerProcess(
     ...(isStoppable ? {} : { stopDisabledReason: "Synara cannot signal this process." }),
   };
   pageTitleProbeArgs.set(server, detectionArgs);
+  if (devKind) {
+    pageTitleProbeEligible.add(server);
+  }
   return server;
 }
 
@@ -947,11 +1000,12 @@ export function buildLocalServerProcesses(
   listeners: readonly ParsedLsofListener[],
   processInfoByPid: ReadonlyMap<number, LocalServerProcessInfo> = new Map(),
   cwdByPid: ReadonlyMap<number, string> = new Map(),
+  mode: LocalServerScanMode = "dev",
 ): ServerLocalServerProcess[] {
   const grouped = groupListenersByPid(listeners);
   const processes: ServerLocalServerProcess[] = [];
   for (const [pid, group] of grouped) {
-    const processRow = toServerProcess(pid, group, processInfoByPid, cwdByPid);
+    const processRow = toServerProcess(pid, group, processInfoByPid, cwdByPid, mode);
     if (processRow) {
       processes.push(processRow);
     }
@@ -961,18 +1015,55 @@ export function buildLocalServerProcesses(
   );
 }
 
-export async function listLocalServers(): Promise<ServerListLocalServersResult> {
-  const listeners = await readLsofListeners();
+// Ports Synara itself listens on, from the environment the dev runner (or
+// desktop launcher) starts the server with. Lets the Ports panel exclude our
+// own server/web listeners; absent in environments that don't set them.
+export function resolveOwnListenerPorts(env: NodeJS.ProcessEnv = process.env): number[] {
+  const ports: number[] = [];
+  for (const value of [env.SYNARA_PORT, env.PORT]) {
+    const port = Number(value);
+    if (Number.isInteger(port) && port > 0 && port <= 65_535) {
+      ports.push(port);
+    }
+  }
+  return [...new Set(ports)];
+}
+
+export function excludePortsFromListeners(
+  listeners: readonly ParsedLsofListener[],
+  excludePorts: readonly number[] | undefined,
+): ParsedLsofListener[] {
+  if (!excludePorts || excludePorts.length === 0) {
+    return [...listeners];
+  }
+  const excluded = new Set(excludePorts);
+  return listeners.filter((listener) => !excluded.has(listener.port));
+}
+
+// Each scan shells out to lsof/ps (~50–200ms); callers poll at 10s intervals,
+// so no cache — every call sees fresh listeners.
+async function scanLocalServers(
+  includeAll: boolean,
+  excludePorts: readonly number[] | undefined,
+): Promise<ServerListLocalServersResult> {
+  const mode: LocalServerScanMode = includeAll ? "all" : "dev";
+  const listeners = excludePortsFromListeners(await readLsofListeners(), excludePorts);
   const pids = [...new Set(listeners.map((listener) => listener.pid))];
   const processInfoByPid = await readProcessInfoWithAncestors(pids);
   // Resolve cwd across the full lineage so a generic port-holding child can fall
   // back to its dev-tool parent's directory (cwd is inherited across fork/exec).
   const cwdByPid = await readProcessCwdBatch([...new Set([...pids, ...processInfoByPid.keys()])]);
-  const servers = buildLocalServerProcesses(listeners, processInfoByPid, cwdByPid);
+  const servers = buildLocalServerProcesses(listeners, processInfoByPid, cwdByPid, mode);
   return {
     generatedAt: new Date().toISOString(),
     servers: await enrichLocalServerProcessesWithPageTitles(servers),
   };
+}
+
+export async function listLocalServers(
+  options: ListLocalServersOptions = {},
+): Promise<ServerListLocalServersResult> {
+  return scanLocalServers(options.includeAll ?? false, options.excludePorts ?? []);
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -996,7 +1087,7 @@ export async function stopLocalServer(
   const target =
     prevalidatedTarget !== undefined
       ? prevalidatedTarget
-      : (await listLocalServers()).servers.find(
+      : (await listLocalServers({ includeAll: true })).servers.find(
           (server) => server.pid === input.pid && server.ports.includes(input.port),
         );
 

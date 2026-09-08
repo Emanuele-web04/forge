@@ -11,7 +11,7 @@ import { createThreadSelector } from "../storeSelectors";
 import { useStore } from "../store";
 import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
 import { resolveThreadHandoffBadgeLabel } from "../lib/threadHandoff";
-import { SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME } from "../sidebarRowStyles";
+import { SIDEBAR_ROW_GAP_CLASS_NAME, SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME } from "../sidebarRowStyles";
 import type { SidebarThreadSummary } from "../types";
 import { TerminalIcon } from "../lib/icons";
 import { cn } from "../lib/utils";
@@ -143,7 +143,8 @@ function renderSubagentLabel(input: {
   );
 }
 
-function SidebarSubagentLabel({
+/** Nickname (accent colour) + role/title label for native subagent rows. */
+export function SidebarSubagentLabel({
   thread,
   roleClassName,
 }: {
@@ -170,7 +171,6 @@ export function SidebarThreadRowContent({
   terminalCount,
   isActive,
   variant,
-  subagentIndentPx: subagentIndentPxProp,
   pendingStatusColorClass,
   suffix,
 }: {
@@ -180,43 +180,23 @@ export function SidebarThreadRowContent({
   terminalCount: number;
   isActive: boolean;
   variant: "pinned" | "standard";
-  subagentIndentPx?: number;
   pendingStatusColorClass?: string | null | undefined;
   suffix?: ReactNode;
 }) {
-  const subagentIndentPx = subagentIndentPxProp ?? 0;
-  const isSubagentThread = Boolean(thread.parentThreadId);
-  const subagentPresentation =
-    variant === "standard" && isSubagentThread
-      ? resolveSubagentPresentationForThread({
-          thread: {
-            id: thread.id,
-            parentThreadId: thread.parentThreadId,
-            subagentAgentId: thread.subagentAgentId,
-            subagentNickname: thread.subagentNickname,
-            subagentRole: thread.subagentRole,
-            title: thread.title,
-          },
-        })
-      : null;
+  // Native-subagent identity (nickname/role presentation) is independent from
+  // hierarchy layout: a source/batch child displays its thread title, and every
+  // row — root or descendant — leads with its own provider icon.
+  const isNativeSubagent = Boolean(thread.parentThreadId);
   const showThreadProviderAvatar = !isGenericChatThreadTitle(thread.title);
 
   return (
-    <>
-      {variant === "standard" && isSubagentThread ? (
-        <span
-          aria-hidden="true"
-          className="relative inline-flex h-3.5 w-[18px] shrink-0 items-center"
-          style={{ marginLeft: `${subagentIndentPx}px` }}
-        >
-          <span className="absolute left-1.5 top-0 bottom-0 w-px rounded-full bg-border/35" />
-          <span className="absolute left-1.5 top-1/2 h-px w-2.5 -translate-y-1/2 bg-border/35" />
-          <span
-            className="absolute left-1.5 top-1/2 size-[5px] -translate-x-1/2 -translate-y-1/2 rounded-full"
-            style={{ backgroundColor: subagentPresentation?.accentColor }}
-          />
-        </span>
-      ) : terminalEntryPoint ? (
+    <div
+      className={cn(
+        "flex min-w-0 flex-1 items-center",
+        variant === "pinned" ? "gap-1.5" : SIDEBAR_ROW_GAP_CLASS_NAME,
+      )}
+    >
+      {terminalEntryPoint ? (
         <SidebarGlyph icon={TerminalIcon} variant="chrome" />
       ) : showThreadProviderAvatar ? (
         <ProviderAvatarWithTerminal
@@ -228,20 +208,20 @@ export function SidebarThreadRowContent({
       <div
         className={cn(
           "flex min-w-0 flex-1 items-center text-left",
-          variant === "standard" && isSubagentThread ? "gap-[5px]" : "gap-1.5",
+          variant === "standard" && isNativeSubagent ? "gap-[5px]" : "gap-1.5",
         )}
       >
         <span
           className={cn(
             "min-w-0 flex-1 truncate-fade text-[length:var(--app-font-size-ui,12px)]",
             isActive ? "text-foreground" : SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
-            variant === "standard" && isSubagentThread
+            variant === "standard" && isNativeSubagent
               ? "leading-[18px] text-foreground/80"
               : "leading-5",
           )}
           data-testid={variant === "pinned" ? `thread-title-${thread.id}` : undefined}
         >
-          {isSubagentThread ? (
+          {isNativeSubagent ? (
             <SidebarSubagentLabel
               thread={thread}
               roleClassName={variant === "standard" ? "text-muted-foreground/42" : undefined}
@@ -250,7 +230,7 @@ export function SidebarThreadRowContent({
             thread.title
           )}
         </span>
-        {!isSubagentThread && pendingStatusColorClass ? (
+        {!isNativeSubagent && pendingStatusColorClass ? (
           <span
             aria-label="Pending approval"
             className={cn("shrink-0 text-[10px] font-medium", pendingStatusColorClass)}
@@ -260,6 +240,6 @@ export function SidebarThreadRowContent({
         ) : null}
       </div>
       {suffix}
-    </>
+    </div>
   );
 }

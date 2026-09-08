@@ -5352,7 +5352,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           canUseTool,
           env: claudeSdkEnv,
           spawnClaudeCodeProcess: bindClaudeProcessOwner(processOwner),
-          ...(input.cwd ? { additionalDirectories: [input.cwd] } : {}),
+          ...(() => {
+            const directories = [
+              input.cwd,
+              ...(input.additionalRoots ?? []).map((root) => root.path),
+            ].filter((entry): entry is string => typeof entry === "string");
+            const uniqueDirectories = [...new Set(directories)];
+            return uniqueDirectories.length > 0 ? { additionalDirectories: uniqueDirectories } : {};
+          })(),
           ...(agentGatewayCredentials
             ? {
                 mcpServers: buildClaudeMcpServers(gatewaySessionLease!.connection),

@@ -404,7 +404,27 @@ describe("threadBootstrap", () => {
     });
   });
 
-  it("restores the last-used model and options for a fresh bootstrap ahead of project and global defaults", () => {
+  it("preserves the chosen draft model when promoting a fresh terminal thread", () => {
+    expect(
+      resolveTerminalThreadCreationState({
+        activeDraftThread: null,
+        activeThread: null,
+        defaultProvider: "devin",
+        draftComposerState: makeComposerDraftState({
+          modelSelectionByProvider: {
+            pi: modelSelection("pi", "pi-auto"),
+          },
+          activeProvider: "pi",
+        }),
+        draftThread: makeDraftThread(),
+        options: undefined,
+        projectDefaultModelSelection: null,
+        projectId: PROJECT_ID,
+      }).modelSelection,
+    ).toEqual(modelSelection("pi", "pi-auto"));
+  });
+
+  it("restores the last-used model and options ahead of project and global defaults", () => {
     const lastUsed = modelSelection("claudeAgent", "claude-opus-4-6", { effort: "max" });
     expect(
       resolveTerminalThreadCreationState({

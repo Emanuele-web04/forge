@@ -31,7 +31,9 @@ import {
   type OrchestrationThreadStreamItem,
   type ProjectDevServerEvent,
   type ServerProviderStatusesUpdatedPayload,
+  type ServerKeepAwakeUpdatedPayload,
   type ServerLifecycleStreamEvent,
+  type ServerListLocalServersInput,
   type ServerSettingsUpdatedPayload,
   type ServerVoiceTranscriptionResult,
   type TerminalEvent,
@@ -132,6 +134,7 @@ const serverProviderStatusesUpdatedListeners =
   createListenerRegistry<ServerProviderStatusesUpdatedPayload>();
 const serverMaintenanceUpdatedListeners = createListenerRegistry<ServerLifecycleStreamEvent>();
 const serverSettingsUpdatedListeners = createListenerRegistry<ServerSettingsUpdatedPayload>();
+const serverKeepAwakeUpdatedListeners = createListenerRegistry<ServerKeepAwakeUpdatedPayload>();
 const gitActionProgressListeners = createListenerRegistry<GitActionProgressEvent>();
 const gitWorktreeSetupProgressListeners = createListenerRegistry<GitWorktreeSetupProgressEvent>();
 const projectProvisionProgressListeners =
@@ -170,6 +173,7 @@ function clearWsNativeApiListeners(): void {
   serverProviderStatusesUpdatedListeners.clear();
   serverMaintenanceUpdatedListeners.clear();
   serverSettingsUpdatedListeners.clear();
+  serverKeepAwakeUpdatedListeners.clear();
   gitActionProgressListeners.clear();
   gitWorktreeSetupProgressListeners.clear();
   projectProvisionProgressListeners.clear();
@@ -410,6 +414,19 @@ export function onServerSettingsUpdated(
   });
 }
 
+/** Subscribe to keep-awake (caffeinate) state; replays the latest push. */
+export function onServerKeepAwakeUpdated(
+  listener: (payload: ServerKeepAwakeUpdatedPayload) => void,
+): () => void {
+  const latestKeepAwake =
+    instance?.transport.getLatestPush(WS_CHANNELS.serverKeepAwakeUpdated)?.data ?? null;
+  return subscribeWithReplay({
+    registry: serverKeepAwakeUpdatedListeners,
+    listener,
+    latest: latestKeepAwake,
+  });
+}
+
 /**
  * Subscribe to unrecoverable per-thread stream failures (retries and reconnect
  * exhausted). Lets thread-detail consumers surface a failed hydration state
@@ -451,6 +468,9 @@ export function createWsNativeApi(): NativeApi {
   });
   transport.subscribe(WS_CHANNELS.serverSettingsUpdated, (message) => {
     serverSettingsUpdatedListeners.emit(message.data);
+  });
+  transport.subscribe(WS_CHANNELS.serverKeepAwakeUpdated, (message) => {
+    serverKeepAwakeUpdatedListeners.emit(message.data);
   });
   transport.subscribe(WS_CHANNELS.gitActionProgress, (message) => {
     gitActionProgressListeners.emit(message.data);
@@ -697,18 +717,34 @@ export function createWsNativeApi(): NativeApi {
         transport.request(WS_METHODS.serverRevokeExternalMcpIntegration, input),
       refreshExternalMcpPairing: (input: ExternalMcpRefreshPairingInput) =>
         transport.request(WS_METHODS.serverRefreshExternalMcpPairing, input),
+      listOutboundMcpConnections: () =>
+        transport.request(WS_METHODS.serverListOutboundMcpConnections),
+      beginOutboundMcpAuthorization: (input) =>
+        transport.request(WS_METHODS.serverBeginOutboundMcpAuthorization, input),
+      disconnectOutboundMcpConnection: (input) =>
+        transport.request(WS_METHODS.serverDisconnectOutboundMcpConnection, input),
       refreshProviders: () => transport.request(WS_METHODS.serverRefreshProviders),
       // Provider updates run up to 2 minutes server-side; callers wrap this in
       // withProviderUpdateTimeout, which owns the client-side watchdog.
       updateProvider: (input) =>
         transport.request(WS_METHODS.serverUpdateProvider, input, { timeoutMs: null }),
       listWorktrees: () => transport.request(WS_METHODS.serverListWorktrees),
-      listLocalServers: () => transport.request(WS_METHODS.serverListLocalServers),
+      listLocalServers: (input?: ServerListLocalServersInput) =>
+        transport.request(WS_METHODS.serverListLocalServers, input ?? {}),
       stopLocalServer: (input) => transport.request(WS_METHODS.serverStopLocalServer, input),
       getProviderUsageSnapshot: (input) =>
         transport.request(WS_METHODS.serverGetProviderUsageSnapshot, input),
       listProviderUsage: (input) => transport.request(WS_METHODS.serverListProviderUsage, input),
       getDiagnostics: () => transport.request(WS_METHODS.serverGetDiagnostics),
+      getResourceSnapshot: () => transport.request(WS_METHODS.resourceGetSnapshot),
+      killResourceSession: (input) => transport.request(WS_METHODS.resourceKillSession, input),
+      killAllResourceSessions: () => transport.request(WS_METHODS.resourceKillAllSessions),
+      cleanResourceWorkspaces: (input) =>
+        transport.request(WS_METHODS.resourceCleanWorkspaces, input, { timeoutMs: null }),
+      scanResourceDisk: (input) =>
+        transport.request(WS_METHODS.resourceScanDisk, input, { timeoutMs: null }),
+      cancelResourceDiskScan: () => transport.request(WS_METHODS.resourceCancelDiskScan),
+      restartResourceDaemon: () => transport.request(WS_METHODS.resourceRestartDaemon),
       generateThreadRecap: (input) =>
         transport.request(WS_METHODS.serverGenerateThreadRecap, input, {
           timeoutMs: null,
