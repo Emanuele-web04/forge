@@ -130,4 +130,13 @@ describe("Synara harness policy", () => {
     assert.notInclude(policy, "device_list");
     assert.notInclude(policy, "device_describe_ui");
   });
+
+  it("withholds the memory contract from sessions with no gateway control", () => {
+    const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: false });
+
+    // The synara memory tools do not exist there; advertising them would send
+    // the agent hunting for tools it can never call.
+    assert.notInclude(policy, "synara_recall_memories");
+    assert.notInclude(policy, "synara_remember");
+  });
 });

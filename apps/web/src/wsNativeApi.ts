@@ -820,6 +820,11 @@ export function createWsNativeApi(): NativeApi {
       resolveProposal: (input) => transport.request(WS_METHODS.automationResolveProposal, input),
       onEvent: automationEventListeners.subscribe,
     },
+    mind: {
+      list: (input) => transport.request(WS_METHODS.mindList, input),
+      forget: (input) => transport.request(WS_METHODS.mindForget, input),
+      setPinned: (input) => transport.request(WS_METHODS.mindSetPinned, input),
+    },
     device: {
       list: (input) => transport.request(DEVICE_WS_METHODS.list, input),
       // Booting a cold simulator routinely outruns the default RPC deadline.

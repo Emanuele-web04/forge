@@ -24,6 +24,7 @@ describe("sidebarNavOrdering", () => {
       "newThread",
       "kanban",
       "pullRequests",
+      "mind",
     ]);
   });
 
@@ -34,6 +35,7 @@ describe("sidebarNavOrdering", () => {
       "newThread",
       "pullRequests",
       "automations",
+      "mind",
     ]);
     expect(normalizeHiddenSidebarNavItems(["bogus", "kanban", "kanban"])).toEqual(["kanban"]);
   });

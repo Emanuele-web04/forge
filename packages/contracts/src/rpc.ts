@@ -236,6 +236,13 @@ import {
   StatsGetProfileTokenStatsInput,
   StatsGetProfileTokenStatsResult,
 } from "./stats";
+import {
+  MindForgetInput,
+  MindListInput,
+  MindListResult,
+  MindMemory,
+  MindSetPinnedInput,
+} from "./mind";
 import { WS_METHODS } from "./ws";
 import {
   WS_BOOTSTRAP_METHOD,
@@ -1245,6 +1252,24 @@ export const WsSubscribeAutomationEventsRpc = Rpc.make(WS_METHODS.subscribeAutom
   stream: true,
 });
 
+export const WsMindListRpc = Rpc.make(WS_METHODS.mindList, {
+  payload: MindListInput,
+  success: MindListResult,
+  error: WsRpcError,
+});
+
+export const WsMindForgetRpc = Rpc.make(WS_METHODS.mindForget, {
+  payload: MindForgetInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsMindSetPinnedRpc = Rpc.make(WS_METHODS.mindSetPinned, {
+  payload: MindSetPinnedInput,
+  success: MindMemory,
+  error: WsRpcError,
+});
+
 export const WsBootstrapRpcGroup = RpcGroup.make(WsBootstrapNegotiateRpc);
 
 export const WsFeatureRpcGroup = RpcGroup.make(
@@ -1372,4 +1397,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsAutomationArchiveRunRpc,
   WsAutomationResolveProposalRpc,
   WsSubscribeAutomationEventsRpc,
+  WsMindListRpc,
+  WsMindForgetRpc,
+  WsMindSetPinnedRpc,
 );
