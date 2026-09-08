@@ -17,7 +17,10 @@ lifecycle (idle timeout, Meta+Shift+Esc release/resume chord), the ghost cursor
 (arrow + name badge, scale-aware, hold-then-fade), direct per-client input
 injection (raw wire events on the target client's own
 `wl_pointer`/`wl_keyboard` resources, seat-manager serials, xkb modifier
-mirror — the compositor's seat state is never touched), and the capture
+mirror — the compositor's seat state is never touched; the seat's pointer focus
+is only observed, so an enter the human's seat sends to a sibling surface of the
+agent's target invalidates the agent's own enter and the next motion re-enters),
+and the capture
 pipeline (offscreen GPU render of a window snapshot or each monitor's full
 scene, read back and composited in cairo with the ghost cursor overlaid, so
 captures show the agent's pointer exactly where the human sees it; the human's

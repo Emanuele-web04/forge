@@ -272,6 +272,7 @@ struct SListeners {
     CHyprSignalListener mouseButton;
     CHyprSignalListener mouseAxis;
     CHyprSignalListener keyboardKey;
+    CHyprSignalListener pointerFocusChange;
 };
 
 enum class StopReason : uint8_t {
@@ -309,6 +310,11 @@ struct SState {
     WP<CWLSurfaceResource> directPointerSurface;
     WP<CWLSurfaceResource> directKeyboardSurface;
     std::set<uint32_t>     pressedButtons;
+    // The seat's pointer focus as of its last change signal. The signal carries
+    // no payload, so the surface the seat just left is remembered here: a leave
+    // from a sibling surface of the agent's target invalidates the target's
+    // enter just as an enter into one does (see onSeatPointerFocusChange).
+    WP<CWLSurfaceResource> seatPointerFocus;
     // Ordered, because wl_keyboard.enter carries the held keys as an array and
     // the press order is the honest one to replay.
     std::vector<uint32_t> pressedKeys;
@@ -890,6 +896,45 @@ bool updatePointerFocus() {
     g.pointerWindow = window;
     directPointerMotion(window);
     return !g.directPointerSurface.expired();
+}
+
+// The shared-object focus invalidation, the pointer twin of the keyboard's
+// enter re-stamp below. A client's wl_pointer is one object, shared between the
+// human's seat and the agent's direct injection, and the client keeps exactly
+// one "entered" surface on it: whichever enter it heard last, from either of
+// us. wl_pointer.motion and .button name no surface, so once the seat has
+// entered another surface of the same client — the human moving into the
+// second window of the same browser — every agent event still aimed at its
+// target is routed by the client to the human's window instead, and once the
+// seat leaves that window, to nothing. The agent's own bookkeeping cannot see
+// any of that; only this signal can. So whenever the seat's focus moves into or
+// out of a surface of the client the agent is entered on, the agent forgets its
+// enter (without a leave: the enter the client now believes in is the seat's,
+// not ours to revoke — the same rule directPointerLeave already follows for a
+// surface the human sits on), and the next motion re-enters the target with a
+// fresh serial before anything else is delivered. Buttons the agent is holding
+// are released first: they were pressed on a surface the agent can no longer
+// address, and a press nobody releases stays down in that client forever.
+// Focus changes between other clients are left alone, so hover state on the
+// target survives ordinary agent motion.
+void onSeatPointerFocusChange() {
+    const auto previous = g.seatPointerFocus.lock();
+    const auto current  = g_pSeatManager ? g_pSeatManager->m_state.pointerFocus.lock() : nullptr;
+    g.seatPointerFocus  = current;
+
+    const auto agentSurface = g.directPointerSurface.lock();
+    if (!agentSurface)
+        return;
+    wl_client* const agentClient = agentSurface->client();
+    const bool       touchesAgentClient = (previous && previous->client() == agentClient) || (current && current->client() == agentClient);
+    if (!touchesAgentClient)
+        return;
+
+    releasePressedButtons();
+    g.directPointerSurface.reset();
+    // Owed sub-notch clicks belonged to the enter just invalidated.
+    g.axisRemainderH = 0;
+    g.axisRemainderV = 0;
 }
 
 void ensureXkbState() {
@@ -1954,6 +1999,10 @@ void setupListeners() {
             info.cancelled = true;
         }
     });
+    if (g_pSeatManager) {
+        g.seatPointerFocus            = g_pSeatManager->m_state.pointerFocus;
+        g.listeners.pointerFocusChange = g_pSeatManager->m_events.pointerFocusChange.listen([] { onSeatPointerFocusChange(); });
+    }
 }
 
 void teardown() {
@@ -1963,6 +2012,7 @@ void teardown() {
     g.listeners.mouseButton.reset();
     g.listeners.mouseAxis.reset();
     g.listeners.keyboardKey.reset();
+    g.listeners.pointerFocusChange.reset();
     if (g.idleTimerSource) {
         wl_event_source_remove(g.idleTimerSource);
         g.idleTimerSource = nullptr;
