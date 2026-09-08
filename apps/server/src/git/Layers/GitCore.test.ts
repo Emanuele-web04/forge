@@ -153,22 +153,6 @@ function commitWithDate(
 
 it.layer(TestLayer)("git integration", (it) => {
   describe("shell process execution", () => {
-    it.effect("truncates captured output without stopping progress consumption", () =>
-      Effect.gen(function* () {
-        const lines: string[] = [];
-        const output = yield* collectGitOutput(
-          { operation: "test output", cwd: process.cwd(), args: ["status"] },
-          Stream.fromIterable([new TextEncoder().encode("first\nsecond\nthird\n")]),
-          8,
-          (line) => Effect.sync(() => lines.push(line)),
-          "truncate",
-        );
-
-        expect(output).toBe("first\nse");
-        expect(lines).toEqual(["first", "second", "third"]);
-      }),
-    );
-
     it.effect("caps captured output when maxOutputBytes is exceeded", () =>
       Effect.gen(function* () {
         const result = yield* runTruncatedNodeCommand({

@@ -4,10 +4,10 @@ import { useQuery } from "@tanstack/react-query";
 import { useCallback, useMemo, useRef, type KeyboardEvent, type RefObject } from "react";
 
 import type { ResolvedKeybindingsConfig } from "@synara/contracts";
+import { isBrowserSaveChord } from "~/hooks/useWorkspaceFileEditorShortcuts";
 import { buildDiffPanelUnsafeCSS, resolveDiffThemeName } from "~/lib/diffRendering";
 import { isEditorFileSaveShortcut } from "~/keybindings";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
-import { cn } from "~/lib/utils";
 import { CodeEditBoundary } from "./CodeEditBoundary";
 import {
   createCodeEditHistoryControls,
@@ -16,15 +16,12 @@ import {
   type CodeEditHistoryState,
   type PierreEditor,
 } from "./pierreEdit";
-import { PanelStateMessage } from "../chat/PanelStateMessage";
 
 export interface CodeEditorPaneProps {
   value: string;
   valueVersion: number;
   fileName: string;
   resolvedTheme: "light" | "dark";
-  readOnly?: boolean;
-  className?: string;
   onChange: (value: string) => void;
   onSave: () => void;
   historyControlsRef?: RefObject<CodeEditHistoryControls | null> | undefined;
@@ -66,15 +63,6 @@ export function useCodeEditorSessionOptions(input: {
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 
-function isBrowserSaveChord(event: KeyboardEvent<HTMLDivElement>): boolean {
-  return (
-    event.key.toLowerCase() === "s" &&
-    (event.metaKey || event.ctrlKey) &&
-    !event.altKey &&
-    !event.shiftKey
-  );
-}
-
 // Capture-phase save handling for the pierre editor: the editor hosts its own
 // key handling, so saves are dispatched from the container. The chord is
 // matched against the configured `editor.file.save` binding (not hard-coded
@@ -100,12 +88,6 @@ export function useCodeEditorSaveKeyDownHandler(onSave: () => void) {
     [keybindings],
   );
 }
-
-export const CODE_EDITOR_LOADING_FALLBACK = (
-  <PanelStateMessage density="compact" fill="flex">
-    <p>Loading editor...</p>
-  </PanelStateMessage>
-);
 
 export function CodeEditorPane(props: CodeEditorPaneProps) {
   const valueRef = useRef(props.value);
@@ -137,17 +119,9 @@ export function CodeEditorPane(props: CodeEditorPaneProps) {
   const saveKeyDownHandler = useCodeEditorSaveKeyDownHandler(props.onSave);
 
   return (
-    <div
-      className={cn("min-h-0 min-w-0 flex-1 overflow-auto", props.className)}
-      onKeyDownCapture={saveKeyDownHandler}
-    >
-      <CodeEditBoundary fallback={CODE_EDITOR_LOADING_FALLBACK}>
-        <File
-          file={file}
-          options={options}
-          edit={!(props.readOnly ?? false)}
-          editorOptions={editorOptions}
-        />
+    <div className="min-h-0 min-w-0 flex-1 overflow-auto" onKeyDownCapture={saveKeyDownHandler}>
+      <CodeEditBoundary>
+        <File file={file} options={options} edit editorOptions={editorOptions} />
       </CodeEditBoundary>
     </div>
   );

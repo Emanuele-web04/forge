@@ -273,7 +273,6 @@ export interface DiffChangeMarkerSource {
 export interface DiffChangeMarker {
   path: string;
   kind: DiffChangeMarkerKind;
-  topRatio: number;
   top: number;
 }
 
@@ -324,7 +323,6 @@ export function resolveDiffChangeMarkers(input: {
     return {
       path: file.path,
       kind: resolveDiffChangeMarkerKind(file.changeType),
-      topRatio,
       top: Math.min(maxTop, topRatio * input.stripHeight),
     };
   });

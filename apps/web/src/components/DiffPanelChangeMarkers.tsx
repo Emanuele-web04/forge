@@ -2,11 +2,7 @@ import type { FileDiffMetadata } from "@pierre/diffs/react";
 import { useEffect, useState, type RefObject } from "react";
 
 import { resolveFileDiffPath } from "~/lib/diffRendering";
-import {
-  readDiffFileAnchors,
-  readDiffFileOffsetTops,
-  resolveDiffRenderSurface,
-} from "~/lib/diffScrollSurface";
+import { readDiffFileAnchors, resolveDiffRenderSurface } from "~/lib/diffScrollSurface";
 import {
   DIFF_CHANGE_MARKER_HEIGHT_PX,
   resolveDiffChangeMarkers,
@@ -49,7 +45,7 @@ export function DiffPanelChangeMarkers(props: {
     const measure = () => {
       frame = 0;
       const anchors = readDiffFileAnchors(surface);
-      const offsetTops = readDiffFileOffsetTops(surface, anchors);
+      const surfaceTop = surface.getBoundingClientRect().top - surface.scrollTop;
       const files = anchors.flatMap((anchor) => {
         const changeType = changeTypeByPath.get(anchor.path);
         if (!changeType) {
@@ -58,7 +54,7 @@ export function DiffPanelChangeMarkers(props: {
         return [
           {
             path: anchor.path,
-            offsetTop: offsetTops.get(anchor.path) ?? 0,
+            offsetTop: anchor.element.getBoundingClientRect().top - surfaceTop,
             changeType,
           },
         ];

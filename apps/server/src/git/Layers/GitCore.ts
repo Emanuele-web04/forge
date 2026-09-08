@@ -2210,21 +2210,11 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
     const readRefPatch: GitCoreShape["readRefPatch"] = (cwd, ref) =>
       Effect.gen(function* () {
-        const verified = yield* executeGit(
-          "GitCore.readRefPatch.verifyRef",
+        const resolvedRef = yield* resolveCommitObjectId(
           cwd,
-          ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`],
-          { allowNonZeroExit: true },
+          ref,
+          "GitCore.readRefPatch.verifyRef",
         );
-        const resolvedRef = verified.stdout.trim();
-        if (verified.code !== 0 || resolvedRef.length === 0) {
-          return yield* createGitCommandError(
-            "GitCore.readRefPatch.verifyRef",
-            cwd,
-            ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`],
-            `Cannot resolve "${ref}" to a commit in this repository.`,
-          );
-        }
 
         return yield* withRefIndex(
           cwd,
@@ -2279,21 +2269,11 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           }
           case "ref": {
             const compareRef = (ref ?? "").trim();
-            const verified = yield* executeGit(
-              "GitCore.readDiffStats.verifyRef",
+            const resolvedRef = yield* resolveCommitObjectId(
               cwd,
-              ["rev-parse", "--verify", "--quiet", `${compareRef}^{commit}`],
-              { allowNonZeroExit: true },
+              compareRef,
+              "GitCore.readDiffStats.verifyRef",
             );
-            const resolvedRef = verified.stdout.trim();
-            if (verified.code !== 0 || resolvedRef.length === 0) {
-              return yield* createGitCommandError(
-                "GitCore.readDiffStats.verifyRef",
-                cwd,
-                ["rev-parse", "--verify", "--quiet", `${compareRef}^{commit}`],
-                `Cannot resolve "${compareRef}" to a commit in this repository.`,
-              );
-            }
             return yield* withRefIndex(
               cwd,
               resolvedRef,

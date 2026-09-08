@@ -27,16 +27,6 @@ export function readDiffFileAnchors(root: HTMLElement | null): DiffFileAnchor[] 
   return anchors;
 }
 
-export function readDiffFileOffsetTops(
-  surface: HTMLElement,
-  anchors: ReadonlyArray<DiffFileAnchor>,
-): Map<string, number> {
-  const surfaceTop = surface.getBoundingClientRect().top - surface.scrollTop;
-  return new Map(
-    anchors.map((anchor) => [anchor.path, anchor.element.getBoundingClientRect().top - surfaceTop]),
-  );
-}
-
 /**
  * Index of the last position whose value is at or below `threshold`, or -1 when
  * none is. Values must be non-decreasing by index; each is read at most

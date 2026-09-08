@@ -4,13 +4,8 @@ import { normalizeLineEndings } from "@synara/shared/text";
 import { useMemo, useRef, useState, type RefObject } from "react";
 
 import { buildDiffPanelUnsafeCSS, resolveDiffThemeName } from "~/lib/diffRendering";
-import { cn } from "~/lib/utils";
 import { CodeEditBoundary } from "./CodeEditBoundary";
-import {
-  CODE_EDITOR_LOADING_FALLBACK,
-  useCodeEditorSaveKeyDownHandler,
-  useCodeEditorSessionOptions,
-} from "./CodeEditorPane";
+import { useCodeEditorSaveKeyDownHandler, useCodeEditorSessionOptions } from "./CodeEditorPane";
 import type { CodeEditHistoryControls, CodeEditHistoryState } from "./pierreEdit";
 
 export interface CodeDiffEditorPaneProps {
@@ -22,7 +17,6 @@ export interface CodeDiffEditorPaneProps {
   resolvedTheme: "light" | "dark";
   renderSideBySide: boolean;
   readOnly?: boolean;
-  className?: string;
   onChange: (value: string) => void;
   onSave: () => void;
   historyControlsRef?: RefObject<CodeEditHistoryControls | null> | undefined;
@@ -79,11 +73,8 @@ export function CodeDiffEditorPane(props: CodeDiffEditorPaneProps) {
   const saveKeyDownHandler = useCodeEditorSaveKeyDownHandler(props.onSave);
 
   return (
-    <div
-      className={cn("min-h-0 min-w-0 flex-1 overflow-auto", props.className)}
-      onKeyDownCapture={saveKeyDownHandler}
-    >
-      <CodeEditBoundary fallback={CODE_EDITOR_LOADING_FALLBACK}>
+    <div className="min-h-0 min-w-0 flex-1 overflow-auto" onKeyDownCapture={saveKeyDownHandler}>
+      <CodeEditBoundary>
         {/* diffStyle is effectively mount-time config on FileDiff, so a layout
             switch must remount the instance (same treatment as the diff panel). */}
         <FileDiff

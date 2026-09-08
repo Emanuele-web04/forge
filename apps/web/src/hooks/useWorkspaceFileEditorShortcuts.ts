@@ -7,7 +7,9 @@ import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 
-function isBrowserSaveChord(event: globalThis.KeyboardEvent): boolean {
+export function isBrowserSaveChord(
+  event: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey">,
+): boolean {
   return (
     event.key.toLowerCase() === "s" &&
     (event.metaKey || event.ctrlKey) &&

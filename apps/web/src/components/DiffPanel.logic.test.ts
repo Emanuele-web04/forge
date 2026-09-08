@@ -535,8 +535,8 @@ describe("resolveDiffChangeMarkers", () => {
     });
 
     expect(markers).toEqual([
-      { path: "a.ts", kind: "added", topRatio: 0, top: 0 },
-      { path: "b.ts", kind: "modified", topRatio: 0.5, top: 100 },
+      { path: "a.ts", kind: "added", top: 0 },
+      { path: "b.ts", kind: "modified", top: 100 },
     ]);
   });
 
@@ -548,7 +548,7 @@ describe("resolveDiffChangeMarkers", () => {
     });
 
     expect(markers).toEqual([
-      { path: "z.ts", kind: "removed", topRatio: 1, top: 200 - DIFF_CHANGE_MARKER_HEIGHT_PX },
+      { path: "z.ts", kind: "removed", top: 200 - DIFF_CHANGE_MARKER_HEIGHT_PX },
     ]);
   });
 
@@ -559,6 +559,6 @@ describe("resolveDiffChangeMarkers", () => {
       stripHeight: 0,
     });
 
-    expect(markers).toEqual([{ path: "a.ts", kind: "modified", topRatio: 0.25, top: 0 }]);
+    expect(markers).toEqual([{ path: "a.ts", kind: "modified", top: 0 }]);
   });
 });
