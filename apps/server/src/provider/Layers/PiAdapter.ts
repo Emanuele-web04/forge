@@ -1450,6 +1450,31 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       } satisfies ProviderRuntimeEvent);
     };
 
+    const offerPiRetryWarning = (
+      context: PiSessionContext,
+      input: {
+        readonly message: string;
+        readonly method: string;
+        readonly messageType?: string;
+        readonly detail?: unknown;
+      },
+    ) => {
+      offerRuntimeEvent({
+        ...makeEventBase(context),
+        type: "runtime.warning",
+        payload: {
+          message: input.message,
+          detail: input.detail ?? { method: input.method },
+        },
+        raw: {
+          source: "pi.sdk.event",
+          method: input.method,
+          ...(input.messageType ? { messageType: input.messageType } : {}),
+          payload: input.detail ?? { message: input.message },
+        },
+      } satisfies ProviderRuntimeEvent);
+    };
+
     const resolvePiExtensionUserInput = (
       context: PiSessionContext,
       requestId: ApprovalRequestId,
@@ -1763,6 +1788,17 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
 
     const disposeSessionContext = async (context: PiSessionContext) => {
       try {
+        // Tear down while the SDK sleeps between retry attempts: wake it first
+        // so runtime.dispose() below cannot hang behind the backoff timer.
+        try {
+          (
+            context.runtime.session as unknown as {
+              readonly abortRetry?: () => void;
+            }
+          ).abortRetry?.();
+        } catch {
+          // Best-effort: never block teardown on a throwing abortRetry.
+        }
         await Effect.runPromise(
           cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId),
         );
@@ -2026,16 +2062,36 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           return;
         }
         case "agent_end": {
+          // Pi auto-retry emits an intermediate agent_end with willRetry=true
+          // before auto_retry_start, then starts a brand-new agent cycle for
+          // the retry attempt. That intermediate event is NOT terminal: the
+          // SDK keeps the prompt alive through backoff and will emit a final
+          // agent_end with willRetry=false. Treating it as terminal fails the
+          // turn, surfaces a top-level error toast, pauses autonomous goals,
+          // and clears activeTurnId so the retry's turn_start arrives without
+          // identity — freezing streaming and making End task unresponsive.
+          const willRetry =
+            (event as unknown as { readonly willRetry?: boolean }).willRetry === true;
+          if (willRetry) {
+            return;
+          }
+          const turnId = context.activeTurnId;
+          // Guard against a stray agent_end after the turn already settled
+          // (e.g. prompt rejection completed the turn first). Emitting a
+          // second terminal turn.completed would re-fail the session and
+          // duplicate the thread error.
+          if (!turnId) {
+            return;
+          }
           const stats = context.runtime.session.getSessionStats();
           const usage = normalizeTokenUsage(stats, context.runtime.session.model?.contextWindow);
           context.lastKnownTokenUsage = usage;
-          const turnId = context.activeTurnId;
           const errorMessage = context.runtime.session.agent.state.errorMessage;
           const failure = errorMessage ? classifyPiTurnFailure(errorMessage) : undefined;
           const leafId = context.runtime.session.sessionManager.getLeafId();
-          const turn = turnId
-            ? context.turns.find((candidate) => candidate.id === turnId)
-            : undefined;
+          // turnId is guaranteed defined: the stray-event guard above returns
+          // early when there is no active turn.
+          const turn = context.turns.find((candidate) => candidate.id === turnId);
           if (turn) turn.leafId = leafId;
           if (context.activeAssistantItemId) {
             offerRuntimeEvent({
@@ -2080,7 +2136,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             });
           }
           const completionBase = makeEventBase(context);
-          if (turnId && context.gatewaySessionLease && context.gatewayConnection) {
+          if (context.gatewaySessionLease && context.gatewayConnection) {
             const outgoingLease = context.gatewaySessionLease;
             const drainage = outgoingLease.retireTurn(turnId);
             outgoingLease.release();
@@ -2122,6 +2178,103 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
                 : { state: "completed", stopReason: null, usage: stats },
             raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
           } satisfies ProviderRuntimeEvent);
+          return;
+        }
+        case "auto_retry_start": {
+          // Pi SDK backoff between attempts. Surface inline (like OpenCode's
+          // "retrying" notices) and keep the turn alive — never fail the turn
+          // or clear activeTurnId here. The final outcome arrives via a later
+          // agent_end with willRetry=false.
+          const retry = event as unknown as {
+            readonly attempt?: unknown;
+            readonly maxAttempts?: unknown;
+            readonly delayMs?: unknown;
+            readonly errorMessage?: unknown;
+          };
+          // Defensive: older/drifted SDK payloads must never render
+          // "attempt undefined/undefined" or "undefined" error text inline.
+          const attempt =
+            typeof retry.attempt === "number" && Number.isFinite(retry.attempt)
+              ? retry.attempt
+              : undefined;
+          const maxAttempts =
+            typeof retry.maxAttempts === "number" && Number.isFinite(retry.maxAttempts)
+              ? retry.maxAttempts
+              : undefined;
+          const delayMs =
+            typeof retry.delayMs === "number" &&
+            Number.isFinite(retry.delayMs) &&
+            retry.delayMs >= 0
+              ? retry.delayMs
+              : undefined;
+          const retryError =
+            typeof retry.errorMessage === "string" && retry.errorMessage.trim().length > 0
+              ? retry.errorMessage
+              : "provider error";
+          const attemptLabel =
+            attempt !== undefined && maxAttempts !== undefined
+              ? `attempt ${attempt}/${maxAttempts}`
+              : attempt !== undefined
+                ? `attempt ${attempt}`
+                : "retrying";
+          const delaySecs = delayMs !== undefined ? delayMs / 1000 : undefined;
+          const delayLabel =
+            delaySecs !== undefined && delaySecs > 0
+              ? `retrying in ${delaySecs.toFixed(delaySecs < 10 ? 1 : 0)}s`
+              : "retrying";
+          offerPiRetryWarning(context, {
+            message: `Pi retrying after provider error (${attemptLabel}, ${delayLabel}): ${retryError}`,
+            method: "prompt/retry",
+            messageType: event.type,
+            detail: {
+              ...(attempt !== undefined ? { attempt } : {}),
+              ...(maxAttempts !== undefined ? { maxAttempts } : {}),
+              ...(delayMs !== undefined ? { delayMs } : {}),
+              errorMessage: retryError,
+            },
+          });
+          return;
+        }
+        case "auto_retry_end": {
+          const retryEnd = event as unknown as {
+            readonly success?: unknown;
+            readonly attempt?: unknown;
+            readonly finalError?: unknown;
+          };
+          const attempt =
+            typeof retryEnd.attempt === "number" && Number.isFinite(retryEnd.attempt)
+              ? retryEnd.attempt
+              : undefined;
+          const finalError =
+            typeof retryEnd.finalError === "string" && retryEnd.finalError.trim().length > 0
+              ? retryEnd.finalError
+              : undefined;
+          // Success just resumes streaming; the final agent_end completes the
+          // turn normally. Only note a terminal retry exhaustion inline — the
+          // following agent_end (willRetry=false) still owns the failure.
+          // Require an explicit false so a missing success flag can never
+          // fabricate a failure row. Skip user-cancelled backoff noise: the
+          // interrupted turn completion already communicates the cancel.
+          const endWasCancelled =
+            (finalError ?? "").toLowerCase().includes("cancel") ||
+            (finalError ?? "").toLowerCase().includes("abort");
+          if (retryEnd.success === false && !endWasCancelled) {
+            offerPiRetryWarning(context, {
+              message: `Pi retry${attempt !== undefined ? ` ${attempt}` : ""} failed${finalError ? `: ${finalError}.` : "."}`,
+              method: "prompt/retry",
+              messageType: event.type,
+              detail: {
+                ...(attempt !== undefined ? { attempt } : {}),
+                success: false,
+                ...(finalError ? { finalError } : {}),
+              },
+            });
+          }
+          return;
+        }
+        case "agent_settled": {
+          // Final settlement after all retries; turn.completed from the final
+          // agent_end already settled lifecycle. Nothing to project.
           return;
         }
         default:
@@ -2655,6 +2808,18 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           return;
         }
         const activeTurnId = turnId ?? context.activeTurnId;
+        // End task must stay responsive while the SDK sleeps between retry
+        // attempts: abort() alone does not cancel backoff, so cancel the
+        // retry wait first. abortRetry is sync; abort() settles the live run.
+        try {
+          (
+            context.runtime.session as unknown as {
+              readonly abortRetry?: () => void;
+            }
+          ).abortRetry?.();
+        } catch {
+          // Best-effort: a throwing abortRetry must not block the abort below.
+        }
         yield* withAgentGatewayTurnCancellation(
           context.gatewaySessionLease,
           activeTurnId,
