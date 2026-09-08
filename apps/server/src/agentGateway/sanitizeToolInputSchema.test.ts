@@ -1,6 +1,8 @@
 import { assert, describe, it } from "@effect/vitest";
 
 import { BROWSER_TOOL_CATALOGUE } from "@synara/shared/browserAutomationCatalogue";
+import { BrowserWebMcpCallInput } from "@synara/contracts";
+import { Schema } from "effect";
 
 import { FALLBACK_OBJECT_DESCRIPTION, sanitizeToolInputSchema } from "./sanitizeToolInputSchema.ts";
 import { countSchemaKeyOccurrences, isJsonRecord } from "./schemaTestUtils.ts";
@@ -25,8 +27,9 @@ describe("sanitizeToolInputSchema", () => {
     assert.equal(FALLBACK_OBJECT_DESCRIPTION, "Free-form JSON object (depth 20, 256 KiB max).");
   });
 
-  it("strips $ref and $defs from the real browser_webmcp_call inputSchema", () => {
-    const entry = findCatalogueEntryOrThrow("browser_webmcp_call");
+  it("strips recursive references from the WebMCP argument contract", () => {
+    const document = Schema.toJsonSchemaDocument(BrowserWebMcpCallInput);
+    const entry = { inputSchema: { ...document.schema, $defs: document.definitions } };
     assert.isAbove(countSchemaKeyOccurrences(entry.inputSchema, "$ref"), 0);
     assert.isAbove(countSchemaKeyOccurrences(entry.inputSchema, "$defs"), 0);
 
@@ -50,6 +53,11 @@ describe("sanitizeToolInputSchema", () => {
       throw new Error("Expected the sanitized webmcp schema to keep its required list.");
     }
     assert.sameMembers(output.required, ["discoveryId", "toolId"]);
+  });
+
+  it("preserves the current browser_run input contract", () => {
+    const entry = findCatalogueEntryOrThrow("browser_run");
+    assert.deepEqual(sanitizeToolInputSchema(cloneJson(entry.inputSchema)), entry.inputSchema);
   });
 
   it("passes unrelated schemas through byte-identical", () => {

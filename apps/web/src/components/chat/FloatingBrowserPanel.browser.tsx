@@ -7,6 +7,7 @@ import "../../index.css";
 import { ThreadId } from "@synara/contracts";
 import { expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
+import { BROWSER_PANEL_BOUNDS_SYNC_EVENT } from "../../lib/browserPanelBoundsSync";
 
 vi.mock("../BrowserPanel", () => ({
   default: () => <div className="h-full min-h-0">Browser viewport</div>,
@@ -76,7 +77,7 @@ it("drags, resizes, and exposes pop/close controls", async () => {
   await vi.waitFor(() => {
     const panel = panelRect();
     const content = contentRect();
-    expect(content.top).toBeLessThanOrEqual(panel.top + 1);
+    expect(content.top).toBe(panel.top + 1);
     expect(content.left).toBeLessThanOrEqual(panel.left + 1);
     expect(content.right).toBeGreaterThanOrEqual(panel.right - 1);
     expect(content.bottom).toBeGreaterThanOrEqual(panel.bottom - 1);
@@ -90,9 +91,13 @@ it("drags, resizes, and exposes pop/close controls", async () => {
   const panel = panelRect();
   expect(header.getBoundingClientRect().top).toBeGreaterThanOrEqual(panel.top);
   expect(header.getBoundingClientRect().right).toBeLessThanOrEqual(panel.right + 1);
+  expect(header.getBoundingClientRect().bottom).toBeLessThan(contentRect().bottom);
   dispatchPointer(header, "pointerdown", 700, 380);
   let overlay = activePointerOverlay();
   dispatchPointer(overlay, "pointermove", 600, 280);
+  expect(panelRect().left).toBe(468);
+  expect(contentRect().left).toBeLessThanOrEqual(469);
+  expect(contentRect().top).toBe(panelRect().top + 1);
   dispatchPointer(overlay, "pointerup", 600, 280);
 
   await vi.waitFor(() => {
@@ -110,7 +115,27 @@ it("drags, resizes, and exposes pop/close controls", async () => {
   await vi.waitFor(() => {
     const rect = panelRect();
     expect({ width: rect.width, height: rect.height }).toEqual({ width: 420, height: 263 });
+    expect(contentRect().width).toBe(rect.width - 2);
+    expect(contentRect().height).toBe(rect.height - 2);
   });
+
+  const host = document.querySelector<HTMLElement>(
+    "[data-floating-browser-host='true']",
+  )?.parentElement;
+  if (!host) throw new Error("Floating browser host is missing");
+  const boundsSync = vi.fn();
+  window.addEventListener(BROWSER_PANEL_BOUNDS_SYNC_EVENT, boundsSync);
+  try {
+    host.style.marginLeft = "80px";
+    host.style.width = "1000px";
+    await vi.waitFor(() => {
+      expect(panelRect().left).toBe(548);
+      expect(panelRect().width).toBe(420);
+      expect(boundsSync).toHaveBeenCalled();
+    });
+  } finally {
+    window.removeEventListener(BROWSER_PANEL_BOUNDS_SYNC_EVENT, boundsSync);
+  }
 
   dispatchPointer(header, "pointerdown", 700, 380);
   overlay = activePointerOverlay();
@@ -128,4 +153,41 @@ it("drags, resizes, and exposes pop/close controls", async () => {
   await mounted.getByRole("button", { name: "Close floating browser" }).click();
   expect(onPopToSidebar).toHaveBeenCalledOnce();
   expect(onClose).toHaveBeenCalledOnce();
+  await mounted.unmount();
+});
+
+it("drags from the preview without opening it, and expands only on a click", async () => {
+  const onPopToSidebar = vi.fn();
+  const mounted = await render(
+    <div className="relative h-[600px] w-[900px] overflow-hidden">
+      <FloatingBrowserPanel
+        threadId={ThreadId.makeUnsafe("preview-gestures")}
+        onClose={() => {}}
+        onPopToSidebar={onPopToSidebar}
+      />
+    </div>,
+  );
+  const shield = document.querySelector("[data-floating-browser-preview-shield]")!;
+  const sync = vi.fn();
+  window.addEventListener(BROWSER_PANEL_BOUNDS_SYNC_EVENT, sync);
+  try {
+    const before = panelRect();
+    dispatchPointer(shield, "pointerdown", 700, 450);
+    const overlay = activePointerOverlay();
+    dispatchPointer(overlay, "pointermove", 650, 420);
+    expect(panelRect().left).toBe(before.left - 50);
+    expect(sync).toHaveBeenCalled();
+    expect(onPopToSidebar).not.toHaveBeenCalled();
+    dispatchPointer(overlay, "pointerup", 650, 420);
+    expect(onPopToSidebar).not.toHaveBeenCalled();
+    dispatchPointer(shield, "pointerdown", 650, 420);
+    dispatchPointer(activePointerOverlay(), "pointerup", 650, 420);
+    expect(onPopToSidebar).toHaveBeenCalledOnce();
+    dispatchPointer(shield, "pointerdown", 650, 420);
+    dispatchPointer(activePointerOverlay(), "pointercancel", 650, 420);
+    expect(onPopToSidebar).toHaveBeenCalledOnce();
+  } finally {
+    window.removeEventListener(BROWSER_PANEL_BOUNDS_SYNC_EVENT, sync);
+    await mounted.unmount();
+  }
 });

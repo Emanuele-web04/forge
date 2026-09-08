@@ -16,6 +16,12 @@ export function makeBrowserAutomationHost(
 ): BrowserAutomationHostShape {
   const pipePath = resolveBrowserHostPipePath(env);
   const capability = resolveBrowserHostCapability(env);
+  if (env.SYNARA_MODE === "desktop" && (!pipePath || !capability)) {
+    console.warn("[browser-host] Desktop browser transport is unavailable", {
+      pipeConfigured: pipePath !== null,
+      capabilityLoaded: capability !== null,
+    });
+  }
   return {
     available: pipePath !== null && capability !== null,
     execute: (input) => {

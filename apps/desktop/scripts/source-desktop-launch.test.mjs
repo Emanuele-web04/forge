@@ -27,6 +27,45 @@ function captureSourceDesktopSpawn(environment, overrides = {}) {
 }
 
 describe("source desktop launch", () => {
+  it("launches normal macOS starts through LaunchServices without secrets in argv", () => {
+    const { spawnProcess } = captureSourceDesktopSpawn(
+      {
+        SYNARA_HOME: "/tmp/isolated",
+        SYNARA_AUTH_TOKEN: "synthetic-secret",
+        ELECTRON_RUN_AS_NODE: "1",
+      },
+      { electronPath: "/runtime/Synara (Dev).app/Contents/MacOS/Electron", launchViaMacOS: true },
+    );
+    expect(spawnProcess).toHaveBeenCalledWith(
+      "/usr/bin/open",
+      [
+        "-W",
+        "-n",
+        "-a",
+        "/runtime/Synara (Dev).app",
+        "--args",
+        "/workspace/apps/desktop/dist-electron/main.js",
+      ],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          SYNARA_HOME: "/tmp/isolated",
+          SYNARA_AUTH_TOKEN: "synthetic-secret",
+        }),
+      }),
+    );
+    expect(spawnProcess.mock.calls[0][2].env).not.toHaveProperty("ELECTRON_RUN_AS_NODE");
+    expect(JSON.stringify(spawnProcess.mock.calls[0][1])).not.toContain("synthetic-secret");
+  });
+
+  it.each([
+    { platform: "linux", electronPath: "/runtime/Synara.app/Contents/MacOS/Electron" },
+    { platform: "darwin", electronPath: "/runtime/electron" },
+  ])("rejects an invalid LaunchServices target before spawning", (overrides) => {
+    expect(() => captureSourceDesktopSpawn({}, { ...overrides, launchViaMacOS: true })).toThrow(
+      "macOS application bundle",
+    );
+  });
+
   it("spawns current source builds with an isolated development environment", () => {
     const environment = {
       ELECTRON_RUN_AS_NODE: "1",

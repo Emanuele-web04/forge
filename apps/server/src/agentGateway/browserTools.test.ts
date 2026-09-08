@@ -23,359 +23,238 @@ const context: ToolContext = {
 };
 
 const TAB_ID = "11111111-1111-4111-8111-111111111111";
-const SNAPSHOT_ID = "22222222-2222-4222-8222-222222222222";
-const NEXT_SNAPSHOT_ID = "33333333-3333-4333-8333-333333333333";
-
-const snapshotHostOutput = (snapshotId = SNAPSHOT_ID) => ({
-  structuredContent: {
-    snapshotId,
-    tabId: TAB_ID,
-    url: "https://www.youtube.com/",
-    title: "YouTube",
-    capturedAt: "2026-07-22T10:00:00.000Z",
-    viewport: { width: 1_024, height: 768, deviceScaleFactor: 1 },
-    semanticSource: "bounded-wai-aria" as const,
-    semanticCoverage: {
-      openShadow: "observed" as const,
-      interceptedClosedShadow: "unobservable" as const,
-      declarativeClosedShadow: "unobservable" as const,
-    },
-    elements: [
-      {
-        ref: "e3",
-        role: "textbox",
-        name: "Search",
-        context: [
-          { role: "main", name: "YouTube" },
-          { role: "search", name: "Site search" },
-        ],
-        bounds: { x: 10, y: 10, width: 200, height: 32 },
-        states: ["editable"],
-      },
-    ],
-    visibleText: "Search",
-    diagnostics: [],
-    truncationReasons: [],
-  },
-});
-
-const typeOutput = () => ({
-  tabId: TAB_ID,
-  target: { ref: "e3", role: "textbox", name: "Search" },
-  resultingValue: { kind: "text" as const, length: 6, value: "Amixem" },
-});
-
 describe("agent gateway browser tools", () => {
-  it("normalizes provider-friendly browser aliases before validation", () => {
-    expect(
-      normalizeGatewayBrowserArguments("browser_type", {
-        ref: "e3",
-        snapshotId: SNAPSHOT_ID,
-        text: "Amixem",
-      }),
-    ).toEqual({ target: { ref: "e3", snapshotId: SNAPSHOT_ID }, text: "Amixem" });
-    expect(
-      normalizeGatewayBrowserArguments("browser_click", {
-        ref: "e4",
-        snapshotId: SNAPSHOT_ID,
-      }),
-    ).toEqual({ target: { ref: "e4", snapshotId: SNAPSHOT_ID } });
-    expect(normalizeGatewayBrowserArguments("browser_press", { key: "ENTER" })).toEqual({
-      keys: ["Enter"],
-    });
-    expect(
-      normalizeGatewayBrowserArguments("browser_press", {
-        keys: ["ctrl+a", "BACKSPACE"],
-      }),
-    ).toEqual({ keys: ["Control+A", "Backspace"] });
-    expect(normalizeGatewayBrowserArguments("browser_scroll", { direction: "down" })).toEqual({
-      direction: "down",
-      mode: "direction",
-    });
-    expect(normalizeGatewayBrowserArguments("browser_screenshot", { full_page: true })).toEqual({
-      fullPage: true,
-    });
-    expect(
-      normalizeGatewayBrowserArguments("browser_select", {
-        elementId: "e4",
-        snapshotId: SNAPSHOT_ID,
-        value: "one",
-      }),
-    ).toEqual({
-      target: { ref: "e4", snapshotId: SNAPSHOT_ID },
-      values: ["one"],
-    });
-    expect(
-      normalizeGatewayBrowserArguments("browser_upload", {
-        selector: 'input[type="file"]',
-        files: ["fixtures/avatar.png"],
-      }),
-    ).toEqual({
-      target: { selector: 'input[type="file"]' },
-      paths: ["fixtures/avatar.png"],
-    });
-    expect(normalizeGatewayBrowserArguments("browser_wait", { timeMs: 1_500 })).toEqual({
-      conditions: [{ kind: "delay", timeMs: 1_500 }],
-      timeoutMs: 2_500,
-    });
-    expect(normalizeGatewayBrowserArguments("browser_wait", { timeoutMs: 2_000 })).toEqual({
-      conditions: [{ kind: "delay", timeMs: 2_000 }],
-      timeoutMs: 3_000,
-    });
-  });
-
-  it("keeps bare ref aliases unbound while preserving explicit snapshot ids", () => {
-    expect(normalizeGatewayBrowserArguments("browser_type", { ref: "e3", text: "Amixem" })).toEqual(
-      { target: { ref: "e3" }, text: "Amixem" },
-    );
-    expect(
-      normalizeGatewayBrowserArguments("browser_type", {
-        elementId: "e3",
-        snapshotId: SNAPSHOT_ID,
-        text: "Amixem",
-      }),
-    ).toEqual({
-      target: { ref: "e3", snapshotId: SNAPSHOT_ID },
-      text: "Amixem",
-    });
-    expect(
-      normalizeGatewayBrowserArguments("browser_drag", {
-        from: { elementId: "e3", snapshotId: SNAPSHOT_ID },
-        to: { ref: "e4", snapshotId: SNAPSHOT_ID },
-      }),
-    ).toEqual({
-      source: { ref: "e3", snapshotId: SNAPSHOT_ID },
-      target: { ref: "e4", snapshotId: SNAPSHOT_ID },
-    });
-  });
-
-  it("rejects a bare old ref after a new snapshot and accepts the explicit current ref", async () => {
-    let snapshotCount = 0;
-    const execute = vi.fn((request: { name: string }) =>
-      Effect.succeed(
-        request.name === "browser_snapshot"
-          ? snapshotHostOutput(snapshotCount++ === 0 ? SNAPSHOT_ID : NEXT_SNAPSHOT_ID)
-          : typeOutput(),
-      ),
-    );
-    const tools = makeAgentGatewayBrowserTools({ available: true, execute });
-    const snapshot = tools.find((tool) => tool.definition.name === "browser_snapshot")!;
-    const type = tools.find((tool) => tool.definition.name === "browser_type")!;
-
-    await Effect.runPromise(snapshot.handler({}, context));
-    const currentSnapshot = await Effect.runPromise(
-      snapshot.handler({}, { ...context, jsonRpcRequestId: 2 }),
-    );
-    const bareOldRef = await Effect.runPromise(
-      type.handler({ ref: "e3", text: "Amixem" }, { ...context, jsonRpcRequestId: 3 }),
-    );
-    const explicitCurrentRef = await Effect.runPromise(
-      type.handler(
-        { ref: "e3", snapshotId: NEXT_SNAPSHOT_ID, text: "Amixem" },
-        { ...context, jsonRpcRequestId: 4 },
-      ),
-    );
-
-    expect(currentSnapshot.isError).not.toBe(true);
-    expect(bareOldRef.isError).toBe(true);
-    expect(explicitCurrentRef.isError).not.toBe(true);
-    expect(execute).toHaveBeenCalledTimes(3);
-    expect(execute).toHaveBeenNthCalledWith(
-      3,
-      expect.objectContaining({
-        name: "browser_type",
-        arguments: expect.objectContaining({
-          target: { ref: "e3", snapshotId: NEXT_SNAPSHOT_ID },
-          text: "Amixem",
-          idempotencyKey: expect.any(String),
-        }),
-      }),
-    );
-  });
-
-  it("renders bounded semantic ancestry in snapshot MCP text", async () => {
-    const execute = vi.fn(() => Effect.succeed(snapshotHostOutput()));
-    const tools = makeAgentGatewayBrowserTools({ available: true, execute });
-    const snapshot = tools.find((tool) => tool.definition.name === "browser_snapshot")!;
-    const result = await Effect.runPromise(snapshot.handler({}, context));
-    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-
-    expect(result.isError).not.toBe(true);
-    expect(text).toContain('[e3] textbox "Search" context=main "YouTube" > search "Site search"');
-    expect(execute).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps the snapshot MCP text projection compact with adversarial semantic context", async () => {
-    const hostOutput = snapshotHostOutput();
-    hostOutput.structuredContent.elements = Array.from({ length: 120 }, (_, index) => ({
-      ref: `e${index + 1}`,
-      role: "button",
-      name: `Action ${index} ${"n".repeat(256)}`,
-      context: Array.from({ length: 4 }, (__, contextIndex) => ({
-        role: "listitem",
-        name: `Context ${contextIndex} ${"c".repeat(480)}`,
-      })),
-      bounds: { x: 10, y: 10, width: 200, height: 32 },
-      states: [],
-    }));
-    hostOutput.structuredContent.visibleText = "é".repeat(4_000);
-    const execute = vi.fn(() => Effect.succeed(hostOutput));
-    const tools = makeAgentGatewayBrowserTools({ available: true, execute });
-    const snapshot = tools.find((tool) => tool.definition.name === "browser_snapshot")!;
-
-    const result = await Effect.runPromise(snapshot.handler({}, context));
-    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-
-    expect(Buffer.byteLength(text, "utf8")).toBeLessThan(16_000);
-    expect(text).toContain("mcpTextTruncated=elements,visibleText");
-    expect(text).not.toContain("�");
-  });
-
-  it("keeps untrusted WebMCP results from flooding model context", async () => {
-    const execute = vi.fn(() =>
-      Effect.succeed({
-        tabId: TAB_ID,
-        discoveryId: SNAPSHOT_ID,
-        toolId: "w1",
-        toolName: "search",
-        contentTrust: "untrusted-web-page",
-        status: "completed",
-        result: { content: "é".repeat(30_000) },
-        finalUrl: "https://example.test/results",
-        navigated: false,
-        redirects: Array.from(
-          { length: 20 },
-          (_, index) => `https://redirect.example/${"r".repeat(7_900)}?step=${index}`,
-        ),
-        dialogs: Array.from({ length: 20 }, (_, index) => ({
-          kind: "alert",
-          message: `Dialog ${index} ${"d".repeat(4_000)}`,
-          action: "accepted",
-          openedAt: "2026-08-26T10:00:00.000Z",
-        })),
-      }),
-    );
-    const tools = makeAgentGatewayBrowserTools({ available: true, execute });
-    const call = tools.find((tool) => tool.definition.name === "browser_webmcp_call")!;
-
-    const result = await Effect.runPromise(
-      call.handler({ discoveryId: SNAPSHOT_ID, toolId: "w1" }, context),
-    );
-    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-
-    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(32 * 1024);
-    expect(text).toContain("contentTrust=untrusted-web-page");
-    expect(text).toContain("resultPreview=");
-    expect(text).toContain("webMcpResultTruncated=true");
-    expect(text).toContain('"redirectCount":20');
-    expect(text).toContain('"dialogCount":20');
-    expect(text).not.toContain('"result":{"content"');
-    expect(text).not.toContain("�");
-  });
-
-  it("keeps oversized failed WebMCP calls parseable in model context", async () => {
-    const execute = vi.fn(() =>
-      Effect.succeed({
-        tabId: TAB_ID,
-        discoveryId: SNAPSHOT_ID,
-        toolId: "w1",
-        toolName: "search",
-        contentTrust: "untrusted-web-page",
-        status: "failed",
-        error: { name: "SearchError", message: "Search failed." },
-        finalUrl: "https://example.test/results",
-        navigated: true,
-        redirects: Array.from(
-          { length: 20 },
-          (_, index) => `https://redirect.example/${"r".repeat(7_900)}?step=${index}`,
-        ),
-        dialogs: Array.from({ length: 20 }, (_, index) => ({
-          kind: "alert",
-          message: `Dialog ${index} ${"d".repeat(4_000)}`,
-          action: "accepted",
-          openedAt: "2026-08-26T10:00:00.000Z",
-        })),
-      }),
-    );
-    const tools = makeAgentGatewayBrowserTools({ available: true, execute });
-    const call = tools.find((tool) => tool.definition.name === "browser_webmcp_call")!;
-
-    const result = await Effect.runPromise(
-      call.handler({ discoveryId: SNAPSHOT_ID, toolId: "w1" }, context),
-    );
-    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-    const metadata = JSON.parse(text.split("\n")[2] ?? "null") as Record<string, unknown>;
-
-    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(32 * 1024);
-    expect(metadata).toMatchObject({
-      status: "failed",
-      error: { name: "SearchError", message: "Search failed." },
-      redirectCount: 20,
-      redirectsTruncated: true,
-      dialogCount: 20,
-      dialogsTruncated: true,
-    });
-    expect(text).toContain("webMcpCallProjectionCompacted=true");
-    expect(text).not.toContain("webMcpTextTruncated=true");
-    expect(text).not.toContain("�");
-  });
-
-  it("keeps a full bounded WebMCP discovery intact in model context", async () => {
-    const execute = vi.fn(() =>
-      Effect.succeed({
-        tabId: TAB_ID,
-        url: `https://example.test/${"u".repeat(7_000)}`,
-        contentTrust: "untrusted-web-page",
-        available: true,
-        implementation: "compatibility",
-        discoveryId: SNAPSHOT_ID,
-        tools: [
-          {
-            toolId: "w1",
-            name: "search",
-            description: "Search the catalogue.",
-            inputSchema: {
-              type: "object",
-              properties: {
-                query: { type: "string", description: "s".repeat(15_000) },
-              },
-            },
-            origin: "https://example.test",
-            annotations: { readOnlyHint: true, untrustedContentHint: true },
-          },
-        ],
-        totalToolCount: 1,
-        skippedToolCount: 0,
-        truncated: false,
-      }),
-    );
-    const tools = makeAgentGatewayBrowserTools({ available: true, execute });
-    const discovery = tools.find((tool) => tool.definition.name === "browser_webmcp_tools")!;
-
-    const result = await Effect.runPromise(discovery.handler({}, context));
-    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-
-    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(32 * 1024);
-    expect(text).not.toContain("webMcpTextTruncated=true");
-    expect(() => JSON.parse(text.split("\n").slice(2).join("\n"))).not.toThrow();
-  });
-
-  it("leaves ambiguous aliases invalid instead of guessing", async () => {
+  it("loads the delegated E2E playbook on demand without touching the browser", async () => {
     const execute = vi.fn();
-    const tools = makeAgentGatewayBrowserTools({ available: true, execute: execute as never });
-    const type = tools.find((tool) => tool.definition.name === "browser_type")!;
-    const press = tools.find((tool) => tool.definition.name === "browser_press")!;
-
-    const bareRef = await Effect.runPromise(type.handler({ ref: "e3", text: "Amixem" }, context));
-    const conflictingKeys = await Effect.runPromise(
-      press.handler({ key: "ENTER", keys: ["Tab"] }, context),
+    const tool = makeAgentGatewayBrowserTools({ available: true, execute: execute as never }).find(
+      (tool) => tool.definition.name === "synara_e2e_review",
+    )!;
+    const result = await Effect.runPromise(tool.handler({}, context));
+    const text = JSON.stringify(result);
+    for (const requirement of [
+      "explicitly requests an E2E",
+      "provider-native subagent/Task",
+      "One agent owns the shared embedded browser",
+      "Wait for the child",
+      "If native delegation is unavailable",
+      "Do not capture exposed secrets",
+      "untested flows",
+    ]) {
+      expect(text).toContain(requirement);
+    }
+    expect(execute).not.toHaveBeenCalled();
+  });
+  it.each([45000, 60000])(
+    "reports actionable timeout bounds before dispatch (%s)",
+    async (timeoutMs) => {
+      const execute = vi.fn();
+      const run = makeAgentGatewayBrowserTools({ available: true, execute: execute as never }).find(
+        (tool) => tool.definition.name === "browser_run",
+      )!;
+      const result = await Effect.runPromise(
+        run.handler({ timeoutMs, code: "private-code" }, context),
+      );
+      expect(result.isError).toBe(true);
+      const content = result.content[0];
+      expect(JSON.parse(content?.type === "text" ? content.text : "null")).toMatchObject({
+        error: {
+          code: "BrowserInvalidTimeout",
+          phase: "input",
+          effectMayHaveCommitted: false,
+          message: expect.stringContaining("100 to 30000"),
+        },
+      });
+      expect(JSON.stringify(result)).not.toContain("private-code");
+      expect(execute).not.toHaveBeenCalled();
+    },
+  );
+  it("forwards a bounded Betterwright operation and preserves legacy text output", async () => {
+    const execute = vi.fn(() =>
+      Effect.succeed({ tabId: TAB_ID, value: { visible: "Signed in" }, serializedByteCount: 23 }),
     );
+    const tools = makeAgentGatewayBrowserTools({ available: true, execute });
+    const run = tools.find((tool) => tool.definition.name === "browser_run")!;
+    const result = await Effect.runPromise(
+      run.handler({ code: "return await snapshot()" }, context),
+    );
+    expect(result.isError).not.toBe(true);
+    expect(execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "browser_run",
+        threadId: "thread-a",
+        sessionKey: context.callerSessionKey,
+      }),
+    );
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("Untrusted browser data"),
+    });
+    expect(result.structuredContent).toMatchObject({ value: { visible: "Signed in" } });
+    expect(result.content[0]).toMatchObject({ text: expect.stringContaining("Signed in") });
+    expect(tools.some((tool) => tool.definition.name === "browser_click")).toBe(false);
+  });
 
-    expect(bareRef.isError).toBe(true);
-    expect(conflictingKeys.isError).toBe(true);
+  it.each(["short-visible-result", "synthetic-page-content ".repeat(500)])(
+    "returns browser data once for Codex even when the entire envelope is printed",
+    async (visible) => {
+      const output = {
+        tabId: TAB_ID,
+        value: { visible },
+        serializedByteCount: Buffer.byteLength(JSON.stringify({ visible })),
+      };
+      const execute = vi.fn(() => Effect.succeed(output));
+      const run = makeAgentGatewayBrowserTools({ available: true, execute }).find(
+        (tool) => tool.definition.name === "browser_run",
+      )!;
+      const result = await Effect.runPromise(
+        run.handler(
+          { code: "return await snapshot()" },
+          {
+            ...context,
+            callerProvider: "codex",
+          },
+        ),
+      );
+      expect(result.structuredContent).toEqual(output);
+      expect(result.content).toEqual([
+        { type: "text", text: expect.stringContaining("Untrusted browser data") },
+      ]);
+      expect(JSON.stringify(result).split(visible)).toHaveLength(2);
+      expect(JSON.stringify(result).length).toBeLessThan(JSON.stringify(output).length + 180);
+    },
+  );
+
+  it("keeps error details visible to Codex result-selection fallback", async () => {
+    const execute = vi.fn();
+    const run = makeAgentGatewayBrowserTools({ available: true, execute: execute as never }).find(
+      (tool) => tool.definition.name === "browser_run",
+    )!;
+    const result = await Effect.runPromise(
+      run.handler(
+        { code: "return true", timeoutMs: 60000 },
+        {
+          ...context,
+          callerProvider: "codex",
+        },
+      ),
+    );
+    const selected = result.structuredContent ?? result;
+    expect(selected).toMatchObject({ isError: true });
+    expect(JSON.stringify(selected)).toContain("BrowserInvalidTimeout");
     expect(execute).not.toHaveBeenCalled();
   });
 
+  it("preserves native screenshot blocks without duplicating metadata or base64", async () => {
+    const image = { mimeType: "image/png" as const, width: 1, height: 1, byteLength: 3 };
+    const metadata = {
+      tabId: TAB_ID,
+      url: "https://example.test/",
+      capturedAt: "2026-09-07T00:00:00.000Z",
+      mode: "viewport",
+      clipped: false,
+      image,
+    };
+    const execute = vi.fn(() =>
+      Effect.succeed({ structuredContent: metadata, image: { ...image, data: "YWJj" } }),
+    );
+    const screenshot = makeAgentGatewayBrowserTools({ available: true, execute }).find(
+      (tool) => tool.definition.name === "browser_screenshot",
+    )!;
+    const result = await Effect.runPromise(
+      screenshot.handler({}, { ...context, callerProvider: "codex" }),
+    );
+    expect(result.isError).not.toBe(true);
+    expect(JSON.parse(JSON.stringify(result.structuredContent))).toEqual(metadata);
+    expect(result.content[1]).toEqual({ type: "image", mimeType: "image/png", data: "YWJj" });
+    expect(JSON.stringify(result).split("YWJj")).toHaveLength(2);
+    expect(JSON.stringify(result).split(TAB_ID)).toHaveLength(2);
+  });
+
+  it("keeps unavailable status structured for Codex without contacting the host", async () => {
+    const execute = vi.fn();
+    const status = makeAgentGatewayBrowserTools({
+      available: false,
+      execute: execute as never,
+    }).find((tool) => tool.definition.name === "browser_status")!;
+    const result = await Effect.runPromise(
+      status.handler({}, { ...context, callerProvider: "codex" }),
+    );
+    expect(result.structuredContent).toMatchObject({ available: false, assignedTabId: null });
+    expect(JSON.stringify(result).split("visible-shared-electron-webview")).toHaveLength(2);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it.each(["saved", "failed", "debug"])(
+    "exposes completion proof truthfully when persistence is %s",
+    async (mode) => {
+      const image = { mimeType: "image/png" as const, width: 1, height: 1, byteLength: 3 };
+      const execute = vi.fn(() =>
+        Effect.succeed({
+          structuredContent: {
+            tabId: TAB_ID,
+            url: "https://example.test/",
+            capturedAt: "2026-09-07T00:00:00Z",
+            mode: "viewport",
+            clipped: false,
+            image,
+          },
+          image: { ...image, data: "YWJj" },
+        }),
+      );
+      const saveProof = vi.fn(async () => {
+        if (mode === "failed") throw new Error("private-storage-error");
+        return "/private/generated_images/proof.png";
+      });
+      const tool = makeAgentGatewayBrowserTools({ available: true, execute }, { saveProof }).find(
+        (tool) => tool.definition.name === "browser_screenshot",
+      )!;
+      const result = await Effect.runPromise(
+        tool.handler(
+          { kind: mode === "debug" ? "debug" : "proof" },
+          { ...context, callerProvider: "codex" },
+        ),
+      );
+      expect(result.isError).not.toBe(true);
+      expect(result.content[1]).toMatchObject({ type: "image", data: "YWJj" });
+      expect(JSON.stringify(result)).not.toContain("private-storage-error");
+      if (mode === "saved")
+        expect(result.structuredContent).toHaveProperty(
+          "artifactPath",
+          "/private/generated_images/proof.png",
+        );
+      else expect(result.structuredContent).not.toHaveProperty("artifactPath");
+      if (mode === "failed") expect(result.structuredContent).toHaveProperty("artifactError");
+      if (mode === "debug") expect(saveProof).not.toHaveBeenCalled();
+      else expect(saveProof).toHaveBeenCalledWith(context.callerThreadId, "YWJj");
+    },
+  );
+
+  it("rejects oversized batches and cross-call upload refs before dispatch", async () => {
+    const execute = vi.fn();
+    const tools = makeAgentGatewayBrowserTools({ available: true, execute: execute as never });
+    const run = tools.find((tool) => tool.definition.name === "browser_run")!;
+    const upload = tools.find((tool) => tool.definition.name === "browser_upload")!;
+    expect(
+      (await Effect.runPromise(run.handler({ code: "x".repeat(16385) }, context))).isError,
+    ).toBe(true);
+    expect(
+      (
+        await Effect.runPromise(
+          upload.handler(
+            { target: { ref: "e1", snapshotId: TAB_ID }, paths: ["file.txt"] },
+            context,
+          ),
+        )
+      ).isError,
+    ).toBe(true);
+    expect(execute).not.toHaveBeenCalled();
+    expect(
+      normalizeGatewayBrowserArguments("browser_upload", {
+        selector: "input[type=file]",
+        files: ["file.txt"],
+      }),
+    ).toEqual({ target: { selector: "input[type=file]" }, paths: ["file.txt"] });
+  });
   it("publishes the complete canonical visible-browser catalogue", () => {
     const host: BrowserAutomationHostShape = {
       available: false,
@@ -391,22 +270,12 @@ describe("agent gateway browser tools", () => {
       "browser_forward",
       "browser_reload",
       "browser_resize",
-      "browser_snapshot",
-      "browser_webmcp_tools",
-      "browser_webmcp_call",
       "browser_screenshot",
       "browser_logs",
-      "browser_click",
-      "browser_hover",
-      "browser_drag",
-      "browser_type",
-      "browser_select",
       "browser_upload",
-      "browser_press",
-      "browser_scroll",
-      "browser_wait",
-      "browser_evaluate",
+      "browser_run",
       "browser_close",
+      "synara_e2e_review",
     ]);
     expect(tools.every((tool) => tool.requiredCapability === "browser:control")).toBe(true);
     expect(tools.every((tool) => tool.requiresActiveTurn === true)).toBe(true);
@@ -595,7 +464,7 @@ describe("agent gateway browser tools", () => {
     expect(result.isError).toBe(true);
     const content = result.content[0];
     expect(JSON.parse(content?.type === "text" ? content.text : "null")).toMatchObject({
-      error: { code: "BrowserInputUnsupported", phase: "input" },
+      error: { code: "BrowserInvalidArguments", phase: "input" },
     });
     expect(execute).not.toHaveBeenCalled();
   });

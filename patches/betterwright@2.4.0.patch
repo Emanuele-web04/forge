@@ -1,0 +1,1075 @@
+diff --git a/dist/src/client.js b/dist/src/client.js
+index 1701abbbbf141a6f47b8b15ffefe4c168fb77ca9..6e0aad76e3d6d45d15918428ae2d895ab4002f49 100644
+--- a/dist/src/client.js
++++ b/dist/src/client.js
+@@ -330,6 +330,14 @@ export class BetterWright {
+      *   machine on the network. Pass `{host:"127.0.0.1"}` for loopback-only.
+      */
+     constructor(options = {}) {
++        this.hostOwnedTarget = options.hostOwnedTarget === true;
++        this.hostUploadFiles = options.hostUploadFiles ?? [];
++        if (!Array.isArray(this.hostUploadFiles) || this.hostUploadFiles.some(file => typeof file !== "string" || !path.isAbsolute(file)) || (this.hostUploadFiles.length && !this.hostOwnedTarget)) {
++            throw new TypeError("Host uploads require a host-owned target and absolute staged paths.");
++        }
++        if (this.hostOwnedTarget && (!options.provider?.cdpUrl || options.downloadPolicy !== "deny")) {
++            throw new TypeError("Host-owned targets require a scoped CDP provider and host-enforced download denial.");
++        }
+         this.home = options.home || defaultHome();
+         // null == the historical `browser/profile`. A validated name scopes the
+         // profile directory and, through it, the profile lock — nothing else.
+@@ -448,6 +456,8 @@ export class BetterWright {
+         // shared, so ephemeral fallbacks and saved files are common to every
+         // profile, as is the vault.
+         return {
++            hostOwnedTarget: this.hostOwnedTarget,
++            hostUploadFiles: this.hostUploadFiles,
+             profileDir: profileDirFor(root, this.profile),
+             runtimeDir: runtime,
+             artifactsDir: artifacts,
+@@ -495,6 +505,7 @@ export class BetterWright {
+             throw new BrowserError("This browser has been closed.");
+         const env = {
+             ...process.env,
++            ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
+             NODE_NO_WARNINGS: "1",
+         };
+         // Playwright's pw:protocol debug scope logs complete CDP payloads. The
+@@ -524,7 +535,8 @@ export class BetterWright {
+             env.BETTERWRIGHT_STEALTH_ACTIVE = "1";
+         }
+         const child = spawn(process.execPath, [...bunInheritedExecArgv(env), ...execArgv, WORKER_PATH], {
+-            cwd: path.dirname(WORKER_PATH),
++            // Electron can read scripts in ASAR, but cannot use an archived cwd.
++            cwd: this.hostOwnedTarget ? this._workerConfig().runtimeDir : path.dirname(WORKER_PATH),
+             stdio: ["pipe", "pipe", "pipe"],
+             env,
+         });
+@@ -954,12 +966,13 @@ export class BetterWright {
+             extracted = await this._extractCookieSync(normalized);
+         }
+         catch (error) {
+-            return { ok: false, error: String(error?.message || error) };
++            return { ok: false, error: "Cookie Sync could not read the selected local browser profile.", cookieReaderCode: error?.cookieReaderCode || "reader_unavailable", cookiePermissionDenied: error?.cookiePermissionDenied === true, cookieReaderStage: error?.cookieReaderStage };
+         }
+         if (!extracted.cookies.length) {
+             return {
+                 ok: true,
+                 synced: 0,
++                ...(this.hostOwnedTarget ? { cookieImportDomains: [] } : {}),
+                 selected: extracted.selected,
+                 skipped: extracted.skipped,
+                 source: extracted.source,
+@@ -969,7 +982,7 @@ export class BetterWright {
+         }
+         const config = await this._prepare();
+         const timeoutSeconds = Math.max(Math.ceil(normalized.timeoutMs / 1000), this.defaultTimeout, 5);
+-        return this._dispatch({
++        const result = await this._dispatch({
+             type: "cookie_sync",
+             config,
+             cookies: extracted.cookies,
+@@ -979,6 +992,7 @@ export class BetterWright {
+             warnings: extracted.warnings,
+             cloudConsent: normalized.cloudConsent,
+         }, timeoutSeconds);
++        return result;
+     }
+     _extractCookieSync(options) {
+         return extractCookieSync(options);
+diff --git a/dist/src/cookie-sync.js b/dist/src/cookie-sync.js
+index ef705665c8c54d34f2f42c3a2d3820103e81dfc6..b15980ea402632ae78ac400266a6eca3f48a553d 100644
+--- a/dist/src/cookie-sync.js
++++ b/dist/src/cookie-sync.js
+@@ -1,5 +1,6 @@
+ import { isIP } from "node:net";
+ import { domainToASCII } from "node:url";
++import { heliumCookieSourceAvailable, listHeliumProfiles, readHeliumCookieSnapshot } from "./helium-cookie-source.js";
+ import { isBoolean, isCallable, isNumber, isRecord, isString, untrustedField, } from "./untrusted-value.js";
+ export const COOKIE_SYNC_MAX_COOKIES = 10_000;
+ export const COOKIE_SYNC_MAX_BYTES = 6 * 1024 * 1024;
+@@ -428,9 +429,12 @@ export function normalizeCookieSnapshot(snapshot, options, { now = Date.now() }
+         source: { ...options.source },
+     };
+ }
+-export async function extractCookieSync(options, load = loadCookieReader) {
++export async function extractCookieSync(options, load = loadCookieReader, heliumDeps = undefined) {
+     let reader;
+     let snapshot;
++    if (options.source.browser === "helium") {
++        return normalizeCookieSnapshot(await readHeliumCookieSnapshot(options, heliumDeps), options);
++    }
+     reader = await load();
+     const readOptions = {
+         browser: options.source.browser,
+@@ -445,34 +449,95 @@ export async function extractCookieSync(options, load = loadCookieReader) {
+     try {
+         snapshot = await reader.read(readOptions);
+     }
+-    catch {
+-        throw new Error("Cookie Sync could not read the selected local browser profile. Check the browser id, profile, permissions, and platform support.");
++    catch (cause) {
++        const error = new Error("Cookie Sync could not read the selected local browser profile.");
++        const code = untrustedField(cause, "rookieCode");
++        error.cookieReaderCode = ["source_extraction_failed", "source_inspection_failed", "discovery_failed", "no_selected_source", "no_discovered_source", "timed_out", "cancelled", "resource_exhausted"].includes(code) ? code : "reader_failed";
++        // The native API does not expose errno separately. Match only explicit OS
++        // denial markers locally; never forward its diagnostic or source paths.
++        const message = untrustedField(cause, "message");
++        error.cookiePermissionDenied = isString(message) && /\b(?:Permission denied|Operation not permitted|os error (?:1|13))\b/i.test(message);
++        if (!error.cookiePermissionDenied && isCallable(untrustedField(reader, "report")) && code === "source_extraction_failed") {
++            try {
++                const report = await reader.report({ browser: options.source.browser, ...(options.source.profile ? { profile: options.source.profile } : {}), ...(options.domains ? { domains: options.domains } : {}), select: "legacy_first", timeoutMs: Math.min(options.timeoutMs, 10_000), appBound: "disabled" });
++                const pending = [report];
++                for (let visited = 0; pending.length && visited < 100; visited++) {
++                    const node = pending.shift();
++                    const issues = untrustedField(node, "issues");
++                    if (Array.isArray(issues)) for (const issue of issues.slice(0, 100)) {
++                        if (untrustedField(issue, "severity") !== "error") continue;
++                        const stage = untrustedField(issue, "stage");
++                        if (["acquisition", "parse", "decrypt", "decode", "query", "discovery"].includes(stage)) error.cookieReaderStage = stage;
++                        const diagnostic = untrustedField(issue, "message");
++                        if (isString(diagnostic) && /\b(?:Permission denied|Operation not permitted|os error (?:1|13))\b/i.test(diagnostic)) error.cookiePermissionDenied = true;
++                    }
++                    for (const field of ["profiles", "sources"]) {
++                        const children = untrustedField(node, field);
++                        if (Array.isArray(children)) pending.push(...children.slice(0, 100));
++                    }
++                }
++            } catch { /* Keep the original fixed failure when diagnostics are unavailable. */ }
++        }
++        throw error;
+     }
+     return normalizeCookieSnapshot(snapshot, options);
+ }
++function classifyCookieReaderListError(cause, fallback) {
++    const error = new Error("Cookie Sync could not list browser sources on this host.");
++    const code = untrustedField(cause, "rookieCode");
++    error.cookieReaderCode = isString(code) &&
++        ["source_extraction_failed", "source_inspection_failed", "discovery_failed",
++            "no_selected_source", "no_discovered_source", "timed_out", "cancelled", "resource_exhausted"].includes(code)
++        ? code
++        : fallback;
++    const message = untrustedField(cause, "message");
++    error.cookiePermissionDenied = isString(message) &&
++        /\b(?:Permission denied|Operation not permitted|os error (?:1|13))\b/i.test(message);
++    return error;
++}
+ export async function listCookieSourceBrowsers(load = loadCookieReader) {
+-    const reader = await load();
+-    let value;
++    const browsers = [];
++    let nativeError;
+     try {
+-        value = await reader.supportedBrowsers();
++        const reader = await load();
++        let value;
++        try {
++            value = await reader.supportedBrowsers();
++        }
++        catch (cause) {
++            // Keep the native reader error from hiding Helium, but preserve it
++            // so an empty result is not mistaken for no available source.
++            nativeError = classifyCookieReaderListError(cause, "reader_failed");
++            value = undefined;
++        }
++        if (Array.isArray(value)) {
++            for (const entry of value.flatMap((entry) => {
++                const id = cleanPublicText(untrustedField(entry, "id"), 128).toLowerCase();
++                const name = cleanPublicText(untrustedField(entry, "displayName"), 256);
++                const engine = cleanPublicText(untrustedField(entry, "engine"), 64);
++                if (!/^[a-z0-9][a-z0-9._-]*$/.test(id))
++                    return [];
++                return id && name ? [{ id, name, engine }] : [];
++            })) {
++                browsers.push(entry);
++            }
++        }
+     }
+-    catch {
+-        throw new Error("Cookie Sync could not list browsers on this host.");
++    catch (cause) {
++        // The native reader is optional; Helium has its own reader.
++        // Do not let the failure read as an empty discovery result.
++        nativeError = classifyCookieReaderListError(cause, "reader_unavailable");
+     }
+-    if (!Array.isArray(value))
+-        throw new Error("Cookie Sync returned an invalid browser list.");
+-    return value.flatMap((entry) => {
+-        const id = cleanPublicText(untrustedField(entry, "id"), 128).toLowerCase();
+-        const name = cleanPublicText(untrustedField(entry, "displayName"), 256);
+-        const engine = cleanPublicText(untrustedField(entry, "engine"), 64);
+-        if (!/^[a-z0-9][a-z0-9._-]*$/.test(id))
+-            return [];
+-        return id && name ? [{ id, name, engine }] : [];
+-    });
++    const helium = await heliumCookieSourceAvailable();
++    if (helium && !browsers.some((entry) => entry.id === helium.id)) browsers.push(helium);
++    if (browsers.length === 0 && nativeError)
++        throw nativeError;
++    return browsers;
+ }
+ export async function listCookieSourceProfiles(browser, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}, load = loadCookieReader) {
+     const normalized = normalizeCookieSyncOptions({ source: { browser }, timeoutMs });
+     const source = normalized.source;
++    if (source.browser === "helium") return listHeliumProfiles();
+     const reader = await load();
+     let value;
+     try {
+diff --git a/dist/src/helium-cookie-source.js b/dist/src/helium-cookie-source.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..e384c75bda7a82b2217b73c032d60b83347fa117
+--- /dev/null
++++ b/dist/src/helium-cookie-source.js
+@@ -0,0 +1,327 @@
++// Helium (net.imput.helium) cookie source for hosts whose native reader does
++// not register the browser yet. Reads the same Chromium cookie database the
++// native reader would, decrypts v10 rows with the profile's Keychain secret,
++// and emits the same detailed-cookie snapshot shape as the native reader so
++// the regular Cookie Sync transfer pipeline stays in charge.
++import { execFile } from "node:child_process";
++import { createDecipheriv, pbkdf2Sync } from "node:crypto";
++import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
++import { homedir, tmpdir } from "node:os";
++import { join } from "node:path";
++import { DatabaseSync } from "node:sqlite";
++
++const HELIUM_BROWSER_ID = "helium";
++const HELIUM_DATA_DIR = "net.imput.helium";
++const HELIUM_KEYCHAIN_SERVICE = "Helium Storage Key";
++const HELIUM_KEYCHAIN_ACCOUNT = "Helium";
++const HELIUM_PROFILE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9 _-]{0,127}$/;
++const HELIUM_RESERVED_PROFILE_DIRS = new Set([
++    "BrowserMetrics-spare.pma",
++    "CertificateRevocation",
++    "ChromeFeatureState",
++    "Crashpad",
++    "GPUPersistentCache",
++    "GraphiteDawnCache",
++    "GrShaderCache",
++    "ShaderCache",
++    "Snapshots",
++    "System Profile",
++    "component_crx_cache",
++    "extensions_crx_cache",
++]);
++const CHROMIUM_EPOCH_OFFSET_SECONDS = 11_644_473_600;
++const CHROMIUM_AES_IV = Buffer.alloc(16, 0x20);
++const HELIUM_KEYCHAIN_TIMEOUT_MS = 30_000;
++
++export async function heliumCookieSourceAvailable() {
++    if (process.platform !== "darwin") return null;
++    try {
++        if (!(await stat(heliumProfileRoot())).isDirectory()) return null;
++    } catch {
++        return null;
++    }
++    return { id: HELIUM_BROWSER_ID, name: "Helium", engine: "chromium" };
++}
++
++function heliumProfileRoot() {
++    return join(homedir(), "Library", "Application Support", HELIUM_DATA_DIR);
++}
++
++function heliumError(code, stage, permissionDenied = false) {
++    const error = new Error("Cookie Sync could not read the selected Helium profile.");
++    error.cookieReaderCode = code;
++    if (stage) error.cookieReaderStage = stage;
++    error.cookiePermissionDenied = permissionDenied === true;
++    return error;
++}
++
++function isMissingError(error) {
++    return error instanceof Error && (error.code === "ENOENT" || error.code === "ENAMETOOLONG");
++}
++
++function isPermissionError(error) {
++    if (!(error instanceof Error)) return false;
++    if (error.code === "EACCES" || error.code === "EPERM") return true;
++    const message = String(error.message);
++    return /\b(?:permission denied|operation not permitted|eacces|eperm|os error (?:1|13))\b/i.test(message);
++}
++
++// Every failure while opening, snapshotting, or querying the SQLite store is
++// reported through the bounded reader contract: a fixed message, the failing
++// stage, and explicit permission markers only, never the raw diagnostic,
++// which can carry filesystem paths or parser internals.
++function classifySqliteError(error, stage) {
++    if (error instanceof Error && typeof error.cookieReaderCode === "string") return error;
++    const message = error instanceof Error ? String(error.message) : "";
++    const permissionDenied = /\b(?:permission denied|operation not permitted|eacces|eperm|os error (?:1|13))\b/i.test(message);
++    return heliumError("source_extraction_failed", stage, permissionDenied);
++}
++
++function queryHeliumRows(database, sql) {
++    try {
++        return database.prepare(sql).all();
++    } catch (error) {
++        throw classifySqliteError(error, "query");
++    }
++}
++
++async function heliumCookieDatabasePath(profileDir) {
++    // Helium writes the legacy per-profile Cookies file today; probe it first so
++    // a future Network/Cookies layout never shadows the active legacy store.
++    for (const candidate of [join(profileDir, "Cookies"), join(profileDir, "Network", "Cookies")]) {
++        try {
++            if ((await stat(candidate)).isFile()) return candidate;
++        } catch (error) {
++            if (isMissingError(error)) continue;
++            throw heliumError("source_extraction_failed", "acquisition", isPermissionError(error));
++        }
++    }
++    return null;
++}
++
++export async function listHeliumProfiles() {
++    if (process.platform !== "darwin") return [];
++    let entries;
++    try {
++        entries = await readdir(heliumProfileRoot(), { withFileTypes: true });
++    } catch (error) {
++        if (isMissingError(error)) return [];
++        throw heliumError("discovery_failed", "discovery", isPermissionError(error));
++    }
++    const profiles = [];
++    for (const entry of entries) {
++        if (!entry.isDirectory() || !HELIUM_PROFILE_NAME_PATTERN.test(entry.name)) continue;
++        if (HELIUM_RESERVED_PROFILE_DIRS.has(entry.name)) continue;
++        if (await heliumCookieDatabasePath(join(heliumProfileRoot(), entry.name)) === null) continue;
++        profiles.push({ id: entry.name, name: entry.name, isDefault: entry.name === "Default" });
++    }
++    return profiles.sort((left, right) => (right.isDefault ? 1 : 0) - (left.isDefault ? 1 : 0) || left.id.localeCompare(right.id));
++}
++
++export function keychainFailure(cause) {
++    // Never include tool output in the error: it may carry prompt text.
++    const message = String(cause?.message || "");
++    if (cause?.killed === true || /timed out/i.test(message)) return heliumError("timed_out", "decrypt");
++    if (/\bcancel+ed\b|interaction|auth/i.test(message)) return heliumError("source_extraction_failed", "decrypt", true);
++    return heliumError("source_extraction_failed", "decrypt");
++}
++
++function spawnKeychainPassword(timeoutMs) {
++    return new Promise((resolve, reject) => {
++        execFile(
++            "/usr/bin/security",
++            ["find-generic-password", "-w", "-a", HELIUM_KEYCHAIN_ACCOUNT, "-s", HELIUM_KEYCHAIN_SERVICE],
++            { timeout: Math.max(1_000, Math.min(timeoutMs, HELIUM_KEYCHAIN_TIMEOUT_MS)), maxBuffer: 4_096, windowsHide: true },
++            (error, stdout) => {
++                if (!error) {
++                    const password = String(stdout).replace(/\r?\n$/, "");
++                    if (password) {
++                        resolve(password);
++                        return;
++                    }
++                    reject(heliumError("reader_failed", "decrypt"));
++                    return;
++                }
++                reject(keychainFailure(error));
++            },
++        );
++    });
++}
++
++function decryptChromiumValue(encrypted, key, version = 0) {
++    if (!(encrypted instanceof Uint8Array) || encrypted.length <= 3) return null;
++    const blob = Buffer.from(encrypted.buffer, encrypted.byteOffset, encrypted.byteLength);
++    const tag = blob.toString("latin1", 0, 3);
++    let body;
++    if (tag === "v10") body = blob.subarray(3);
++    else if (tag === "v11") body = blob.subarray(35);
++    else return null;
++    try {
++        const decipher = createDecipheriv("aes-128-cbc", key, CHROMIUM_AES_IV);
++        let plain = Buffer.concat([decipher.update(body), decipher.final()]);
++        if (version >= 24) {
++            if (plain.length < 32) return null;
++            plain = plain.subarray(32);
++        }
++        return plain.length ? plain.toString("utf8") : "";
++    } catch {
++        return null;
++    }
++}
++
++function heliumCookieRow(row, key, warnings, version) {
++    const name = typeof row.name === "string" ? row.name : "";
++    const domain = typeof row.host_key === "string" ? row.host_key.trim().toLowerCase() : "";
++    const path = typeof row.path === "string" ? row.path : "";
++    if (!name || !domain || !path.startsWith("/")) {
++        warnings.set("malformed", (warnings.get("malformed") ?? 0) + 1);
++        return null;
++    }
++    let value = typeof row.value === "string" ? row.value : "";
++    if (!value) {
++        value = decryptChromiumValue(row.encrypted_value, key, version);
++        if (value === null) {
++            warnings.set("decrypt_failed", (warnings.get("decrypt_failed") ?? 0) + 1);
++            return null;
++        }
++    }
++    // readBigInts surfaces every INTEGER column as bigint; widen the small ones.
++    const secure = Number(row.is_secure);
++    const httpOnly = Number(row.is_httponly);
++    const sameSite = Number(row.samesite);
++    const cookie = {
++        name,
++        value,
++        domain,
++        path,
++        secure: secure === 1,
++        httpOnly: httpOnly === 1,
++        sameSite: sameSite >= -1 && sameSite <= 2 ? sameSite : -1,
++    };
++    if (Number(row.has_expires) === 1 && typeof row.expires_utc === "bigint" && row.expires_utc > 0n) {
++        cookie.expires = Number(row.expires_utc / 1_000_000n) - CHROMIUM_EPOCH_OFFSET_SECONDS;
++    }
++    const context = {};
++    const sourceScheme = Number(row.source_scheme);
++    if (sourceScheme === 0 || sourceScheme === 1 || sourceScheme === 2) {
++        context.sourceScheme = sourceScheme;
++    }
++    const sourcePort = Number(row.source_port);
++    if (sourcePort === -1 || (sourcePort >= 1 && sourcePort <= 65_535)) {
++        context.sourcePort = sourcePort;
++    }
++    const topFrameSiteKey = typeof row.top_frame_site_key === "string" ? row.top_frame_site_key : "";
++    if (topFrameSiteKey) {
++        const hasCrossSiteAncestor = row.has_cross_site_ancestor;
++        const isCrossSite = hasCrossSiteAncestor !== undefined
++            ? Number(hasCrossSiteAncestor) === 1
++            : false;
++        context.topFrameSiteKey = topFrameSiteKey;
++        context.hasCrossSiteAncestor = isCrossSite;
++    }
++    return { cookie, context };
++}
++
++async function snapshotHeliumDatabase(databasePath, workspace) {
++    // VACUUM INTO takes one consistent snapshot under a read transaction, so a
++    // live Helium write can never be observed as a torn database + WAL pair.
++    let database;
++    try {
++        database = new DatabaseSync(databasePath, { readOnly: true });
++    } catch (error) {
++        throw classifySqliteError(error, "acquisition");
++    }
++    try {
++        const copyPath = join(workspace, "Cookies");
++        database.exec(`VACUUM INTO '${copyPath.replaceAll("'", "''")}'`);
++        return copyPath;
++    } catch (error) {
++        throw classifySqliteError(error, "acquisition");
++    } finally {
++        database.close();
++    }
++}
++
++async function queryHeliumCookies(databasePath, key, warnings) {
++    let database;
++    try {
++        database = new DatabaseSync(databasePath, { readBigInts: true });
++    } catch (error) {
++        throw classifySqliteError(error, "acquisition");
++    }
++    try {
++        const columns = new Set(
++            queryHeliumRows(database, "PRAGMA table_info(cookies)").map((column) => String(column.name)),
++        );
++        const secure = columns.has("is_secure") ? "is_secure" : "secure";
++        const httpOnly = columns.has("is_httponly") ? "is_httponly" : "httponly";
++        const topFrameSiteKey = columns.has("top_frame_site_key") ? "top_frame_site_key" : null;
++        const hasCrossSiteAncestor = columns.has("has_cross_site_ancestor") ? "has_cross_site_ancestor" : null;
++        const selection = [
++            "host_key",
++            "name",
++            "value",
++            "encrypted_value",
++            "path",
++            secure,
++            httpOnly,
++            "samesite",
++            "expires_utc",
++            "has_expires",
++            ...(columns.has("source_scheme") ? ["source_scheme"] : []),
++            ...(columns.has("source_port") ? ["source_port"] : []),
++            ...(topFrameSiteKey ? [topFrameSiteKey] : []),
++            ...(hasCrossSiteAncestor ? [hasCrossSiteAncestor] : []),
++        ].filter(Boolean);
++        let version = 0;
++        try {
++            const meta = database.prepare("SELECT value FROM meta WHERE key = 'version'").get();
++            if (meta) {
++                // Real Helium databases store meta.value as INTEGER, which
++                // readBigInts surfaces as bigint; legacy and synthetic stores
++                // keep the string form.
++                const parsed = typeof meta.value === "bigint" || typeof meta.value === "number"
++                    ? Number(meta.value)
++                    : Number.parseInt(String(meta.value), 10);
++                if (Number.isInteger(parsed) && parsed >= 0) version = parsed;
++            }
++        } catch { /* The meta table is best-effort. */ }
++        const rows = queryHeliumRows(database, `SELECT ${selection.join(", ")} FROM cookies`);
++        const detailedCookies = [];
++        for (const row of rows) {
++            const detailed = heliumCookieRow(row, key, warnings, version);
++            if (detailed) detailedCookies.push(detailed);
++        }
++        return detailedCookies;
++    } finally {
++        database.close();
++    }
++}
++
++export async function readHeliumCookieSnapshot(options, deps = {}) {
++    if (process.platform !== "darwin") throw heliumError("no_discovered_source", "discovery");
++    const profile = typeof options.source.profile === "string" ? options.source.profile.trim() : "";
++    if (!profile || !HELIUM_PROFILE_NAME_PATTERN.test(profile)) throw heliumError("no_selected_source", "discovery");
++    const listProfiles = deps.listProfiles ?? listHeliumProfiles;
++    const available = await listProfiles();
++    if (!available.some((entry) => entry.id === profile)) throw heliumError("no_selected_source", "discovery");
++    const databasePath = await heliumCookieDatabasePath(join(heliumProfileRoot(), profile));
++    if (!databasePath) throw heliumError("no_selected_source", "acquisition");
++    const workspace = await mkdtemp(join(tmpdir(), "betterwright-helium-"));
++    try {
++        const copyPath = await snapshotHeliumDatabase(databasePath, workspace);
++        const keychainPassword = deps.keychainPassword ?? spawnKeychainPassword;
++        const password = await keychainPassword(Math.min(options.timeoutMs, HELIUM_KEYCHAIN_TIMEOUT_MS));
++        if (!password) throw heliumError("source_extraction_failed", "decrypt");
++        const key = pbkdf2Sync(password, "saltysalt", 1003, 16, "sha1");
++        const warnings = new Map();
++        const detailedCookies = await queryHeliumCookies(copyPath, key, warnings);
++        return {
++            detailedCookies,
++            warnings: [...warnings.entries()].map(([code, count]) => ({ code, count })),
++        };
++    } finally {
++        await rm(workspace, { recursive: true, force: true }).catch(() => {});
++    }
++
++}
+diff --git a/dist/src/vault-capture.js b/dist/src/vault-capture.js
+index d704ee96ab1b8b89ca80f993572804327d0bb442..46a1ff5c85f7c9f1540fe8990a712dedea2e4bb9 100644
+--- a/dist/src/vault-capture.js
++++ b/dist/src/vault-capture.js
+@@ -76,7 +76,7 @@ function saveNeverOrigins(prefsPath, neverOrigins) {
+  * @param {number} [deps.promptTtlMs] prompt lifetime (default 30000)
+  * @param {number} [deps.modelWindowMs] model-activity window (default 5000)
+  */
+-export function installVaultCapture(context, deps = {}) {
++export function installVaultCapture(context, deps) {
+     const timings = {
+         gateMs: Math.max(50, Number(deps.gateMs) || 8_000),
+         confirmMs: Math.max(50, Number(deps.confirmMs) || 2_500),
+@@ -89,6 +89,8 @@ export function installVaultCapture(context, deps = {}) {
+     const state = {
+         disposed: false,
+         cdpByPage: new Map(), // page -> CDPSession
++        scriptByPage: new Map(),
++        attaching: new Set(),
+         framesByPage: new Map(), // page -> Map<frameId, {contextId, url}>
+         pendingByPage: new Map(), // page -> Map<frameId, capture>
+         prompts: new Map(), // promptId -> {page, frameId, capture, timer}
+@@ -136,7 +138,7 @@ export function installVaultCapture(context, deps = {}) {
+                 username: capture.username,
+                 password: capture.password,
+                 label: hostLabel(capture.origin),
+-                matchMode: "base-domain",
++                matchMode: deps.matchMode || "base-domain",
+                 deferToPending: true,
+             });
+         }
+@@ -165,6 +167,11 @@ export function installVaultCapture(context, deps = {}) {
+         }
+     }
+     async function showPrompt(page, frameId, capture, mode) {
++        if (deps.requestSave) {
++            const choice = await deps.requestSave({ page, origin: capture.origin, username: capture.username, mode });
++            if (!state.disposed && choice === "save") await saveCapture(capture);
++            return;
++        }
+         const frames = state.framesByPage.get(page);
+         const frame = frames?.get(frameId);
+         if (!frame)
+@@ -189,7 +196,12 @@ export function installVaultCapture(context, deps = {}) {
+         })
+             .catch(() => dropPrompt(promptId, false));
+     }
+-    async function resolveCapture(page, frameId) {
++    function resolveCapture(page, frameId) {
++        return resolveCaptureInner(page, frameId).catch(error => {
++            if (!state.disposed && !page.isClosed()) fail(error);
++        });
++    }
++    async function resolveCaptureInner(page, frameId) {
+         const pendings = state.pendingByPage.get(page);
+         const capture = pendings?.get(frameId);
+         if (!capture)
+@@ -198,6 +210,10 @@ export function installVaultCapture(context, deps = {}) {
+         clearTimeout(capture.timer);
+         if (neverOrigins.has(capture.origin))
+             return;
++        if (deps.shouldCapture && !await deps.shouldCapture(capture))
++            return;
++        if (state.disposed)
++            return;
+         const lastModelAt = deps.lastModelActivity(page, capture.origin);
+         if (Number.isFinite(lastModelAt) &&
+             Date.now() - lastModelAt <= timings.modelWindowMs) {
+@@ -334,6 +350,10 @@ export function installVaultCapture(context, deps = {}) {
+         catch {
+             return;
+         }
++        if (state.disposed || page.isClosed()) {
++            await cdp.detach().catch(() => {});
++            return;
++        }
+         state.cdpByPage.set(page, cdp);
+         state.framesByPage.set(page, new Map());
+         state.pendingByPage.set(page, new Map());
+@@ -356,7 +376,9 @@ export function installVaultCapture(context, deps = {}) {
+                 name: BINDING_NAME,
+                 executionContextName: WORLD_NAME,
+             })
+-                .catch(fail);
++                .catch(error => {
++                    if (!state.disposed && !page.isClosed() && frames.get(frameId)?.contextId === context.id) fail(error);
++                });
+             frames.set(frameId, {
+                 contextId: context.id,
+                 url: previous?.url || "",
+@@ -390,23 +412,27 @@ export function installVaultCapture(context, deps = {}) {
+         try {
+             await cdp.send("Page.enable");
+             await cdp.send("Runtime.enable");
+-            await cdp.send("Page.addScriptToEvaluateOnNewDocument", {
++            const script = await cdp.send("Page.addScriptToEvaluateOnNewDocument", {
+                 source: SENSOR_SOURCE,
+                 worldName: WORLD_NAME,
+                 runImmediately: true,
+             });
++            state.scriptByPage.set(page, script.identifier);
++            if (state.disposed || page.isClosed()) await detachPage(page);
++            else deps.onReady?.();
+         }
+         catch (error) {
+-            fail(error);
++            if (!state.disposed && !page.isClosed()) fail(error);
+         }
+     }
+-    function detachPage(page) {
++    async function detachPage(page) {
+         const pendings = state.pendingByPage.get(page);
+         if (pendings) {
+             for (const capture of pendings.values())
+                 clearTimeout(capture.timer);
+         }
+         state.pendingByPage.delete(page);
++        const frames = state.framesByPage.get(page);
+         state.framesByPage.delete(page);
+         for (const [promptId, prompt] of [...state.prompts]) {
+             if (prompt.page === page)
+@@ -414,21 +440,34 @@ export function installVaultCapture(context, deps = {}) {
+         }
+         const cdp = state.cdpByPage.get(page);
+         state.cdpByPage.delete(page);
+-        if (cdp)
+-            void cdp.detach().catch(() => { });
++        if (cdp) {
++            const script = state.scriptByPage.get(page);
++            state.scriptByPage.delete(page);
++            if (script) await cdp.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: script }).catch(() => {});
++            for (const frame of frames?.values() || []) {
++                if (frame.contextId) await cdp.send("Runtime.evaluate", {
++                    expression: "globalThis.__bwVaultDispose?.()", contextId: frame.contextId,
++                }).catch(() => {});
++            }
++            await cdp.detach().catch(() => {});
++        }
+     }
+-    const onPage = (page) => void attachPage(page);
++    const onPage = (page) => {
++        const operation = attachPage(page).catch(fail).finally(() => state.attaching.delete(operation));
++        state.attaching.add(operation);
++    };
+     context.on("page", onPage);
+     for (const page of context.pages())
+-        void attachPage(page);
++        onPage(page);
+     return {
+-        dispose() {
++        async dispose() {
+             if (state.disposed)
+                 return;
+             state.disposed = true;
+             context.off("page", onPage);
++            await Promise.all([...state.attaching]);
+             for (const page of [...state.cdpByPage.keys()])
+-                detachPage(page);
++                await detachPage(page);
+             for (const promptId of [...state.prompts.keys()]) {
+                 dropPrompt(promptId, false);
+             }
+diff --git a/dist/src/vault-sensor.js b/dist/src/vault-sensor.js
+index ed10d8db2a2fe10000b3cf085ebf9f33b1fe8806..1b0b16ab51937d173dcbdae63145243846c11a1a 100644
+--- a/dist/src/vault-sensor.js
++++ b/dist/src/vault-sensor.js
+@@ -17,6 +17,7 @@
+     if (globalThis.__bwVaultSensorInstalled)
+         return;
+     globalThis.__bwVaultSensorInstalled = true;
++    const lifecycle = new AbortController();
+     const BINDING_NAME = "__bwVaultEvent";
+     const PROMPT_TIMEOUT_MS = 30_000;
+     const CLEAR_WATCH_MS = 10_000;
+@@ -28,6 +29,7 @@
+         const encoded = JSON.stringify(payload);
+         let attempts = 0;
+         const deliver = () => {
++            if (lifecycle.signal.aborted) return;
+             try {
+                 const binding = globalThis[BINDING_NAME];
+                 if (isEventBinding(binding)) {
+@@ -136,7 +138,7 @@
+         clearTimer = null;
+     };
+     // A real navigation must not look like "the app unmounted the form".
+-    addEventListener("pagehide", () => stopClearWatch(), true);
++    addEventListener("pagehide", () => stopClearWatch(), { capture: true, signal: lifecycle.signal });
+     // Report whether this document still shows a password form. The worker uses
+     // it to confirm a post-submit navigation: a page that lands back on a
+     // password form is a rejected login, not one worth saving.
+@@ -159,6 +161,7 @@
+     if (document.readyState === "loading") {
+         document.addEventListener("DOMContentLoaded", reportPasswordFormScan, {
+             once: true,
++            signal: lifecycle.signal,
+         });
+     }
+     else {
+@@ -225,14 +228,14 @@
+         const field = passwordFieldFor(event.target);
+         if (field)
+             capture(field);
+-    }, true);
++    }, { capture: true, signal: lifecycle.signal });
+     document.addEventListener("click", (event) => {
+         if (!event.isTrusted || !isSubmitLikeControl(event.target))
+             return;
+         const field = passwordFieldFor(event.target);
+         if (field)
+             capture(field);
+-    }, true);
++    }, { capture: true, signal: lifecycle.signal });
+     // --- save prompt ---------------------------------------------------------
+     let activePrompt = null;
+     const removePrompt = () => {
+@@ -345,4 +348,14 @@
+             removePrompt();
+         }
+     };
++    globalThis.__bwVaultDispose = () => {
++        lifecycle.abort();
++        stopClearWatch();
++        removePrompt();
++        lastCapture = { field: null, password: "", at: 0 };
++        delete globalThis.__bwVaultSensorInstalled;
++        delete globalThis.__bwVaultShowPrompt;
++        delete globalThis.__bwVaultDismissPrompt;
++        delete globalThis.__bwVaultDispose;
++    };
+ })();
+diff --git a/dist/src/vault.js b/dist/src/vault.js
+index a0918cb207235ed2a36ab600518017583c20b3e3..71dcd4df2bdf2cfc7ca8a287bb4ec75ba39b1684 100644
+--- a/dist/src/vault.js
++++ b/dist/src/vault.js
+@@ -1147,16 +1147,22 @@ async function acquireLock(paths, timeoutMs, staleMs, afterPublish = null) {
+ function emptySnapshot() {
+     return { version: SNAPSHOT_VERSION, revision: 0, records: [], pending: [] };
+ }
+-async function loadKeyAndSnapshot(paths) {
++async function loadKeyAndSnapshot(paths, keyProvider) {
+     const [keyStats, dataStats] = await Promise.all([
+         regularFileStats(paths.key, { missing: true }),
+         regularFileStats(paths.data, { missing: true }),
+     ]);
+-    if (!keyStats && dataStats) {
++    if (!keyProvider && !keyStats && dataStats) {
+         throw vaultError("Credential vault key is missing; refusing to replace it while ciphertext exists.", "VAULT_KEY_MISSING");
+     }
+     let key;
+-    if (keyStats) {
++    if (keyProvider) {
++        key = await keyProvider();
++        if (!Buffer.isBuffer(key) || key.length !== KEY_BYTES) {
++            throw vaultError("Host vault key is invalid.", "VAULT_KEY_INVALID");
++        }
++    }
++    else if (keyStats) {
+         key = await readBoundedFile(paths.key, KEY_BYTES, "Credential vault key");
+         if (key.length !== KEY_BYTES) {
+             key.fill(0);
+@@ -1212,6 +1218,10 @@ export class LocalCredentialVault {
+     #afterLockPublishForTest = null;
+     constructor(options = {}) {
+         const resolved = normalizeOptions(options);
++        this.keyProvider = resolved.keyProvider;
++        if (this.keyProvider != null && !isCallable(this.keyProvider)) {
++            throw new TypeError("keyProvider must be a function.");
++        }
+         // Behavior note: the fallback used to hard-code ~/.betterwright, ignoring
+         // BETTERWRIGHT_HOME. It now uses the shared defaultHome() so a vault
+         // constructed without dir/home lands in the same home directory as every
+@@ -1730,7 +1740,7 @@ export class LocalCredentialVault {
+         return withAuditWarning(result, auditWarning);
+     }
+     async #dispatch(action, payload, target) {
+-        const { key, snapshot } = await loadKeyAndSnapshot(this.paths);
++        const { key, snapshot } = await loadKeyAndSnapshot(this.paths, this.keyProvider);
+         try {
+             if (action === "list")
+                 return await this.#list(snapshot, payload, target);
+@@ -1801,6 +1811,9 @@ export class LocalCredentialVault {
+             return result;
+         });
+     }
++    trackRedactionSecret(value) {
++        this.#trackSecret(value);
++    }
+     redact(value) {
+         // Delegates to the one shared algorithm so the host-side net cannot drift
+         // from the worker-side one; only the secret set differs per process.
+@@ -1831,7 +1844,7 @@ export class LocalCredentialVault {
+     async #readSnapshot() {
+         if (!(await pathExists(this.paths.data)))
+             return null;
+-        const { key, snapshot } = await loadKeyAndSnapshot(this.paths);
++        const { key, snapshot } = await loadKeyAndSnapshot(this.paths, this.keyProvider);
+         key.fill(0);
+         return snapshot;
+     }
+@@ -1938,7 +1951,7 @@ export class LocalCredentialVault {
+                 if (!(await pathExists(this.paths.data))) {
+                     throw vaultError("No credential vault exists yet.", "NOT_FOUND");
+                 }
+-                const { key, snapshot } = await loadKeyAndSnapshot(this.paths);
++                const { key, snapshot } = await loadKeyAndSnapshot(this.paths, this.keyProvider);
+                 try {
+                     const index = snapshot.records.findIndex((candidate) => candidate.id === wanted);
+                     const pendingIndex = index === -1
+diff --git a/dist/src/worker.js b/dist/src/worker.js
+index c53eda622f60b7f5084698e850ef6a00f66e60f3..17a70911b9fe57357660a4c60486dac50a8e12aa 100755
+--- a/dist/src/worker.js
++++ b/dist/src/worker.js
+@@ -463,8 +463,8 @@ function sendResult(message) {
+         message.events = [];
+         message.pages = (message.pages || []).slice(0, 4);
+     }
+-    // Empty collections carry no information; both clients default them.
+-    for (const key of Object.keys(message)) {
++    // Only optional diagnostics can be omitted. An empty result is meaningful.
++    for (const key of ["console", "events", "pages", "artifacts", "warnings", "challenges"]) {
+         if (Array.isArray(message[key]) && message[key].length === 0)
+             delete message[key];
+     }
+@@ -580,6 +580,8 @@ const guardProxy = createGuardProxy({
+ });
+ async function installDownloadGuard(context) {
+     await closeDownloadGuard();
++    // Synara's target lease enforces downloads without changing a shared browser context.
++    if (launchConfig.hostOwnedTarget === true && launchConfig.downloadPolicy === "deny") return;
+     const browser = context.browser?.();
+     if (!browser || !isCallable(untrustedField(browser, "newBrowserCDPSession"))) {
+         throw new Error("Chromium download byte limits require a browser CDP session.");
+@@ -2025,9 +2027,10 @@ async function ensureBrowser(config, { requirePersistentProfile = false } = {})
+             // session. On success the context's "close" handler disarms and consumes
+             // this same reference, so the stop never runs twice.
+             try {
+-                const browser = await chromium.connectOverCDP(providerPlan.cdpUrl, Object.keys(providerPlan.headers || {}).length
+-                    ? { headers: providerPlan.headers }
+-                    : {});
++                const browser = await chromium.connectOverCDP(providerPlan.cdpUrl, {
++                    headers: providerPlan.headers || {},
++                    noDefaults: launchConfig.hostOwnedTarget === true,
++                });
+                 const existing = browser.contexts()[0];
+                 browserContext =
+                     existing ||
+@@ -2341,7 +2344,12 @@ function validateMethodPaths(kind, property, args) {
+             : args[1];
+         const files = Array.isArray(supplied) ? supplied : [supplied];
+         for (const file of files) {
+-            if (isString(file))
++            if (isString(file) && launchConfig.hostOwnedTarget === true && launchConfig.hostUploadFiles?.includes(file)) {
++                const resolved = fs.realpathSync(file);
++                if (resolved !== file || !fs.statSync(resolved).isFile())
++                    throw new Error("Host upload is not an exact regular staged file.");
++            }
++            else if (isString(file))
+                 assertReadableBrowserPath(file);
+         }
+     }
+@@ -2631,6 +2639,18 @@ function wrap(value, realm) {
+                 else {
+                     result = member.apply(value, prepared);
+                 }
++                if (launchConfig?.hostOwnedTarget && ["Keyboard", "Page", "Frame", "Locator"].includes(kind) &&
++                    ["press", "pressSequentially", "type", "fill", "down"].includes(property) && result?.catch) {
++                    result = result.catch(async (error) => {
++                        // Playwright press() skips its key-up sequence when CDP
++                        // denies a chord. Restore a neutral keyboard before reuse.
++                        const keyboard = kind === "Keyboard" ? value : kind === "Page" ? value.keyboard : value.page().keyboard;
++                        for (const key of ["AltLeft", "AltRight", "ControlLeft", "ControlRight", "MetaLeft", "MetaRight", "ShiftLeft", "ShiftRight"]) {
++                            await keyboard.up(key).catch(() => {});
++                        }
++                        throw error;
++                    });
++                }
+                 if (["Request", "Response"].includes(kind) &&
+                     property === "headers") {
+                     result = result && isCallable(untrustedField(result, "then"))
+@@ -6850,6 +6870,7 @@ async function cookieSync(message) {
+             id: message.id,
+             ok: true,
+             synced: storedCookies.length,
++            ...(launchConfig.hostOwnedTarget ? { cookieImportDomains: [...new Set(storedCookies.map((cookie) => cookie.domain))] } : {}),
+             selected,
+             skipped,
+             source,
+@@ -7353,7 +7374,8 @@ async function performShutdown() {
+     await closeDownloadGuard();
+     disposeVaultCapture();
+     try {
+-        await browserContext?.close();
++        if (launchConfig?.hostOwnedTarget === true) await browserContext?.browser()?.close();
++        else await browserContext?.close();
+     }
+     catch {
+         /* parent/process exit */
+diff --git a/package.json b/package.json
+index 6a77351c67f82950e967a6c7ad1808ad0157baf5..58b08d0bb606634230f70e2e82c3a6f1ec2fb6ba 100644
+--- a/package.json
++++ b/package.json
+@@ -6,6 +6,11 @@
+   "main": "dist/src/index.js",
+   "types": "types/index.d.ts",
+   "exports": {
++    "./capture": {
++      "types": "./types/capture.d.ts",
++      "import": "./dist/src/vault-capture.js",
++      "default": "./dist/src/vault-capture.js"
++    },
+     ".": {
+       "types": "./types/index.d.ts",
+       "import": "./dist/src/index.js",
+diff --git a/types/capture.d.ts b/types/capture.d.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..3b95156e5daefedd1156860949ed6316e633b498
+--- /dev/null
++++ b/types/capture.d.ts
+@@ -0,0 +1,58 @@
++export interface CapturePage {
++  readonly closed: boolean;
++  lastAgentActivity: number;
++  isClosed(): boolean;
++  close(): void;
++}
++
++export interface CDPSession {
++  send(method: string, parameters?: unknown): Promise<unknown>;
++  on(event: string, callback: (parameters: unknown) => void): void;
++  detach(): Promise<void>;
++}
++
++export interface CaptureContext {
++  pages(): CapturePage[];
++  on(event: "page", listener: (page: CapturePage) => void): void;
++  off(event: "page", listener: (page: CapturePage) => void): void;
++  newCDPSession(page: CapturePage): Promise<CDPSession>;
++}
++
++export type VaultAction = "list" | "save";
++
++export interface VaultCaptureDeps {
++  sessionForPage(page: CapturePage): unknown;
++  vaultCallAtOrigin(
++    session: unknown,
++    origin: string,
++    action: VaultAction,
++    payload: Record<string, unknown>,
++  ): Promise<Record<string, unknown>>;
++  trackSecret(value: string): void;
++  isHeaded(): boolean;
++  lastModelActivity(page: CapturePage, origin: string): number;
++  shouldCapture(input: { origin: string; username: string; password: string }): boolean | Promise<boolean>;
++  matchMode?: "base-domain" | "host" | "exact-origin";
++  requestSave?(params: {
++    page?: CapturePage;
++    origin: string;
++    username: string;
++    mode: string;
++  }): Promise<string>;
++  prefsPath?: string;
++  gateMs?: number;
++  confirmMs?: number;
++  promptTtlMs?: number;
++  modelWindowMs?: number;
++  onError?(error: Error): void;
++  onReady?(): void;
++}
++
++export interface VaultCapture {
++  dispose(): Promise<void>;
++}
++
++export function installVaultCapture(
++  context: CaptureContext,
++  deps: VaultCaptureDeps,
++): VaultCapture;
+diff --git a/types/public.d.ts b/types/public.d.ts
+index 7fbd0aa6136ac82660443871a5177afdebf6818d..272b8fdce93dd5948d5e2b3fec0325c1c48b3173 100644
+--- a/types/public.d.ts
++++ b/types/public.d.ts
+@@ -106,8 +106,9 @@ export type CookieSyncResult =
+       target: string;
+       warnings?: CookieSyncWarning[];
+       profileMode?: "persistent" | "ephemeral";
++      cookieImportDomains?: string[];
+     }
+-  | { ok: false; error: string };
++  | { ok: false; error: string; cookieReaderCode?: string; cookiePermissionDenied?: boolean; cookieReaderStage?: string };
+ 
+ export interface CookieSourceBrowser {
+   id: string;
+@@ -122,6 +123,10 @@ export interface CookieSourceProfile {
+ }
+ 
+ export interface BetterWrightOptions {
++  /** Synara-local: caller owns a single scoped target and enforces download denial. */
++  hostOwnedTarget?: boolean;
++  /** Trusted host-only, exact staged paths allowed for file input selection. */
++  hostUploadFiles?: readonly string[];
+   home?: string;  /**
+    * Named persistent browser profile inside the home: a separate identity,
+    * with its own cookie jar, its own profile lock, and its own session daemon,
+diff --git a/types/vault.d.ts b/types/vault.d.ts
+index 0876c43aa1fab6643fc4c080cb0c5631295a7047..ca87e73231102ec4e4cd800611d1ee128a2c7899 100644
+--- a/types/vault.d.ts
++++ b/types/vault.d.ts
+@@ -23,6 +23,8 @@ export type VaultJsonValue =
+   | { [key: string]: VaultJsonValue };
+ 
+ export interface LocalCredentialVaultOptions {
++  /** Host-owned encryption key. Return a fresh 32-byte Buffer; the vault zeroes it. */
++  keyProvider?: () => Promise<Buffer>;
+   /** Exact vault directory. Takes precedence over `home`. */
+   dir?: string;
+   /** BetterWright home directory; the vault is stored in its `vault` child. */
+@@ -150,6 +152,8 @@ export class LocalCredentialVault {
+ 
+   /** Return a cloned value with every active secret replaced. */
+   redact<T>(value: T): T;
++  /** Synara-local: retain captured secrets while host-owned pages remain alive. */
++  trackRedactionSecret(value: string): void;
+ 
+   /** Clear tracked material after every page in the owning worker is closed. */
+   resetRedactionSecrets(): void;

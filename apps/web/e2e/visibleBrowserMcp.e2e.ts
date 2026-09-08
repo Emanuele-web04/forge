@@ -1,10 +1,18 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createRequire } from "node:module";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-
-import { BROWSER_TOOL_NAMES } from "@synara/contracts";
+import { BROWSER_TOOL_NAMES, type ThreadBrowserState } from "@synara/contracts";
 import { _electron as electron, expect, test, type ElectronApplication } from "playwright/test";
 
 import { createBrowserMcpHarness } from "./fixtures/mcpBrowserHarness";
@@ -44,27 +52,11 @@ async function closeElectronApplication(application: ElectronApplication): Promi
   if (closeError) throw closeError;
 }
 
-function targetByName(
-  snapshot: Record<string, unknown>,
-  name: string,
-): { readonly ref: string; readonly snapshotId: string } {
-  const elements = snapshot.elements;
-  if (!Array.isArray(elements)) throw new Error("Snapshot omitted semantic elements.");
-  const element = elements.find(
-    (candidate) =>
-      candidate && typeof candidate === "object" && (candidate as { name?: unknown }).name === name,
-  ) as { ref?: unknown } | undefined;
-  if (typeof element?.ref !== "string" || typeof snapshot.snapshotId !== "string") {
-    throw new Error(`Snapshot did not contain ${name}.`);
-  }
-  return { ref: element.ref, snapshotId: snapshot.snapshotId };
-}
-
 test("production MCP controls one persistent Electron page across visibility changes", async () => {
   const mainPath = process.env.SYNARA_E2E_ELECTRON_MAIN;
   if (!mainPath) throw new Error("Electron E2E main bundle was not prepared.");
   const site = await startVisibleBrowserFixtureSite();
-  const home = mkdtempSync(join(tmpdir(), "synara-visible-browser-e2e-"));
+  const home = mkdtempSync(join(process.platform === "darwin" ? "/tmp" : tmpdir(), "synara-mcp-"));
   const workspaceRoot = join(home, "workspace");
   mkdirSync(workspaceRoot);
   writeFileSync(join(workspaceRoot, "fixture-upload.txt"), "visible-browser-upload\n", "utf8");
@@ -139,651 +131,680 @@ test("production MCP controls one persistent Electron page across visibility cha
       threadId,
       workspaceRoot,
     });
+
     const initialized = await mcp.initialize();
     expect(initialized.protocolVersion).toBe("2025-06-18");
-    const tools = await mcp.listTools();
-    expect(tools.map((tool) => tool.name)).toEqual(BROWSER_TOOL_NAMES);
+    expect((await mcp.listTools()).map((tool) => tool.name)).toEqual([
+      ...BROWSER_TOOL_NAMES,
+      "synara_e2e_review",
+    ]);
+    const guidance = await mcp.call("synara_e2e_review");
+    expect(JSON.stringify(guidance.content)).toMatch(/subagent/i);
+    expect(JSON.stringify(guidance.content)).toContain("proof");
 
-    const beforeStatus = await mcp.call("browser_status");
-    expect(beforeStatus.structuredContent).toMatchObject({
+    const run = (code: string, timeoutMs = 10_000) =>
+      mcp.call("browser_run", { code, timeoutMs, idempotencyKey: key() });
+    const read = async (expression: string) =>
+      (await run(`return await page.evaluate(() => (${expression}));`)).structuredContent.value;
+    const waitForText = (value: string) =>
+      run(
+        `await page.getByText(${JSON.stringify(value)}).waitFor({state:"visible"}); return true;`,
+      );
+    const click = (name: string) =>
+      run(
+        `await human.click(page.getByRole("button", {name:${JSON.stringify(name)},exact:true})); return true;`,
+      );
+
+    expect((await mcp.call("browser_status")).structuredContent).toMatchObject({
       available: true,
       physicalScope: "visible-shared-electron-webview",
       authorization: "not-required",
     });
-
     const opened = await mcp.call("browser_open", {
       url: site.initialUrl,
       show: true,
       reuse: true,
     });
-    const tabId = opened.structuredContent.tabId;
-    expect(typeof tabId).toBe("string");
-    await expect(page.locator("html")).toHaveAttribute("data-native-runtime-tab-id", String(tabId));
-    const initialRuntime = await runtimeDetails(String(tabId));
+    const tabId = String(opened.structuredContent.tabId);
+    await expect(page.locator("html")).toHaveAttribute("data-native-runtime-tab-id", tabId);
+    const initialRuntime = await runtimeDetails(tabId);
     expect(initialRuntime.url).toBe(site.initialUrl);
 
-    await electronApp.evaluate(() => {
-      (
-        globalThis as typeof globalThis & {
-          __synaraVisibleBrowserE2E: { setPanelRevealEnabled(enabled: boolean): void };
-        }
-      ).__synaraVisibleBrowserE2E.setPanelRevealEnabled(false);
-    });
-    await mcp.call("browser_evaluate", {
-      expression: `document.body.dataset.backgroundAgent = "continued"; true`,
-      idempotencyKey: key(),
-    });
-    const backgroundProbe = await mcp.call("browser_evaluate", {
-      expression: `document.body.dataset.backgroundAgent`,
-      idempotencyKey: key(),
-    });
-    expect(backgroundProbe.structuredContent.value).toBe("continued");
-    expect((await runtimeDetails(String(tabId))).id).toBe(initialRuntime.id);
-    await electronApp.evaluate(() => {
-      (
-        globalThis as typeof globalThis & {
-          __synaraVisibleBrowserE2E: { setPanelRevealEnabled(enabled: boolean): void };
-        }
-      ).__synaraVisibleBrowserE2E.setPanelRevealEnabled(true);
-    });
-
-    const navigated = await mcp.call("browser_navigate", {
-      url: site.appUrl,
-      waitUntil: "domcontentloaded",
-    });
-    expect(navigated.structuredContent).toMatchObject({ tabId, finalUrl: site.appUrl });
-    expect((await runtimeDetails(String(tabId))).url).toBe(site.appUrl);
-
-    // A real provider may use evaluate for a client-side navigation. Prove the
-    // CDP target and the native view remain the same physical page,
-    // rather than allowing metadata to advance on a hidden runtime.
-    await mcp.call("browser_evaluate", {
-      expression: `location.href = ${JSON.stringify(site.nextUrl)}; true`,
-      idempotencyKey: key(),
-    });
-    await mcp.call("browser_wait", {
-      conditions: [{ kind: "url", exact: site.nextUrl }],
-    });
-    expect((await runtimeDetails(String(tabId))).url).toBe(site.nextUrl);
-    expect((await runtimeDetails(String(tabId))).id).toBe(initialRuntime.id);
-    await mcp.call("browser_navigate", {
-      tabId,
-      url: site.appUrl,
-      waitUntil: "domcontentloaded",
-      idempotencyKey: key(),
-    });
-
-    const resized = await mcp.call("browser_resize", {
-      width: 760,
-      height: 520,
-      idempotencyKey: key(),
-    });
-    expect(resized.structuredContent).toMatchObject({
-      tabId,
-      requested: { width: 760, height: 520 },
-      observed: { height: 520 },
-    });
-    // The fixture page has a vertical scrollbar, so Chromium reports the CSS
-    // layout viewport minus its scrollbar while retaining the requested outer
-    // device-metrics width.
-    expect((resized.structuredContent.observed as { width: number }).width).toBeGreaterThanOrEqual(
-      740,
-    );
-    expect((resized.structuredContent.observed as { width: number }).width).toBeLessThanOrEqual(
-      760,
-    );
-    await mcp.call("browser_wait", {
-      conditions: [{ kind: "text", text: "Delayed fixture ready", state: "present" }],
-    });
-
-    const defaultSnapshot = await mcp.call("browser_snapshot");
-    expect(defaultSnapshot.structuredContent).not.toHaveProperty("image");
-    expect(defaultSnapshot.content.some((item) => item.type === "image")).toBe(false);
-
-    let snapshotResult = await mcp.call("browser_snapshot", {
-      includeImage: true,
-      includeDiagnostics: true,
-    });
-    expect(snapshotResult.structuredContent).toMatchObject({
-      tabId,
-      url: site.appUrl,
-      semanticSource: "bounded-wai-aria",
-      truncationReasons: [],
-      image: { mimeType: "image/png" },
-    });
-    const png = snapshotResult.content.find((item) => item.type === "image");
-    expect(png?.mimeType).toBe("image/png");
-    const pngBytes = Buffer.from(String(png?.data), "base64");
-    expect(pngBytes.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
-
-    const viewportScreenshot = await mcp.call("browser_screenshot");
-    expect(viewportScreenshot.structuredContent).toMatchObject({
-      tabId,
-      url: site.appUrl,
-      mode: "viewport",
-      clipped: false,
-      image: { mimeType: "image/png" },
-    });
-    const viewportPng = viewportScreenshot.content.find((item) => item.type === "image");
-    expect(Buffer.from(String(viewportPng?.data), "base64").subarray(0, 8)).toEqual(
-      Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
-    );
-    const fullPageScreenshot = await mcp.call("browser_screenshot", { fullPage: true });
-    expect(fullPageScreenshot.structuredContent).toMatchObject({
-      tabId,
-      url: site.appUrl,
-      mode: "fullPage",
-      clipped: false,
-      image: { mimeType: "image/png" },
-    });
-    expect(
-      (fullPageScreenshot.structuredContent.image as { height: number }).height,
-    ).toBeGreaterThan(2_000);
-
-    const hoverTarget = targetByName(snapshotResult.structuredContent, "Reveal hover state");
-    await mcp.call("browser_hover", {
-      target: hoverTarget,
-      idempotencyKey: key(),
-    });
-    const hoverState = await mcp.call("browser_evaluate", {
-      expression: `(() => { const node = document.querySelector('#hover-result'); return { visibility: getComputedStyle(node).visibility, trusted: node.dataset.trusted }; })()`,
-      idempotencyKey: key(),
-    });
-    expect(hoverState.structuredContent.value).toEqual({
-      visibility: "visible",
-      trusted: "true",
-    });
-
-    snapshotResult = await mcp.call("browser_snapshot");
-    await mcp.call("browser_select", {
-      target: targetByName(snapshotResult.structuredContent, "Fixture choice"),
-      values: ["beta"],
-      idempotencyKey: key(),
-    });
-    await mcp.call("browser_wait", {
-      conditions: [{ kind: "text", text: "Selected: beta", state: "present" }],
-    });
-
-    snapshotResult = await mcp.call("browser_snapshot");
-    const uploadTarget = targetByName(snapshotResult.structuredContent, "Fixture upload");
-    const uploaded = await mcp.call("browser_upload", {
-      target: uploadTarget,
-      paths: ["fixture-upload.txt"],
-      idempotencyKey: key(),
-    });
-    expect(uploaded.structuredContent.files).toEqual([
-      { name: "fixture-upload.txt", byteLength: 23 },
-    ]);
-    await mcp.call("browser_wait", {
-      conditions: [{ kind: "text", text: "Uploaded: fixture-upload.txt:23", state: "present" }],
-    });
-    await expect(
-      mcp.call("browser_upload", {
-        target: uploadTarget,
-        paths: ["outside-link.txt"],
-        timeoutMs: 1_000,
-        idempotencyKey: key(),
-      }),
-    ).rejects.toThrow(/BrowserUploadPathOutsideWorkspace/);
-
-    snapshotResult = await mcp.call("browser_snapshot");
-    try {
-      await mcp.call("browser_drag", {
-        source: targetByName(snapshotResult.structuredContent, "Drag source"),
-        target: targetByName(snapshotResult.structuredContent, "Drop target"),
-        steps: 8,
-        timeoutMs: 2_000,
-        idempotencyKey: key(),
+    await test.step("keeps the same native page while hidden and navigating", async () => {
+      await electronApp.evaluate(() => {
+        (
+          globalThis as typeof globalThis & {
+            __synaraVisibleBrowserE2E: { setPanelRevealEnabled(enabled: boolean): void };
+          }
+        ).__synaraVisibleBrowserE2E.setPanelRevealEnabled(false);
       });
-    } catch (error) {
-      const dragDiagnostics = await mcp.call("browser_evaluate", {
-        expression: `({
-          source: document.querySelector('#drag-source').getBoundingClientRect().toJSON(),
-          target: document.querySelector('#drop-target').getBoundingClientRect().toJSON(),
-          dragMousedown: document.body.dataset.dragMousedown,
-          dragMousemove: document.body.dataset.dragMousemove,
-          dragstart: document.body.dataset.dragstart,
-          dragend: document.body.dataset.dragend,
-          drop: document.body.dataset.drop
-        })`,
-        idempotencyKey: key(),
-      });
-      throw new Error(
-        `browser_drag failed with ${String(error)}; diagnostics=${JSON.stringify(dragDiagnostics.structuredContent.value)}`,
+      await run(
+        'return await page.evaluate(() => document.body.dataset.backgroundAgent = "continued");',
       );
-    }
-    await mcp.call("browser_wait", {
-      conditions: [{ kind: "text", text: "Dragged: yes", state: "present" }],
-    });
-
-    for (const expectedDialog of [
-      {
-        name: "Open alert dialog",
-        kind: "alert",
-        action: "accepted",
-        result: "Dialog result: alert-continued",
-      },
-      {
-        name: "Open confirm dialog",
-        kind: "confirm",
-        action: "dismissed",
-        result: "Dialog result: confirm-false",
-      },
-      {
-        name: "Open prompt dialog",
-        kind: "prompt",
-        action: "dismissed",
-        result: "Dialog result: prompt-null",
-      },
-    ] as const) {
-      snapshotResult = await mcp.call("browser_snapshot");
-      const clickedDialog = await mcp.call("browser_click", {
-        target: targetByName(snapshotResult.structuredContent, expectedDialog.name),
-        idempotencyKey: key(),
+      expect(await read("document.body.dataset.backgroundAgent")).toBe("continued");
+      expect((await runtimeDetails(tabId)).id).toBe(initialRuntime.id);
+      await electronApp.evaluate(() => {
+        (
+          globalThis as typeof globalThis & {
+            __synaraVisibleBrowserE2E: { setPanelRevealEnabled(enabled: boolean): void };
+          }
+        ).__synaraVisibleBrowserE2E.setPanelRevealEnabled(true);
       });
-      expect(clickedDialog.structuredContent.dialogs).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            kind: expectedDialog.kind,
-            action: expectedDialog.action,
-          }),
-        ]),
+      const navigated = await mcp.call("browser_navigate", { url: site.appUrl });
+      expect(navigated.structuredContent).toMatchObject({ tabId, finalUrl: site.appUrl });
+      await run(
+        `return await page.evaluate(() => { location.href = ${JSON.stringify(site.nextUrl)}; return true; });`,
       );
-      await mcp.call("browser_wait", {
-        conditions: [{ kind: "text", text: expectedDialog.result, state: "present" }],
-      });
-    }
+      await run(`await page.waitForURL(${JSON.stringify(site.nextUrl)}); return true;`);
+      expect((await runtimeDetails(tabId)).url).toBe(site.nextUrl);
+      expect((await runtimeDetails(tabId)).id).toBe(initialRuntime.id);
+      await mcp.call("browser_navigate", { tabId, url: site.appUrl });
+      expect(await read("document.body.dataset.agentClicks")).toBe("0");
+    });
 
-    snapshotResult = await mcp.call("browser_snapshot");
-    await mcp.call("browser_click", {
-      target: targetByName(snapshotResult.structuredContent, "Emit fixture logs"),
-      idempotencyKey: key(),
-    });
-    await mcp.call("browser_wait", {
-      conditions: [
-        {
-          kind: "target",
-          target: { selector: "body[data-logs-emitted='true']" },
-          state: "attached",
-        },
-      ],
-    });
-    const logs = await mcp.call("browser_logs", { limit: 200 });
-    const logJson = JSON.stringify(logs.structuredContent);
-    expect(logJson).toContain("Fixture console warning");
-    expect(logJson).toContain("/api/fixture");
-    expect(logJson).not.toContain("SECRET_HEADER_MUST_NOT_LEAK");
-    expect(logJson).not.toContain("SECRET_BODY_MUST_NOT_LEAK");
-
-    snapshotResult = await mcp.call("browser_snapshot");
-    await expect(
-      mcp.call("browser_click", {
-        target: targetByName(snapshotResult.structuredContent, "Download fixture"),
-        idempotencyKey: key(),
-      }),
-    ).rejects.toThrow(/BrowserDownloadApprovalRequired/);
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(existsSync(join(home, "Downloads", "fixture-download.txt"))).toBe(false);
-
-    snapshotResult = await mcp.call("browser_snapshot");
-    const oauthWindowPromise = electronApp.waitForEvent("window");
-    const oauthPopupClick = await mcp.call("browser_click", {
-      target: targetByName(snapshotResult.structuredContent, "Open OAuth popup"),
-      idempotencyKey: key(),
-    });
-    expect(oauthPopupClick.structuredContent).toMatchObject({
-      tabId,
-      humanActionRequired: {
-        kind: "oauth_popup",
-        instruction: "Complete sign-in in the visible popup before continuing.",
-      },
-    });
-    const oauthWindow = await oauthWindowPromise;
-    await expect(
-      oauthWindow.getByRole("heading", { name: "Complete fixture sign-in" }),
-    ).toBeVisible();
-    const afterOAuthTabs = await mcp.call("browser_tabs");
-    expect(afterOAuthTabs.structuredContent).toMatchObject({
-      activeTabId: tabId,
-      assignedTabId: tabId,
-    });
-    expect(afterOAuthTabs.structuredContent.tabs).toHaveLength(1);
-    await oauthWindow.close();
-
-    snapshotResult = await mcp.call("browser_snapshot");
-    const popupClick = await mcp.call("browser_click", {
-      target: targetByName(snapshotResult.structuredContent, "Open fixture tab"),
-      idempotencyKey: key(),
-    });
-    if (typeof popupClick.structuredContent.openedTabId !== "string") {
-      const unresolvedPopupTabs = await mcp.call("browser_tabs");
-      const unresolvedPopupLink = await mcp.call("browser_evaluate", {
-        expression: `(() => { const link = document.querySelector('#new-tab'); return { href: link?.href, target: link?.target, activeElement: document.activeElement?.id }; })()`,
-        idempotencyKey: key(),
-      });
-      throw new Error(
-        `target=_blank click did not report openedTabId; click=${JSON.stringify(popupClick.structuredContent)}; tabs=${JSON.stringify(unresolvedPopupTabs.structuredContent)}; link=${JSON.stringify(unresolvedPopupLink.structuredContent.value)}`,
-      );
-    }
-    const popupTabId = String(popupClick.structuredContent.openedTabId);
-    const popupTabs = await mcp.call("browser_tabs");
-    expect(popupTabs.structuredContent).toMatchObject({
-      activeTabId: popupTabId,
-      assignedTabId: popupTabId,
-    });
-    expect(popupTabs.structuredContent.tabs).toHaveLength(2);
-    const popupSnapshot = await mcp.call("browser_snapshot");
-    expect(popupSnapshot.structuredContent).toMatchObject({
-      tabId: popupTabId,
-      title: "Popup fixture",
-    });
-    expect(popupSnapshot.structuredContent.visibleText).toContain("Agent-created fixture tab");
-    const popupClosed = await mcp.call("browser_close", {
-      tabId: popupTabId,
-      idempotencyKey: key(),
-    });
-    expect(popupClosed.structuredContent).toMatchObject({
-      closedTabId: popupTabId,
-      activeTabId: tabId,
-    });
-    await expect(page.locator("html")).toHaveAttribute("data-native-runtime-tab-id", String(tabId));
-
-    await mcp.call("browser_navigate", {
-      tabId,
-      url: site.nextUrl,
-      waitUntil: "load",
-      idempotencyKey: key(),
-    });
-    const wentBack = await mcp.call("browser_back", {
-      tabId,
-      waitUntil: "domcontentloaded",
-      idempotencyKey: key(),
-    });
-    expect(wentBack.structuredContent.finalUrl).toBe(site.appUrl);
-    const wentForward = await mcp.call("browser_forward", {
-      tabId,
-      waitUntil: "load",
-      idempotencyKey: key(),
-    });
-    expect(wentForward.structuredContent.finalUrl).toBe(site.nextUrl);
-    const reloaded = await mcp.call("browser_reload", {
-      tabId,
-      waitUntil: "networkidle",
-      ignoreCache: true,
-      idempotencyKey: key(),
-    });
-    expect(reloaded.structuredContent.finalUrl).toBe(site.nextUrl);
-    const redirected = await mcp.call("browser_navigate", {
-      tabId,
-      url: site.redirectUrl,
-      waitUntil: "load",
-      idempotencyKey: key(),
-    });
-    expect(redirected.structuredContent.finalUrl).toBe(site.nextUrl);
-    expect(redirected.structuredContent.redirects).toContain(site.redirectUrl);
-    await expect(
-      mcp.call("browser_navigate", {
+    await test.step("returns bounded observations and durable screenshot proof", async () => {
+      const resized = await mcp.call("browser_resize", { width: 760, height: 520 });
+      expect(resized.structuredContent).toMatchObject({
         tabId,
-        url: "file:///etc/passwd",
-        timeoutMs: 1_000,
-        idempotencyKey: key(),
-      }),
-    ).rejects.toThrow(/BrowserNavigationBlocked/);
-    await mcp.call("browser_navigate", {
-      tabId,
-      url: site.appUrl,
-      waitUntil: "domcontentloaded",
-      idempotencyKey: key(),
-    });
-
-    snapshotResult = await mcp.call("browser_snapshot");
-    await expect(
-      mcp.call("browser_click", {
-        target: targetByName(snapshotResult.structuredContent, "Disabled action"),
-        timeoutMs: 500,
-        idempotencyKey: key(),
-      }),
-    ).rejects.toThrow(/BrowserTargetNotEnabled/);
-    await expect(
-      mcp.call("browser_click", {
-        target: targetByName(snapshotResult.structuredContent, "Covered action"),
-        timeoutMs: 500,
-        idempotencyKey: key(),
-      }),
-    ).rejects.toThrow(/BrowserTargetObscured/);
-
-    const stableAgentTarget = targetByName(snapshotResult.structuredContent, "Commit agent action");
-    await mcp.call("browser_evaluate", {
-      expression:
-        "document.querySelector('#state').setAttribute('data-unrelated-mutation', String(Date.now())); true",
-      idempotencyKey: key(),
-    });
-    await mcp.call("browser_click", {
-      ...stableAgentTarget,
-      idempotencyKey: key(),
-    });
-    const pointGeometry = await mcp.call("browser_evaluate", {
-      expression: `(() => { const r = document.querySelector('#point').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
-      idempotencyKey: key(),
-    });
-    await mcp.call("browser_click", {
-      target: { point: pointGeometry.structuredContent.value },
-      idempotencyKey: key(),
-    });
-    await mcp.call("browser_wait", {
-      conditions: [{ kind: "text", text: "Point clicks: 1", state: "present" }],
-    });
-    await mcp.call("browser_evaluate", {
-      expression: String.raw`(() => {
-        const fragment = document.createDocumentFragment();
-        for (let index = 0; index < 300; index += 1) {
-          const button = document.createElement("button");
-          button.textContent = "Offscreen action " + index;
-          button.style.position = "absolute";
-          button.style.top = (1000 + index * 36) + "px";
-          fragment.append(button);
-        }
-        document.body.append(fragment);
-        return true;
-      })()`,
-      idempotencyKey: key(),
-    });
-    const compactSnapshot = await mcp.call("browser_snapshot", { includeImage: false });
-    expect(Array.isArray(compactSnapshot.structuredContent.elements)).toBe(true);
-    expect((compactSnapshot.structuredContent.elements as unknown[]).length).toBe(120);
-    expect(compactSnapshot.structuredContent.truncationReasons).toContain("semantic-element-limit");
-    expect(() => targetByName(compactSnapshot.structuredContent, "Shared input")).not.toThrow();
-    expect(
-      Buffer.byteLength(JSON.stringify(compactSnapshot.structuredContent), "utf8"),
-    ).toBeLessThan(36_000);
-    const compactText = compactSnapshot.content.find((item) => item.type === "text")?.text;
-    expect(Buffer.byteLength(String(compactText ?? ""), "utf8")).toBeLessThan(16_000);
-
-    snapshotResult = await mcp.call("browser_snapshot", { includeImage: false });
-    const hostComposer = page.getByLabel("Host composer");
-    await hostComposer.fill("HOST_SENTINEL");
-    await hostComposer.focus();
-    const sharedInputByElementId = targetByName(snapshotResult.structuredContent, "Shared input");
-    await mcp.call("browser_type", {
-      elementId: sharedInputByElementId.ref,
-      snapshotId: sharedInputByElementId.snapshotId,
-      text: "shared-through-mcp",
-      idempotencyKey: key(),
-    });
-    await expect(hostComposer).toHaveValue("HOST_SENTINEL");
-    await mcp.call("browser_press", {
-      keys: ["ctrl+a", "BACKSPACE", "x", "y", "ArrowLeft", "Delete"],
-      idempotencyKey: key(),
-    });
-    const edited = await mcp.call("browser_evaluate", {
-      expression: "document.querySelector('input').value",
-      idempotencyKey: key(),
-    });
-    expect(edited.structuredContent.value).toBe("x");
-    snapshotResult = await mcp.call("browser_snapshot", { includeImage: false });
-    const sharedInputByBareRef = targetByName(snapshotResult.structuredContent, "Shared input");
-    await expect(
-      mcp.call("browser_type", {
-        ref: sharedInputByBareRef.ref,
-        text: "shared-through-mcp",
-        idempotencyKey: key(),
-      }),
-    ).rejects.toThrow(/BrowserInputUnsupported/);
-    await mcp.call("browser_type", {
-      ref: sharedInputByBareRef.ref,
-      snapshotId: sharedInputByBareRef.snapshotId,
-      text: "shared-through-mcp",
-      idempotencyKey: key(),
-    });
-    await mcp.call("browser_press", {
-      key: "ENTER",
-      idempotencyKey: key(),
-    });
-    await mcp.call("browser_wait", { timeMs: 25 });
-    await mcp.call("browser_wait", { timeoutMs: 100 });
-    await expect(hostComposer).toHaveValue("HOST_SENTINEL");
-    await expect(page.locator("html")).toHaveAttribute("data-host-submits", "0");
-    const scrolled = await mcp.call("browser_scroll", {
-      direction: "end",
-      amount: 1_000,
-      idempotencyKey: key(),
-    });
-    expect((scrolled.structuredContent.after as { y: number }).y).toBeGreaterThan(0);
-    await mcp.call("browser_wait", {
-      mode: "all",
-      conditions: [{ kind: "text", text: "Agent clicks: 1", state: "present" }],
-    });
-
-    // Return to the top through Electron's native input path. Playwright's
-    // renderer-scoped mouse cannot target a sibling WebContentsView.
-    await sendNativeInput(String(tabId), { type: "mouseMove", x: 30, y: 30 });
-    for (let step = 0; step < 32; step += 1) {
-      await sendNativeInput(String(tabId), {
-        type: "mouseWheel",
-        x: 30,
-        y: 30,
-        deltaY: 1_000,
-        canScroll: true,
+        requested: { width: 760, height: 520 },
+        observed: { height: 520 },
       });
-    }
-    // Electron acknowledges input before Chromium applies guest scrolling.
-    // Observe convergence through the public browser tool.
-    await expect
-      .poll(
-        async () => {
-          const probe = await mcp.call("browser_evaluate", {
-            expression: "scrollY",
-            idempotencyKey: key(),
-          });
-          return probe.structuredContent.value;
-        },
-        { timeout: 2_000, intervals: [25, 50, 100] },
-      )
-      .toBe(0);
-    const manualGeometry = await mcp.call("browser_evaluate", {
-      expression: `(() => { const r = document.querySelector('#manual').getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height, scrollY }; })()`,
-      idempotencyKey: key(),
+      expect(
+        (resized.structuredContent.observed as { width: number }).width,
+      ).toBeGreaterThanOrEqual(740);
+      await waitForText("Delayed fixture ready");
+      const observed = await run("return await snapshot({interactive:true});");
+      expect(observed.content.some((item) => item.type === "image")).toBe(false);
+      expect(JSON.stringify(observed.structuredContent.value)).toContain("Shared input");
+      for (const fullPage of [false, true]) {
+        const screenshot = await mcp.call("browser_screenshot", { fullPage, kind: "proof" });
+        expect(screenshot.structuredContent).toMatchObject({
+          tabId,
+          mode: fullPage ? "fullPage" : "viewport",
+          image: { mimeType: "image/png" },
+        });
+        const png = screenshot.content.find((item) => item.type === "image");
+        const bytes = Buffer.from(String(png?.data), "base64");
+        expect(bytes.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+        const artifactPath = String(screenshot.structuredContent.artifactPath);
+        expect(artifactPath.startsWith(join(workspaceRoot, "proof"))).toBe(true);
+        expect(readFileSync(artifactPath)).toEqual(bytes);
+        if (fullPage)
+          expect((screenshot.structuredContent.image as { height: number }).height).toBeGreaterThan(
+            2000,
+          );
+      }
     });
-    const rect = manualGeometry.structuredContent.value as {
-      x: number;
-      y: number;
-      width: number;
-      height: number;
-      scrollY: number;
-    };
-    expect(rect.scrollY).toBe(0);
-    const interruptedByManualClick = mcp
-      .call("browser_wait", {
-        conditions: [{ kind: "text", text: "This text never appears", state: "present" }],
-        timeoutMs: 5_000,
-      })
-      .then(
+
+    await test.step("performs trusted hover, select, workspace upload and drag", async () => {
+      await run(
+        'await page.getByRole("button",{name:"Reveal hover state",exact:true}).hover(); return true;',
+      );
+      expect(
+        await read(
+          '({visibility:getComputedStyle(document.querySelector("#hover-result")).visibility,trusted:document.querySelector("#hover-result").dataset.trusted})',
+        ),
+      ).toEqual({ visibility: "visible", trusted: "true" });
+      await run(
+        'await page.getByLabel("Fixture choice",{exact:true}).selectOption("beta"); return true;',
+      );
+      await waitForText("Selected: beta");
+      const target = { locator: { kind: "label", text: "Fixture upload", exact: true } };
+      const uploaded = await mcp.call("browser_upload", { target, paths: ["fixture-upload.txt"] });
+      expect(uploaded.structuredContent.files).toEqual([
+        { name: "fixture-upload.txt", byteLength: 23 },
+      ]);
+      await waitForText("Uploaded: fixture-upload.txt:23");
+      await expect(
+        mcp.call("browser_upload", { target, paths: ["outside-link.txt"] }),
+      ).rejects.toThrow(/BrowserUploadPathOutsideWorkspace/);
+      await run('await page.locator("#drop-target").scrollIntoViewIfNeeded(); return true;');
+      await run(
+        'await page.locator("#drag-source").dragTo(page.locator("#drop-target"), {steps:8}); return true;',
+      );
+      const dragState = await read(
+        '({state:document.querySelector("#drag-state").textContent,start:document.body.dataset.dragstart,end:document.body.dataset.dragend,drop:document.body.dataset.drop,down:document.body.dataset.dragMousedown,move:document.body.dataset.dragMousemove,buttons:document.body.dataset.dragButtons,focused:document.hasFocus(),source:document.querySelector("#drag-source").getBoundingClientRect().toJSON(),target:document.querySelector("#drop-target").getBoundingClientRect().toJSON()})',
+      );
+      expect(dragState, JSON.stringify(dragState)).toMatchObject({ state: "Dragged: yes" });
+      await waitForText("Dragged: yes");
+    });
+
+    await test.step("handles dialogs, excludes network secrets and blocks downloads", async () => {
+      for (const [name, kind, action, result] of [
+        ["Open alert dialog", "alert", "accepted", "alert-continued"],
+        ["Open confirm dialog", "confirm", "dismissed", "confirm-false"],
+        ["Open prompt dialog", "prompt", "dismissed", "prompt-null"],
+      ]) {
+        const clicked = await click(name!);
+        expect(clicked.structuredContent.dialogs).toEqual(
+          expect.arrayContaining([expect.objectContaining({ kind, action })]),
+        );
+        await waitForText(`Dialog result: ${result}`);
+      }
+      await click("Emit fixture logs");
+      await run(
+        'await page.locator("body[data-logs-emitted=true]").waitFor({state:"attached"}); return true;',
+      );
+      const logs = JSON.stringify(
+        (await mcp.call("browser_logs", { limit: 200 })).structuredContent,
+      );
+      expect(logs).toContain("Fixture console warning");
+      expect(logs).toContain("/api/fixture");
+      expect(logs).not.toContain("SECRET_HEADER_MUST_NOT_LEAK");
+      expect(logs).not.toContain("SECRET_BODY_MUST_NOT_LEAK");
+      await expect(
+        run(
+          'await human.click(page.getByRole("link",{name:"Download fixture",exact:true})); return true;',
+        ),
+      ).rejects.toThrow(/BrowserDownloadApprovalRequired/);
+      // Give a broken block time to write the file before asserting it never
+      // appeared; an immediate check would pass a regression that downloads
+      // slightly late.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(existsSync(join(home, "Downloads", "fixture-download.txt"))).toBe(false);
+    });
+
+    await test.step("keeps OAuth and target-blank popups inside the app", async () => {
+      for (const [name, url, role] of [
+        ["Open OAuth popup", "/oauth", "button"],
+        ["Open fixture tab", "/popup", "link"],
+      ]) {
+        await run(
+          `await human.click(page.getByRole(${JSON.stringify(role)},{name:${JSON.stringify(name)},exact:true})); return true;`,
+        );
+        const tabs = (await mcp.call("browser_tabs")).structuredContent;
+        expect(tabs.tabs).toHaveLength(2);
+        const popupTab = (tabs.tabs as { tabId: string; url: string }[]).find(
+          (tab) => tab.tabId !== tabId,
+        );
+        expect(popupTab).toBeDefined();
+        const popupTabId = popupTab!.tabId;
+        await mcp.call("browser_run", { tabId: popupTabId, code: "return page.url();" });
+        await expect
+          .poll(async () => (await runtimeDetails(popupTabId)).url)
+          .toBe(new URL(url!, site.appUrl).href);
+        expect(
+          await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length),
+        ).toBe(1);
+        expect(tabs.activeTabId).toBe(popupTabId);
+        const closed = await mcp.call("browser_close", { tabId: popupTabId });
+        expect(closed.structuredContent).toMatchObject({
+          closedTabId: popupTabId,
+          activeTabId: tabId,
+        });
+        await expect(page.locator("html")).toHaveAttribute("data-native-runtime-tab-id", tabId);
+      }
+    });
+
+    await test.step("preserves history and rejects unsupported navigation", async () => {
+      await mcp.call("browser_navigate", { tabId, url: site.nextUrl, waitUntil: "load" });
+      expect((await mcp.call("browser_back", { tabId })).structuredContent.finalUrl).toBe(
+        site.appUrl,
+      );
+      expect((await mcp.call("browser_forward", { tabId })).structuredContent.finalUrl).toBe(
+        site.nextUrl,
+      );
+      expect(
+        (await mcp.call("browser_reload", { tabId, ignoreCache: true })).structuredContent.finalUrl,
+      ).toBe(site.nextUrl);
+      const redirected = await mcp.call("browser_navigate", { tabId, url: site.redirectUrl });
+      expect(redirected.structuredContent.finalUrl).toBe(site.nextUrl);
+      expect(redirected.structuredContent.redirects).toContain(site.redirectUrl);
+      await expect(
+        mcp.call("browser_navigate", { tabId, url: "file:///etc/passwd" }),
+      ).rejects.toThrow(/BrowserNavigationBlocked/);
+      await mcp.call("browser_navigate", { tabId, url: site.appUrl });
+      // Locator clicks enforce actionability; human.click is a lower-level pointer operation.
+      for (const name of ["Disabled action", "Covered action"]) {
+        await expect(
+          run(
+            `await page.getByRole("button",{name:${JSON.stringify(name)},exact:true}).click({timeout:500}); return true;`,
+          ),
+        ).rejects.toThrow(/BrowserEvaluationFailed|BrowserTimeout/);
+      }
+      expect(await read("document.body.dataset.agentClicks")).toBe("0");
+    });
+
+    await test.step("keeps native input in the guest and returns compact observations", async () => {
+      await run(
+        'return await page.evaluate(() => { document.querySelector("#state").setAttribute("data-unrelated-mutation","true"); return true; });',
+      );
+      await click("Commit agent action");
+      const point = (await read(
+        '(() => {const r=document.querySelector("#point").getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()',
+      )) as { x: number; y: number };
+      await run(`await page.mouse.click(${point.x},${point.y}); return true;`);
+      await waitForText("Point clicks: 1");
+      await run(
+        'return await page.evaluate(() => {const fragment=document.createDocumentFragment();for(let i=0;i<300;i++){const button=document.createElement("button");button.textContent="Offscreen action "+i;button.style.cssText="position:absolute;top:"+(1000+i*36)+"px";fragment.append(button);}document.body.append(fragment);return true;});',
+      );
+      const compact = await run('return await snapshot({interactive:true,selector:"main"});');
+      expect(Buffer.byteLength(JSON.stringify(compact.structuredContent))).toBeLessThan(36_000);
+      const hostComposer = page.getByLabel("Host composer");
+      await electronApp.evaluate(() => {
+        (
+          globalThis as typeof globalThis & {
+            __synaraVisibleBrowserE2E: { setPreviewEnabled(enabled: boolean): void };
+          }
+        ).__synaraVisibleBrowserE2E.setPreviewEnabled(true);
+      });
+      await hostComposer.fill("HOST_SENTINEL");
+      await hostComposer.focus();
+      await electronApp.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()[0]!.webContents.focus(),
+      );
+      await run(
+        'await page.getByLabel("Shared input",{exact:true}).fill("direct-filled"); return true;',
+      );
+      await expect(hostComposer).toHaveValue("HOST_SENTINEL");
+      expect(await read('document.querySelector("input").value')).toBe("direct-filled");
+      await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.hide());
+      try {
+        const hiddenProof = await mcp.call("browser_screenshot", {
+          kind: "proof",
+          fullPage: false,
+          timeoutMs: 3000,
+        });
+        expect(hiddenProof.content.some((block) => block.type === "image")).toBe(true);
+      } finally {
+        await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.show());
+      }
+      await electronApp.evaluate(() => {
+        (
+          globalThis as typeof globalThis & {
+            __synaraVisibleBrowserE2E: { setPreviewEnabled(enabled: boolean): void };
+          }
+        ).__synaraVisibleBrowserE2E.setPreviewEnabled(false);
+      });
+      await hostComposer.focus();
+      await electronApp.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()[0]!.webContents.focus(),
+      );
+      await run(
+        'await human.type(page.getByLabel("Shared input",{exact:true}),"shared-through-mcp",{clear:true}); return true;',
+      );
+      await expect(hostComposer).toHaveValue("HOST_SENTINEL");
+      await run('await page.keyboard.press("ControlOrMeta+A"); return true;');
+      await run('await page.keyboard.press("Backspace"); return true;');
+      await run('await page.keyboard.press("x"); return true;');
+      expect(await read('document.querySelector("input").value')).toBe("x");
+      await run(
+        'await human.type(page.getByLabel("Shared input",{exact:true}),"shared-through-mcp",{clear:true}); return true;',
+      );
+      await run('await page.keyboard.press("Enter"); return true;');
+      await expect(hostComposer).toHaveValue("HOST_SENTINEL");
+      await expect(page.locator("html")).toHaveAttribute("data-host-submits", "0");
+      await run("await human.scroll({deltaY:1000,deltaX:0}); return true;");
+      await expect.poll(() => read("scrollY")).toBeGreaterThan(0);
+    });
+
+    await test.step("shares the system clipboard without granting website reads", async () => {
+      await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.hide());
+      await run('await page.getByRole("button",{name:"Copy synthetic text",exact:true}).click();');
+      await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.show());
+      await expect.poll(() => read('document.querySelector("#copy").dataset.copied')).toBe("true");
+      expect(
+        await electronApp.evaluate(
+          ({ clipboard }) => clipboard.readText() === "synthetic-browser-copy",
+        ),
+      ).toBe(true);
+      if (process.platform === "darwin")
+        expect(
+          execFileSync("/usr/bin/pbpaste", { encoding: "utf8" }) === "synthetic-browser-copy",
+        ).toBe(true);
+      await electronApp.evaluate(({ clipboard }) => clipboard.writeText("synthetic-shell-copy"));
+      await run('await page.getByLabel("Shared input",{exact:true}).fill("");');
+      await run('await page.keyboard.press("ControlOrMeta+V");');
+      expect(await read('document.querySelector("input").value')).toBe("synthetic-shell-copy");
+      await run('await page.keyboard.press("ControlOrMeta+A");');
+      await run('await page.keyboard.press("ControlOrMeta+X");');
+      expect(await read('document.querySelector("input").value')).toBe("");
+      expect(
+        await electronApp.evaluate(
+          ({ clipboard }) => clipboard.readText() === "synthetic-shell-copy",
+        ),
+      ).toBe(true);
+      expect(await read("navigator.clipboard.readText().then(() => false, () => true)")).toBe(true);
+      await electronApp.evaluate(({ clipboard }) => clipboard.clear());
+      await run('await page.getByLabel("Shared input",{exact:true}).fill("shared-through-mcp");');
+    });
+
+    await test.step("does not mistake zoomed automated clicks for human input", async () => {
+      for (const factor of [0.5, 1.25, 1]) {
+        await electronApp.evaluate((_, value) => {
+          (
+            globalThis as typeof globalThis & {
+              __synaraVisibleBrowserE2E: { setPageZoomFactor(value: number): void };
+            }
+          ).__synaraVisibleBrowserE2E.setPageZoomFactor(value);
+        }, factor);
+        await run(
+          'await human.click(page.getByRole("button",{name:"Commit point action",exact:true}));',
+        );
+      }
+    });
+
+    await test.step("yields to human input and recovers after MCP cancellation", async () => {
+      await sendNativeInput(tabId, { type: "mouseMove", x: 30, y: 30 });
+      for (let step = 0; step < 32; step++)
+        await sendNativeInput(tabId, {
+          type: "mouseWheel",
+          x: 30,
+          y: 30,
+          deltaY: 1000,
+          canScroll: true,
+        });
+      await expect.poll(() => read("scrollY"), { timeout: 3000 }).toBe(0);
+      const rect = (await read(
+        '(() => {const r=document.querySelector("#manual").getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()',
+      )) as { x: number; y: number };
+      const interrupted = run(
+        'await page.getByText("Human takeover sentinel never appears").waitFor(); return true;',
+        5000,
+      ).then(
         () => null,
         (error: unknown) => error,
       );
-    // Let the request enter its polling loop so this is a real concurrent human
-    // takeover, not an already-aborted request that never reached the page.
-    await new Promise((resolve) => setTimeout(resolve, 75));
-    const manualX = Math.round(rect.x + rect.width / 2);
-    const manualY = Math.round(rect.y + rect.height / 2);
-    await sendNativeInput(String(tabId), { type: "mouseMove", x: manualX, y: manualY });
-    await sendNativeInput(String(tabId), {
-      type: "mouseDown",
-      x: manualX,
-      y: manualY,
-      button: "left",
-      clickCount: 1,
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const point = { x: Math.round(rect.x), y: Math.round(rect.y) };
+      await sendNativeInput(tabId, { type: "mouseMove", ...point });
+      await sendNativeInput(tabId, { type: "mouseDown", ...point, button: "left", clickCount: 1 });
+      await sendNativeInput(tabId, { type: "mouseUp", ...point, button: "left", clickCount: 1 });
+      expect(String(await interrupted)).toContain("BrowserInterruptedByHuman");
+      await waitForText("Manual clicks: 1");
+      expect(
+        await read(
+          '({value:document.querySelector("input").value,agentClicks:document.body.dataset.agentClicks,pointClicks:document.body.dataset.pointClicks,manualClicks:document.body.dataset.manualClicks,presses:document.body.dataset.presses,cookie:document.cookie})',
+        ),
+      ).toEqual({
+        value: "shared-through-mcp",
+        agentClicks: "1",
+        pointClicks: "4",
+        manualClicks: "1",
+        presses: "1",
+        cookie: expect.stringContaining("shared_cookie=agent"),
+      });
+      await mcp.cancelCall("browser_run", {
+        code: 'await page.getByText("Cancellation sentinel never appears").waitFor(); return true;',
+        timeoutMs: 10_000,
+      });
+      expect(await read("document.title")).toBe("Visible browser fixture");
+      const tabs = (await mcp.call("browser_tabs")).structuredContent;
+      expect(tabs).toMatchObject({ activeTabId: tabId, assignedTabId: tabId });
+      expect(tabs.tabs).toEqual([
+        expect.objectContaining({ tabId, active: true, routable: true, state: "live" }),
+      ]);
+      expect((await mcp.call("browser_close")).structuredContent).toEqual({
+        closedTabId: tabId,
+        activeTabId: null,
+      });
+      expect((await mcp.call("browser_tabs")).structuredContent).toMatchObject({
+        assignedTabId: null,
+        activeTabId: null,
+        tabs: [],
+      });
+      expect(
+        await electronApp.evaluate(
+          () =>
+            (
+              globalThis as typeof globalThis & {
+                __synaraVisibleBrowserE2E: { browserManager: { runtimes: Map<string, unknown> } };
+              }
+            ).__synaraVisibleBrowserE2E.browserManager.runtimes.size,
+        ),
+      ).toBe(0);
     });
-    await sendNativeInput(String(tabId), {
-      type: "mouseUp",
-      x: manualX,
-      y: manualY,
-      button: "left",
-      clickCount: 1,
-    });
-    const interruptionError = await interruptedByManualClick;
-    expect(interruptionError).toBeInstanceOf(Error);
-    expect((interruptionError as Error).message).toMatch(/BrowserInterruptedByHuman/);
-
-    await mcp.call("browser_wait", {
-      conditions: [{ kind: "text", text: "Manual clicks: 1", state: "present" }],
-    });
-    const sharedState = await mcp.call("browser_evaluate", {
-      expression: `({ value: document.querySelector('input').value, agentClicks: document.body.dataset.agentClicks, pointClicks: document.body.dataset.pointClicks, manualClicks: document.body.dataset.manualClicks, presses: document.body.dataset.presses, cookie: document.cookie })`,
-      idempotencyKey: key(),
-    });
-    expect(sharedState.structuredContent.value).toEqual({
-      value: "shared-through-mcp",
-      agentClicks: "1",
-      pointClicks: "1",
-      manualClicks: "1",
-      presses: "1",
-      cookie: expect.stringContaining("shared_cookie=agent"),
-    });
-    expect(String((sharedState.structuredContent.value as { cookie: string }).cookie)).toContain(
-      "manual_cookie=playwright",
-    );
-
-    // Exercise the actual MCP cancellation path used by provider interruption,
-    // then prove the per-tab queue drained and remains usable immediately.
-    await mcp.cancelCall("browser_wait", {
-      conditions: [{ kind: "text", text: "Cancellation sentinel never appears", state: "present" }],
-      timeoutMs: 10_000,
-    });
-    const afterCancellation = await mcp.call("browser_evaluate", {
-      expression: "document.title",
-      idempotencyKey: key(),
-    });
-    expect(afterCancellation.structuredContent.value).toBe("Visible browser fixture");
-
-    const tabs = await mcp.call("browser_tabs");
-    expect(tabs.structuredContent).toMatchObject({ activeTabId: tabId, assignedTabId: tabId });
-    expect(tabs.structuredContent.tabs).toEqual([
-      expect.objectContaining({ tabId, active: true, routable: true, state: "live" }),
-    ]);
-    const finalStatus = await mcp.call("browser_status");
-    expect(finalStatus.structuredContent).toMatchObject({
-      assignedTabId: tabId,
-      authorization: "not-required",
-    });
-
-    const closed = await mcp.call("browser_close", { idempotencyKey: key() });
-    expect(closed.structuredContent).toEqual({ closedTabId: tabId, activeTabId: null });
-    const tabsAfterClose = await mcp.call("browser_tabs");
-    expect(tabsAfterClose.structuredContent).toMatchObject({
-      assignedTabId: null,
-      activeTabId: null,
-      tabs: [],
-    });
-    const runtimeCount = await electronApp.evaluate(() => {
-      const manager = (
-        globalThis as typeof globalThis & {
-          __synaraVisibleBrowserE2E: { browserManager: { runtimes: Map<string, unknown> } };
+    await test.step("captures proof before the renderer mounts the browser panel", async () => {
+      await electronApp.evaluate(() => {
+        (
+          globalThis as typeof globalThis & {
+            __synaraVisibleBrowserE2E: { setPanelRevealEnabled(enabled: boolean): void };
+          }
+        ).__synaraVisibleBrowserE2E.setPanelRevealEnabled(false);
+      });
+      try {
+        await mcp.call("browser_open", { url: site.appUrl, show: true });
+        const previewPixels = await electronApp.evaluate(async ({ nativeImage }) => {
+          const state = (
+            globalThis as typeof globalThis & {
+              __synaraVisibleBrowserE2E: {
+                threadId: string;
+                setPreviewEnabled(enabled: boolean): void;
+                setPanelRevealEnabled(enabled: boolean): void;
+                browserManager: {
+                  getState(input: { threadId: string }): { activeTabId: string };
+                  capturePreview(input: {
+                    threadId: string;
+                    tabId: string;
+                  }): Promise<string | null>;
+                };
+              };
+            }
+          ).__synaraVisibleBrowserE2E;
+          state.setPreviewEnabled(true);
+          try {
+            const { activeTabId } = state.browserManager.getState({ threadId: state.threadId });
+            const data = await state.browserManager.capturePreview({
+              threadId: state.threadId,
+              tabId: activeTabId,
+            });
+            const image = nativeImage.createFromDataURL(data ?? "");
+            const bitmap = image.toBitmap();
+            let varied = false;
+            for (let offset = 4; offset < bitmap.length; offset += 4) {
+              if (!bitmap.subarray(offset, offset + 4).equals(bitmap.subarray(0, 4))) {
+                varied = true;
+                break;
+              }
+            }
+            return { empty: image.isEmpty(), width: image.getSize().width, varied };
+          } finally {
+            state.setPreviewEnabled(false);
+            state.setPanelRevealEnabled(false);
+          }
+        });
+        expect(previewPixels).toEqual({ empty: false, width: 640, varied: true });
+        await mcp.call("browser_close");
+        for (const fullPage of [true, false]) {
+          await mcp.call("browser_open", { url: site.appUrl, show: true });
+          const layerOrder = await electronApp.evaluate(({ BrowserWindow }) => {
+            const window = BrowserWindow.getAllWindows()[0]!;
+            return {
+              count: window.contentView.children.length,
+              backgroundVisible: window.contentView.children[0]!.getVisible(),
+              backgroundBounds: window.contentView.children[0]!.getBounds(),
+            };
+          });
+          expect(layerOrder.count).toBe(1);
+          expect(layerOrder.backgroundVisible).toBe(false);
+          expect(layerOrder.backgroundBounds).toMatchObject({ x: 0, y: 0 });
+          const viewport = (await read(
+            "({width:innerWidth,height:innerHeight,scale:devicePixelRatio})",
+          )) as { width: number; height: number; scale: number };
+          expect(viewport).toMatchObject({ width: 1280, height: 800 });
+          await run(
+            'await human.click(page.getByRole("button",{name:"Commit agent action",exact:true})); return true;',
+            3000,
+          );
+          expect(await read("document.body.dataset.agentClicks")).toBe("1");
+          const proof = await mcp.call("browser_screenshot", {
+            kind: "proof",
+            fullPage,
+            timeoutMs: 3000,
+          });
+          expect(proof.content.some((block) => block.type === "image")).toBe(true);
+          expect(proof.structuredContent.image).toMatchObject({
+            width: 1280 * viewport.scale,
+            height: (fullPage ? 2600 : 800) * viewport.scale,
+          });
+          const pixels = await electronApp.evaluate(({ nativeImage }, artifactPath) => {
+            const image = nativeImage.createFromPath(artifactPath);
+            const bitmap = image.toBitmap();
+            let varied = false;
+            for (let offset = 4; offset < bitmap.length; offset += 4) {
+              if (!bitmap.subarray(offset, offset + 4).equals(bitmap.subarray(0, 4))) {
+                varied = true;
+                break;
+              }
+            }
+            return { empty: image.isEmpty(), varied };
+          }, String(proof.structuredContent.artifactPath));
+          expect(pixels).toEqual({ empty: false, varied: true });
+          expect(
+            await electronApp.evaluate(({ BrowserWindow }) =>
+              BrowserWindow.getAllWindows()[0]!.contentView.children[0]!.getVisible(),
+            ),
+          ).toBe(false);
+          await page.getByLabel("Host composer").click();
+          await page.keyboard.type("hidden-page-safe");
+          await expect(page.getByLabel("Host composer")).toHaveValue(
+            "HOST_SENTINELhidden-page-safe",
+          );
+          await page.getByLabel("Host composer").fill("HOST_SENTINEL");
+          expect(await read('document.querySelector("input").value')).toBe("");
+          await mcp.call("browser_close");
         }
-      ).__synaraVisibleBrowserE2E.browserManager;
-      return manager.runtimes.size;
+      } finally {
+        await electronApp.evaluate(() => {
+          (
+            globalThis as typeof globalThis & {
+              __synaraVisibleBrowserE2E: { setPanelRevealEnabled(enabled: boolean): void };
+            }
+          ).__synaraVisibleBrowserE2E.setPanelRevealEnabled(true);
+        });
+      }
     });
-    expect(runtimeCount).toBe(0);
+
+    await test.step("isolates renderer webview input from the host composer", async () => {
+      await electronApp.evaluate((_electron, url) => {
+        const fixture = (
+          globalThis as typeof globalThis & {
+            __synaraVisibleBrowserE2E: {
+              threadId: string;
+              browserManager: {
+                open(input: { threadId: string }): unknown;
+                newTab(input: { threadId: string; url: string }): unknown;
+              };
+              setSurface(value: "native" | "renderer"): void;
+            };
+          }
+        ).__synaraVisibleBrowserE2E;
+        fixture.browserManager.open({ threadId: fixture.threadId });
+        fixture.browserManager.newTab({ threadId: fixture.threadId, url });
+        fixture.setSurface("native");
+        fixture.setSurface("renderer");
+      }, site.appUrl);
+      await expect(page.locator("html")).toHaveAttribute("data-webview-attached", "true");
+      await mcp.call("browser_open", { url: site.appUrl, show: true });
+      const composer = page.getByLabel("Host composer");
+      await composer.fill("HOST_SENTINEL");
+      await composer.focus();
+      await electronApp.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()[0]!.webContents.focus(),
+      );
+      await run(
+        'await page.getByLabel("Shared input",{exact:true}).fill("guest-only"); return true;',
+      );
+      await expect(composer).toHaveValue("HOST_SENTINEL");
+      expect(await read('document.querySelector("input").value')).toBe("guest-only");
+      expect(await read("document.body.dataset.inputTrusted")).toBe("true");
+      await run(
+        'await page.keyboard.press("ControlOrMeta+A"); await page.keyboard.press("Backspace"); await page.keyboard.press("x"); return true;',
+      );
+      await expect(composer).toHaveValue("HOST_SENTINEL");
+      expect(await read('document.querySelector("input").value')).toBe("x");
+      await run('await page.keyboard.press("Enter"); return true;');
+      await expect(page.locator("html")).toHaveAttribute("data-host-submits", "0");
+    });
+
+    await test.step("explains invalid sandbox APIs and recovers sign-in button clicks", async () => {
+      const signinUrl = new URL("/signin", site.initialUrl).href;
+      await mcp.call("browser_navigate", { url: signinUrl });
+      for (const code of [
+        'await human.click(getByRole("button",{name:"Log In",exact:true}));',
+        'await getByRole("button",{name:"Log In",exact:true}).click();',
+        'await human.click(getByRole("button",{name:"Continue with Google"}));',
+        "return await page.snapshot({interactive:true});",
+        'return Array.from(document.querySelectorAll("button"));',
+        "await waitForTimeout(400);",
+      ]) {
+        await expect(run(code)).rejects.toThrow("BrowserScriptApiUnavailable");
+      }
+      expect(
+        (await run('return await page.locator("#mode").innerText();')).structuredContent.value,
+      ).toBe("Sign Up selected");
+      await run('await human.click(page.getByRole("button",{name:"Log In",exact:true}));');
+      expect(
+        (await run('return await page.locator("#mode").innerText();')).structuredContent.value,
+      ).toBe("Log In selected");
+      const partial = await run(
+        'await page.getByRole("button",{name:"Continue with Google"}).click(); return location.href;',
+      ).catch((error: unknown) => error);
+      expect(String(partial)).toContain("BrowserScriptApiUnavailable");
+      expect(String(partial)).toContain('\\"effectMayHaveCommitted\\":true');
+      expect(
+        (await run('return await page.locator("#mode").innerText();')).structuredContent.value,
+      ).toBe("Google selected");
+      expect((await run("return await page.url();")).structuredContent.value).toBe(signinUrl);
+      expect(
+        (await run("return await page.evaluate(() => document.title);")).structuredContent.value,
+      ).toBe("Sign-in fixture");
+      await expect(page.getByLabel("Host composer")).toHaveValue("HOST_SENTINEL");
+    });
+
+    await test.step("preserves empty and falsy browser results", async () => {
+      for (const value of [[], {}, null, false, 0, "", { accounts: [], next: null }]) {
+        const result = await run(`return ${JSON.stringify(value)};`);
+        expect(result.structuredContent.value).toEqual(value);
+      }
+      const emptyLocators = await run(
+        'return await page.getByRole("link",{name:"No such fixture link"}).allTextContents();',
+      );
+      expect(emptyLocators.structuredContent.value).toEqual([]);
+    });
+    await test.step("follows a client redirect before the first document finishes loading", async () => {
+      const result = await mcp.call("browser_open", {
+        url: new URL("/client-redirect", site.appUrl).href,
+        reuse: false,
+        timeoutMs: 3000,
+      });
+      expect(result.structuredContent.finalUrl).toBe(site.nextUrl);
+      expect(result.structuredContent.loadState).not.toBe("commit");
+    });
+    await test.step("rejects a stale renderer handoff without replacing the agent's native page", async () => {
+      const result = await page.evaluate(async (url) => {
+        const { ipcRenderer } = (
+          window as unknown as {
+            require(name: string): {
+              ipcRenderer: { invoke(channel: string, input: unknown): Promise<ThreadBrowserState> };
+            };
+          }
+        ).require("electron");
+        const guest = document.createElement("webview") as HTMLElement & {
+          getWebContentsId(): number;
+        };
+        guest.setAttribute("partition", "persist:synara-browser");
+        guest.setAttribute("src", url);
+        const ready = new Promise<void>((resolve) =>
+          guest.addEventListener("dom-ready", () => resolve(), { once: true }),
+        );
+        document.body.append(guest);
+        try {
+          await ready;
+          const tabId = document.documentElement.dataset.nativeRuntimeTabId;
+          return await ipcRenderer.invoke("synara-e2e:attach-webview", {
+            tabId,
+            webContentsId: guest.getWebContentsId(),
+          });
+        } finally {
+          guest.remove();
+        }
+      }, site.appUrl);
+      expect(result.tabs.find((tab) => tab.id === result.activeTabId)?.runtimeSurface).toBe(
+        "native",
+      );
+      expect((await run("return await page.url();")).structuredContent.value).toBe(site.nextUrl);
+    });
   } finally {
     try {
       await closeElectronApplication(electronApp);

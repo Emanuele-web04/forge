@@ -2292,22 +2292,31 @@ function compareTimelineEntries(left: TimelineEntry, right: TimelineEntry): numb
   return left.createdAt.localeCompare(right.createdAt);
 }
 
-function areTimelineEntriesOrdered(entries: ReadonlyArray<TimelineEntry>): boolean {
+type TimelineComparator = (left: TimelineEntry, right: TimelineEntry) => number;
+
+function areTimelineEntriesOrdered(
+  entries: ReadonlyArray<TimelineEntry>,
+  compare: TimelineComparator,
+): boolean {
   for (let index = 1; index < entries.length; index += 1) {
-    if (compareTimelineEntries(entries[index - 1]!, entries[index]!) > 0) {
+    if (compare(entries[index - 1]!, entries[index]!) > 0) {
       return false;
     }
   }
   return true;
 }
 
-function sortedTimelineEntries(entries: TimelineEntry[]): TimelineEntry[] {
-  return areTimelineEntriesOrdered(entries) ? entries : entries.toSorted(compareTimelineEntries);
+function sortedTimelineEntries(
+  entries: TimelineEntry[],
+  compare: TimelineComparator,
+): TimelineEntry[] {
+  return areTimelineEntriesOrdered(entries, compare) ? entries : entries.toSorted(compare);
 }
 
 function mergeTimelineEntries(
   left: ReadonlyArray<TimelineEntry>,
   right: ReadonlyArray<TimelineEntry>,
+  compare: TimelineComparator,
 ): TimelineEntry[] {
   if (left.length === 0) {
     return [...right];
@@ -2322,7 +2331,7 @@ function mergeTimelineEntries(
   while (leftIndex < left.length && rightIndex < right.length) {
     const leftEntry = left[leftIndex]!;
     const rightEntry = right[rightIndex]!;
-    if (compareTimelineEntries(leftEntry, rightEntry) <= 0) {
+    if (compare(leftEntry, rightEntry) <= 0) {
       merged.push(leftEntry);
       leftIndex += 1;
     } else {
@@ -2406,11 +2415,56 @@ export function deriveTimelineEntries(
     entry,
   }));
 
+  // Late tool completion/replay timestamps must not move an earlier turn's
+  // work below a new user request and inflate that request's tool disclosure.
+  const userStarts: string[] = [];
+  const messageOrder = new Map<string, number>();
+  const turnOrder = new Map<string, number>();
+  const messagesOrdered = messages.every(
+    (message, index) =>
+      index === 0 || messages[index - 1]!.createdAt.localeCompare(message.createdAt) <= 0,
+  );
+  const orderedMessages = messagesOrdered
+    ? messages
+    : messages.toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
+  for (const message of orderedMessages) {
+    if (message.role === "user") userStarts.push(message.createdAt);
+    const order = userStarts.length;
+    messageOrder.set(message.id, order);
+    if (message.turnId && !turnOrder.has(message.turnId)) turnOrder.set(message.turnId, order);
+  }
+  const orderByEntry = new Map<TimelineEntry, number>();
+  for (const entry of [...messageRows, ...proposedPlanRows, ...workRows]) {
+    const knownOrder =
+      entry.kind === "message" || entry.kind === "message-segment"
+        ? messageOrder.get(entry.message.id)
+        : turnOrder.get(
+            (entry.kind === "work" ? entry.entry.turnId : entry.proposedPlan.turnId) ?? "",
+          );
+    if (knownOrder !== undefined) {
+      orderByEntry.set(entry, knownOrder);
+      continue;
+    }
+    // Unattributed legacy activity keeps its chronological position.
+    let low = 0;
+    let high = userStarts.length;
+    while (low < high) {
+      const mid = (low + high) >>> 1;
+      if (userStarts[mid]!.localeCompare(entry.createdAt) <= 0) low = mid + 1;
+      else high = mid;
+    }
+    orderByEntry.set(entry, low);
+  }
+  const compare: TimelineComparator = (left, right) =>
+    orderByEntry.get(left)! - orderByEntry.get(right)! || compareTimelineEntries(left, right);
+
   return mergeTimelineEntries(
     mergeTimelineEntries(
-      sortedTimelineEntries(messageRows),
-      sortedTimelineEntries(proposedPlanRows),
+      sortedTimelineEntries(messageRows, compare),
+      sortedTimelineEntries(proposedPlanRows, compare),
+      compare,
     ),
-    sortedTimelineEntries(workRows),
+    sortedTimelineEntries(workRows, compare),
+    compare,
   );
 }

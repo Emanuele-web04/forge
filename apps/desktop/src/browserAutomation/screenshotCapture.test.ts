@@ -35,10 +35,11 @@ const createRuntime = (
   const sendCommand = vi.fn(async (method: string) => {
     if (method === "Page.getLayoutMetrics") {
       return {
-        contentSize: {
+        cssContentSize: {
           width: options.contentWidth ?? 1_500,
           height: options.contentHeight ?? 4_000,
         },
+        contentSize: { width: 3_000, height: 8_000 },
       };
     }
     if (method === "Page.captureScreenshot") {
@@ -107,5 +108,37 @@ describe("browser screenshot capture", () => {
     await expect(captureBrowserScreenshot(runtime, { fullPage: false })).rejects.toMatchObject({
       browserError: { code: "BrowserScreenshotTooLarge" },
     });
+  });
+
+  it("uses CSS metrics instead of Retina device pixels for the clip", async () => {
+    const { runtime, sendCommand } = createRuntime();
+    await captureBrowserScreenshot(runtime, { fullPage: true });
+    expect(sendCommand).toHaveBeenCalledWith(
+      "Page.captureScreenshot",
+      expect.objectContaining({
+        clip: { x: 0, y: 0, width: 1_500, height: 4_000, scale: 1 },
+      }),
+    );
+  });
+
+  it("reduces capture scale when Retina output exceeds the pixel limit", async () => {
+    const { runtime, sendCommand } = createRuntime({ contentWidth: 3_000, contentHeight: 8_000 });
+    const metrics = await sendCommand("Page.getLayoutMetrics");
+    sendCommand.mockClear();
+    sendCommand
+      .mockResolvedValueOnce(metrics)
+      .mockResolvedValueOnce({ data: png(6_000, 16_000).toString("base64") })
+      .mockResolvedValueOnce({ data: png(4_500, 12_000).toString("base64") })
+      .mockResolvedValueOnce({ data: png(3_000, 8_000).toString("base64") });
+    await expect(captureBrowserScreenshot(runtime, { fullPage: true })).resolves.toMatchObject({
+      image: { width: 3_000, height: 8_000 },
+    });
+    expect(sendCommand).toHaveBeenCalledTimes(4);
+    expect(sendCommand).toHaveBeenLastCalledWith(
+      "Page.captureScreenshot",
+      expect.objectContaining({
+        clip: { x: 0, y: 0, width: 3_000, height: 8_000, scale: 0.5 },
+      }),
+    );
   });
 });

@@ -7,6 +7,8 @@ import {
 import { Effect, Option } from "effect";
 
 import { makeAgentGatewayBrowserTools } from "../../../server/src/agentGateway/browserTools";
+import { saveBrowserProof } from "../../../server/src/agentGateway/browserProof";
+import { join } from "node:path";
 import { makeAgentGatewayInFlightRequestRegistry } from "../../../server/src/agentGateway/inFlightRequestRegistry";
 import { makeAgentGatewayMcpTransport } from "../../../server/src/agentGateway/mcpTransport";
 import { makeAgentGatewaySessionRegistry } from "../../../server/src/agentGateway/Layers/AgentGatewaySessionRegistry";
@@ -23,7 +25,10 @@ export interface McpCallResult {
 export interface BrowserMcpHarness {
   readonly initialize: () => Promise<Record<string, unknown>>;
   readonly listTools: () => Promise<ReadonlyArray<Record<string, unknown>>>;
-  readonly call: (name: BrowserToolName, args?: Record<string, unknown>) => Promise<McpCallResult>;
+  readonly call: (
+    name: BrowserToolName | "synara_e2e_review",
+    args?: Record<string, unknown>,
+  ) => Promise<McpCallResult>;
   readonly cancelCall: (name: BrowserToolName, args?: Record<string, unknown>) => Promise<void>;
 }
 
@@ -86,7 +91,10 @@ export function createBrowserMcpHarness(input: {
       SYNARA_BROWSER_HOST_PIPE_PATH: input.pipePath,
       SYNARA_BROWSER_HOST_CAPABILITY: input.capability,
     }),
-    { resolveWorkspaceRoot: () => Effect.succeed(input.workspaceRoot) },
+    {
+      resolveWorkspaceRoot: () => Effect.succeed(input.workspaceRoot),
+      saveProof: (owner, data) => saveBrowserProof(owner, data, join(input.workspaceRoot, "proof")),
+    },
   );
   const handle = makeAgentGatewayMcpTransport({
     credentials,
@@ -138,7 +146,8 @@ export function createBrowserMcpHarness(input: {
       if (result.isError === true) throw new Error(`MCP tool failure: ${JSON.stringify(result)}`);
       return {
         content: Array.isArray(result.content) ? result.content.map(asRecord) : [],
-        structuredContent: asRecord(result.structuredContent),
+        structuredContent:
+          result.structuredContent === undefined ? {} : asRecord(result.structuredContent),
       };
     },
     cancelCall: async (name, args = {}) => {

@@ -72,6 +72,16 @@ describe("normalizeCompactToolLabel", () => {
 });
 
 describe("deriveSynaraMcpToolTitle", () => {
+  it.each([
+    ["browser_run", "Run browser actions"],
+    ["browser_click", "Click browser target"],
+    ["browser_wait", "Wait for browser condition"],
+    ["browser_webmcp_call", "Call page WebMCP tool"],
+  ])("keeps current and historical %s messages readable", (toolName, title) => {
+    expect(deriveSynaraMcpToolTitle({ toolName, status: "completed" })).toBe(title);
+    expect(isSynaraBrowserToolCall({ title })).toBe(true);
+  });
+
   it("uses stable action-first names for Synara browser tools", () => {
     for (const status of ["running", "completed", "failed"] as const) {
       expect(

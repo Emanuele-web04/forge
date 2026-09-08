@@ -19,6 +19,8 @@ export default function globalSetup(): () => void {
       "--format=cjs",
       `--outfile=${OUTPUT_PATH}`,
       "--external=electron",
+      "--external=betterwright",
+      `--banner=module.paths.unshift(${JSON.stringify(resolve(WEB_DIR, "../desktop/node_modules"))});`,
     ],
     { cwd: WEB_DIR, stdio: "inherit" },
   );

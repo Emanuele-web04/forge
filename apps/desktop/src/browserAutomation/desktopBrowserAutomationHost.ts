@@ -1,43 +1,34 @@
 import {
   BROWSER_TOOL_NAMES,
   type BrowserBackInput,
-  type BrowserClickInput,
   type BrowserCloseOutput,
-  type BrowserDragInput,
-  type BrowserEvaluateInput,
+  type BrowserRunInput,
   type BrowserForwardInput,
-  type BrowserHoverInput,
   type BrowserLogsInput,
   type BrowserNavigateOutput,
   type BrowserOpenOutput,
-  type BrowserPressInput,
   type BrowserReloadInput,
   type BrowserResizeInput,
   type BrowserResizeOutput,
-  type BrowserScrollInput,
   type BrowserScreenshotInput,
-  type BrowserSelectInput,
-  type BrowserSnapshotInput,
   type BrowserStatusOutput,
   type BrowserTabId,
   type BrowserTabsOutput,
   type BrowserToolName,
   type BrowserToolNavigateInput,
   type BrowserToolOpenInput,
-  type BrowserTypeInput,
   type BrowserUploadInput,
-  type BrowserWaitInput,
-  type BrowserWebMcpCallInput,
-  type BrowserWebMcpCallOutput,
-  type BrowserWebMcpToolsInput,
   type ThreadBrowserState,
   type ThreadId,
 } from "@synara/contracts";
+import { app } from "electron";
+import { join } from "node:path";
 import {
   BROWSER_TOOL_DEFINITIONS_BY_NAME,
   stableJsonStringify,
 } from "@synara/shared/browserAutomationCatalogue";
 import { Schema } from "effect";
+import { browserInputErrorCode } from "@synara/shared/browserAutomationErrors";
 
 import type {
   BrowserAutomationWindowOpenEvent,
@@ -46,32 +37,12 @@ import type {
 } from "../browserManager";
 import { abortReason, observePage, sendCdpCommand, throwIfAborted } from "./cdpRuntime";
 import { BrowserAutomationHostError, browserHostError } from "./hostErrors";
-import {
-  clickBrowserTarget,
-  dragBrowserTarget,
-  hoverBrowserTarget,
-  pressBrowserKeys,
-  scrollBrowser,
-  selectBrowserTarget,
-  typeIntoBrowserTarget,
-} from "./inputActions";
-import { captureSemanticSnapshot, type BrowserSnapshotHandle } from "./semanticSnapshot";
 import { BrowserDiagnosticsStore } from "./browserDiagnostics";
 import { navigateBrowserHistory, type BrowserHistoryDirection } from "./navigationHistory";
 import { captureBrowserScreenshot } from "./screenshotCapture";
 import { withDialogHandling } from "./dialogHandling";
 import { uploadBrowserFiles } from "./workspaceUpload";
-import {
-  evaluateBrowserExpression,
-  waitForBrowserConditions,
-  waitForLoadMilestone,
-} from "./waitAndEvaluate";
-import {
-  discoverWebMcpTools,
-  invokeWebMcpTool,
-  type WebMcpDiscoveryHandle,
-  type WebMcpInvocationResult,
-} from "./webMcp";
+import { browserEvaluationOutput, waitForLoadMilestone } from "./waitAndEvaluate";
 import {
   beginBrowserNavigation,
   getBrowserNavigationTracker,
@@ -79,13 +50,14 @@ import {
   type BrowserNavigationMark,
   type BrowserNavigationObservation,
 } from "./navigationTracker";
+import { runBetterwright } from "./betterwrightRuntime";
+import type { BrowserVault } from "./browserVault";
+import type { BrowserVaultCapture } from "./browserVaultCapture";
 
 const MAX_IDEMPOTENCY_ENTRIES = 512;
 const IDEMPOTENCY_TTL_MS = 15 * 60_000;
 const MAX_IDEMPOTENCY_TOMBSTONES = 4_096;
 const IDEMPOTENCY_TOMBSTONE_TTL_MS = 24 * 60 * 60_000;
-const MAX_SESSION_SNAPSHOTS = 256;
-const MAX_SESSION_WEB_MCP_DISCOVERIES = 256;
 const WINDOW_OPEN_RECONCILIATION_TIMEOUT_MS = 2_000;
 const WINDOW_OPEN_EVENT_LOOP_GRACE_MS = 16;
 
@@ -102,6 +74,8 @@ export interface BrowserAutomationToolRequest {
 
 export interface DesktopBrowserAutomationHostOptions {
   readonly requestOpenPanel?: (threadId: ThreadId) => void | Promise<void>;
+  readonly vault?: BrowserVault;
+  readonly vaultCapture?: BrowserVaultCapture;
 }
 
 interface SessionAffinity {
@@ -319,8 +293,6 @@ export class DesktopBrowserAutomationHost {
   private readonly idempotency = new Map<string, IdempotencyEntry>();
   private readonly idempotencyTombstones = new Map<string, IdempotencyTombstone>();
   private readonly lockTails = new Map<string, Promise<void>>();
-  private readonly snapshotBySession = new Map<string, BrowserSnapshotHandle>();
-  private readonly webMcpDiscoveryBySession = new Map<string, WebMcpDiscoveryHandle>();
   private readonly activeOperations = new Set<Promise<unknown>>();
   private readonly diagnostics = new BrowserDiagnosticsStore();
   private readonly requestOpenPanel: ((threadId: ThreadId) => void | Promise<void>) | undefined;
@@ -329,46 +301,9 @@ export class DesktopBrowserAutomationHost {
 
   constructor(
     private readonly browserManager: DesktopBrowserManager,
-    options: DesktopBrowserAutomationHostOptions = {},
+    private readonly options: DesktopBrowserAutomationHostOptions = {},
   ) {
     this.requestOpenPanel = options.requestOpenPanel;
-  }
-
-  private discardWebMcpDiscovery(sessionId: string): void {
-    const discovery = this.webMcpDiscoveryBySession.get(sessionId);
-    if (!discovery) return;
-    this.webMcpDiscoveryBySession.delete(sessionId);
-    void discovery.release();
-  }
-
-  private discardWebMcpDiscoveriesForTab(threadId: ThreadId, tabId: string): void {
-    for (const [sessionId, discovery] of this.webMcpDiscoveryBySession) {
-      if (discovery.tabId !== tabId || this.affinities.get(sessionId)?.threadId !== threadId) {
-        continue;
-      }
-      this.discardWebMcpDiscovery(sessionId);
-    }
-  }
-
-  private storeWebMcpDiscovery(sessionId: string, discovery: WebMcpDiscoveryHandle): void {
-    if (this.disposed) {
-      void discovery.release();
-      return;
-    }
-    this.discardWebMcpDiscovery(sessionId);
-    this.webMcpDiscoveryBySession.set(sessionId, discovery);
-    discovery.onInvalidated(() => {
-      if (this.webMcpDiscoveryBySession.get(sessionId) === discovery) {
-        this.webMcpDiscoveryBySession.delete(sessionId);
-      }
-    });
-    while (this.webMcpDiscoveryBySession.size > MAX_SESSION_WEB_MCP_DISCOVERIES) {
-      const oldestSessionId = this.webMcpDiscoveryBySession.keys().next().value as
-        | string
-        | undefined;
-      if (!oldestSessionId) break;
-      this.discardWebMcpDiscovery(oldestSessionId);
-    }
   }
 
   dispose(): Promise<void> {
@@ -376,11 +311,12 @@ export class DesktopBrowserAutomationHost {
     this.disposed = true;
     this.disposal = (async () => {
       await Promise.allSettled([...this.activeOperations]);
-      const discoveries = [...this.webMcpDiscoveryBySession.values()];
-      this.webMcpDiscoveryBySession.clear();
-      await Promise.all(discoveries.map((discovery) => discovery.release()));
     })();
     return this.disposal;
+  }
+
+  async waitForIdle(): Promise<void> {
+    while (this.activeOperations.size > 0) await Promise.allSettled([...this.activeOperations]);
   }
 
   async executeTool(request: BrowserAutomationToolRequest): Promise<unknown> {
@@ -401,7 +337,8 @@ export class DesktopBrowserAutomationHost {
     if (
       request.name !== "browser_status" &&
       request.name !== "browser_tabs" &&
-      this.browserManager.isAnnotationInteractive(request.threadId)
+      (this.browserManager.isAnnotationInteractive(request.threadId) ||
+        this.browserManager.isHumanBrowserOperationActive())
     ) {
       throw new BrowserAutomationHostError({
         code: "BrowserInterruptedByHuman",
@@ -417,9 +354,7 @@ export class DesktopBrowserAutomationHost {
         unknown
       >;
     } catch {
-      browserHostError({
-        code: "BrowserInputUnsupported",
-      });
+      browserHostError({ code: browserInputErrorCode(request.arguments) });
     }
     const affinity = this.bindSession(request);
     const timeoutMs =
@@ -585,7 +520,19 @@ export class DesktopBrowserAutomationHost {
 
     const timer = setTimeout(abortForTimeout, timeoutMs);
     try {
-      const output = await raceWithAbort(operation, controller.signal, queuedTimeoutError);
+      const rawOutput = await raceWithAbort(operation, controller.signal, queuedTimeoutError);
+      let output = this.options.vault?.redact(rawOutput) ?? rawOutput;
+      if (
+        request.name === "browser_run" &&
+        output &&
+        typeof output === "object" &&
+        "value" in output
+      ) {
+        output = {
+          ...output,
+          serializedByteCount: Buffer.byteLength(JSON.stringify(output.value), "utf8"),
+        };
+      }
       try {
         return Schema.decodeUnknownSync(definition.hostOutput as never)(output);
       } catch {
@@ -640,23 +587,6 @@ export class DesktopBrowserAutomationHost {
     result: Promise<unknown>,
   ): Promise<unknown> {
     const output = await result;
-    if (request.name === "browser_snapshot") {
-      const envelope =
-        output && typeof output === "object"
-          ? (output as { readonly structuredContent?: { readonly snapshotId?: string } })
-          : undefined;
-      const replayedSnapshotId = envelope?.structuredContent?.snapshotId;
-      const currentSnapshot = this.snapshotBySession.get(request.sessionId);
-      if (!replayedSnapshotId || currentSnapshot?.snapshotId !== replayedSnapshotId) {
-        throw new BrowserAutomationHostError({
-          code: "BrowserStaleReference",
-          retryable: false,
-          phase: "snapshot",
-          effectMayHaveCommitted: false,
-          ...(currentSnapshot ? { tabId: currentSnapshot.tabId as BrowserTabId } : {}),
-        });
-      }
-    }
     if (output && typeof output === "object" && "tabId" in output) {
       const replayedTabId = (output as { readonly tabId?: unknown }).tabId;
       if (typeof replayedTabId === "string" && affinity.tabId !== replayedTabId) {
@@ -758,7 +688,10 @@ export class DesktopBrowserAutomationHost {
       tabId: tabId as BrowserTabId,
     });
     try {
-      if (this.browserManager.getAutomationHumanControlEpoch(threadId) !== epoch) {
+      if (
+        this.browserManager.isHumanBrowserOperationActive() ||
+        this.browserManager.getAutomationHumanControlEpoch(threadId) !== epoch
+      ) {
         interrupt(humanError);
       }
       throwIfAborted(signal);
@@ -972,8 +905,6 @@ export class DesktopBrowserAutomationHost {
       case "browser_tabs":
         return this.tabs(affinity);
       case "browser_open":
-        this.snapshotBySession.delete(request.sessionId);
-        this.discardWebMcpDiscovery(request.sessionId);
         return this.open(
           affinity,
           input as BrowserToolOpenInput,
@@ -1043,8 +974,6 @@ export class DesktopBrowserAutomationHost {
   ): Promise<TabToolExecution> {
     throwIfAborted(signal);
     if (request.name === "browser_close") {
-      this.snapshotBySession.delete(request.sessionId);
-      this.discardWebMcpDiscoveriesForTab(affinity.threadId, targetTabId);
       return uncorrelatedExecution(this.close(affinity, targetTabId));
     }
 
@@ -1085,8 +1014,6 @@ export class DesktopBrowserAutomationHost {
         });
       }
       const url = validateWebUrl(resolvedUrl);
-      this.snapshotBySession.delete(request.sessionId);
-      this.discardWebMcpDiscoveriesForTab(affinity.threadId, targetTabId);
       this.browserManager.prepareAutomationNavigation({
         threadId: affinity.threadId,
         tabId: targetTabId,
@@ -1108,8 +1035,6 @@ export class DesktopBrowserAutomationHost {
 
     const historyDirection = browserHistoryDirection(request.name);
     if (historyDirection) {
-      this.snapshotBySession.delete(request.sessionId);
-      this.discardWebMcpDiscoveriesForTab(affinity.threadId, targetTabId);
       const runtime = await this.resolveAutomationRuntime(affinity, targetTabId, signal, true);
       return uncorrelatedExecution(
         await this.withDialogs(runtime, signal, () =>
@@ -1124,21 +1049,7 @@ export class DesktopBrowserAutomationHost {
     }
 
     const runtime = await this.resolveAutomationRuntime(affinity, targetTabId, signal, true);
-    let snapshot = this.snapshotBySession.get(request.sessionId);
-    if (
-      snapshot &&
-      snapshot.humanControlEpoch !==
-        this.browserManager.getAutomationHumanControlEpoch(affinity.threadId)
-    ) {
-      this.snapshotBySession.delete(request.sessionId);
-      snapshot = undefined;
-    }
-    const windowOpen =
-      request.name === "browser_click" ||
-      request.name === "browser_press" ||
-      request.name === "browser_webmcp_call"
-        ? this.observeWindowOpen(runtime)
-        : null;
+    const windowOpen = request.name === "browser_run" ? this.observeWindowOpen(runtime) : null;
     try {
       return await this.executeVisibleTool(
         request,
@@ -1146,7 +1057,6 @@ export class DesktopBrowserAutomationHost {
         affinity,
         targetTabId,
         runtime,
-        snapshot,
         windowOpen,
         signal,
       );
@@ -1164,214 +1074,63 @@ export class DesktopBrowserAutomationHost {
     affinity: SessionAffinity,
     targetTabId: string,
     runtime: BrowserAutomationVisibleRuntime,
-    snapshot: BrowserSnapshotHandle | undefined,
     windowOpen: WindowOpenObservation | null,
     signal: AbortSignal,
   ): Promise<TabToolExecution> {
     let openedTabId: string | null = null;
     let oauthPopup = false;
+    if (!BROWSER_TOOL_DEFINITIONS_BY_NAME[request.name].annotations.readOnlyHint) {
+      this.options.vaultCapture?.noteAgentActivity(runtime);
+    }
     const output = await this.withDialogs(runtime, signal, async () => {
       switch (request.name) {
         case "browser_resize":
           return this.resize(runtime, input as BrowserResizeInput, request.sessionId, signal);
-        case "browser_snapshot": {
-          const capture = await captureSemanticSnapshot(
-            runtime,
-            {
-              ...(input as BrowserSnapshotInput),
-              includeImage: (input as BrowserSnapshotInput).includeImage ?? false,
-              includeDiagnostics: (input as BrowserSnapshotInput).includeDiagnostics ?? true,
-              humanControlEpoch: this.browserManager.getAutomationHumanControlEpoch(
-                affinity.threadId,
-              ),
-            },
-            signal,
-          );
-          throwIfAborted(signal);
-          boundedMapSet(
-            this.snapshotBySession,
-            request.sessionId,
-            capture.handle,
-            MAX_SESSION_SNAPSHOTS,
-          );
-          return capture.output;
-        }
-        case "browser_webmcp_tools": {
-          const discovery = await discoverWebMcpTools(
-            runtime,
-            input as BrowserWebMcpToolsInput,
-            this.browserManager.getAutomationHumanControlEpoch(affinity.threadId),
-            signal,
-          );
-          if (discovery.handle) {
-            this.storeWebMcpDiscovery(request.sessionId, discovery.handle);
-          } else {
-            this.discardWebMcpDiscovery(request.sessionId);
-          }
-          return discovery.output;
-        }
-        case "browser_webmcp_call": {
-          const callInput = input as BrowserWebMcpCallInput;
-          const discovery = this.webMcpDiscoveryBySession.get(request.sessionId);
-          if (!discovery) {
-            browserHostError({ code: "BrowserWebMcpDiscoveryStale" });
-          }
-          if (
-            discovery.humanControlEpoch !==
-            this.browserManager.getAutomationHumanControlEpoch(affinity.threadId)
-          ) {
-            this.discardWebMcpDiscovery(request.sessionId);
-            browserHostError({ code: "BrowserWebMcpDiscoveryStale" });
-          }
-          const entry = discovery.entries.get(callInput.toolId);
-          if (
-            !entry ||
-            discovery.discoveryId !== callInput.discoveryId ||
-            discovery.tabId !== runtime.tabId
-          ) {
-            browserHostError({ code: "BrowserWebMcpDiscoveryStale" });
-          }
-          const navigationTracker = await getBrowserNavigationTracker(runtime, signal);
-          const navigationMark = navigationTracker.mark();
-          let invocation: WebMcpInvocationResult;
-          try {
-            invocation = await invokeWebMcpTool(runtime, callInput, discovery, signal);
-          } catch (error) {
-            if (
-              error instanceof BrowserAutomationHostError &&
-              error.browserError.code === "BrowserWebMcpDiscoveryStale"
-            ) {
-              this.discardWebMcpDiscovery(request.sessionId);
-            }
-            throw error;
-          }
-          const windowOpenResult = await this.reconcileWindowOpen(
-            windowOpen!,
-            input.timeoutMs as number | undefined,
-            targetTabId,
-            signal,
-          );
-          openedTabId = windowOpenResult.openedTabId;
-          oauthPopup = windowOpenResult.oauthPopup;
-          await Promise.resolve();
-          const navigated = navigationTracker.hasNavigationStartedSince(navigationMark);
-          let finalUrl = validateWebUrl(runtime.webContents.getURL(), true);
-          let redirects: string[] = [];
-          let loadState: BrowserWebMcpCallOutput["loadState"];
-          if (navigated) {
-            const navigation = await this.waitForNavigation(
-              runtime,
-              navigationTracker,
-              navigationMark,
-              "commit",
-              (input.timeoutMs as number | undefined) ?? 15_000,
-              signal,
-            );
-            finalUrl = validateWebUrl(navigation.url, true);
-            redirects = navigation.redirects
-              .map((redirect) => validateWebUrl(redirect, true))
-              .slice(0, 20);
-            loadState = navigation.state;
-            this.discardWebMcpDiscoveriesForTab(affinity.threadId, targetTabId);
-            this.snapshotBySession.delete(request.sessionId);
-          }
-          return {
-            tabId: runtime.tabId as BrowserTabId,
-            discoveryId: callInput.discoveryId,
-            toolId: callInput.toolId,
-            toolName: entry.name,
-            contentTrust: "untrusted-web-page" as const,
-            ...invocation,
-            finalUrl,
-            navigated,
-            redirects,
-            ...(loadState ? { loadState } : {}),
-          } satisfies BrowserWebMcpCallOutput;
-        }
         case "browser_screenshot":
           return captureBrowserScreenshot(runtime, input as BrowserScreenshotInput, signal);
         case "browser_logs":
           return this.diagnostics.read(runtime, input as BrowserLogsInput, signal);
-        case "browser_click": {
-          const navigationTracker = await getBrowserNavigationTracker(runtime, signal);
-          const navigationMark = navigationTracker.mark();
-          const clicked = await clickBrowserTarget(
-            runtime,
-            input as BrowserClickInput,
-            snapshot,
-            signal,
-          );
-          const windowOpenResult = await this.reconcileWindowOpen(
-            windowOpen!,
-            input.timeoutMs as number | undefined,
-            targetTabId,
-            signal,
-          );
-          openedTabId = windowOpenResult.openedTabId;
-          oauthPopup = windowOpenResult.oauthPopup;
-          // A DOM activation initiates same-document and cross-document
-          // navigation synchronously. Reconcile CDP events already emitted by
-          // that activation so the result never reports the old URL.
-          await Promise.resolve();
-          if (!navigationTracker.hasNavigationStartedSince(navigationMark)) return clicked;
-          const navigation = await this.waitForNavigation(
-            runtime,
-            navigationTracker,
-            navigationMark,
-            "commit",
-            (input.timeoutMs as number | undefined) ?? 15_000,
-            signal,
-          );
-          this.discardWebMcpDiscoveriesForTab(affinity.threadId, targetTabId);
-          return {
-            ...clicked,
-            finalUrl: validateWebUrl(navigation.url, true),
-            redirects: navigation.redirects
-              .map((redirect) => validateWebUrl(redirect, true))
-              .slice(0, 20),
-            loadState: navigation.state,
-          };
-        }
-        case "browser_hover":
-          return hoverBrowserTarget(runtime, input as BrowserHoverInput, snapshot, signal);
-        case "browser_drag":
-          return dragBrowserTarget(runtime, input as BrowserDragInput, snapshot, signal);
-        case "browser_type":
-          return typeIntoBrowserTarget(runtime, input as BrowserTypeInput, snapshot, signal);
-        case "browser_select":
-          return selectBrowserTarget(runtime, input as BrowserSelectInput, snapshot, signal);
         case "browser_upload":
           return uploadBrowserFiles(
             runtime,
             input as BrowserUploadInput,
-            snapshot,
             request.workspaceRoot,
             signal,
           );
-        case "browser_press": {
-          const pressed = await pressBrowserKeys(runtime, input as BrowserPressInput, signal);
-          const windowOpenResult = await this.reconcileWindowOpen(
+        case "browser_run": {
+          let value: unknown;
+          try {
+            value = await runBetterwright({
+              home: join(app.getPath("userData"), "browser-engine"),
+              contents: runtime.webContents,
+              expectAgentInput: runtime.expectAgentInput,
+              code: (input as BrowserRunInput).code,
+              timeoutMs: (input.timeoutMs as number | undefined) ?? 15_000,
+              signal,
+              ...(this.options.vault
+                ? { vault: this.options.vault.agentAdapter(runtime.webContents, signal) }
+                : {}),
+            });
+          } catch (error) {
+            throwIfAborted(signal);
+            if (error instanceof BrowserAutomationHostError) throw error;
+            browserHostError({
+              code: "BrowserEvaluationFailed",
+              retryable: false,
+              phase: "evaluate",
+              effectMayHaveCommitted: true,
+            });
+          }
+          const correlation = await this.reconcileWindowOpen(
             windowOpen!,
             input.timeoutMs as number | undefined,
             targetTabId,
             signal,
           );
-          openedTabId = windowOpenResult.openedTabId;
-          oauthPopup = windowOpenResult.oauthPopup;
-          return pressed;
+          openedTabId = correlation.openedTabId;
+          oauthPopup = correlation.oauthPopup;
+          return browserEvaluationOutput(runtime.tabId, value);
         }
-        case "browser_scroll":
-          return scrollBrowser(runtime, input as BrowserScrollInput, snapshot, signal);
-        case "browser_wait":
-          return waitForBrowserConditions(
-            runtime,
-            input as BrowserWaitInput,
-            snapshot,
-            (input.timeoutMs as number | undefined) ?? 15_000,
-            signal,
-          );
-        case "browser_evaluate":
-          return evaluateBrowserExpression(runtime, input as BrowserEvaluateInput, signal);
         default:
           browserHostError({ code: "BrowserInputUnsupported" });
       }
@@ -1386,11 +1145,7 @@ export class DesktopBrowserAutomationHost {
     execution: TabToolExecution,
   ): unknown {
     const result = execution.output;
-    if (
-      request.name !== "browser_click" &&
-      request.name !== "browser_press" &&
-      request.name !== "browser_webmcp_call"
-    ) {
+    if (request.name !== "browser_run") {
       return result;
     }
 
@@ -1417,8 +1172,6 @@ export class DesktopBrowserAutomationHost {
     // for a new tab created inside the short-lived agent gesture lease. Adopt
     // it after the human guard has successfully reconciled.
     affinity.tabId = openedTabId;
-    this.snapshotBySession.delete(request.sessionId);
-    this.discardWebMcpDiscovery(request.sessionId);
     return reconciledResult && typeof reconciledResult === "object"
       ? { ...reconciledResult, openedTabId: openedTabId as BrowserTabId }
       : reconciledResult;
@@ -1684,7 +1437,6 @@ export class DesktopBrowserAutomationHost {
     sessionId: string,
     signal: AbortSignal,
   ): Promise<BrowserResizeOutput> {
-    this.snapshotBySession.delete(sessionId);
     const page = await observePage(runtime, signal);
     await sendCdpCommand(
       runtime,

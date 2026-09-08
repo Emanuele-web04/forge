@@ -52,6 +52,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.3.0",
+    "playwright-core": "^1.62.1",
     "tailwindcss": "4.2.2",
     "typescript": "catalog:",
     "wrangler": "^4.122.0"

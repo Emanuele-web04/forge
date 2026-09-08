@@ -49,7 +49,7 @@ const pngDimensions = (
   }
   const width = data.readUInt32BE(16);
   const height = data.readUInt32BE(20);
-  if (width < 1 || height < 1 || width > MAX_SCREENSHOT_WIDTH || height > MAX_FULL_PAGE_HEIGHT) {
+  if (width < 1 || height < 1) {
     screenshotTooLarge(runtime);
   }
   return { width, height };
@@ -85,7 +85,12 @@ const captureViewport = async (
     const png = image.toPNG();
     if (png.byteLength >= 24) {
       const dimensions = pngDimensions(runtime, png);
-      if (png.byteLength > MAX_SCREENSHOT_BYTES) screenshotTooLarge(runtime);
+      if (
+        png.byteLength > MAX_SCREENSHOT_BYTES ||
+        dimensions.width > MAX_SCREENSHOT_WIDTH ||
+        dimensions.height > MAX_FULL_PAGE_HEIGHT
+      )
+        screenshotTooLarge(runtime);
       return { png, ...dimensions };
     }
   }
@@ -102,10 +107,10 @@ const captureFullPage = async (
   readonly clipped: boolean;
 }> => {
   const metrics = await sendCdpCommand<{
-    readonly contentSize?: { readonly width?: number; readonly height?: number };
+    readonly cssContentSize: { readonly width: number; readonly height: number };
   }>(runtime, "Page.getLayoutMetrics", {}, signal);
-  const rawWidth = Math.max(1, Math.ceil(metrics.contentSize?.width ?? 1));
-  const rawHeight = Math.max(1, Math.ceil(metrics.contentSize?.height ?? 1));
+  const rawWidth = Math.max(1, Math.ceil(metrics.cssContentSize.width));
+  const rawHeight = Math.max(1, Math.ceil(metrics.cssContentSize.height));
   const width = Math.min(MAX_SCREENSHOT_WIDTH, rawWidth);
   const height = Math.min(MAX_FULL_PAGE_HEIGHT, rawHeight);
   const clipped = width < rawWidth || height < rawHeight;
@@ -129,6 +134,8 @@ const captureFullPage = async (
         typeof response.data === "string" ? Buffer.from(response.data, "base64") : Buffer.alloc(0);
       if (data.byteLength < 24) continue;
       const dimensions = pngDimensions(runtime, data);
+      if (dimensions.width > MAX_SCREENSHOT_WIDTH || dimensions.height > MAX_FULL_PAGE_HEIGHT)
+        break;
       if (data.byteLength <= MAX_SCREENSHOT_BYTES) {
         return { png: data, ...dimensions, clipped };
       }

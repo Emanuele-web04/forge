@@ -19,6 +19,34 @@ import type {
 } from "@synara/contracts";
 import type { BrowserHistoryEntry } from "../browserStateStore";
 import type { BrowserAnnotationDraft } from "../lib/browserAnnotations";
+import { resolveDesktopDipRectFromCssRect } from "@synara/shared/desktopChrome";
+
+export function resolveBrowserRuntimePresentation(input: {
+  native: boolean;
+  floating: boolean;
+  rect: { x: number; y: number; width: number; height: number };
+  desktopZoom: number;
+}) {
+  const { native, floating, rect, desktopZoom } = input;
+  const layout = floating ? resolveFloatingBrowserGuestLayout(rect) : null;
+  const scale = native && layout ? layout.scale : 1;
+  const bounds = resolveDesktopDipRectFromCssRect(
+    layout
+      ? {
+          x: rect.x + layout.x,
+          y: rect.y + layout.y,
+          width: layout.width * scale,
+          height: layout.height * scale,
+        }
+      : rect,
+    desktopZoom,
+  );
+  return {
+    surface: native ? ("native" as const) : ("renderer" as const),
+    bounds,
+    pageZoomFactor: native && floating ? scale * desktopZoom : 1,
+  };
+}
 
 const BROWSER_SUGGESTION_LIMIT = 6;
 
