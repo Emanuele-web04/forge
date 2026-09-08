@@ -421,17 +421,23 @@ export function useTailAnchorScroll({
     };
   }, [anchorMessageId, anchorScrollInFlightRef, listRef, onAnchorSlideFinished, timelineRootRef]);
 
+  // Only real message changes should restart the quiet-period hold. Tool and
+  // work activity also update the full timeline, but they must not extend the
+  // live-output anchor past the message-stream settle window.
+  //
+  // This effect is declared before the geometry correction so that, when a new
+  // message and a content change land in the same commit, the timestamp updates
+  // before the correction runs. If the correction ran first it could observe
+  // the old timestamp, finish the hold, and stop the slide before the new
+  // message gets a chance to extend ownership.
+  useLayoutEffect(() => {
+    lastContentChangeAtRef.current = performance.now();
+  }, [messageChangeSignal]);
+
   // React commits streamed text before paint. Re-apply the current slide
   // coordinate in that layout window so a chunk landing above the anchor cannot
   // push the anchored message for one visible frame.
   useLayoutEffect(() => {
     anchorSlideCorrectionRef.current?.();
   }, [contentChangeSignal]);
-
-  // Only real message changes should restart the quiet-period hold. Tool and
-  // work activity also update the full timeline, but they must not extend the
-  // live-output anchor past the message-stream settle window.
-  useLayoutEffect(() => {
-    lastContentChangeAtRef.current = performance.now();
-  }, [messageChangeSignal]);
 }
