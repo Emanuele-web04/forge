@@ -37,6 +37,10 @@ import {
 } from "../lib/terminalContext";
 import { filterPastedTextsWithText, type PastedTextDraft } from "../lib/composerPastedText";
 import {
+  normalizePullRequestContexts,
+  type PullRequestContextDraft,
+} from "../lib/pullRequestContext";
+import {
   humanizeSubagentStatus,
   normalizeSubagentStatusKind,
   resolveSubagentPresentationForThread,
@@ -1602,11 +1606,13 @@ export function deriveComposerSendState(options: {
   fileCommentCount: number;
   terminalContexts: ReadonlyArray<TerminalContextDraft>;
   pastedTexts: ReadonlyArray<PastedTextDraft>;
+  pullRequestContexts: ReadonlyArray<PullRequestContextDraft>;
 }): {
   trimmedPrompt: string;
   sendableTerminalContexts: TerminalContextDraft[];
   expiredTerminalContextCount: number;
   sendablePastedTexts: PastedTextDraft[];
+  sendablePullRequestContexts: PullRequestContextDraft[];
   hasSendableContent: boolean;
 } {
   const trimmedPrompt = stripInlineTerminalContextPlaceholders(options.prompt).trim();
@@ -1614,11 +1620,13 @@ export function deriveComposerSendState(options: {
   const expiredTerminalContextCount =
     options.terminalContexts.length - sendableTerminalContexts.length;
   const sendablePastedTexts = filterPastedTextsWithText(options.pastedTexts);
+  const sendablePullRequestContexts = normalizePullRequestContexts(options.pullRequestContexts);
   return {
     trimmedPrompt,
     sendableTerminalContexts,
     expiredTerminalContextCount,
     sendablePastedTexts,
+    sendablePullRequestContexts,
     hasSendableContent:
       trimmedPrompt.length > 0 ||
       options.imageCount > 0 ||
@@ -1627,7 +1635,8 @@ export function deriveComposerSendState(options: {
       options.browserAnnotationCount > 0 ||
       options.fileCommentCount > 0 ||
       sendableTerminalContexts.length > 0 ||
-      sendablePastedTexts.length > 0,
+      sendablePastedTexts.length > 0 ||
+      sendablePullRequestContexts.length > 0,
   };
 }
 

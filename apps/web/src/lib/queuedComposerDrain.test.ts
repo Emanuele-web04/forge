@@ -52,6 +52,7 @@ function makeQueuedChatTurn(id: string): QueuedComposerTurn {
     terminalContexts: [],
     fileComments: [],
     pastedTexts: [],
+    pullRequestContexts: [],
     skills: [],
     mentions: [],
     selectedProvider: "codex",

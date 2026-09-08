@@ -1,5 +1,7 @@
 // FILE: EnvironmentPullRequestSection.browser.tsx
-// Purpose: Browser regression tests for PR actions in the Environment panel.
+// Purpose: Browser regression tests for the PR row menu in the Environment panel — Repair
+//          attaches composer context cards, the comment list scrolls, and link actions close
+//          the panel.
 // Layer: Vitest browser tests
 
 import "../../../index.css";
@@ -50,7 +52,10 @@ function createQueryClient(commentsOverride?: GitPullRequestSnapshotResult["comm
   } satisfies GitStatusResult;
   const snapshot = {
     pullRequest,
-    checks: [],
+    checks: [
+      { name: "Test, lint, build, and smoke", status: "failure", url: "https://ci.example/1" },
+      { name: "Typecheck", status: "success", url: null },
+    ],
     comments: commentsOverride ?? [
       {
         id: "comment-1",
@@ -85,43 +90,96 @@ function createQueryClient(commentsOverride?: GitPullRequestSnapshotResult["comm
   return queryClient;
 }
 
+function renderSection(queryClient: QueryClient, onClose = vi.fn()) {
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <EnvironmentPullRequestSection
+        gitCwd={cwd}
+        enabled
+        activeThreadId={threadId}
+        // No project: Merge/Status stay hidden and View PR falls back to the URL handler.
+        projectId={null}
+        configuredRepositories={[{ nameWithOwner: "example/synara" }]}
+        onOpenUrl={vi.fn()}
+        onClose={onClose}
+      />
+    </QueryClientProvider>,
+  );
+}
+
+async function openRepairSubmenu() {
+  await page.getByText("#321 Keep PR context visible", { exact: true }).click();
+  await expect.element(page.getByText("Repair", { exact: true })).toBeVisible();
+  await page.getByText("Repair", { exact: true }).hover();
+  await expect.element(page.getByText("Everything", { exact: true })).toBeVisible();
+}
+
+function draftCards() {
+  return useComposerDraftStore.getState().draftsByThreadId[threadId]?.pullRequestContexts ?? [];
+}
+
 describe("EnvironmentPullRequestSection", () => {
   afterEach(() => {
     useComposerDraftStore.getState().clearDraftThread(threadId);
     document.body.innerHTML = "";
   });
 
-  it("groups all review comments into one prompt and keeps the panel open", async () => {
+  it("attaches one Repair card per scope instead of pasting prompt text", async () => {
     const onClose = vi.fn();
     const queryClient = createQueryClient();
-    await render(
-      <QueryClientProvider client={queryClient}>
-        <EnvironmentPullRequestSection
-          gitCwd={cwd}
-          enabled
-          activeThreadId={threadId}
-          projectId={null}
-          configuredRepositories={[{ nameWithOwner: "example/synara" }]}
-          onOpenUrl={vi.fn()}
-          onClose={onClose}
-        />
-      </QueryClientProvider>,
+    await renderSection(queryClient, onClose);
+
+    await openRepairSubmenu();
+    // Repair's badge counts comments + failing checks + conflicts.
+    expect(document.body.textContent).toContain("Repair");
+    await page.getByText("Failing checks", { exact: true }).click();
+
+    await expect.poll(() => draftCards().length).toBe(1);
+    expect(draftCards()[0]).toMatchObject({
+      scope: "checks",
+      prNumber: 321,
+      title: "1 failing check",
+      subtitle: "Test, lint, build, and smoke",
+    });
+    expect(draftCards()[0]?.text).toContain("Fix the failing CI checks on PR #321");
+    // The prompt itself never lands in the editor.
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.prompt ?? "").toBe("");
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    // A second scope adds a second card; re-picking the same scope replaces, not stacks.
+    await openRepairSubmenu();
+    await page.getByText("Everything", { exact: true }).click();
+    await expect.poll(() => draftCards().length).toBe(2);
+    expect(draftCards()[1]).toMatchObject({
+      scope: "everything",
+      title: "Repair PR #321",
+      subtitle: "2 comments, 1 failing check, merge conflicts",
+    });
+    expect(draftCards()[1]?.text).toContain(
+      "Preserve the Environment panel while drafting the fix.",
     );
+    expect(draftCards()[1]?.text).toContain("Address the second review finding too.");
+    expect(draftCards()[1]?.text).toContain("Merge conflicts:");
 
-    document
-      .querySelector<HTMLButtonElement>('button[title*="resolve the merge conflicts"]')
-      ?.click();
-    document
-      .querySelector<HTMLButtonElement>(
-        'button[title="Draft one prompt containing all visible review comments"]',
-      )
-      ?.click();
+    await openRepairSubmenu();
+    await page.getByText("Failing checks", { exact: true }).click();
+    await expect.poll(() => draftCards().length).toBe(2);
+    expect(draftCards().filter((card) => card.scope === "checks")).toHaveLength(1);
+  });
 
-    const prompt = useComposerDraftStore.getState().draftsByThreadId[threadId]?.prompt ?? "";
-    expect(prompt).toContain("has merge conflicts with its base branch");
-    expect(prompt).toContain("Preserve the Environment panel while drafting the fix.");
-    expect(prompt).toContain("Address the second review finding too.");
-    expect(onClose).not.toHaveBeenCalled();
+  it("adds the pull request itself to the chat as a reference card", async () => {
+    const queryClient = createQueryClient();
+    await renderSection(queryClient);
+
+    await page.getByText("#321 Keep PR context visible", { exact: true }).click();
+    await page.getByText("Add to chat", { exact: true }).click();
+
+    await expect.poll(() => draftCards().length).toBe(1);
+    expect(draftCards()[0]).toMatchObject({
+      scope: "reference",
+      title: "#321 Keep PR context visible",
+      subtitle: "fix/pr-panel → main",
+    });
   });
 
   it("scrolls long comment lists instead of crushing the rows", async () => {
@@ -134,21 +192,11 @@ describe("EnvironmentPullRequestSection", () => {
       createdAt: "2026-08-07T10:00:00Z",
     }));
     const queryClient = createQueryClient(comments);
-    await render(
-      <QueryClientProvider client={queryClient}>
-        <EnvironmentPullRequestSection
-          gitCwd={cwd}
-          enabled
-          activeThreadId={threadId}
-          projectId={null}
-          configuredRepositories={[{ nameWithOwner: "example/synara" }]}
-          onOpenUrl={vi.fn()}
-          onClose={vi.fn()}
-        />
-      </QueryClientProvider>,
-    );
+    await renderSection(queryClient);
 
-    await page.getByText("6 comments").click();
+    await page.getByText("#321 Keep PR context visible", { exact: true }).click();
+    await expect.element(page.getByText("6 comments", { exact: true })).toBeVisible();
+    await page.getByText("Comments", { exact: true }).hover();
     await expect
       .poll(() => document.body.textContent?.includes("Finding 0"), { timeout: 5000 })
       .toBe(true);

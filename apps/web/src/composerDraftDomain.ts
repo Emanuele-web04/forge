@@ -33,6 +33,10 @@ import {
   type FileCommentSelection,
   normalizeFileCommentSelection,
 } from "./lib/fileComments";
+import {
+  type PullRequestContextDraft,
+  normalizePullRequestContexts,
+} from "./lib/pullRequestContext";
 import { type TerminalContextDraft, normalizeTerminalContextText } from "./lib/terminalContext";
 import {
   type ChatAssistantSelectionAttachment,
@@ -105,6 +109,7 @@ export interface ComposerPromptHistorySavedDraft {
   terminalContexts: TerminalContextDraft[];
   fileComments: FileCommentDraft[];
   pastedTexts: PastedTextDraft[];
+  pullRequestContexts: PullRequestContextDraft[];
   skills: ProviderSkillReference[];
   mentions: ProviderMentionReference[];
 }
@@ -124,6 +129,7 @@ export interface QueuedComposerChatTurn {
   terminalContexts: TerminalContextDraft[];
   fileComments: FileCommentDraft[];
   pastedTexts: PastedTextDraft[];
+  pullRequestContexts: PullRequestContextDraft[];
   skills: ProviderSkillReference[];
   mentions: ProviderMentionReference[];
   selectedProvider: ProviderKind;
@@ -176,6 +182,7 @@ export interface ComposerThreadDraftState {
   terminalContexts: TerminalContextDraft[];
   fileComments: FileCommentDraft[];
   pastedTexts: PastedTextDraft[];
+  pullRequestContexts: PullRequestContextDraft[];
   skills: ProviderSkillReference[];
   mentions: ProviderMentionReference[];
   queuedTurns: QueuedComposerTurn[];
@@ -355,6 +362,9 @@ export interface ComposerDraftStoreState {
   addPastedTexts: (threadId: ThreadId, pastedTexts: PastedTextDraft[]) => void;
   removePastedText: (threadId: ThreadId, pastedTextId: string) => void;
   clearPastedTexts: (threadId: ThreadId) => void;
+  addPullRequestContext: (threadId: ThreadId, context: PullRequestContextDraft) => boolean;
+  removePullRequestContext: (threadId: ThreadId, contextId: string) => void;
+  clearPullRequestContexts: (threadId: ThreadId) => void;
   insertTerminalContext: (
     threadId: ThreadId,
     prompt: string,
@@ -526,6 +536,7 @@ export function createEmptyThreadDraft(): ComposerThreadDraftState {
     terminalContexts: [],
     fileComments: [],
     pastedTexts: [],
+    pullRequestContexts: [],
     skills: [],
     mentions: [],
     queuedTurns: [],
@@ -733,6 +744,7 @@ export function captureComposerPromptHistorySavedDraft(input: {
     terminalContexts: normalizeTerminalContextsForThread(threadId, draft.terminalContexts),
     fileComments: normalizeFileComments(draft.fileComments),
     pastedTexts: normalizePastedTexts(draft.pastedTexts),
+    pullRequestContexts: normalizePullRequestContexts(draft.pullRequestContexts),
     skills: [...draft.skills],
     mentions: [...draft.mentions],
   };
@@ -764,6 +776,7 @@ export function buildTransferredComposerDraft(input: {
     ),
     fileComments: normalizeFileComments(sourceDraft.fileComments),
     pastedTexts: normalizePastedTexts(sourceDraft.pastedTexts),
+    pullRequestContexts: normalizePullRequestContexts(sourceDraft.pullRequestContexts),
     skills: [...sourceDraft.skills],
     mentions: [...sourceDraft.mentions],
     restoredSourceProposedPlan: null,
@@ -807,6 +820,7 @@ function clonePromptHistorySavedDraft(
     ),
     fileComments: normalizeFileComments(savedDraft.fileComments),
     pastedTexts: normalizePastedTexts(savedDraft.pastedTexts),
+    pullRequestContexts: normalizePullRequestContexts(savedDraft.pullRequestContexts),
     skills: [...savedDraft.skills],
     mentions: [...savedDraft.mentions],
   };
@@ -824,6 +838,7 @@ export function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.terminalContexts.length === 0 &&
     draft.fileComments.length === 0 &&
     draft.pastedTexts.length === 0 &&
+    draft.pullRequestContexts.length === 0 &&
     draft.skills.length === 0 &&
     draft.mentions.length === 0 &&
     draft.queuedTurns.length === 0 &&
@@ -849,6 +864,7 @@ const EMPTY_PERSISTED_ATTACHMENTS: PersistedComposerImageAttachment[] = [];
 const EMPTY_TERMINAL_CONTEXTS: TerminalContextDraft[] = [];
 const EMPTY_BROWSER_ANNOTATIONS: BrowserAnnotationDraft[] = [];
 const EMPTY_PASTED_TEXTS: PastedTextDraft[] = [];
+const EMPTY_PULL_REQUEST_CONTEXTS: PullRequestContextDraft[] = [];
 const EMPTY_SKILLS: ProviderSkillReference[] = [];
 const EMPTY_MENTIONS: ProviderMentionReference[] = [];
 const EMPTY_QUEUED_TURNS: QueuedComposerTurn[] = [];
@@ -859,6 +875,7 @@ Object.freeze(EMPTY_PERSISTED_ATTACHMENTS);
 Object.freeze(EMPTY_TERMINAL_CONTEXTS);
 Object.freeze(EMPTY_BROWSER_ANNOTATIONS);
 Object.freeze(EMPTY_PASTED_TEXTS);
+Object.freeze(EMPTY_PULL_REQUEST_CONTEXTS);
 Object.freeze(EMPTY_SKILLS);
 Object.freeze(EMPTY_MENTIONS);
 Object.freeze(EMPTY_QUEUED_TURNS);
@@ -877,6 +894,7 @@ const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   terminalContexts: EMPTY_TERMINAL_CONTEXTS,
   fileComments: [],
   pastedTexts: EMPTY_PASTED_TEXTS,
+  pullRequestContexts: EMPTY_PULL_REQUEST_CONTEXTS,
   skills: EMPTY_SKILLS,
   mentions: EMPTY_MENTIONS,
   queuedTurns: EMPTY_QUEUED_TURNS,
