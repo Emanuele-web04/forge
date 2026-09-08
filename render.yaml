@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: cortex-cloud-control
+    runtime: docker
+    plan: free
+    dockerfilePath: ./apps/cloud-control/Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: CORTEX_ENVIRONMENT
+        value: production
+      - key: CORTEX_DATABASE_URL
+        sync: false
