@@ -1080,6 +1080,202 @@ layer("GitHubCliLive", (it) => {
     }),
   );
 
+  for (const { label, login } of [
+    { label: "empty", login: "" },
+    { label: "null", login: null },
+    { label: "whitespace-only", login: " \t " },
+    { label: "missing", login: undefined },
+  ]) {
+    it.effect(`tolerates commit authors with ${label} GitHub login`, () =>
+      Effect.gen(function* () {
+        mockedRunProcess.mockResolvedValueOnce({
+          stdout: JSON.stringify({
+            number: 1016,
+            title: "fix(models): normalize provider model display names",
+            url: "https://github.com/acme/app/pull/1016",
+            headRefName: "fix/normalize-model-display-names",
+            baseRefName: "main",
+            state: "MERGED",
+            mergedAt: "2026-09-08T13:33:01Z",
+            createdAt: "2026-09-07T05:30:14Z",
+            updatedAt: "2026-09-08T13:33:01Z",
+            commits: [
+              {
+                oid: "31967670e7d8ac8e6271187cf91e3d08ed48dc96",
+                messageHeadline: "fix(models): normalize provider model display names",
+                committedDate: "2026-09-07T05:16:29Z",
+                authors: [
+                  { login: " SHLE1 ", name: " SHLE1 " },
+                  {
+                    login,
+                    name: " Local co-author ",
+                    avatarUrl: "https://avatars.githubusercontent.com/unrelated",
+                    url: "https://github.com/unrelated",
+                  },
+                  { login, name: " ", slug: "not-a-user" },
+                ],
+              },
+              {
+                oid: "5a554f9e40043fba3184182c22f7f4bab617fc19",
+                messageHeadline: "fix(models): ignore inherited display-name tokens",
+                committedDate: "2026-09-08T13:18:37Z",
+                // `gh` emits empty-string logins for local-git authors with no
+                // GitHub account. This must not fail the whole detail payload.
+                authors: [{ id: "", login, name: "Emanuele Di Pietro" }],
+              },
+            ],
+          }),
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        });
+        const gh = yield* GitHubCli;
+        const detail = yield* gh.getPullRequestDetail({
+          cwd: "/repo",
+          repository: "acme/app",
+          number: 1016,
+        });
+        assert.equal(detail.commits[1]?.oid, "5a554f9e40043fba3184182c22f7f4bab617fc19");
+        assert.equal(
+          detail.commits[1]?.messageHeadline,
+          "fix(models): ignore inherited display-name tokens",
+        );
+        assert.deepStrictEqual(
+          detail.commits.map((commit) => commit.authors),
+          [
+            [
+              {
+                login: "SHLE1",
+                name: "SHLE1",
+                avatarUrl: "https://avatars.githubusercontent.com/SHLE1?size=64",
+                url: "https://github.com/SHLE1",
+              },
+              { login: null, name: "Local co-author", avatarUrl: null, url: null },
+            ],
+            [{ login: null, name: "Emanuele Di Pietro", avatarUrl: null, url: null }],
+          ],
+        );
+      }),
+    );
+  }
+
+  for (const invalidAuthor of [{ login: 123 }, { login: null, name: false }]) {
+    it.effect(`rejects malformed commit author ${JSON.stringify(invalidAuthor)}`, () =>
+      Effect.gen(function* () {
+        mockedRunProcess.mockResolvedValueOnce({
+          stdout: JSON.stringify({
+            number: 9,
+            title: "Malformed author",
+            url: "https://github.com/acme/app/pull/9",
+            headRefName: "malformed-author",
+            baseRefName: "main",
+            createdAt: "2026-07-01T00:00:00Z",
+            updatedAt: "2026-07-02T00:00:00Z",
+            commits: [
+              {
+                oid: "abc123",
+                committedDate: "2026-07-01T00:00:00Z",
+                authors: [invalidAuthor],
+              },
+            ],
+          }),
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        });
+        const gh = yield* GitHubCli;
+        const error = yield* gh.getPullRequestDetail({
+          cwd: "/repo",
+          repository: "acme/app",
+          number: 9,
+        }).pipe(Effect.flip);
+        expect(error.detail).toContain("invalid pull request detail JSON");
+      }),
+    );
+  }
+
+  it.effect("normalizes nullable actors without losing comments or treating teams as users", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          number: 9,
+          title: "Nullable actors",
+          url: "https://github.com/acme/app/pull/9",
+          headRefName: "nullable-actors",
+          baseRefName: "main",
+          createdAt: "2026-07-01T00:00:00Z",
+          updatedAt: "2026-07-02T00:00:00Z",
+          author: { login: null, slug: null, name: "Local author" },
+          reviewRequests: [
+            { login: " reviewer ", slug: "unused" },
+            { __typename: "Team", login: "", slug: " platform " },
+            { __typename: "Team", login: null, slug: "security" },
+            { __typename: "Team", login: " \t ", slug: "infra" },
+            { login: "", slug: "" },
+            { login: null, slug: null },
+            { login: " \t ", slug: " \t " },
+            {},
+          ],
+          comments: [
+            {
+              id: "comment",
+              body: "Keep this comment",
+              createdAt: "2026-07-01T01:00:00Z",
+              author: { login: "", name: "Former user" },
+            },
+          ],
+          reviews: [
+            {
+              id: "review",
+              body: "Keep this review",
+              submittedAt: "2026-07-01T02:00:00Z",
+              state: "APPROVED",
+              author: { login: " \t " },
+            },
+          ],
+        }),
+        stderr: "",
+        code: 0,
+        signal: null,
+        timedOut: false,
+      });
+      const gh = yield* GitHubCli;
+      const detail = yield* gh.getPullRequestDetail({
+        cwd: "/repo",
+        repository: "acme/app",
+        number: 9,
+      });
+
+      assert.equal(detail.author, null);
+      assert.deepStrictEqual(detail.reviewRequestLogins, ["reviewer"]);
+      assert.deepStrictEqual(detail.reviewers, [
+        {
+          login: "reviewer",
+          name: null,
+          avatarUrl: "https://avatars.githubusercontent.com/reviewer?size=64",
+          url: null,
+        },
+        { login: "platform", name: null, avatarUrl: null, url: null },
+        { login: "security", name: null, avatarUrl: null, url: null },
+        { login: "infra", name: null, avatarUrl: null, url: null },
+      ]);
+      assert.deepStrictEqual(
+        detail.comments.map(({ id, body, author, reviewState }) => ({
+          id,
+          body,
+          author,
+          reviewState,
+        })),
+        [
+          { id: "comment", body: "Keep this comment", author: null, reviewState: null },
+          { id: "review", body: "Keep this review", author: null, reviewState: "APPROVED" },
+        ],
+      );
+    }),
+  );
+
   it.effect("loads bounded diffs and runs merge actions", () =>
     Effect.gen(function* () {
       mockedRunProcess
