@@ -15,11 +15,14 @@ import {
   refreshEmptyRouteRestoreSnapshot,
   waitForEmptyRouteRestoreFallbackDelay,
 } from "../chatRouteRecovery";
-import { useComposerDraftStore } from "../composerDraftStore";
+import {
+  reclaimUnreachableDetachedDraftThreads,
+  useComposerDraftStore,
+} from "../composerDraftStore";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
 import { readNativeApi } from "../nativeApi";
 import { isSplitRoute } from "../splitViewRoute";
-import { selectSplitView, useSplitViewStore } from "../splitViewStore";
+import { collectSplitViewThreadIds, selectSplitView, useSplitViewStore } from "../splitViewStore";
 import { useStore } from "../store";
 import { createThreadExistsSelector, createThreadProjectIdSelector } from "../storeSelectors";
 import { SingleChatSurface } from "../components/chat/SingleChatSurface";
@@ -86,6 +89,24 @@ function ChatThreadRouteView() {
     }
     return undefined;
   }, [missingThreadRecoveryState, routeThreadExists]);
+
+  useEffect(() => {
+    return () => {
+      // Detached drafts (preserveProjectDraft flows such as bug-report
+      // drafting) never claim a project slot, so once their route unmounts
+      // nothing links back to them. The check is deferred so strict-mode
+      // remounts and staged navigations cannot reclaim a still-displayed
+      // draft — by the time it runs, the location has settled.
+      window.setTimeout(() => {
+        const displayedThreadIds = collectSplitViewThreadIds();
+        const routedThreadId = window.location.pathname.match(/^\/([^/?#]+)/)?.[1];
+        if (routedThreadId) {
+          displayedThreadIds.add(ThreadId.makeUnsafe(decodeURIComponent(routedThreadId)));
+        }
+        reclaimUnreachableDetachedDraftThreads(displayedThreadIds);
+      }, 0);
+    };
+  }, [threadId]);
 
   useEffect(() => {
     if (!threadsHydrated || !splitViewsHydrated) {

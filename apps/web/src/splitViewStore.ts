@@ -337,6 +337,18 @@ export function resolveSplitViewThreadIds(splitView: SplitView): ThreadId[] {
   return [...new Set(ids)];
 }
 
+/** Every thread id currently shown in any split-view leaf pane. */
+export function collectSplitViewThreadIds(): Set<ThreadId> {
+  const ids = new Set<ThreadId>();
+  for (const splitView of Object.values(useSplitViewStore.getState().splitViewsById)) {
+    if (!splitView) continue;
+    for (const threadId of resolveSplitViewThreadIds(splitView)) {
+      ids.add(threadId);
+    }
+  }
+  return ids;
+}
+
 export function resolveSplitViewPaneIdForThread(
   splitView: SplitView,
   threadId: ThreadId | null,

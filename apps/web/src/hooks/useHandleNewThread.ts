@@ -14,6 +14,7 @@ import {
   type ComposerThreadDraftState,
   type DraftThreadState,
   resolvePreferredComposerModelSelection,
+  reclaimUnreachableDetachedDraftThreads,
   useComposerDraftStore,
 } from "../composerDraftStore";
 import {
@@ -40,6 +41,7 @@ import { newCommandId, newThreadId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { useFocusedChatContext } from "../focusedChatContext";
 import { useStore } from "../store";
+import { collectSplitViewThreadIds } from "../splitViewStore";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 
@@ -365,6 +367,16 @@ export function useHandleNewThread() {
         }
         return bootstrapPlan.threadId;
       })();
+    }
+
+    if (options?.preserveProjectDraft) {
+      // Detached drafts are unreachable once they leave the screen; reclaim
+      // leftovers from earlier side-action drafts before minting another so
+      // they cannot accumulate in persisted storage.
+      const displayedThreadIds = collectSplitViewThreadIds();
+      if (routeThreadId) displayedThreadIds.add(routeThreadId);
+      if (focusedThreadId) displayedThreadIds.add(focusedThreadId);
+      reclaimUnreachableDetachedDraftThreads(displayedThreadIds);
     }
 
     return runDraftNavigationOnce(draftNavigationSlotKey(projectId, entryPoint), async () => {

@@ -4,6 +4,7 @@ import { selectComposerThreadDraft } from "./composerDraftDomain";
 import {
   finalizePromotedDraftThreads,
   markPromotedDraftThreads,
+  reclaimUnreachableDetachedDraftThreads,
   useComposerDraftStore,
 } from "./composerDraftStore";
 import {
@@ -324,6 +325,34 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(state.draftsByThreadId[threadId]?.prompt).toContain("unsent work in progress");
     expect(state.getDraftThread(otherThreadId)).toMatchObject({ projectId, entryPoint: "chat" });
     expect(state.draftsByThreadId[otherThreadId]?.prompt).toContain("bug-report interview prompt");
+  });
+
+  it("reclaims only detached drafts that are unreachable", () => {
+    const store = useComposerDraftStore.getState();
+    const detachedId = ThreadId.makeUnsafe("thread-detached");
+    const displayedId = ThreadId.makeUnsafe("thread-displayed");
+    const promotedId = ThreadId.makeUnsafe("thread-promoted");
+
+    // The mapped project draft keeps its unsent text.
+    store.setProjectDraftThreadId(projectId, threadId);
+    store.setPrompt(threadId, "unsent");
+    // Detached drafts: one abandoned (unreachable), one still displayed, one
+    // mid-promotion.
+    store.registerDraftThread(detachedId, { projectId, entryPoint: "chat" });
+    store.setPrompt(detachedId, "abandoned bug report");
+    store.registerDraftThread(displayedId, { projectId, entryPoint: "chat" });
+    store.registerDraftThread(promotedId, { projectId, entryPoint: "chat" });
+    store.markDraftThreadPromoting(promotedId);
+
+    reclaimUnreachableDetachedDraftThreads(new Set([displayedId]));
+
+    const state = useComposerDraftStore.getState();
+    expect(state.getDraftThreadByProjectId(projectId)?.threadId).toBe(threadId);
+    expect(state.draftsByThreadId[threadId]?.prompt).toContain("unsent");
+    expect(state.getDraftThread(detachedId)).toBeNull();
+    expect(state.draftsByThreadId[detachedId]).toBeUndefined();
+    expect(state.getDraftThread(displayedId)).not.toBeNull();
+    expect(state.getDraftThread(promotedId)?.promotedTo).toBe(promotedId);
   });
 
   it("releases queued preview blobs when remapping a project to a new draft thread", () => {

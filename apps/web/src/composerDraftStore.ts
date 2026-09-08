@@ -157,3 +157,23 @@ export function finalizePromotedDraftThreads(serverThreadIds: ReadonlySet<Thread
     store.finalizePromotedDraftThread(threadId);
   }
 }
+
+/**
+ * A draft thread that never claimed a project slot (preserveProjectDraft flows
+ * such as bug-report drafting) is reachable only while it is displayed — no
+ * project, sidebar row, or other surface links back to it. Sweep drafts that
+ * are unmapped, not mid-promotion, and absent from the displayed set; without
+ * this, abandoned detached drafts would persist in storage forever.
+ */
+export function reclaimUnreachableDetachedDraftThreads(
+  displayedThreadIds: ReadonlySet<ThreadId>,
+): void {
+  const store = useComposerDraftStore.getState();
+  const mappedThreadIds = new Set(Object.values(store.projectDraftThreadIdByProjectId));
+  for (const threadId of Object.keys(store.draftThreadsByThreadId) as ThreadId[]) {
+    const draftThread = store.draftThreadsByThreadId[threadId];
+    if (!draftThread || draftThread.promotedTo !== undefined) continue;
+    if (mappedThreadIds.has(threadId) || displayedThreadIds.has(threadId)) continue;
+    store.clearDraftThread(threadId);
+  }
+}
