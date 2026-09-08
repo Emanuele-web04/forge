@@ -6,10 +6,10 @@ import type { BrowserTabId, BrowserUploadInput, BrowserUploadOutput } from "@syn
 import { app, type WebContents } from "electron";
 
 import type { BrowserAutomationVisibleRuntime } from "../browserManager";
-import { callFunctionOn, sendCdpCommand, throwIfAborted } from "./cdpRuntime";
+import { throwIfAborted } from "./cdpRuntime";
 import { browserHostError } from "./hostErrors";
-import type { BrowserSnapshotHandle } from "./semanticSnapshot";
-import { releaseBrowserTarget, resolveBrowserTarget } from "./targets";
+import { runBetterwright } from "./betterwrightRuntime";
+import { betterwrightLocator } from "./betterwrightLocator";
 
 const MAX_UPLOAD_FILE_BYTES = 2_147_483_647;
 const DEFAULT_MAX_UPLOAD_INVOCATION_BYTES = 256 * 1024 * 1024;
@@ -554,59 +554,17 @@ const stageWorkspaceUploadFiles = async (
   }
 };
 
-interface FileInputDetails {
-  readonly ok?: boolean;
-  readonly enabled?: boolean;
-  readonly multiple?: boolean;
-}
-
-const FILE_INPUT_DETAILS_FUNCTION = String.raw`function() {
-  if (!(this instanceof HTMLInputElement) || String(this.type).toLowerCase() !== "file") {
-    return { ok: false };
-  }
-  let disabled = this.disabled === true || String(this.getAttribute("aria-disabled") || "").toLowerCase() === "true";
-  try { disabled ||= this.matches(":disabled"); } catch {}
-  return { ok: true, enabled: !disabled, multiple: this.multiple === true };
-}`;
-
 export const uploadBrowserFiles = async (
   runtime: BrowserAutomationVisibleRuntime,
   input: BrowserUploadInput,
-  snapshot: BrowserSnapshotHandle | undefined,
   workspaceRoot: string | null | undefined,
   signal?: AbortSignal,
 ): Promise<BrowserUploadOutput> => {
-  const resolved = await resolveBrowserTarget(runtime, input.target, snapshot, {
-    requireVisible: false,
-    signal,
-  });
   let staged: StagedWorkspaceUpload | undefined;
   let untrackedStagingDirectory: string | undefined;
   let reservation: StagedUploadReservation | undefined;
   try {
-    if (!resolved.objectId) {
-      browserHostError({
-        code: "BrowserTargetNotFound",
-        retryable: false,
-        phase: "target",
-        effectMayHaveCommitted: false,
-        tabId: runtime.tabId as BrowserTabId,
-      });
-    }
-    const details = await callFunctionOn<FileInputDetails>(
-      runtime,
-      resolved.objectId,
-      FILE_INPUT_DETAILS_FUNCTION,
-      { effectMayHaveCommitted: false, signal },
-    );
-    if (!details.value?.ok) browserHostError({ code: "BrowserInputUnsupported" });
-    if (!details.value.enabled) {
-      browserHostError({ code: "BrowserTargetNotEnabled", tabId: runtime.tabId as BrowserTabId });
-    }
     const inspected = await inspectWorkspaceUploadFiles(workspaceRoot, input.paths, signal);
-    if (!details.value.multiple && inspected.files.length !== 1) {
-      browserHostError({ code: "BrowserInputUnsupported" });
-    }
     const uploadBytes = cumulativeUploadBytes(runtime.webContents, inspected.files);
     reservation = reserveStagedUpload(runtime.webContents, uploadBytes, inspected.files.length);
     staged = await stageWorkspaceUploadFiles(
@@ -627,19 +585,43 @@ export const uploadBrowserFiles = async (
     }
     const filesForChromium = staged.files.map((file) => file.path);
     staged = undefined;
-    await sendCdpCommand(
-      runtime,
-      "DOM.setFileInputFiles",
-      {
-        objectId: resolved.objectId,
-        files: filesForChromium,
-      },
-      signal,
-      { effectMayHaveCommitted: true },
-    );
+    const result = await runBetterwright<{
+      code?:
+        | "BrowserInputUnsupported"
+        | "BrowserTargetNotFound"
+        | "BrowserTargetAmbiguous"
+        | "BrowserTargetNotEnabled";
+    }>({
+      home: join(app.getPath("userData"), "browser-engine"),
+      contents: runtime.webContents,
+      expectAgentInput: runtime.expectAgentInput,
+      uploadFiles: filesForChromium,
+      signal: signal ?? new AbortController().signal,
+      timeoutMs: input.timeoutMs ?? 15_000,
+      code: `const target = ${betterwrightLocator(input.target)};
+const count = await target.count();
+if (count !== 1) return {code: count === 0 ? "BrowserTargetNotFound" : "BrowserTargetAmbiguous"};
+const details = await target.evaluate(element => ({
+  file: element instanceof HTMLInputElement && element.type === "file",
+  disabled: element.matches(":disabled") || element.getAttribute("aria-disabled") === "true",
+  multiple: element.multiple === true
+}));
+if (!details.file || (!details.multiple && ${filesForChromium.length} !== 1)) return {code: "BrowserInputUnsupported"};
+if (details.disabled) return {code: "BrowserTargetNotEnabled"};
+await target.setInputFiles(${JSON.stringify(filesForChromium)});
+return {};`,
+    });
+    if (result.code)
+      browserHostError({
+        code: result.code,
+        tabId: runtime.tabId as BrowserTabId,
+        phase: "input",
+        retryable: false,
+        effectMayHaveCommitted: false,
+      });
     return {
       tabId: runtime.tabId as BrowserTabId,
-      target: resolved.info,
+      target: {},
       files: inspected.files.map(({ name, byteLength }) => ({ name, byteLength })),
     };
   } finally {
@@ -655,6 +637,5 @@ export const uploadBrowserFiles = async (
     // owned by its lifecycle because the selection may already have committed
     // despite a transport error. Synthetic runtimes without lifecycle events
     // cannot retain a usable selection and are cleaned here.
-    await releaseBrowserTarget(runtime, resolved, signal);
   }
 };

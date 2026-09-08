@@ -11,6 +11,7 @@ import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
 import {
+  browserInputErrorCode,
   makeBrowserAutomationError,
   makeBrowserMcpToolErrorEnvelope,
 } from "./browserAutomationErrors";
@@ -35,6 +36,29 @@ function makeCanonicalInput(code: BrowserErrorCode): BrowserAutomationErrorInput
 }
 
 describe("browser automation error factories", () => {
+  it.each([45_000, 60_000, 99, 30_001, 100.5, "30000", null, NaN, Infinity])(
+    "explains invalid timeout %s without reflecting input",
+    (timeoutMs) => {
+      const code = browserInputErrorCode({ timeoutMs, code: "private-secret" });
+      expect(code).toBe("BrowserInvalidTimeout");
+      const error = makeBrowserAutomationError({ code });
+      expect(error).toMatchObject({
+        phase: "input",
+        retryable: false,
+        effectMayHaveCommitted: false,
+      });
+      expect(error.message).toContain("100 to 30000");
+      expect(error.message).not.toContain("private-secret");
+    },
+  );
+
+  it.each([{}, { timeoutMs: undefined }, { timeoutMs: 100 }, { timeoutMs: 30000 }, null])(
+    "distinguishes other schema failures from timeout bounds",
+    (input) => {
+      expect(browserInputErrorCode(input)).toBe("BrowserInvalidArguments");
+    },
+  );
+
   it("constructs every canonical error as a strictly decoded contract value", () => {
     for (const code of browserErrorCodes) {
       const error = makeBrowserAutomationError(makeCanonicalInput(code));

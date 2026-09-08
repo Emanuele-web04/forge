@@ -6,6 +6,7 @@
 import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@synara/contracts";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import { sameAppSnapShortcut } from "@synara/shared/appSnapShortcut";
+import { SafariAccessSetupButton } from "../components/SafariAccessOnboarding";
 import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 
@@ -448,6 +449,7 @@ function SettingsRouteView() {
 
   const renderGeneralPanel = () => (
     <div className="space-y-6">
+      <SafariAccessSetupButton />
       <SettingsSection title="Core defaults">
         <SettingsRow
           title="Default provider"

@@ -2,10 +2,25 @@ import {
   BrowserAutomationError,
   BrowserAutomationErrorMessages,
   BrowserFixedAutomationErrorInvariants,
+  BrowserTimeoutMs,
   type BrowserAutomationErrorInput,
   type BrowserMcpToolErrorEnvelope,
 } from "@synara/contracts";
 import { Schema } from "effect";
+
+// Classify known fields without exposing parser issues, code or credential values.
+export const browserInputErrorCode = (argumentsValue: unknown) => {
+  if (
+    argumentsValue !== null &&
+    typeof argumentsValue === "object" &&
+    "timeoutMs" in argumentsValue &&
+    argumentsValue.timeoutMs !== undefined &&
+    !Schema.is(BrowserTimeoutMs)(argumentsValue.timeoutMs)
+  ) {
+    return "BrowserInvalidTimeout" as const;
+  }
+  return "BrowserInvalidArguments" as const;
+};
 
 type BrowserFixedAutomationErrorCode = keyof typeof BrowserFixedAutomationErrorInvariants;
 type BrowserContextualAutomationErrorInput = Exclude<

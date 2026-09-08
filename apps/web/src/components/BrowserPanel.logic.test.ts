@@ -19,11 +19,66 @@ import {
   shouldOccludeBrowserWebview,
   applyBrowserWebviewPresentation,
   isBrowserPanelBoundsHiddenKey,
+  resolveBrowserRuntimePresentation,
 } from "./BrowserPanel.logic";
 import { ThreadId, type BrowserAnnotationEvent } from "@synara/contracts";
 import type { BrowserAnnotationDraft } from "../lib/browserAnnotations";
 
 const THREAD_A = ThreadId.makeUnsafe("thread-a");
+
+describe("native browser presentation ownership", () => {
+  it("keeps the native page in a floating slot and scales without a renderer handoff", () => {
+    expect(
+      resolveBrowserRuntimePresentation({
+        native: true,
+        floating: true,
+        rect: { x: 20, y: 30, width: 320, height: 220 },
+        desktopZoom: 1,
+      }),
+    ).toEqual({
+      surface: "native",
+      bounds: { x: 20, y: 40, width: 320, height: 200 },
+      pageZoomFactor: 0.25,
+    });
+  });
+  it("preserves page dimensions across shell zoom and expands the same native surface", () => {
+    const floating = resolveBrowserRuntimePresentation({
+      native: true,
+      floating: true,
+      rect: { x: 20, y: 30, width: 640, height: 440 },
+      desktopZoom: 1.5,
+    });
+    expect(floating.surface).toBe("native");
+    expect(floating.bounds.width / floating.pageZoomFactor).toBe(1280);
+    expect(floating.bounds.height / floating.pageZoomFactor).toBe(800);
+    expect(
+      resolveBrowserRuntimePresentation({
+        native: true,
+        floating: false,
+        rect: { x: 20, y: 30, width: 900, height: 600 },
+        desktopZoom: 1,
+      }),
+    ).toEqual({
+      surface: "native",
+      bounds: { x: 20, y: 30, width: 900, height: 600 },
+      pageZoomFactor: 1,
+    });
+  });
+  it("leaves existing renderer guests on their original CSS-scaled surface", () => {
+    expect(
+      resolveBrowserRuntimePresentation({
+        native: false,
+        floating: true,
+        rect: { x: 20, y: 30, width: 320, height: 220 },
+        desktopZoom: 1,
+      }),
+    ).toEqual({
+      surface: "renderer",
+      bounds: { x: 20, y: 40, width: 1280, height: 800 },
+      pageZoomFactor: 1,
+    });
+  });
+});
 const DOCUMENT_KEY = `sha256:${"0".repeat(64)}`;
 
 function committedEvent(

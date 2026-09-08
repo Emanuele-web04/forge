@@ -11,6 +11,7 @@ import {
   type WsCompatibilityError,
 } from "@synara/contracts";
 import { defaultTerminalTitleForCliKind } from "@synara/shared/terminalThreads";
+import { BrowserVaultDialog } from "~/components/BrowserVault";
 import { isThreadDetailEventFor } from "@synara/shared/threadDetailEvents";
 import {
   Outlet,
@@ -29,6 +30,7 @@ import { DesktopWindowControls } from "../components/DesktopWindowControls";
 import { RunningChatsQuitCoordinator } from "../components/RunningChatsQuitCoordinator";
 import { AppSnapCoordinator } from "../components/AppSnapCoordinator";
 import { AppSnapWelcomeDialog } from "../components/AppSnapWelcomeDialog";
+import { SafariAccessOnboarding } from "../components/SafariAccessOnboarding";
 import { QueuedComposerDrainCoordinator } from "../components/QueuedComposerDrainCoordinator";
 import { FeedbackDialog } from "../components/FeedbackDialog";
 import { SETTINGS_TARGETS } from "../settingsNavigation";
@@ -302,11 +304,14 @@ function RootRouteView() {
           <EventRouter />
           <ProviderStatusRefreshCoordinator />
           <GlobalShortcutsDialog />
+          <BrowserVaultDialog />
           <GlobalFeedbackDialog />
           <GlobalWhatsNewSurface />
           <TaskCompletionNotifications />
           <QueuedComposerDrainCoordinator />
-          <AppSnapWelcomeDialog />
+          <SafariAccessOnboarding>
+            <AppSnapWelcomeDialog />
+          </SafariAccessOnboarding>
           <AppSnapCoordinator />
           <DesktopProjectBootstrap />
           <Outlet />

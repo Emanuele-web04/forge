@@ -16,14 +16,17 @@
     "smoke-test": "node scripts/smoke-test.mjs"
   },
   "dependencies": {
+    "betterwright": "2.4.0",
     "effect": "catalog:",
     "electron": "43.4.1",
-    "electron-updater": "^6.6.2"
+    "electron-updater": "^6.6.2",
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@synara/contracts": "workspace:*",
     "@synara/shared": "workspace:*",
     "@types/node": "catalog:",
+    "@types/ws": "^8.5.13",
     "tsdown": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",

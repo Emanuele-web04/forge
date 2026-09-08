@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 import {
   resolveSynaraDesktopFlavor,
@@ -74,9 +74,29 @@ export function spawnSourceDesktop({
   readWindowsEnvironment = readWindowsPersistentEnvironment,
   spawnProcess,
   stdio = "inherit",
+  launchViaMacOS = false,
 }) {
   assertCurrentSourceDesktopBuild(desktopDirectory, readBuiltMain);
-  return spawnProcess(electronPath, ["dist-electron/main.js"], {
+  let executable = electronPath;
+  let args = ["dist-electron/main.js"];
+  if (launchViaMacOS) {
+    const macOSDirectory = dirname(electronPath);
+    const contentsDirectory = dirname(macOSDirectory);
+    const bundle = dirname(contentsDirectory);
+    if (
+      platform !== "darwin" ||
+      basename(macOSDirectory) !== "MacOS" ||
+      basename(contentsDirectory) !== "Contents" ||
+      !bundle.endsWith(".app")
+    ) {
+      throw new Error("LaunchServices requires a macOS application bundle.");
+    }
+    // LaunchServices makes the app responsible for TCC access instead of the caller.
+    // Keep secrets in the inherited environment, never in open's --env arguments.
+    executable = "/usr/bin/open";
+    args = ["-W", "-n", "-a", bundle, "--args", resolve(desktopDirectory, "dist-electron/main.js")];
+  }
+  return spawnProcess(executable, args, {
     cwd: desktopDirectory,
     env: createSourceDesktopEnvironment({
       environment,

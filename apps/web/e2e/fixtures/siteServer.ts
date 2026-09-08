@@ -54,6 +54,7 @@ const APP_HTML = `<!doctype html>
       <label>Shared input <input aria-label="Shared input" /></label>
       <button id="agent" type="button">Commit agent action</button>
       <button id="point" type="button">Commit point action</button>
+      <button id="copy" type="button" onclick="navigator.clipboard.writeText('synthetic-browser-copy').then(() => this.dataset.copied = 'true', error => this.dataset.copied = error.name + ': ' + error.message)">Copy synthetic text</button>
       <input id="manual" type="button" value="Manual Playwright action" />
       <section id="private-editor-wrap">
         <div id="private-editor" contenteditable="true">Private draft must not be captured</div>
@@ -151,7 +152,8 @@ const APP_HTML = `<!doctype html>
         document.body.dataset.dragstart = String(Number(document.body.dataset.dragstart) + 1);
         event.dataTransfer?.setData("text/plain", "synara-drag");
       });
-      dragSource.addEventListener("mousedown", () => {
+      dragSource.addEventListener("mousedown", (event) => {
+        document.body.dataset.dragButtons = String(event.buttons);
         document.body.dataset.dragMousedown = String(Number(document.body.dataset.dragMousedown) + 1);
       });
       dragSource.addEventListener("mousemove", () => {
@@ -213,16 +215,32 @@ const OAUTH_HTML = `<!doctype html><html><head><title>OAuth fixture</title></hea
   <h1>Complete fixture sign-in</h1><button type="button">Continue manually</button>
 </body></html>`;
 
+const SIGNIN_HTML = `<!doctype html><html><head><title>Sign-in fixture</title></head><body>
+  <label>Email <input type="email" /></label>
+  <label>Password <input type="password" /></label>
+  <button type="button" onclick="document.querySelector('#mode').textContent='Log In selected'">Log In</button>
+  <button type="button" onclick="document.querySelector('#mode').textContent='Google selected'">Continue with Google</button>
+  <p id="mode">Sign Up selected</p>
+</body></html>`;
+
 const HTML_BY_PATH: Readonly<Record<string, string>> = {
   "/app": APP_HTML,
   "/next": NEXT_HTML,
   "/oauth": OAUTH_HTML,
   "/popup": POPUP_HTML,
+  "/signin": SIGNIN_HTML,
+  "/client-redirect":
+    "<!doctype html><script>location.replace('/next')</script><script src='/redirect-blocker.js'></script>",
 };
 
 export async function startVisibleBrowserFixtureSite(): Promise<VisibleBrowserFixtureSite> {
   const server: Server = createServer((request, response) => {
     const requestPath = new URL(request.url ?? "/", "http://fixture.test").pathname;
+    if (requestPath === "/redirect-blocker.js") {
+      response.setHeader("Content-Type", "text/javascript");
+      setTimeout(() => response.end(""), 500);
+      return;
+    }
     if (requestPath === "/redirect") {
       response.statusCode = 302;
       response.setHeader("Location", "/next");

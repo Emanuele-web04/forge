@@ -8,7 +8,7 @@ export default defineConfig({
   fullyParallel: false,
   timeout: 120_000,
   expect: { timeout: 10_000 },
-  reporter: [["list"]],
+  reporter: [["list", { printSteps: true }]],
   use: {
     actionTimeout: 10_000,
     trace: "retain-on-failure",

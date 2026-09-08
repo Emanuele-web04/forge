@@ -57,6 +57,8 @@ interface PipeClient {
 }
 
 export interface BrowserHostPipeServerOptions {
+  readonly vault?: import("./browserAutomation/browserVault").BrowserVault;
+  readonly vaultCapture?: import("./browserAutomation/browserVaultCapture").BrowserVaultCapture;
   readonly pipePath?: string;
   readonly capability?: string;
   readonly platform?: NodeJS.Platform;
@@ -217,6 +219,7 @@ export class BrowserHostPipeServer {
   private readonly platform: NodeJS.Platform;
   private readonly automationHost: Pick<DesktopBrowserAutomationHost, "executeTool">;
   private readonly disposeAutomationHost: (() => Promise<void>) | undefined;
+  private readonly drainAutomationHost: (() => Promise<void>) | undefined;
   private readonly maxInFlightRequests: number;
   private readonly maxQueuedOutputBytes: number;
   private readonly capability: string;
@@ -236,18 +239,26 @@ export class BrowserHostPipeServer {
     this.capability = capability;
     this.maxInFlightRequests = normalized.maxInFlightRequests ?? MAX_IN_FLIGHT_REQUESTS;
     this.maxQueuedOutputBytes = normalized.maxQueuedOutputBytes ?? MAX_QUEUED_OUTPUT_BYTES;
-    const hostOptions = normalized.requestOpenPanel
-      ? { requestOpenPanel: normalized.requestOpenPanel }
-      : {};
+    const hostOptions = {
+      ...(normalized.requestOpenPanel ? { requestOpenPanel: normalized.requestOpenPanel } : {}),
+      ...(normalized.vault ? { vault: normalized.vault } : {}),
+      ...(normalized.vaultCapture ? { vaultCapture: normalized.vaultCapture } : {}),
+    };
     if (normalized.automationHost) {
       this.automationHost = normalized.automationHost;
       this.disposeAutomationHost = undefined;
+      this.drainAutomationHost = undefined;
     } else {
       const automationHost = new DesktopBrowserAutomationHost(browserManager, hostOptions);
       this.automationHost = automationHost;
       this.disposeAutomationHost = () => automationHost.dispose();
+      this.drainAutomationHost = () => automationHost.waitForIdle();
     }
     this.server = Net.createServer((socket) => this.handleConnection(socket));
+  }
+
+  async waitForIdle(): Promise<void> {
+    await this.drainAutomationHost?.();
   }
 
   async start(): Promise<void> {

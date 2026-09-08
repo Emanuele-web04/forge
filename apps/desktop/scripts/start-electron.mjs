@@ -12,6 +12,7 @@ const child = spawnSourceDesktop({
   desktopDirectory: desktopDir,
   electronPath: resolveElectronPath(),
   spawnProcess: spawn,
+  launchViaMacOS: process.platform === "darwin",
 });
 
 child.on("exit", (code, signal) => {
