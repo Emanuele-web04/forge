@@ -36,6 +36,10 @@ import {
 } from "@synara/contracts";
 import { prewarmChatGptVoiceTranscriptionConnection } from "@synara/shared/chatGptVoiceTranscription";
 import { getModelSelectionBooleanOptionValue, normalizeModelSlug } from "@synara/shared/model";
+import {
+  JsonRpcStdioRequestRegistry,
+  type JsonRpcPendingRequest,
+} from "@synara/shared/jsonrpc-stdio";
 import { decodeSubagentReceiverThreadIds } from "@synara/shared/subagents";
 import { spawnProcess } from "@synara/shared/processRuntime";
 import { Effect, ServiceMap } from "effect";
@@ -87,13 +91,7 @@ import {
 const log = createLogger("codex");
 
 type PendingRequestKey = string;
-
-interface PendingRequest {
-  method: string;
-  timeout: ReturnType<typeof setTimeout>;
-  resolve: (value: unknown) => void;
-  reject: (error: Error) => void;
-}
+type PendingRequest = JsonRpcPendingRequest;
 
 interface PendingApprovalRequest {
   requestId: ApprovalRequestId;
@@ -165,6 +163,7 @@ interface CodexSessionContext {
   stdinWriter: CodexJsonlWriter;
   detachStdout?: () => void;
   pending: Map<PendingRequestKey, PendingRequest>;
+  rpcRequests?: JsonRpcStdioRequestRegistry;
   pendingApprovals: Map<ApprovalRequestId, PendingApprovalRequest>;
   pendingUserInputs: Map<ApprovalRequestId, PendingUserInputRequest>;
   sessionApprovalOverride?: CodexSessionApprovalOverride;
@@ -2276,6 +2275,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private rejectPendingRequests(context: CodexSessionContext, error: Error): void {
+    if (context.rpcRequests) {
+      context.rpcRequests.rejectAll(error);
+      return;
+    }
     for (const pending of context.pending.values()) {
       clearTimeout(pending.timeout);
       pending.reject(error);
@@ -2896,6 +2899,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private attachProcessListeners(context: CodexSessionContext): void {
+    this.requestRegistry(context).processStarted();
     const onStdoutData = (chunk: Buffer) => {
       if (context.stopping) return;
       try {
@@ -2927,7 +2931,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     context.detachStdout = () => {
       context.child.stdout.off("data", onStdoutData);
       context.child.stdout.off("end", onStdoutEnd);
-      context.stdoutFramer.reset();
+      context.stdoutFramer.close();
       delete context.detachStdout;
     };
 
@@ -2960,7 +2964,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const message = `codex app-server exited (code=${code ?? "null"}, signal=${signal ?? "null"}).`;
       const exitError = new Error(message);
       context.stdinWriter.close(exitError);
-      this.rejectPendingRequests(context, exitError);
+      this.requestRegistry(context).processExited(exitError);
       // The child is gone, so the responses cannot land; settling still clears
       // the maps and emits the resolutions that close the pending UI cards.
       void this.settlePendingHumanRequests(context, "session exited");
@@ -3437,21 +3441,18 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private handleResponse(context: CodexSessionContext, response: JsonRpcResponse): void {
-    const key = String(response.id);
-    const pending = context.pending.get(key);
-    if (!pending) {
-      return;
-    }
-
-    clearTimeout(pending.timeout);
-    context.pending.delete(key);
-
-    if (response.error?.message) {
-      pending.reject(new Error(`${pending.method} failed: ${String(response.error.message)}`));
-      return;
-    }
-
-    pending.resolve(response.result);
+    // Preserve the app-server's existing compatibility behavior for malformed
+    // error envelopes: only an error carrying a message rejected a request.
+    // Some older Codex builds emitted an error code without a message and the
+    // old manager treated that as a response with an undefined result.
+    this.requestRegistry(context).handleResponse(
+      response.error?.message
+        ? response
+        : {
+            id: response.id,
+            result: response.result,
+          },
+    );
   }
 
   private async sendRequest<TResponse>(
@@ -3463,28 +3464,32 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const id = context.nextRequestId;
     context.nextRequestId += 1;
 
-    const result = await new Promise<unknown>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        context.pending.delete(String(id));
-        reject(new Error(`Timed out waiting for ${method}.`));
-      }, timeoutMs);
-
-      context.pending.set(String(id), {
+    // The registry owns the pending map and the timeout; upstream's idle-timer kick
+    // still has to happen on every settled request, success or failure.
+    const result = await this.requestRegistry(context)
+      .requestWithId(
+        id,
         method,
-        timeout,
-        resolve,
-        reject,
+        params,
+        (message) => this.writeMessage(context, message),
+        timeoutMs,
+      )
+      .finally(() => {
+        this.restartDiscoverySessionIdleTimer(context);
       });
-      void this.writeMessage(context, { method, id, params }).catch((error) => {
-        clearTimeout(timeout);
-        context.pending.delete(String(id));
-        reject(error);
-      });
-    }).finally(() => {
-      this.restartDiscoverySessionIdleTimer(context);
-    });
 
     return result as TResponse;
+  }
+
+  private requestRegistry(context: CodexSessionContext): JsonRpcStdioRequestRegistry {
+    if (!context.rpcRequests) {
+      context.rpcRequests = new JsonRpcStdioRequestRegistry({
+        pending: context.pending,
+        responseError: ({ method, error }) =>
+          new Error(`${method} failed: ${String(error.message)}`),
+      });
+    }
+    return context.rpcRequests;
   }
 
   private writeMessage(context: CodexSessionContext, message: unknown): Promise<void> {

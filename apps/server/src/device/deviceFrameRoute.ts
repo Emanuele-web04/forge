@@ -22,6 +22,11 @@ import {
   DEVICE_FRAME_WS_PATH,
   DEVICE_FRAME_WS_UDID_PARAM,
 } from "@synara/shared/deviceFrame";
+import {
+  decodeFrameResyncRequest,
+  makeFrameSink,
+  type FrameSink,
+} from "@synara/shared/frameTransport";
 import { Effect, Layer } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
@@ -37,23 +42,12 @@ const MAX_CLIENT_MESSAGE_BYTES = 1_024;
  * treating as a protocol error.
  */
 export function decodeResyncRequest(message: string | Uint8Array): "resync" | null {
-  const text = typeof message === "string" ? message : Buffer.from(message).toString("utf8");
-  if (text.length > MAX_CLIENT_MESSAGE_BYTES) return null;
-  try {
-    const parsed: unknown = JSON.parse(text);
-    return typeof parsed === "object" &&
-      parsed !== null &&
-      (parsed as { type?: unknown }).type === DEVICE_FRAME_RESYNC_MESSAGE
-      ? "resync"
-      : null;
-  } catch {
-    return null;
-  }
+  return decodeFrameResyncRequest(message, DEVICE_FRAME_RESYNC_MESSAGE, MAX_CLIENT_MESSAGE_BYTES);
 }
 
 export interface DeviceFrameSocketWriter {
   readonly write: (bytes: Uint8Array) => void;
-  readonly sink: DeviceFrameSink;
+  readonly sink: FrameSink;
 }
 
 /**
@@ -65,20 +59,7 @@ export function makeDeviceFrameSink(options: {
   readonly send: (bytes: Uint8Array) => Promise<void> | void;
   readonly isOpen: () => boolean;
 }): DeviceFrameSink {
-  let inFlightBytes = 0;
-  return {
-    send: (bytes) => {
-      inFlightBytes += bytes.byteLength;
-      const settle = () => {
-        inFlightBytes = Math.max(0, inFlightBytes - bytes.byteLength);
-      };
-      const result = options.send(bytes);
-      if (result instanceof Promise) result.then(settle, settle);
-      else settle();
-    },
-    bufferedAmount: () => inFlightBytes,
-    isOpen: options.isOpen,
-  };
+  return makeFrameSink(options);
 }
 
 /**
