@@ -1,11 +1,11 @@
 // FILE: EnvironmentUsageSection.browser.tsx
-// Purpose: Browser coverage for the active-provider usage row and multi-window summaries.
+// Purpose: Browser coverage for the per-enabled-provider usage rows and multi-window summaries.
 
 import "../../../index.css";
 
 import { DEFAULT_SERVER_SETTINGS_VIEW, type ServerProviderUsageSnapshot } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { page, userEvent } from "vitest/browser";
+import { page } from "vitest/browser";
 import { describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
@@ -41,7 +41,7 @@ function createQueryClient(): QueryClient {
 }
 
 describe("EnvironmentUsageSection", () => {
-  it("renders only the active provider with every reported usage window", async () => {
+  it("renders one row per enabled provider with every reported usage window", async () => {
     const queryClient = createQueryClient();
     queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
       snapshot("codex", [
@@ -54,7 +54,7 @@ describe("EnvironmentUsageSection", () => {
 
     await render(
       <QueryClientProvider client={queryClient}>
-        <EnvironmentUsageSection provider="codex" />
+        <EnvironmentUsageSection />
       </QueryClientProvider>,
     );
 
@@ -62,9 +62,13 @@ describe("EnvironmentUsageSection", () => {
       name: "Codex usage: 5h 95% remaining, Weekly 82% remaining",
     });
     await expect.element(codex).toBeVisible();
-    expect(document.querySelector('button[aria-label^="Claude usage:"]')).toBeNull();
-    await expect.element(page.getByText("5h", { exact: true })).toBeVisible();
-    await expect.element(page.getByText("Weekly", { exact: true })).toBeVisible();
+    await expect
+      .element(
+        page.getByRole("button", { name: "Claude usage: Weekly 46% remaining" }),
+      )
+      .toBeVisible();
+    await expect.element(codex.getByText("5h", { exact: true })).toBeVisible();
+    await expect.element(codex.getByText("Weekly", { exact: true })).toBeVisible();
 
     await codex.click();
 
@@ -72,22 +76,30 @@ describe("EnvironmentUsageSection", () => {
     await expect.element(page.getByText("82% left", { exact: true })).toBeVisible();
   });
 
-  it("hides the section while the provider has nothing displayable yet", async () => {
+  it("hides the disabled provider's row but keeps the others", async () => {
     const queryClient = createQueryClient();
-    // Batch resolved but the provider's live fetch was dropped (e.g. errored server-side) and no
-    // local/thread fallback produced rows: nothing renders until some source yields data.
     queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
       snapshot("codex", [{ window: "Weekly", usedPercent: 18, windowDurationMins: 10_080 }]),
+      snapshot("cursor", [{ window: "Current", usedPercent: 30 }]),
     ]);
-    queryClient.setQueryData(serverQueryKeys.settings(), DEFAULT_SERVER_SETTINGS_VIEW);
+    queryClient.setQueryData(serverQueryKeys.settings(), {
+      ...DEFAULT_SERVER_SETTINGS_VIEW,
+      providers: {
+        ...DEFAULT_SERVER_SETTINGS_VIEW.providers,
+        cursor: { ...DEFAULT_SERVER_SETTINGS_VIEW.providers.cursor, enabled: false },
+      },
+    });
 
     await render(
       <QueryClientProvider client={queryClient}>
-        <EnvironmentUsageSection provider="claudeAgent" />
+        <EnvironmentUsageSection />
       </QueryClientProvider>,
     );
 
-    expect(document.querySelector('button[aria-label^="Claude usage:"]')).toBeNull();
+    await expect
+      .element(page.getByRole("button", { name: "Codex usage: Weekly 82% remaining" }))
+      .toBeVisible();
+    expect(document.querySelector('button[aria-label^="Cursor usage:"]')).toBeNull();
   });
 
   it("shows the row from usage lines alone when the provider reports no limit windows", async () => {
@@ -103,7 +115,7 @@ describe("EnvironmentUsageSection", () => {
 
     await render(
       <QueryClientProvider client={queryClient}>
-        <EnvironmentUsageSection provider="droid" />
+        <EnvironmentUsageSection />
       </QueryClientProvider>,
     );
 
@@ -112,25 +124,21 @@ describe("EnvironmentUsageSection", () => {
       .toBeVisible();
   });
 
-  it("hides the section when the active provider is disabled", async () => {
+  it("hides the section entirely when no enabled provider has anything displayable", async () => {
     const queryClient = createQueryClient();
-    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
-      snapshot("cursor", [{ window: "Current", usedPercent: 30 }]),
-    ]);
-    queryClient.setQueryData(serverQueryKeys.settings(), {
-      ...DEFAULT_SERVER_SETTINGS_VIEW,
-      providers: {
-        ...DEFAULT_SERVER_SETTINGS_VIEW.providers,
-        cursor: { ...DEFAULT_SERVER_SETTINGS_VIEW.providers.cursor, enabled: false },
-      },
-    });
+    // Empty batch and no local/thread fallback produces rows: nothing renders, not even the
+    // "Usage" label, until some source yields data.
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
+    queryClient.setQueryData(serverQueryKeys.settings(), DEFAULT_SERVER_SETTINGS_VIEW);
 
     await render(
       <QueryClientProvider client={queryClient}>
-        <EnvironmentUsageSection provider="cursor" />
+        <EnvironmentUsageSection />
       </QueryClientProvider>,
     );
 
-    expect(document.querySelector('button[aria-label^="Cursor usage:"]')).toBeNull();
+    expect(document.querySelector('button[aria-label*="usage:"]')).toBeNull();
+    // The "Usage" label itself renders as a <p>; with every row hidden nothing may mount.
+    expect(document.querySelector("p")).toBeNull();
   });
 });
