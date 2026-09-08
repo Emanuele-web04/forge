@@ -169,6 +169,40 @@ it.layer(TestLayer)("git integration", (it) => {
   });
 
   describe("bounded working-tree and ref reads", () => {
+    it.effect("streams rename metadata beyond the capture limit for a selected file", () =>
+      Effect.gen(function* () {
+        const realCore = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const names = Array.from({ length: 24 }, (_, index) => `file-${index}.txt`);
+        for (const name of names) {
+          yield* writeTextFile(path.join(tmp, name), `${name}\n`.repeat(10));
+        }
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "rename sources"]);
+        for (const name of names) yield* git(tmp, ["mv", name, `moved-${name}`]);
+        const metadata = yield* realCore.execute({
+          operation: "test rename metadata",
+          cwd: tmp,
+          args: ["diff", "--name-status", "-z", "HEAD"],
+        });
+        expect(metadata.stdout.length).toBeGreaterThan(128);
+        const core = yield* makeIsolatedGitCore((input) =>
+          realCore.execute({
+            ...input,
+            ...(input.operation === "GitCore.readWorkingTreePatch.renamePaths"
+              ? { maxOutputBytes: 128 }
+              : {}),
+          }),
+        );
+        const patch = (yield* core.readWorkingTreePatch(tmp, "moved-file-9.txt")).patch;
+        expect(patch).toContain("rename from file-9.txt");
+        expect(patch).toContain("rename to moved-file-9.txt");
+        expect(patch).not.toContain("moved-file-8.txt");
+        expect(patch).not.toContain("new file mode");
+      }),
+    );
+
     it.effect("preserves a regular-file to gitlink type change against the ref", () =>
       Effect.gen(function* () {
         const core = yield* GitCore;
@@ -295,6 +329,27 @@ it.layer(TestLayer)("git integration", (it) => {
         );
         expect(output).toBe("first\nse");
         expect(lines).toEqual(["first", "second", "third", "fourth"]);
+      }),
+    );
+
+    it.effect("preserves NUL-delimited paths across byte chunks beyond the capture limit", () =>
+      Effect.gen(function* () {
+        const records = ["R100", "old\r\nname", "new é\tname"];
+        const bytes = new TextEncoder().encode(records.join("\0") + "\0");
+        const received: string[] = [];
+        const output = yield* collectGitOutput(
+          { operation: "test paths", cwd: process.cwd(), args: ["diff"] },
+          Stream.fromIterable(Array.from(bytes, (byte) => Uint8Array.of(byte))),
+          16,
+          (record) =>
+            Effect.sync(() => {
+              received.push(record);
+            }),
+          "truncate",
+          "\0",
+        );
+        expect(output).toBe(new TextDecoder().decode(bytes).slice(0, 16));
+        expect(received).toEqual(records);
       }),
     );
 

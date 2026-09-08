@@ -78,6 +78,8 @@ export interface GitPreparedCommitContext {
 }
 
 export interface ExecuteGitProgress {
+  /** Use NUL records for machine-readable Git output containing arbitrary paths. */
+  readonly stdoutLineDelimiter?: "\n" | "\0";
   readonly onStdoutLine?: (line: string) => Effect.Effect<void, never>;
   readonly onStderrLine?: (line: string) => Effect.Effect<void, never>;
   readonly onHookStarted?: (hookName: string) => Effect.Effect<void, never>;

@@ -589,28 +589,35 @@ export const collectGitOutput = Effect.fn(function* <E>(
   maxOutputBytes: number,
   onLine: ((line: string) => Effect.Effect<void, never>) | undefined,
   outputMode: "error" | "truncate",
+  lineDelimiter: "\n" | "\0" = "\n",
 ): Effect.fn.Return<string, GitCommandError> {
   const decoder = new TextDecoder();
   let bytes = 0;
   let text = "";
   let lineBuffer = "";
+  const findSeparator = () =>
+    lineDelimiter === "\0" ? lineBuffer.indexOf("\0") : lineBuffer.search(/[\r\n]/);
 
   const emitCompleteLines = (flush: boolean) =>
     Effect.gen(function* () {
-      let separatorIndex = lineBuffer.search(/[\r\n]/);
+      let separatorIndex = findSeparator();
       while (separatorIndex >= 0) {
         const line = lineBuffer.slice(0, separatorIndex);
         const separatorWidth =
-          lineBuffer[separatorIndex] === "\r" && lineBuffer[separatorIndex + 1] === "\n" ? 2 : 1;
+          lineDelimiter !== "\0" &&
+          lineBuffer[separatorIndex] === "\r" &&
+          lineBuffer[separatorIndex + 1] === "\n"
+            ? 2
+            : 1;
         lineBuffer = lineBuffer.slice(separatorIndex + separatorWidth);
         if (line.length > 0 && onLine) {
           yield* onLine(line);
         }
-        separatorIndex = lineBuffer.search(/[\r\n]/);
+        separatorIndex = findSeparator();
       }
 
       if (flush) {
-        const trailing = lineBuffer.replace(/\r$/, "");
+        const trailing = lineDelimiter === "\0" ? lineBuffer : lineBuffer.replace(/\r$/, "");
         lineBuffer = "";
         if (trailing.length > 0 && onLine) {
           yield* onLine(trailing);
@@ -734,6 +741,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                 maxOutputBytes,
                 input.progress?.onStdoutLine,
                 outputMode,
+                input.progress?.stdoutLineDelimiter,
               ),
               collectGitOutput(
                 commandInput,
@@ -1888,24 +1896,30 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             undefined,
             filePath,
           );
-          // A destination alone hides its rename relationship from Git. Read
-          // only name metadata when HEAD lacks the path, then include its old
-          // name in the bounded patch so a rename is not shown as a new file.
+          // A destination alone hides its rename relationship from Git. Stream
+          // rename metadata so unrelated paths cannot exhaust the capture limit,
+          // then include the old name in the bounded patch.
           if (headExists && baseType?.code !== 0 && !untrackedFiles.includes(filePath)) {
-            const records = yield* executeGit(
+            let field = 0;
+            let sourcePath = "";
+            yield* executeGit(
               "GitCore.readWorkingTreePatch.renamePaths",
               cwd,
-              ["diff", "--name-status", "-z", "--no-ext-diff", "HEAD"],
-              { timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS },
-            ).pipe(Effect.map((result) => result.stdout.split("\0")));
-            for (let index = 0; index < records.length; ) {
-              const status = records[index++];
-              const oldPath = records[index++];
-              if (status?.startsWith("R") || status?.startsWith("C")) {
-                const newPath = records[index++];
-                if (status.startsWith("R") && newPath === filePath && oldPath) paths.push(oldPath);
-              }
-            }
+              ["diff", "--name-status", "-z", "--diff-filter=R", "--no-ext-diff", "HEAD"],
+              {
+                timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
+                outputMode: "truncate",
+                progress: {
+                  stdoutLineDelimiter: "\0",
+                  onStdoutLine: (record) =>
+                    Effect.sync(() => {
+                      if (field === 1) sourcePath = record;
+                      if (field === 2 && record === filePath) paths.push(sourcePath);
+                      field = (field + 1) % 3;
+                    }),
+                },
+              },
+            );
           }
         }
 
