@@ -1089,9 +1089,6 @@ export function projectProviderRuntimeActivities(
           payload: toActivityPayload({
             state,
             ...(modelUsage ? { modelUsage } : {}),
-            ...(event.provider === "antigravity" && event.payload.usage
-              ? { usage: event.payload.usage, provider: event.provider }
-              : {}),
             ...(typeof event.payload.totalCostUsd === "number"
               ? { totalCostUsd: event.payload.totalCostUsd }
               : {}),
