@@ -10,6 +10,10 @@ import {
 } from "./browserAnnotations";
 import { extractTrailingFileComments, type ParsedFileCommentEntry } from "./fileComments";
 import { extractTrailingPastedTexts, type ParsedPastedTextEntry } from "./composerPastedText";
+import {
+  extractTrailingPullRequestContexts,
+  type ParsedPullRequestContextEntry,
+} from "./pullRequestContext";
 
 export interface TerminalContextSelection {
   terminalId: string;
@@ -41,6 +45,7 @@ export interface DisplayedUserMessageState {
   assistantSelections: ParsedAssistantSelectionEntry[];
   fileComments: ParsedFileCommentEntry[];
   pastedTexts: ParsedPastedTextEntry[];
+  pullRequestContexts: ParsedPullRequestContextEntry[];
   browserAnnotations: BrowserAnnotationDraft[];
 }
 
@@ -57,6 +62,7 @@ export const IMAGE_ONLY_VISIBLE_PLACEHOLDER = "(No Content)";
 const TRAILING_TERMINAL_CONTEXT_BLOCK_PATTERN =
   /\n*<terminal_context>\n([\s\S]*?)\n<\/terminal_context>\s*$/;
 const TRAILING_SERIALIZED_COMPOSER_BLOCK_PATTERNS = [
+  /\n*(<pull_request_context>\n[\s\S]*?\n<\/pull_request_context>)\s*$/u,
   /\n*(<pasted_text>\n[\s\S]*?\n<\/pasted_text>)\s*$/u,
   /\n*(<file_comments>\n[\s\S]*?\n<\/file_comments>)\s*$/u,
   /\n*(<terminal_context>\n[\s\S]*?\n<\/terminal_context>)\s*$/u,
@@ -300,13 +306,17 @@ export function deriveDisplayedUserMessageState(
   options: DisplayedUserMessageOptions,
 ): DisplayedUserMessageState {
   // Trailing blocks are serialized in order: assistant selections, terminal
-  // contexts, file comments, pasted text, then browser annotations (outermost).
-  // Strip them in reverse so each extractor sees its block at the end.
+  // contexts, file comments, pasted text, pull request contexts, then browser
+  // annotations (outermost). Strip them in reverse so each extractor sees its
+  // block at the end.
   const extractedBrowserAnnotations =
     options.messageId === undefined
       ? { promptText: prompt, annotations: [] }
       : extractTrailingBrowserAnnotations(prompt, options.messageId);
-  const extractedPastedTexts = extractTrailingPastedTexts(extractedBrowserAnnotations.promptText);
+  const extractedPullRequestContexts = extractTrailingPullRequestContexts(
+    extractedBrowserAnnotations.promptText,
+  );
+  const extractedPastedTexts = extractTrailingPastedTexts(extractedPullRequestContexts.promptText);
   const extractedFileComments = extractTrailingFileComments(extractedPastedTexts.promptText);
   const extractedContexts = extractTrailingTerminalContexts(extractedFileComments.promptText);
   const extractedAssistantSelections = extractTrailingAssistantSelections(
@@ -328,6 +338,7 @@ export function deriveDisplayedUserMessageState(
     assistantSelections: extractedAssistantSelections.selections,
     fileComments: extractedFileComments.comments,
     pastedTexts: extractedPastedTexts.pastedTexts,
+    pullRequestContexts: extractedPullRequestContexts.pullRequestContexts,
     browserAnnotations: extractedBrowserAnnotations.annotations,
   };
 }

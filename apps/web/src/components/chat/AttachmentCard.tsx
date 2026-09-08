@@ -36,7 +36,7 @@ const ATTACHMENT_CARD_SIZE_STYLES: Record<AttachmentCardSize, AttachmentCardSize
   },
   // Roomier composer card with a prominent type glyph (file attachments).
   md: {
-    shell: "h-14 w-60 max-w-full gap-2.5 rounded-xl py-2 pl-2 shadow-sm",
+    shell: "h-14 w-60 max-w-full gap-2.5 rounded-xl py-2 pl-2",
     shellWithRemove: "pr-8",
     shellWithoutRemove: "pr-3",
     tile: "size-10 rounded-lg",

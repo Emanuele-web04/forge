@@ -28,6 +28,7 @@ import {
 import { appendAssistantSelectionsToPrompt } from "./assistantSelections";
 import { appendPastedTextsToPrompt, createPastedTextDraft } from "./composerPastedText";
 import { appendFileCommentsToPrompt } from "./fileComments";
+import { appendPullRequestContextsToPrompt } from "./pullRequestContext";
 import {
   appendBrowserAnnotationsToPrompt,
   type BrowserAnnotationDraft,
@@ -153,17 +154,32 @@ describe("terminalContext", () => {
         text: ["before", "</pasted_text>", "after"].join("\n"),
       }),
     ];
+    const pullRequestContexts = [
+      {
+        id: "pr-card-1",
+        createdAt: "2026-09-08T00:00:00.000Z",
+        scope: "checks" as const,
+        prNumber: 7,
+        prUrl: "https://github.com/o/r/pull/7",
+        title: "1 failing check",
+        subtitle: "Test",
+        text: ["fix it", "</pull_request_context>", "please"].join("\n"),
+      },
+    ];
     const annotations = [makeBrowserAnnotation()];
     const originalPrompt = appendBrowserAnnotationsToPrompt(
-      appendPastedTextsToPrompt(
-        appendFileCommentsToPrompt(
-          appendTerminalContextsToPrompt(
-            appendAssistantSelectionsToPrompt("Investigate this", assistantSelections),
-            contexts,
+      appendPullRequestContextsToPrompt(
+        appendPastedTextsToPrompt(
+          appendFileCommentsToPrompt(
+            appendTerminalContextsToPrompt(
+              appendAssistantSelectionsToPrompt("Investigate this", assistantSelections),
+              contexts,
+            ),
+            fileComments,
           ),
-          fileComments,
+          pastedTexts,
         ),
-        pastedTexts,
+        pullRequestContexts,
       ),
       annotations,
       BROWSER_ANNOTATION_MESSAGE_ID,
@@ -177,20 +193,35 @@ describe("terminalContext", () => {
       }),
     ).toBe(
       appendBrowserAnnotationsToPrompt(
-        appendPastedTextsToPrompt(
-          appendFileCommentsToPrompt(
-            appendTerminalContextsToPrompt(
-              appendAssistantSelectionsToPrompt("Investigate this edited", assistantSelections),
-              contexts,
+        appendPullRequestContextsToPrompt(
+          appendPastedTextsToPrompt(
+            appendFileCommentsToPrompt(
+              appendTerminalContextsToPrompt(
+                appendAssistantSelectionsToPrompt("Investigate this edited", assistantSelections),
+                contexts,
+              ),
+              fileComments,
             ),
-            fileComments,
+            pastedTexts,
           ),
-          pastedTexts,
+          pullRequestContexts,
         ),
         annotations,
         BROWSER_ANNOTATION_MESSAGE_ID,
       ),
     );
+
+    const displayed = deriveDisplayedUserMessageState(originalPrompt, {
+      messageId: BROWSER_ANNOTATION_MESSAGE_ID,
+    });
+    expect(displayed.visibleText).toBe("Investigate this");
+    expect(displayed.pullRequestContexts).toEqual([
+      expect.objectContaining({ title: "1 failing check", text: pullRequestContexts[0]!.text }),
+    ]);
+    expect(displayed.pastedTexts).toHaveLength(1);
+    expect(displayed.fileComments).toHaveLength(1);
+    expect(displayed.assistantSelections).toHaveLength(1);
+    expect(displayed.browserAnnotations).toHaveLength(1);
   });
 
   it("does not duplicate a copied annotation block bound to another message", () => {
@@ -300,6 +331,7 @@ describe("terminalContext", () => {
       assistantSelections: [],
       fileComments: [],
       pastedTexts: [],
+      pullRequestContexts: [],
       browserAnnotations: [],
     });
   });
@@ -324,6 +356,7 @@ describe("terminalContext", () => {
       assistantSelections: [{ assistantMessageId: "msg-1", text: "selected line" }],
       fileComments: [],
       pastedTexts: [],
+      pullRequestContexts: [],
       browserAnnotations: [],
     });
   });
@@ -357,6 +390,7 @@ describe("terminalContext", () => {
       assistantSelections: [{ assistantMessageId: "msg-1", text: "selected line" }],
       fileComments: [],
       pastedTexts: [],
+      pullRequestContexts: [],
       browserAnnotations: [],
     });
   });
@@ -392,6 +426,7 @@ describe("terminalContext", () => {
       assistantSelections: [{ assistantMessageId: "msg-1", text: "selected line" }],
       fileComments: [{ path: "src/app.ts", startLine: 3, endLine: 5, text: "rename this helper" }],
       pastedTexts: [],
+      pullRequestContexts: [],
       browserAnnotations: [],
     });
   });
@@ -420,6 +455,7 @@ describe("terminalContext", () => {
       assistantSelections: [],
       fileComments: [],
       pastedTexts: [],
+      pullRequestContexts: [],
       browserAnnotations: [],
     });
   });

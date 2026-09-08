@@ -3,11 +3,16 @@ import { describe, expect, it } from "vitest";
 import type { GitPullRequestComment, PullRequestComment } from "@synara/contracts";
 
 import {
+  buildFixFailingChecksPrompt,
   buildFixReviewCommentsPrompt,
   buildFixFindingsPrompt,
+  buildPullRequestContextCard,
+  buildRepairEverythingPrompt,
   buildResolveConflictsPrompt,
   describePullRequestComment,
   FIX_PROMPT_MAX_COMMENTS,
+  summarizePullRequestRepairs,
+  type PullRequestCardSource,
   summarizePullRequestChecks,
   summarizePullRequestComments,
   summarizePullRequestDiffStat,
@@ -25,6 +30,167 @@ function makeComment(overrides: Partial<GitPullRequestComment> = {}): GitPullReq
     ...overrides,
   };
 }
+
+const cardPr: PullRequestCardSource = {
+  number: 321,
+  title: "Keep PR context visible",
+  url: "https://github.com/example/synara/pull/321",
+  baseBranch: "main",
+  headBranch: "fix/pr-panel",
+  state: "open",
+  isDraft: false,
+  mergeability: "conflicting",
+  additions: 4,
+  deletions: 2,
+  changedFiles: 1,
+};
+
+const failingChecks = [
+  { name: "Test", status: "failure" as const, url: "https://ci.example/test" },
+  { name: "Lint", status: "cancelled" as const, url: null },
+  { name: "Build", status: "success" as const, url: null },
+];
+
+describe("summarizePullRequestRepairs", () => {
+  it("counts comments, failed or cancelled checks, and conflicts", () => {
+    expect(
+      summarizePullRequestRepairs({
+        checks: failingChecks,
+        comments: [makeComment()],
+        mergeability: "conflicting",
+      }),
+    ).toEqual({ comments: 1, failingChecks: 2, conflicts: true, total: 4 });
+    expect(
+      summarizePullRequestRepairs({ checks: [], comments: [], mergeability: "mergeable" }),
+    ).toEqual({ comments: 0, failingChecks: 0, conflicts: false, total: 0 });
+  });
+});
+
+describe("buildFixFailingChecksPrompt", () => {
+  it("lists only actionable checks and asks for a local reproduction", () => {
+    const prompt = buildFixFailingChecksPrompt({
+      prNumber: 321,
+      prUrl: cardPr.url,
+      headBranch: cardPr.headBranch,
+      checks: failingChecks,
+    });
+    expect(prompt).toContain("Fix the failing CI checks on PR #321");
+    expect(prompt).toContain("1. Failed check `Test` at https://ci.example/test");
+    expect(prompt).toContain("2. Cancelled check `Lint`");
+    expect(prompt).not.toContain("Build");
+    expect(prompt).toContain("Reproduce each failure locally");
+  });
+});
+
+describe("buildRepairEverythingPrompt", () => {
+  it("covers conflicts, failing checks, and review comments in one prompt", () => {
+    const prompt = buildRepairEverythingPrompt({
+      prNumber: 321,
+      prUrl: cardPr.url,
+      baseBranch: "main",
+      headBranch: "fix/pr-panel",
+      hasConflicts: true,
+      checks: failingChecks,
+      comments: [makeComment({ body: "Rename this helper" })],
+    });
+    expect(prompt).toContain("Get PR #321");
+    expect(prompt).toContain(
+      "Merge conflicts: update the checked-out branch with the latest `main`",
+    );
+    expect(prompt).toContain("Failing checks:");
+    expect(prompt).toContain("Failed check `Test`");
+    expect(prompt).toContain("Review comments to address:");
+    expect(prompt).toContain("> Rename this helper");
+  });
+
+  it("omits sections that have nothing to repair", () => {
+    const prompt = buildRepairEverythingPrompt({
+      prNumber: 1,
+      prUrl: cardPr.url,
+      baseBranch: "main",
+      headBranch: "topic",
+      hasConflicts: false,
+      checks: [],
+      comments: [makeComment()],
+    });
+    expect(prompt).not.toContain("Merge conflicts:");
+    expect(prompt).not.toContain("Failing checks:");
+    expect(prompt).toContain("Review comments to address:");
+  });
+});
+
+describe("buildPullRequestContextCard", () => {
+  const base = {
+    pr: cardPr,
+    checks: failingChecks,
+    comments: [makeComment(), makeComment({ id: "2", path: "Other.ts" })],
+    commentsTruncated: false,
+  };
+
+  it("builds a failing-checks card titled by count and subtitled by check names", () => {
+    const card = buildPullRequestContextCard({ ...base, scope: "checks" });
+    expect(card).toMatchObject({
+      scope: "checks",
+      prNumber: 321,
+      prUrl: cardPr.url,
+      title: "2 failing checks",
+      subtitle: "Test, Lint",
+    });
+    expect(card?.text).toContain("Fix the failing CI checks on PR #321");
+    expect(card?.id.length).toBeGreaterThan(0);
+  });
+
+  it("builds a comments card subtitled by the commented files", () => {
+    const card = buildPullRequestContextCard({ ...base, scope: "comments" });
+    expect(card).toMatchObject({
+      title: "2 review comments",
+      subtitle: "CursorAcpCommand.ts, Other.ts",
+    });
+    expect(card?.text).toContain("Tackle these review comments on PR #321");
+  });
+
+  it("marks bounded comment previews with a plus", () => {
+    const card = buildPullRequestContextCard({
+      ...base,
+      scope: "comments",
+      commentsTruncated: true,
+    });
+    expect(card?.title).toBe("2+ review comments");
+  });
+
+  it("builds conflicts, everything, and reference cards", () => {
+    expect(buildPullRequestContextCard({ ...base, scope: "conflicts" })).toMatchObject({
+      title: "Merge conflicts",
+      subtitle: "Conflicts with main",
+    });
+    expect(buildPullRequestContextCard({ ...base, scope: "everything" })).toMatchObject({
+      title: "Repair PR #321",
+      subtitle: "2 comments, 2 failing checks, merge conflicts",
+    });
+    const reference = buildPullRequestContextCard({ ...base, scope: "reference" });
+    expect(reference).toMatchObject({
+      title: "#321 Keep PR context visible",
+      subtitle: "fix/pr-panel → main",
+    });
+    expect(reference?.text).toContain("Pull request #321 — Keep PR context visible");
+    expect(reference?.text).toContain("State: Open, has conflicts.");
+    expect(reference?.text).toContain("Size: +4 −2 across 1 file.");
+  });
+
+  it("returns null when the scope has nothing to repair", () => {
+    const clean = {
+      ...base,
+      checks: [],
+      comments: [],
+      pr: { ...cardPr, mergeability: "mergeable" as const },
+    };
+    expect(buildPullRequestContextCard({ ...clean, scope: "checks" })).toBeNull();
+    expect(buildPullRequestContextCard({ ...clean, scope: "comments" })).toBeNull();
+    expect(buildPullRequestContextCard({ ...clean, scope: "conflicts" })).toBeNull();
+    expect(buildPullRequestContextCard({ ...clean, scope: "everything" })).toBeNull();
+    expect(buildPullRequestContextCard({ ...clean, scope: "reference" })).not.toBeNull();
+  });
+});
 
 describe("summarizePullRequestChecks", () => {
   it("reports failing checks ahead of pending ones", () => {

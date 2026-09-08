@@ -57,6 +57,7 @@ function makeComposerDraftState(
     terminalContexts: [],
     fileComments: [],
     pastedTexts: [],
+    pullRequestContexts: [],
     skills: [],
     mentions: [],
     queuedTurns: [],

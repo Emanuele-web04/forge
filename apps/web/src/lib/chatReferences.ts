@@ -9,6 +9,7 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { requestComposerFocus } from "../composerFocusRequestStore";
 import { formatComposerMentionToken } from "./composerMentions";
 import { createFileCommentDraft, type FileCommentSelection } from "./fileComments";
+import { type PullRequestContextDraft } from "./pullRequestContext";
 
 export interface ChatFileReference {
   path: string;
@@ -135,6 +136,21 @@ export function addChatFileComment(threadId: ThreadId, comment: FileCommentSelec
   useComposerDraftStore.getState().addFileComment(threadId, draft);
   requestComposerFocus(threadId);
   return true;
+}
+
+// Attach a pull request context card ("Repair" / "Add to chat" from the PR menu) to the
+// thread's composer draft. The card renders above the editor and its prompt is serialized
+// into the message on send. Returns false when the card is empty. Focus moves to the
+// composer so the new bubble is visible.
+export function addChatPullRequestContext(
+  threadId: ThreadId,
+  context: PullRequestContextDraft,
+): boolean {
+  const added = useComposerDraftStore.getState().addPullRequestContext(threadId, context);
+  if (added) {
+    requestComposerFocus(threadId);
+  }
+  return added;
 }
 
 function countNewlines(text: string): number {

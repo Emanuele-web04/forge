@@ -89,6 +89,7 @@ import { FileAttachmentChip } from "./FileAttachmentChip";
 import { FileCommentsSummaryChip } from "./FileCommentsSummaryChip";
 import { BrowserAnnotationStrip } from "./BrowserAnnotationStrip";
 import { UserMessagePastedTextCard } from "./PastedTextChip";
+import { UserMessagePullRequestContextCard } from "./PullRequestContextCard";
 import {
   EditedFileRowContent,
   prefersCompactWorkEntryRow,
@@ -1647,6 +1648,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const terminalContexts = displayedUserMessage.contexts;
           const renderedFileComments = displayedUserMessage.fileComments;
           const renderedPastedTexts = displayedUserMessage.pastedTexts;
+          const renderedPullRequestContexts = displayedUserMessage.pullRequestContexts;
           const renderedBrowserAnnotations = displayedUserMessage.browserAnnotations;
           const userMessageText = displayedUserMessage.visibleText;
           const userMessageExpanded = expandedUserMessagesById[row.message.id] ?? false;
@@ -1670,6 +1672,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             browserAnnotationCount: renderedBrowserAnnotations.length,
             fileCommentCount: renderedFileComments.length,
             pastedTextCount: renderedPastedTexts.length,
+            pullRequestContextCount: renderedPullRequestContexts.length,
           });
           const isTailContentRow = row.id === tailContentRowId;
           const showCrossTaskOrigin =
@@ -1724,6 +1727,19 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           key={pasted.index}
                           text={pasted.text}
                           metrics={{ lineCount: pasted.lineCount, charCount: pasted.charCount }}
+                        />
+                      ))}
+                    </div>
+                  )}
+                  {renderedPullRequestContexts.length > 0 && (
+                    <div className="mb-1 flex max-w-full flex-col items-end gap-1.5 self-end">
+                      {renderedPullRequestContexts.map((context) => (
+                        <UserMessagePullRequestContextCard
+                          key={context.index}
+                          scope={context.scope}
+                          title={context.title}
+                          subtitle={context.subtitle}
+                          text={context.text}
                         />
                       ))}
                     </div>
