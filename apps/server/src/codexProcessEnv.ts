@@ -22,6 +22,14 @@ import {
 
 const CODEX_PROCESS_SHELL_ENV_NAMES = ["PATH", "SSH_AUTH_SOCK"] as const;
 const CODEX_OVERLAY_SHARED_STATE_FILES = new Set(["auth.json"]);
+// SQLite databases and their WAL/SHM/journal sidecars are never mirrored into
+// the overlay. SQLite derives sidecar paths from the path it opened the
+// database through, and on Windows deleting a sidecar through a symlink only
+// removes the link, so a per-file mirror lets Synara's app-server and an
+// external `codex` CLI end up with two WALs on one database. The overlay
+// instead points CODEX_SQLITE_HOME at the source home so every process opens
+// the same files through the same path.
+const CODEX_SQLITE_STATE_ENTRY_PATTERN = /^.+\.sqlite(?:-(?:wal|shm|journal))?$/;
 const SYNARA_CONFIG_SUPPRESSIONS_FILE = "synara-config-suppressions-v1.json";
 const SYNARA_MANAGED_MCP_TABLE_HEADER = "[mcp_servers.synara]";
 export const SYNARA_COMPETING_BROWSER_PLUGIN_SECTION_HEADERS = [
@@ -207,13 +215,9 @@ async function ensureCodexOverlaySymlink(input: {
       return;
     }
 
-    if (
-      targetStat.isSymbolicLink() ||
-      /^.+\.sqlite(?:-(?:wal|shm|journal))?$/.test(input.entryName) ||
-      CODEX_OVERLAY_SHARED_STATE_FILES.has(input.entryName)
-    ) {
-      // SQLite files must stay generation-matched, and auth must mirror the
-      // user's real Codex home so external `codex login` changes are visible.
+    if (targetStat.isSymbolicLink() || CODEX_OVERLAY_SHARED_STATE_FILES.has(input.entryName)) {
+      // Auth must mirror the user's real Codex home so external `codex login`
+      // changes are visible.
       await fs.rm(input.targetPath, { recursive: true, force: true });
     } else {
       return;
@@ -221,6 +225,27 @@ async function ensureCodexOverlaySymlink(input: {
   }
 
   await linkOrCopyCodexOverlayEntry(input);
+}
+
+function isCodexSqliteStateEntry(entryName: string): boolean {
+  return CODEX_SQLITE_STATE_ENTRY_PATTERN.test(entryName);
+}
+
+/**
+ * Removes SQLite links that earlier Synara releases mirrored into the overlay.
+ * Only symlinks are removed: a regular database file in the overlay is left
+ * untouched because Synara no longer owns or reads it.
+ */
+async function removeLegacyCodexOverlaySqliteLinks(overlayHomePath: string): Promise<void> {
+  for (const entry of await fs.readdir(overlayHomePath)) {
+    if (!isCodexSqliteStateEntry(entry)) {
+      continue;
+    }
+    const targetPath = path.join(overlayHomePath, entry);
+    if ((await fs.lstat(targetPath)).isSymbolicLink()) {
+      await fs.rm(targetPath, { force: true });
+    }
+  }
 }
 
 export function appendCodexConfigSection(config: string, section: string): string {
@@ -620,8 +645,9 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
   try {
     // Auth must get a best-effort link/copy before optional entries whose
     // symlinks may fail on restricted Windows installs.
+    await removeLegacyCodexOverlaySqliteLinks(overlayHomePath);
     for (const entry of prioritizeCodexOverlayEntries(await fs.readdir(sourceHomePath))) {
-      if (entry === "config.toml") {
+      if (entry === "config.toml" || isCodexSqliteStateEntry(entry)) {
         continue;
       }
       const sourcePath = path.join(sourceHomePath, entry);
@@ -714,6 +740,12 @@ export async function buildCodexProcessEnv(
     overlayHomePath || input.homePath
       ? { ...baseEnv, CODEX_HOME: overlayHomePath ?? input.homePath }
       : baseEnv;
+  if (overlayHomePath && !configuredEnv.CODEX_SQLITE_HOME?.trim()) {
+    // Keep every Codex process (Synara's app-server, the user's own `codex`
+    // CLI) on one SQLite home reached through one path; see
+    // CODEX_SQLITE_STATE_ENTRY_PATTERN. A user-provided value wins.
+    configuredEnv.CODEX_SQLITE_HOME = resolveBaseCodexHomePath(baseEnv, input.homePath);
+  }
   const platform = input.platform ?? process.platform;
   const effectiveEnv = buildProviderChildEnvironment({
     provider: "codex",

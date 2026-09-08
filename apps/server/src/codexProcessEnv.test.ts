@@ -112,6 +112,28 @@ describe("buildCodexProcessEnv", () => {
     }
   });
 
+  it("keeps a user-provided CODEX_SQLITE_HOME for the session overlay", async () => {
+    const codexHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-sqlite-home-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
+    const sqliteHome = mkdtempSync(path.join(os.tmpdir(), "synara-user-sqlite-home-"));
+    writeFileSync(path.join(codexHome, "config.toml"), 'model = "gpt-5.5"', "utf8");
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome, CODEX_SQLITE_HOME: sqliteHome },
+        homePath: codexHome,
+        platform: "win32",
+      });
+
+      expect(env.CODEX_HOME).toBe(path.join(runtimeHome, "codex-home-overlay"));
+      expect(env.CODEX_SQLITE_HOME).toBe(sqliteHome);
+    } finally {
+      rmSync(codexHome, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+      rmSync(sqliteHome, { recursive: true, force: true });
+    }
+  });
+
   it("replaces a user-defined Synara MCP table only inside the session overlay", async () => {
     const sourceHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-source-"));
     const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-runtime-"));
