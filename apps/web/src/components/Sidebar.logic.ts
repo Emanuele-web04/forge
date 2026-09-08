@@ -4,6 +4,7 @@
 
 import {
   MAX_PINNED_PROJECTS,
+  type AutomationListResult,
   type ProjectId,
   type PullRequestReviewRequestCountResult,
   type ThreadId,
@@ -84,6 +85,20 @@ export function resolvePullRequestReviewBadge(
           "pull request is",
           "pull requests are",
         )} waiting for your review`,
+      }
+    : null;
+}
+
+/** Sidebar badge = number of configured automations, matching the Automations "All" tab. */
+export function resolveAutomationCountBadge(
+  result: AutomationListResult | undefined,
+): SidebarActionBadge | null {
+  if (!result) return null;
+  const count = result.definitions.length;
+  return count > 0
+    ? {
+        text: String(count),
+        accessibleLabel: `${count} ${pluralize(count, "automation")}`,
       }
     : null;
 }

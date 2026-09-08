@@ -307,14 +307,6 @@ export function isUnresolvedTriageResult(result: AutomationRunResult | null): bo
   return Boolean(result && result.unread && result.archivedAt === null);
 }
 
-export function unresolvedTriageRuns(runs: readonly AutomationRun[]): AutomationRun[] {
-  return runs.filter((run) => isTriageRun(run));
-}
-
-export function automationAttentionCount(runs: readonly AutomationRun[]): number {
-  return unresolvedTriageRuns(runs).length;
-}
-
 export function runStatusLabel(status: AutomationRun["status"]): string {
   switch (status) {
     case "pending":

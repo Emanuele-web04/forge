@@ -29,6 +29,7 @@ import {
   isDuplicateProjectCreateError,
   pruneProjectThreadListPagingForCollapsedProjects,
   recoverExistingAddProjectTarget,
+  resolveAutomationCountBadge,
   runExclusiveProjectAddition,
   runProjectProvisionWithCancellationRecovery,
   resolvePullRequestReviewBadge,
@@ -51,7 +52,7 @@ import {
   sortProjectsForSidebar,
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
-import { ProjectId, ThreadId } from "@synara/contracts";
+import { ProjectId, ThreadId, type AutomationListResult } from "@synara/contracts";
 import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
@@ -97,6 +98,27 @@ describe("resolvePullRequestReviewBadge", () => {
     expect(resolvePullRequestReviewBadge(undefined)).toBeNull();
     expect(resolvePullRequestReviewBadge({ count: 1, incomplete: false })?.accessibleLabel).toBe(
       "1 pull request is waiting for your review",
+    );
+  });
+});
+
+describe("resolveAutomationCountBadge", () => {
+  const listWithDefinitions = (count: number) =>
+    ({
+      definitions: Array.from({ length: count }, () => ({})),
+      runs: [],
+      memories: [],
+    }) as unknown as AutomationListResult;
+
+  it("counts configured automations and hides the badge at zero or before load", () => {
+    expect(resolveAutomationCountBadge(undefined)).toBeNull();
+    expect(resolveAutomationCountBadge(listWithDefinitions(0))).toBeNull();
+    expect(resolveAutomationCountBadge(listWithDefinitions(2))).toEqual({
+      text: "2",
+      accessibleLabel: "2 automations",
+    });
+    expect(resolveAutomationCountBadge(listWithDefinitions(1))?.accessibleLabel).toBe(
+      "1 automation",
     );
   });
 });
