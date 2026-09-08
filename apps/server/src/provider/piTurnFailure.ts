@@ -4,6 +4,9 @@ const PI_INTERRUPTION_MARKERS = [
   "aborterror",
   "interrupted by user",
   "user aborted",
+  // The SDK reports this through auto_retry_end when backoff is aborted.
+  "retry cancelled",
+  "retry canceled",
 ] as const;
 
 interface PiTurnFailureClassification {
