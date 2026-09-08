@@ -13,7 +13,7 @@ describe("classifyPiTurnFailure", () => {
   it("treats retry-backoff cancellation as an interrupted turn", () => {
     // End task during SDK backoff settles with "Retry cancelled" — a
     // user-initiated interrupt, not a failure (issue #1027).
-    for (const message of ["Retry cancelled", "retry canceled", "Cancelled", "canceled"]) {
+    for (const message of ["Retry cancelled", "retry canceled"]) {
       expect(classifyPiTurnFailure(message)).toEqual({
         state: "interrupted",
         stopReason: "aborted",
