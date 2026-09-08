@@ -204,6 +204,44 @@ describe("ServerSettingsService", () => {
     expect(result.persisted).not.toContain("opencode-secret");
   });
 
+  it("keeps the Groq voice API key server-only and independent of coding providers", async () => {
+    const result = await runWithSettings(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        const { settingsPath } = yield* ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        yield* service.start;
+        const view = yield* service.updateSettingsView({
+          voiceTranscription: {
+            provider: "groq",
+            groqModel: "whisper-large-v3",
+            groqApiKey: "gsk_voice_secret",
+          },
+        });
+        const internal = yield* service.getSettings;
+        const groqApiKey = yield* service.getVoiceTranscriptionGroqApiKey;
+        const persisted = yield* fs.readFileString(settingsPath);
+        return { view, internal, groqApiKey, persisted };
+      }),
+    );
+
+    expect(result.internal.voiceTranscription).toMatchObject({
+      provider: "groq",
+      groqModel: "whisper-large-v3",
+      groqApiKeyConfigured: true,
+    });
+    expect(result.view.voiceTranscription).toMatchObject({
+      provider: "groq",
+      groqModel: "whisper-large-v3",
+      groqApiKeyConfigured: true,
+    });
+    expect(result.groqApiKey).toBe("gsk_voice_secret");
+    expect(JSON.stringify(result.internal)).not.toContain("gsk_voice_secret");
+    expect(JSON.stringify(result.view)).not.toContain("gsk_voice_secret");
+    expect(JSON.stringify(result.view)).not.toContain('"groqApiKey"');
+    expect(result.persisted).not.toContain("gsk_voice_secret");
+  });
+
   it.each([
     {
       name: "resolves text generation selection away from disabled providers",

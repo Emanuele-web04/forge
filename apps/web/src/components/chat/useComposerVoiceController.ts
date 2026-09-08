@@ -3,7 +3,12 @@
 // Layer: Chat composer hook
 // Depends on: useVoiceRecorder, ChatView voice helper logic, and the native API voice endpoint.
 
-import { type ProviderKind, type ServerProviderStatus, type ThreadId } from "@synara/contracts";
+import {
+  type ProviderKind,
+  type ServerProviderStatus,
+  type ThreadId,
+  type VoiceTranscriptionProviderKind,
+} from "@synara/contracts";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { Project } from "../../types";
@@ -40,6 +45,8 @@ export interface UseComposerVoiceControllerOptions {
   threadId: ThreadId;
   selectedProvider: ProviderKind;
   activeProviderStatus: ServerProviderStatus | null;
+  voiceTranscriptionProvider?: VoiceTranscriptionProviderKind;
+  groqApiKeyConfigured?: boolean;
   pendingUserInputCount: number;
   onTranscriptReady: (transcript: string) => void;
   refreshVoiceStatus: RefreshProviderStatusesNow;
@@ -78,6 +85,8 @@ export function useComposerVoiceController(
     threadId,
     selectedProvider,
     activeProviderStatus,
+    voiceTranscriptionProvider,
+    groqApiKeyConfigured,
     pendingUserInputCount,
     onTranscriptReady,
     refreshVoiceStatus,
@@ -116,6 +125,8 @@ export function useComposerVoiceController(
     voiceTranscriptionAvailable: activeProviderStatus?.voiceTranscriptionAvailable,
     isRecording: isVoiceRecording,
     isTranscribing: isVoiceTranscribing,
+    ...(voiceTranscriptionProvider ? { voiceTranscriptionProvider } : {}),
+    ...(groqApiKeyConfigured !== undefined ? { groqApiKeyConfigured } : {}),
   });
 
   useEffect(() => {
@@ -183,17 +194,15 @@ export function useComposerVoiceController(
     if (!activeProject) {
       return;
     }
-    if (activeProviderStatus?.authStatus === "unauthenticated") {
-      toastManager.add({
-        type: "error",
-        title: "Sign in to ChatGPT in Codex before using voice notes.",
-      });
-      return;
-    }
     if (!canStartVoiceNotes) {
       toastManager.add({
         type: "error",
-        title: "Voice notes require a ChatGPT-authenticated Codex session.",
+        title:
+          voiceTranscriptionProvider === "groq"
+            ? "Add a Groq API key in Settings before using voice notes."
+            : groqApiKeyConfigured
+              ? "Voice notes are unavailable for the selected transcription provider."
+              : "Voice notes require a Groq API key or a ChatGPT-authenticated Codex session.",
       });
       return;
     }

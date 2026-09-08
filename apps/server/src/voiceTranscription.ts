@@ -1,8 +1,8 @@
 // FILE: voiceTranscription.ts
-// Purpose: Validates Remodex-style WAV payloads and proxies them to ChatGPT transcription.
+// Purpose: Validates Remodex-style WAV payloads and proxies them to the selected STT backend.
 // Layer: Server utility
-// Exports: transcribeVoiceWithChatGptSession
-// Depends on: ChatGPT session auth supplied by Codex app-server callers.
+// Exports: transcribeVoiceWithChatGptSession, transcribeVoiceWithGroq
+// Depends on: ChatGPT session auth supplied by Codex app-server callers, or a Groq API key.
 
 import { Buffer } from "node:buffer";
 
@@ -12,6 +12,7 @@ import type {
 } from "@synara/contracts";
 import { SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES } from "@synara/contracts";
 import { requestChatGptVoiceTranscription } from "@synara/shared/chatGptVoiceTranscription";
+import { requestGroqVoiceTranscription } from "@synara/shared/groqVoiceTranscription";
 import { decodeOutboundJson, type OutboundHttpResponse } from "@synara/shared/outboundHttp";
 
 const MAX_DURATION_MS = 120_000;
@@ -50,6 +51,42 @@ export async function transcribeVoiceWithChatGptSession(input: {
 
   if (response.status < 200 || response.status >= 300) {
     throw new Error(readTranscriptionErrorMessage(response));
+  }
+
+  let payload: { text?: unknown; transcript?: unknown } | null = null;
+  try {
+    payload = decodeOutboundJson(response, { maxDepth: 16, maxNodes: 1_000 }) as {
+      text?: unknown;
+      transcript?: unknown;
+    };
+  } catch {
+    payload = null;
+  }
+  const text = readString(payload?.text) ?? readString(payload?.transcript);
+  if (!text) {
+    throw new Error("The transcription response did not include any text.");
+  }
+
+  return { text };
+}
+
+export async function transcribeVoiceWithGroq(input: {
+  readonly request: ServerVoiceTranscriptionInput;
+  readonly apiKey: string;
+  readonly model: string;
+  readonly signal?: AbortSignal;
+}): Promise<ServerVoiceTranscriptionResult> {
+  const audioBuffer = decodeVoiceAudio(input.request);
+  const response = await requestGroqVoiceTranscription({
+    audio: audioBuffer,
+    mimeType: input.request.mimeType,
+    apiKey: input.apiKey,
+    model: input.model,
+    ...(input.signal ? { signal: input.signal } : {}),
+  });
+
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(readGroqTranscriptionErrorMessage(response));
   }
 
   let payload: { text?: unknown; transcript?: unknown } | null = null;
@@ -137,6 +174,32 @@ function readTranscriptionErrorMessage(response: OutboundHttpResponse): string {
 
   if (response.status === 401 || response.status === 403) {
     return "Your ChatGPT login has expired. Sign in again.";
+  }
+
+  return errorMessage;
+}
+
+function readGroqTranscriptionErrorMessage(response: OutboundHttpResponse): string {
+  let errorMessage = `Transcription failed with status ${response.status}.`;
+  try {
+    const payload = decodeOutboundJson(response, { maxDepth: 16, maxNodes: 1_000 }) as {
+      error?: { message?: unknown };
+      message?: unknown;
+    } | null;
+    const providerMessage =
+      readString(payload?.error?.message) ?? readString(payload?.message) ?? null;
+    if (providerMessage) {
+      errorMessage = providerMessage;
+    }
+  } catch {
+    // Keep the generic status-based message when the provider body is empty or invalid.
+  }
+
+  if (response.status === 401 || response.status === 403) {
+    return "The Groq API key is invalid. Update it in Settings > General.";
+  }
+  if (response.status === 429) {
+    return "Groq rate-limited the transcription request. Try again in a moment.";
   }
 
   return errorMessage;

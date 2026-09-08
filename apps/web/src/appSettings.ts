@@ -10,8 +10,12 @@ import {
   type AssistantDeliveryMode,
   DesktopAppIcon,
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
+  DEFAULT_GROQ_VOICE_TRANSCRIPTION_MODEL,
   DEFAULT_SERVER_SETTINGS,
   DEFAULT_SERVER_SETTINGS_VIEW,
+  DEFAULT_VOICE_TRANSCRIPTION_PROVIDER,
+  GroqVoiceTranscriptionModel,
+  VoiceTranscriptionProviderKind,
   GIT_TEXT_GENERATION_PROVIDERS,
   TrimmedNonEmptyString,
   ProviderKind,
@@ -325,6 +329,16 @@ export const AppSettingsSchema = Schema.Struct({
   showEnvironmentInstructions: Schema.Boolean.pipe(withDefaults(() => false)),
   showEnvironmentNotepad: Schema.Boolean.pipe(withDefaults(() => false)),
   followUpBehavior: FollowUpBehavior.pipe(withDefaults(() => DEFAULT_FOLLOW_UP_BEHAVIOR)),
+  voiceTranscriptionProvider: VoiceTranscriptionProviderKind.pipe(
+    withDefaults(() => DEFAULT_VOICE_TRANSCRIPTION_PROVIDER),
+  ),
+  voiceTranscriptionGroqModel: GroqVoiceTranscriptionModel.pipe(
+    withDefaults(() => DEFAULT_GROQ_VOICE_TRANSCRIPTION_MODEL),
+  ),
+  voiceTranscriptionGroqApiKey: Schema.String.check(Schema.isMaxLength(4096)).pipe(
+    withDefaults(() => ""),
+  ),
+  voiceTranscriptionGroqApiKeyConfigured: Schema.Boolean.pipe(withDefaults(() => false)),
   enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => true)),
   autoOpenDevicePane: Schema.Boolean.pipe(withDefaults(() => true)),
   enableProviderUpdateChecks: Schema.Boolean.pipe(withDefaults(() => true)),
@@ -611,6 +625,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     // Password fields are accepted only as write-only update patches. Never retain
     // reusable provider credentials in browser state or localStorage.
     openCodeServerPassword: "",
+    voiceTranscriptionGroqApiKey: "",
     claudeBinaryPath: normalizeProviderBinaryPathOverride("claudeAgent", settings.claudeBinaryPath),
     codexBinaryPath: normalizeProviderBinaryPathOverride("codex", settings.codexBinaryPath),
     cursorBinaryPath: normalizeProviderBinaryPathOverride("cursor", settings.cursorBinaryPath),
@@ -681,6 +696,9 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     defaultThreadEnvMode: settings.defaultThreadEnvMode,
     enableAssistantStreaming: settings.enableAssistantStreaming,
     enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
+    voiceTranscriptionProvider: settings.voiceTranscription.provider,
+    voiceTranscriptionGroqModel: settings.voiceTranscription.groqModel,
+    voiceTranscriptionGroqApiKeyConfigured: settings.voiceTranscription.groqApiKeyConfigured,
     antigravityBinaryPath: settings.providers.antigravity.binaryPath,
     grokBinaryPath: settings.providers.grok.binaryPath,
     droidBinaryPath: settings.providers.droid.binaryPath,
@@ -767,11 +785,43 @@ function pruneProviderPatchAgainstCurrentSettings(
 
 export function appSettingsPatchToServerSettingsPatch(
   patch: Partial<AppSettings>,
-  currentSettings?: Pick<ServerSettingsView, "providers">,
+  currentSettings?: Pick<ServerSettingsView, "providers" | "voiceTranscription">,
 ): ServerSettingsPatch {
   const providers: MutableServerSettingsProvidersPatch = {};
   const serverPatch: MutableServerSettingsPatch = {};
 
+  if (
+    hasOwn(patch, "voiceTranscriptionProvider") ||
+    hasOwn(patch, "voiceTranscriptionGroqModel") ||
+    hasOwn(patch, "voiceTranscriptionGroqApiKey")
+  ) {
+    const voiceTranscription: Mutable<NonNullable<ServerSettingsPatch["voiceTranscription"]>> = {};
+    if (hasOwn(patch, "voiceTranscriptionProvider") && patch.voiceTranscriptionProvider) {
+      voiceTranscription.provider = patch.voiceTranscriptionProvider;
+    }
+    if (hasOwn(patch, "voiceTranscriptionGroqModel") && patch.voiceTranscriptionGroqModel) {
+      voiceTranscription.groqModel = patch.voiceTranscriptionGroqModel;
+    }
+    if (hasOwn(patch, "voiceTranscriptionGroqApiKey")) {
+      const groqApiKey = patch.voiceTranscriptionGroqApiKey ?? "";
+      const skipEmptyClear =
+        groqApiKey === "" && currentSettings?.voiceTranscription.groqApiKeyConfigured === false;
+      if (!skipEmptyClear) {
+        voiceTranscription.groqApiKey = groqApiKey;
+      }
+    }
+    if (currentSettings) {
+      if (voiceTranscription.provider === currentSettings.voiceTranscription.provider) {
+        delete voiceTranscription.provider;
+      }
+      if (voiceTranscription.groqModel === currentSettings.voiceTranscription.groqModel) {
+        delete voiceTranscription.groqModel;
+      }
+    }
+    if (Object.keys(voiceTranscription).length > 0) {
+      serverPatch.voiceTranscription = voiceTranscription;
+    }
+  }
   if (hasOwn(patch, "enableAssistantStreaming")) {
     serverPatch.enableAssistantStreaming = Boolean(patch.enableAssistantStreaming);
   }
@@ -1000,6 +1050,13 @@ export function applyLocalAppSettingsPatch(
     ...localPatch,
     ...(hasOwn(patch, "openCodeServerPassword")
       ? { openCodeServerPasswordConfigured: Boolean(patch.openCodeServerPassword?.trim()) }
+      : {}),
+    ...(hasOwn(patch, "voiceTranscriptionGroqApiKey")
+      ? {
+          voiceTranscriptionGroqApiKeyConfigured: Boolean(
+            patch.voiceTranscriptionGroqApiKey?.trim(),
+          ),
+        }
       : {}),
   });
 }

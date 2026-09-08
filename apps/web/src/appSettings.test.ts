@@ -136,6 +136,27 @@ describe("server-backed provider enablement", () => {
     expect(patch.providers).toBeUndefined();
   });
 
+  it("maps independent voice transcription settings into the server patch", () => {
+    const patch = appSettingsPatchToServerSettingsPatch({
+      voiceTranscriptionProvider: "groq",
+      voiceTranscriptionGroqModel: "whisper-large-v3",
+      voiceTranscriptionGroqApiKey: "gsk_test",
+    });
+    expect(patch.voiceTranscription).toEqual({
+      provider: "groq",
+      groqModel: "whisper-large-v3",
+      groqApiKey: "gsk_test",
+    });
+  });
+
+  it("omits an empty Groq API key when none is configured", () => {
+    const patch = appSettingsPatchToServerSettingsPatch(
+      { voiceTranscriptionGroqApiKey: "" },
+      DEFAULT_SERVER_SETTINGS_VIEW,
+    );
+    expect(patch.voiceTranscription).toBeUndefined();
+  });
+
   it("invalidates discovery for initial and changed streamed provider settings", () => {
     const disabledOpenCode = {
       ...DEFAULT_SERVER_SETTINGS_VIEW,

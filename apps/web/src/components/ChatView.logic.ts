@@ -12,7 +12,9 @@ import {
   type RuntimeMode,
   type ServerProviderAuthStatus,
   type ThreadId as ThreadIdType,
+  type VoiceTranscriptionProviderKind,
 } from "@synara/contracts";
+import { isIndependentVoiceTranscriptionReady } from "@synara/shared/voiceTranscription";
 import { getDefaultModel, normalizeModelSlug } from "@synara/shared/model";
 import { buildSynaraBranchName } from "@synara/shared/git";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
@@ -938,13 +940,25 @@ export function deriveComposerVoiceState(input: {
   voiceTranscriptionAvailable: boolean | undefined;
   isRecording: boolean;
   isTranscribing: boolean;
+  voiceTranscriptionProvider?: VoiceTranscriptionProviderKind;
+  groqApiKeyConfigured?: boolean;
 }): {
   canRenderVoiceNotes: boolean;
   canStartVoiceNotes: boolean;
   showVoiceNotesControl: boolean;
 } {
-  const canRenderVoiceNotes = input.authStatus !== "unauthenticated";
-  const canStartVoiceNotes = canRenderVoiceNotes && input.voiceTranscriptionAvailable !== false;
+  const voiceTranscriptionProvider = input.voiceTranscriptionProvider ?? "auto";
+  const groqReady = isIndependentVoiceTranscriptionReady({
+    provider: voiceTranscriptionProvider,
+    groqApiKeyConfigured: input.groqApiKeyConfigured === true,
+  });
+  const chatgptReady =
+    voiceTranscriptionProvider !== "groq" &&
+    input.authStatus !== "unauthenticated" &&
+    input.voiceTranscriptionAvailable !== false;
+  const canStartVoiceNotes = groqReady || chatgptReady;
+  const canRenderVoiceNotes =
+    groqReady || voiceTranscriptionProvider === "groq" || input.authStatus !== "unauthenticated";
 
   return {
     canRenderVoiceNotes,
