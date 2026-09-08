@@ -1522,6 +1522,12 @@ function reconcileSettledLiveActivities(
       return entry;
     }
 
+    // Linked detached commands settle through their task lifecycle, even after
+    // the originating turn ends or another turn becomes active.
+    if (liveActivity.background) {
+      return entry;
+    }
+
     const terminal = entry.turnId ? terminalByTurnId.get(entry.turnId) : undefined;
     if (terminal) {
       return {

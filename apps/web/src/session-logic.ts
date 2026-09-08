@@ -66,7 +66,7 @@ export interface ActiveTaskListState {
   }>;
 }
 
-// One still-running background task for the active turn: a backgrounded shell
+// One still-running background task: a backgrounded shell
 // command (Claude's `local_bash`), a Task-tool subagent, a workflow run, or a
 // provider-native task. Carries enough identity for the UI to name it and stop it.
 export interface ActiveBackgroundTask {
@@ -285,10 +285,11 @@ export function deriveActiveTaskListState(
     : null;
 }
 
-// Counts still-running background work for the active turn so compact UI can surface agent activity.
+// Collects running tasks across the thread. Turn-tail detection supplies a turn
+// filter; persistent background-work UI omits it so tasks survive turn changes.
 export function deriveActiveBackgroundTasksState(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
-  latestTurnId: TurnId | undefined,
+  latestTurnId?: TurnId,
 ): ActiveBackgroundTasksState | null {
   const ordered = orderedActivities(activities);
   const activeTasks = new Map<string, ActiveBackgroundTask>();

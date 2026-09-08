@@ -193,6 +193,44 @@ describe("deriveActiveTaskListState", () => {
 });
 
 describe("deriveActiveBackgroundTasksState", () => {
+  it("keeps detached work across turns until its task completes", () => {
+    const activities = [
+      makeActivity({
+        id: "detached-start",
+        kind: "task.started",
+        turnId: "turn-1",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        payload: { taskId: "bash-1", taskType: "local_bash" },
+      }),
+      makeActivity({
+        id: "turn-done",
+        kind: "turn.completed",
+        turnId: "turn-1",
+        createdAt: "2026-02-23T00:00:02.000Z",
+      }),
+    ];
+    expect(deriveActiveBackgroundTasksState(activities)?.taskIds).toEqual(["bash-1"]);
+    activities.push(
+      makeActivity({
+        id: "next-turn",
+        kind: "turn.started",
+        turnId: "turn-2",
+        createdAt: "2026-02-23T00:00:03.000Z",
+      }),
+    );
+    expect(deriveActiveBackgroundTasksState(activities)?.taskIds).toEqual(["bash-1"]);
+    activities.push(
+      makeActivity({
+        id: "detached-done",
+        kind: "task.completed",
+        turnId: "turn-2",
+        createdAt: "2026-02-23T00:00:04.000Z",
+        payload: { taskId: "bash-1", status: "completed" },
+      }),
+    );
+    expect(deriveActiveBackgroundTasksState(activities)).toBeNull();
+  });
+
   it("counts only still-active non-plan background tasks for the current turn", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

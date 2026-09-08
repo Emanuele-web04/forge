@@ -153,9 +153,36 @@ describe("deriveWorkLogEntries", () => {
       lastActivityAt: "2026-02-23T00:00:02.000Z",
     });
 
+    const afterTurnCompleted = [
+      ...activities,
+      makeActivity({
+        id: "turn-done",
+        createdAt: "2026-02-23T00:00:04.000Z",
+        kind: "turn.completed",
+        summary: "Turn completed",
+        turnId: "turn-1",
+      }),
+    ];
+    for (const activeTurnId of [null, TurnId.makeUnsafe("turn-2")]) {
+      const [background] = deriveWorkLogEntries(
+        afterTurnCompleted,
+        activeTurnId ?? TurnId.makeUnsafe("turn-1"),
+        { activeTurnId, visibleTurnIds: new Set(["turn-1", "turn-2"]) },
+      );
+      expect(background?.toolStatus).toBe("running");
+      expect(background?.liveActivity).toMatchObject({ state: "waiting", background: true });
+    }
+
+    const [snapshotOnly] = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-1"), {
+      activeTurnId: null,
+      latestTurnState: "completed",
+      latestTurnCompletedAt: "2026-02-23T00:00:04.000Z",
+    });
+    expect(snapshotOnly?.toolStatus).toBe("running");
+
     const [settled] = deriveWorkLogEntries(
       [
-        ...activities,
+        ...afterTurnCompleted,
         makeActivity({
           id: "bash-task-done",
           createdAt: "2026-02-23T00:05:00.000Z",
@@ -166,8 +193,11 @@ describe("deriveWorkLogEntries", () => {
           payload: { taskId: "bg-1", status: "completed", detail: "Tests passed" },
         }),
       ],
-      TurnId.makeUnsafe("turn-1"),
-      { activeTurnId: TurnId.makeUnsafe("turn-1") },
+      TurnId.makeUnsafe("turn-2"),
+      {
+        activeTurnId: TurnId.makeUnsafe("turn-2"),
+        visibleTurnIds: new Set(["turn-1", "turn-2"]),
+      },
     );
     expect(settled?.toolStatus).toBe("completed");
     expect(settled?.liveActivity).toMatchObject({

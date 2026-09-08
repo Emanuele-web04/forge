@@ -3011,11 +3011,9 @@ export default function ChatView({
       : deriveActiveTaskListState(threadActivities, activeLatestTurn?.turnId);
   }, [activeLatestTurn?.turnId, latestTurnSettled, showDebugTaskBanner, threadActivities]);
   const activeBackgroundTasks = useMemo(
-    () =>
-      latestTurnSettled
-        ? null
-        : deriveActiveBackgroundTasksState(threadActivities, activeLatestTurn?.turnId ?? undefined),
-    [activeLatestTurn?.turnId, latestTurnSettled, threadActivities],
+    // Detached tasks can outlive their turn. Their own lifecycle clears the panel.
+    () => deriveActiveBackgroundTasksState(threadActivities),
+    [threadActivities],
   );
   // Task tool_use_ids the provider confirmed as backgrounded via task_updated
   // patches (last patch wins, so re-foregrounded tasks drop back out).
