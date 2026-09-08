@@ -2,7 +2,7 @@
 // Purpose: Owns the shared identity and status content rendered by every Sidebar thread row.
 // Exports: SidebarThreadRowContent and its terminal-status presentation type.
 
-import { useMemo, type ReactNode } from "react";
+import { memo, useMemo, type ReactNode } from "react";
 
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { pluralize } from "@synara/shared/text";
@@ -107,6 +107,16 @@ function ProviderAvatarWithTerminal({
   );
 }
 
+const MemoizedProviderAvatarWithTerminal = memo(
+  ProviderAvatarWithTerminal,
+  (previous, next) =>
+    previous.thread === next.thread &&
+    previous.terminalCount === next.terminalCount &&
+    previous.terminalStatus?.label === next.terminalStatus?.label &&
+    previous.terminalStatus?.colorClass === next.terminalStatus?.colorClass &&
+    previous.terminalStatus?.pulse === next.terminalStatus?.pulse,
+);
+
 function renderSubagentLabel(input: {
   thread: SidebarThreadSummary;
   threads?: Parameters<typeof resolveSubagentPresentationForThread>[0]["threads"];
@@ -162,6 +172,12 @@ function SidebarSubagentLabel({
     roleClassName,
   });
 }
+
+const MemoizedSidebarSubagentLabel = memo(
+  SidebarSubagentLabel,
+  (previous, next) =>
+    previous.thread === next.thread && previous.roleClassName === next.roleClassName,
+);
 
 export function SidebarThreadRowContent({
   thread,
@@ -219,7 +235,7 @@ export function SidebarThreadRowContent({
       ) : terminalEntryPoint ? (
         <SidebarGlyph icon={TerminalIcon} variant="chrome" />
       ) : showThreadProviderAvatar ? (
-        <ProviderAvatarWithTerminal
+        <MemoizedProviderAvatarWithTerminal
           thread={thread}
           terminalStatus={terminalStatus}
           terminalCount={terminalCount}
@@ -242,7 +258,7 @@ export function SidebarThreadRowContent({
           data-testid={variant === "pinned" ? `thread-title-${thread.id}` : undefined}
         >
           {isSubagentThread ? (
-            <SidebarSubagentLabel
+            <MemoizedSidebarSubagentLabel
               thread={thread}
               roleClassName={variant === "standard" ? "text-muted-foreground/42" : undefined}
             />
