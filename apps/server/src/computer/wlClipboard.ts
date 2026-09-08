@@ -158,8 +158,9 @@ function describeFailure(result: ClipboardCommandResult): string {
  * Spawns one wl-clipboard process. Only spawn failures reject — an ENOENT for a
  * missing binary — so every exit status is mapped in one place above.
  *
- * `env` overrides the inherited environment: wl-clipboard talks to whichever
- * `WAYLAND_DISPLAY` it is handed.
+ * `env` overrides the inherited environment and is how a nested compositor's
+ * clipboard is reached: wl-clipboard talks to whichever `WAYLAND_DISPLAY` it is
+ * handed, so the same code addresses the ambient session and a Tier 3 one.
  */
 export function spawnClipboardCommand(
   spec: ClipboardCommandSpec,

@@ -199,14 +199,37 @@ interface KWinPluginState {
   readonly capsLockOn: boolean | undefined;
 }
 
+/**
+ * Why the backend is dialing D-Bus right now. The default factories ignore it;
+ * a factory that boots a desktop on demand (the nested backend) must not boot
+ * for an `automatic` call — that is the reconnect loop running on a timer,
+ * with no user or agent behind it, and a desktop window that respawns on a
+ * timer is a haunting rather than a recovery. Such a factory answers an
+ * automatic call for a desktop it will not boot with a `dormant`
+ * `ComputerBackendError`, which stands the reconnect loop down.
+ */
+export interface KWinDbusConnectContext {
+  readonly automatic: boolean;
+}
+
 export interface KWinComputerBackendOptions {
   readonly computerId?: string;
   readonly dbus?: KWinComputerDbus;
-  readonly dbusFactory?: () => Promise<KWinComputerDbus>;
+  readonly dbusFactory?: (context: KWinDbusConnectContext) => Promise<KWinComputerDbus>;
+  /**
+   * A private session bus carrying the compositor, set only by the nested
+   * Tier 3 session. Absent, KWin is reached on the ambient session bus.
+   */
+  readonly busAddress?: string;
   readonly atspi?: AtspiTreeReader;
   readonly installedPluginIds?: () => Promise<readonly string[]>;
   readonly pluginDirectories?: readonly string[];
-  /** "Is anyone answering to this bus name?", for the passive probe only. */
+  /**
+   * "Is anyone answering to this bus name?", for the passive probe only. A
+   * backend bound to a private bus (the nested Tier 3 session) answers yes
+   * without asking, because that session's compositor and plugin were started
+   * by this process and the ambient session bus knows nothing about either.
+   */
   readonly busNameHasOwner?: (name: string) => Promise<boolean>;
   /** Where the shipped plugin binaries live; probed for a version match. */
   readonly prebuiltRoot?: () => string | undefined;
@@ -236,6 +259,12 @@ export interface KWinComputerBackendOptions {
    * `DEFAULT_HUMAN_ACTIVE_THRESHOLD_MS`.
    */
   readonly humanActiveGuardMs?: number;
+  /**
+   * Whether the driven compositor renders on the human's own display. True for
+   * the host session (the default), false when the backend is bound to a
+   * nested, offscreen compositor — see `nestedKWinBackendOptions`.
+   */
+  readonly visibleDesktop?: boolean;
   /** Installer stamp consulted when KWin refuses to load the plugin. */
   readonly installStampPath?: string;
   readonly readInstallStamp?: () => Promise<string | undefined>;
@@ -251,6 +280,14 @@ export interface KWinComputerBackendOptions {
     readonly allowPrebuilt: boolean;
     readonly force: boolean;
   }) => Promise<ProvisionResult>;
+  /**
+   * Whether the compositor that will load the plugin can already see the
+   * install root, forwarded to provisioning. The nested backend answers `true`:
+   * it spawns its compositor with the root injected, so the default test
+   * against the server's session environment would wrongly tell its user to
+   * log out.
+   */
+  readonly compositorSeesPluginRoot?: () => boolean;
 }
 
 /**
@@ -268,6 +305,7 @@ export class KWinComputerBackend implements ComputerBackend {
   private readonly failureFallbackMessage = "The Synara KWin backend failed without a message.";
   private readonly platform: string;
   private readonly sessionType: string;
+  private readonly visibleDesktop: boolean;
   private readonly now: () => number;
   private readonly sleep: (milliseconds: number) => Promise<void>;
   private readonly glideDurationMs: number;
@@ -276,7 +314,7 @@ export class KWinComputerBackend implements ComputerBackend {
   private readonly idleTimeoutMs: number;
   private readonly humanActiveGuardMs: number;
   private readonly atspi: AtspiTreeReader;
-  private readonly dbusFactory: () => Promise<KWinComputerDbus>;
+  private readonly dbusFactory: (context: KWinDbusConnectContext) => Promise<KWinComputerDbus>;
   private readonly installedPluginIds: () => Promise<readonly string[]>;
   private readonly busNameHasOwner: (name: string) => Promise<boolean>;
   private readonly prebuiltRoot: () => string | undefined;
@@ -347,6 +385,7 @@ export class KWinComputerBackend implements ComputerBackend {
       options.sessionType ??
       process.env.XDG_SESSION_TYPE ??
       (process.env.WAYLAND_DISPLAY ? "wayland" : "");
+    this.visibleDesktop = options.visibleDesktop ?? true;
     this.now = options.now ?? Date.now;
     this.sleep = options.sleep ?? ((milliseconds) => delay(milliseconds));
     this.spawnProcess =
@@ -371,11 +410,18 @@ export class KWinComputerBackend implements ComputerBackend {
     this.dbus = options.dbus;
     this.dbusFactory =
       options.dbusFactory ??
-      (options.dbus ? async () => options.dbus! : () => createSessionKWinComputerDbus());
+      (options.dbus
+        ? async () => options.dbus!
+        : () =>
+            createSessionKWinComputerDbus(
+              options.busAddress ? { busAddress: options.busAddress } : {},
+            ));
     this.installedPluginIds =
       options.installedPluginIds ??
       (() => scanInstalledPluginIds(options.pluginDirectories ?? defaultPluginDirectories()));
-    this.busNameHasOwner = options.busNameHasOwner ?? ((name) => sessionBusNameHasOwner(name));
+    this.busNameHasOwner =
+      options.busNameHasOwner ??
+      (options.busAddress ? async () => true : (name) => sessionBusNameHasOwner(name));
     this.prebuiltRoot = options.prebuiltRoot ?? (() => prebuiltPluginRoot());
     this.buildToolingPresent = options.buildToolingPresent ?? localBuildToolingPresent;
     this.readInstallStamp =
@@ -413,6 +459,9 @@ export class KWinComputerBackend implements ComputerBackend {
             return installStampIsCurrent(stamp, files, running);
           },
           stampPath: options.installStampPath ?? defaultInstallStampPath(),
+          ...(options.compositorSeesPluginRoot
+            ? { compositorSeesPluginRoot: options.compositorSeesPluginRoot }
+            : {}),
         }));
     this.healthState = new ComputerHealthState({
       readStatus: () => ({
@@ -446,7 +495,7 @@ export class KWinComputerBackend implements ComputerBackend {
       focus: true,
       raise: true,
       ghostCursor: true,
-      visibleDesktop: true,
+      visibleDesktop: this.visibleDesktop,
     };
   }
 
@@ -1081,21 +1130,22 @@ export class KWinComputerBackend implements ComputerBackend {
   }
 
   private async ensurePlugin(
-    options: { readonly start?: boolean } = {},
+    options: { readonly start?: boolean; readonly automatic?: boolean } = {},
   ): Promise<KWinComputerPluginApi> {
-    const plugin = await this.ensureConnectedPlugin();
+    const plugin = await this.ensureConnectedPlugin(options.automatic === true);
     if (options.start !== false) await this.startPlugin(plugin);
     return plugin;
   }
 
-  private async ensureConnectedPlugin(): Promise<KWinComputerPluginApi> {
+  private async ensureConnectedPlugin(automatic: boolean): Promise<KWinComputerPluginApi> {
     if (this.disposed) throw new ComputerBackendError("KWin computer backend is disposed.");
     const connected = this.connectedPlugin();
     if (connected) return connected;
     if (this.connectPromise) return this.connectPromise;
-    this.connectPromise = this.connectWithBackoff()
+    this.connectPromise = this.connectWithBackoff(automatic)
       .catch((error) => {
-        if (!isMethodLevelDbusError(error)) this.scheduleReconnect();
+        if (isDormantBackendError(error)) this.standDownReconnect();
+        else if (!isMethodLevelDbusError(error)) this.scheduleReconnect();
         this.recordHealthFailure(error);
         this.publishHealth();
         throw error;
@@ -1147,14 +1197,16 @@ export class KWinComputerBackend implements ComputerBackend {
     return this.startPromise;
   }
 
-  private async connectWithBackoff(): Promise<KWinComputerPluginApi> {
+  private async connectWithBackoff(automatic: boolean): Promise<KWinComputerPluginApi> {
     let lastError: unknown;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
-        return await this.connectOnce();
+        return await this.connectOnce(automatic);
       } catch (error) {
         lastError = error;
-        if (isMethodLevelDbusError(error)) throw error;
+        // A dormant refusal is a decision, not a fault: retrying cannot boot
+        // the desktop this very call was told not to boot.
+        if (isMethodLevelDbusError(error) || isDormantBackendError(error)) throw error;
         this.invalidateConnection();
         if (attempt < 2) await this.sleep(KWIN_RECONNECT_BASE_DELAY_MS * 2 ** attempt);
       }
@@ -1165,8 +1217,8 @@ export class KWinComputerBackend implements ComputerBackend {
     );
   }
 
-  private async connectOnce(): Promise<KWinComputerPluginApi> {
-    const dbus = this.dbus ?? (this.dbus = await this.dbusFactory());
+  private async connectOnce(automatic: boolean): Promise<KWinComputerPluginApi> {
+    const dbus = this.dbus ?? (this.dbus = await this.dbusFactory({ automatic }));
     if (!this.disconnect) {
       this.disconnect = dbus.onDisconnect(() => {
         this.invalidateConnection();
@@ -1419,10 +1471,26 @@ export class KWinComputerBackend implements ComputerBackend {
     this.reconnecting = true;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
-      void this.ensurePlugin({ start: false }).catch(() => this.scheduleReconnect());
+      void this.ensurePlugin({ start: false, automatic: true }).catch((error: unknown) => {
+        if (!isDormantBackendError(error)) this.scheduleReconnect();
+      });
     }, delayMs);
     this.reconnectTimer.unref?.();
     this.publishHealth();
+  }
+
+  /**
+   * Ends the reconnect loop without a connection. Only a dormant refusal lands
+   * here: the factory said the desktop is deliberately not running and only a
+   * real use may boot it, so a pending retry would either lie about recovery
+   * or respawn a desktop window the human just closed. The next real use
+   * connects — and thereby boots — without any of this state in the way.
+   */
+  private standDownReconnect(): void {
+    if (this.reconnectTimer !== undefined) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = undefined;
+    this.reconnectFailures = 0;
+    this.reconnecting = false;
   }
 
   private async readPluginState(plugin: KWinComputerPluginApi): Promise<KWinPluginState> {
@@ -1448,11 +1516,14 @@ export class KWinComputerBackend implements ComputerBackend {
       typeof parsed.msSinceHumanInput === "number" && Number.isFinite(parsed.msSinceHumanInput)
         ? parsed.msSinceHumanInput
         : undefined;
+    // Nothing to protect in a compositor the agent owns, and reporting a guard
+    // there would refuse the agent on its own input.
+    const guarded = parsed.ownsCompositor !== true;
     return {
       position,
       targetWindowId,
-      humanFocusWindowId,
-      msSinceHumanInput,
+      humanFocusWindowId: guarded ? humanFocusWindowId : undefined,
+      msSinceHumanInput: guarded ? msSinceHumanInput : undefined,
       capsLockOn:
         parsed.capsLockOn === true ? true : parsed.capsLockOn === false ? false : undefined,
     };
@@ -1829,8 +1900,8 @@ export type SynaraPluginLoadPlan =
  * loaded) while the old build keeps serving. Anything other than exactly
  * [newest] is therefore a "replace": unload every loaded generation so the
  * name is free, then load the target. Shared by the host backend's connect
- * path. `undefined` when no Synara plugin exists at all, which is not
- * recoverable here.
+ * path and the nested session's first load. `undefined` when no Synara plugin
+ * exists at all, which is not recoverable here.
  */
 export function resolveSynaraPluginLoad(options: {
   readonly loaded: readonly string[];
@@ -2056,6 +2127,10 @@ const CONNECTION_DBUS_ERROR_TYPES = new Set([
   "org.freedesktop.DBus.Error.ServiceUnknown",
   "org.freedesktop.DBus.Error.NameHasNoOwner",
 ]);
+
+function isDormantBackendError(error: unknown): boolean {
+  return error instanceof ComputerBackendError && error.dormant;
+}
 
 /**
  * The well-known service name arriving from the wrong process.

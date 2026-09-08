@@ -18,6 +18,7 @@ export const COMPUTER_OBJECT_PATH = "/org/synara/ComputerUse";
 export const COMPUTER_INTERFACE = "org.synara.ComputerUse1";
 export const KWIN_DBUS_DEFAULT_TIMEOUT_MS = 5_000;
 export const KWIN_DBUS_CAPTURE_TIMEOUT_MS = 10_000;
+const DBUS_NAME_POLL_MS = 100;
 
 export class KWinDbusTimeoutError extends Error {
   readonly connectionLevel = true;
@@ -90,6 +91,12 @@ export interface KWinComputerDbus {
 }
 
 export interface KWinComputerDbusOptions {
+  /**
+   * A private bus to use instead of the ambient session bus, as the nested
+   * Tier 3 compositor runs on one. Absent, this is the user's own session bus,
+   * which is the only bus a real desktop's KWin is reachable on.
+   */
+  readonly busAddress?: string;
   /** Tests inject a fake here; production resolves the real dbus-next. */
   readonly dbusModule?: Pick<typeof dbusModule, "sessionBus">;
 }
@@ -125,7 +132,9 @@ export async function openComputerSessionBus(
   // resolves it only when the backend has passed the Linux/Wayland gate.
   const require = createRequire(import.meta.url);
   const dbus = options.dbusModule ?? (require("dbus-next") as typeof dbusModule);
-  const bus = dbus.sessionBus();
+  const bus = options.busAddress
+    ? dbus.sessionBus({ busAddress: options.busAddress })
+    : dbus.sessionBus();
   let closed = false;
   const disconnectListeners = new Set<() => void>();
   const onDisconnectEvent = () => {
@@ -252,6 +261,56 @@ export async function createSessionKWinComputerDbus(
   } catch (error) {
     await session.close();
     throw error;
+  }
+}
+
+/**
+ * Waits for `name` to be owned on a bus, and reports whether it appeared.
+ *
+ * One connection polls `NameHasOwner` rather than reconnecting per attempt: a
+ * connect/disconnect cycle per poll would churn the bus, and a failed connect
+ * can emit a late error on a bus nobody is listening to any more.
+ */
+export async function waitForSessionBusName(options: {
+  readonly busAddress: string;
+  readonly name: string;
+  readonly timeoutMs: number;
+  readonly pollMs?: number;
+  /** Ends the wait early, for a caller that knows the name will never appear. */
+  readonly abort?: () => boolean;
+}): Promise<boolean> {
+  const require = createRequire(import.meta.url);
+  const dbus = require("dbus-next") as typeof dbusModule;
+  const bus = dbus.sessionBus({ busAddress: options.busAddress });
+  const eventBus = bus as unknown as EventEmitter;
+  let connectionError: unknown;
+  const onError = (error: unknown) => {
+    connectionError ??= error;
+  };
+  eventBus.on("error", onError);
+  eventBus.on("disconnect", onError);
+  try {
+    const daemon = await withTimeout(
+      Promise.resolve(bus.getProxyObject(DBUS_SERVICE, DBUS_OBJECT_PATH)),
+      KWIN_DBUS_DEFAULT_TIMEOUT_MS,
+      "getProxyObject",
+    );
+    const iface = daemon.getInterface(DBUS_INTERFACE);
+    const deadline = Date.now() + options.timeoutMs;
+    for (;;) {
+      if (options.abort?.() === true) return false;
+      if (connectionError !== undefined) throw connectionError;
+      if ((await invoke(iface, "NameHasOwner", options.name)) === true) return true;
+      if (Date.now() >= deadline) return false;
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, options.pollMs ?? DBUS_NAME_POLL_MS);
+        timer.unref?.();
+      });
+    }
+  } finally {
+    eventBus.off("error", onError);
+    eventBus.off("disconnect", onError);
+    bus.disconnect();
   }
 }
 

@@ -166,6 +166,7 @@ Proposed execution order: Batch 1 = H1–H4 + M5, M7–M10, M13 (highest risk-re
 
 - L22: `ThreadComputerState.cursor` declared, spread, never assigned (`ComputerManager.ts:98,1395`) — the web agent-cursor dot (`ComputerPanel.tsx:395`) is dead code as a result. Wire backend pointer position into publishes, or remove the field and the overlay.
 - L23: Web pane drops input silently at queue limit — `sendInput` ignores `push()`'s return (`ComputerPanel.tsx:133`); surface a transient "desktop busy" message on drop (wire `onDrop`).
+- L24: `supervisedProcess.ts:179` + `nestedKWinSession.ts:152-158` — kwin_wayland stdout piped and never drained; >64 KB blocks the compositor forever while health reports connected. Spawn with `stdout:"ignore"` (stderr stays piped) or attach a drain.
 - L25: Overlapping `attachStream` orphans the frame interval (`KWinComputerBackend.ts:868-878`) — clear the pending interval again after the `ensurePlugin` await.
 - L26: `recordError` writes `lastError` on all threads without publishing (`ComputerManager.ts:1443-1446`) — debounce-republish so stream attach failures reach the panel.
 - L27: Concurrent publishes can emit duplicate versions (`ComputerManager.ts:1281-1318`) — per-thread promise chain around `publish`.

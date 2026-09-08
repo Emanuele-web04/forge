@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { ComputerBackendError, NO_COMPUTER_CAPABILITIES } from "./ComputerBackend.ts";
 import { UnavailableComputerBackend } from "./UnavailableComputerBackend.ts";
 
-const REASON = "No KWin compositor is answering on the session bus.";
+const REASON = "The windowed nested KWin session did not start: kwin_wayland is not installed.";
 
 describe("UnavailableComputerBackend", () => {
   it("reports the same sentence through availability, health, and every action", async () => {

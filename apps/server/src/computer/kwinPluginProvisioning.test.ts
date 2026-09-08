@@ -300,6 +300,15 @@ describe("provisioning", () => {
     expect(seen.summary).not.toMatch(/Log out/);
   });
 
+  it("never asks for a login when the backend vouches for the compositor's view", async () => {
+    // The nested backend spawns its compositor with the plugin root injected,
+    // so the session environment this server inherited proves nothing.
+    const deps = await baseDeps({ compositorSeesPluginRoot: () => true });
+    const result = await provisionKWinPlugin(deps);
+    expect(result.requiresRelogin).toBe(false);
+    expect(result.summary).not.toMatch(/Log out/);
+  });
+
   it("writes the env script even when the plugin is already current", async () => {
     const deps = await baseDeps({ isCurrent: async () => true });
     const result = await provisionKWinPlugin(deps);

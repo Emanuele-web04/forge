@@ -99,6 +99,7 @@ class FakePlugin implements KWinComputerPluginApi {
     | {
         readonly humanFocusWindowId?: string;
         readonly msSinceHumanInput?: number;
+        readonly ownsCompositor?: boolean;
       }
     | undefined;
   /** Which window the plugin says the agent seat is aimed at. */
@@ -862,6 +863,14 @@ describe("KWinComputerBackend", () => {
       raise: true,
       ghostCursor: true,
       visibleDesktop: true,
+    });
+  });
+
+  it("reports an invisible desktop when bound to a nested compositor", () => {
+    // Same class, different tier: the nested session passes visibleDesktop
+    // false, and the pane auto-open gate keys off exactly this flag.
+    expect(makeBackend(new FakeDbus(), { visibleDesktop: false }).capabilities()).toMatchObject({
+      visibleDesktop: false,
     });
   });
 
@@ -2193,6 +2202,10 @@ describe("KWinComputerBackend", () => {
     ["nothing has focus", { humanFocusWindowId: "", msSinceHumanInput: 10 }],
     ["no input has been observed", { humanFocusWindowId: "window-1", msSinceHumanInput: -1 }],
     ["the plugin is older and reports neither", {}],
+    [
+      "the agent owns the compositor",
+      { humanFocusWindowId: "window-1", msSinceHumanInput: 10, ownsCompositor: true },
+    ],
   ])("allows a semantic write when %s", async (_label, humanState) => {
     const dbus = new FakeDbus();
     const writes: AtspiTextWrite[] = [];
@@ -2891,6 +2904,46 @@ describe("KWinComputerBackend KWin crash recovery", () => {
     ]);
 
     await backend.dispose();
+  });
+});
+
+describe("KWinComputerBackend dormant desktop", () => {
+  it("stands the reconnect loop down when the factory refuses to boot for it", async () => {
+    vi.useFakeTimers();
+    try {
+      const dbus = new FakeDbus();
+      dbus.loaded = ["SynaraComputerUsePluginV10"];
+      let factoryCalls = 0;
+      const backend = makeBackend(dbus, {
+        // What the nested backend's factory does once its compositor process
+        // has exited and the caller is the reconnect loop, not a real use.
+        dbusFactory: async () => {
+          factoryCalls += 1;
+          throw new ComputerBackendError("The desktop is not running.", {
+            dormant: true,
+            retryable: true,
+          });
+        },
+      });
+
+      await expect(backend.listWindows()).resolves.toMatchObject([{ id: "window-1" }]);
+
+      dbus.disconnect();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(factoryCalls).toBe(1);
+      expect(backend.health()).toMatchObject({
+        status: "unavailable",
+        lastFailure: { message: "The desktop is not running." },
+      });
+
+      // Stood down for good: no amount of waiting produces another attempt.
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(factoryCalls).toBe(1);
+
+      await backend.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

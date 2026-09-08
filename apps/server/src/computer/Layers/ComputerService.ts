@@ -5,6 +5,14 @@ import { FakeComputerBackend } from "../FakeComputerBackend.ts";
 import { ComputerManager } from "../ComputerManager.ts";
 import { KWinComputerBackend } from "../KWinComputerBackend.ts";
 import { UnavailableComputerBackend } from "../UnavailableComputerBackend.ts";
+import {
+  nestedModeForChoice,
+  selectLinuxBackend,
+  type LinuxBackendSelection,
+} from "../linuxBackendSelection.ts";
+import { sessionBusNameHasOwner } from "../sessionBusNames.ts";
+import { NestedComputerBackend } from "../nestedComputerBackend.ts";
+import { nestedAtspiMode, parseNestedSizeEnv } from "../nestedKWinSession.ts";
 import { ComputerService, type ComputerServiceShape } from "../Services/ComputerService.ts";
 import type { ComputerBackend } from "../ComputerBackend.ts";
 
@@ -17,6 +25,10 @@ export interface ComputerServiceLiveOptions {
   readonly platform?: NodeJS.Platform;
 }
 
+interface LinuxBackend {
+  readonly backend: ComputerBackend;
+}
+
 export function makeComputerServiceLayer(options: ComputerServiceLiveOptions = {}) {
   return Layer.effect(
     ComputerService,
@@ -25,6 +37,10 @@ export function makeComputerServiceLayer(options: ComputerServiceLiveOptions = {
       const configuredBackend =
         options.backend ??
         (process.env.SYNARA_COMPUTER_BACKEND === "fake" ? new FakeComputerBackend() : undefined);
+      const linux =
+        configuredBackend === undefined && platform === "linux"
+          ? yield* Effect.promise(() => makeLinuxBackend())
+          : undefined;
       // Off Linux there is no backend to fall back to — and the fake would be
       // worse than none: it answers "available" and every tool call succeeds
       // against a phantom desktop, so an agent could report success at clicks
@@ -32,7 +48,7 @@ export function makeComputerServiceLayer(options: ComputerServiceLiveOptions = {
       // verdict kind the pane's blocked state is keyed off.
       const backend =
         configuredBackend ??
-        (platform === "linux" ? new KWinComputerBackend() : undefined) ??
+        linux?.backend ??
         new UnavailableComputerBackend(
           `Computer control requires a Linux host; this server runs on ${platform}.`,
           { availability: { kind: "unsupported-platform", platform } },
@@ -73,6 +89,53 @@ export function makeComputerServiceLayer(options: ComputerServiceLiveOptions = {
       } satisfies ComputerServiceShape;
     }),
   );
+}
+
+/**
+ * Builds whichever backend `selectLinuxBackend` resolved, with no fallback in
+ * any direction: a backend that fails stays failed and carries the reason. See `linuxBackendSelection.ts` for the order and why it probes the
+ * session bus rather than reading `XDG_CURRENT_DESKTOP`.
+ *
+ * On a KDE host with none of these environment variables set, this is still a
+ * bare `new KWinComputerBackend()` — the same object, with the same defaults,
+ * as before any other backend existed.
+ */
+async function makeLinuxBackend(): Promise<LinuxBackend> {
+  let selection: LinuxBackendSelection;
+  try {
+    selection = await selectLinuxBackend({ busNameHasOwner: sessionBusNameHasOwner });
+  } catch (error) {
+    // Only a malformed SYNARA_COMPUTER_BACKEND reaches here, and it must not
+    // take the server down: an operator typo becomes an availability card that
+    // lists the backends that do exist.
+    return { backend: new UnavailableComputerBackend(describeError(error)) };
+  }
+  switch (selection.choice) {
+    case "kwin":
+      return { backend: new KWinComputerBackend() };
+    case "nested":
+    case "nested-window": {
+      // Constructed, not booted: the nested compositor is expensive and — in
+      // window mode — visible, so nothing may appear because a server started.
+      // The backend boots its session on first real use, and its `provision()`
+      // is the settings panel's one-click setup. The geometry comes from
+      // `SYNARA_COMPUTER_NESTED_SIZE=WxH`. A session that fails to boot stays
+      // failed: falling back to the real desktop would hand an agent the
+      // human's screen right after an operator asked for an isolated one.
+      const size = parseNestedSizeEnv(process.env.SYNARA_COMPUTER_NESTED_SIZE);
+      return {
+        backend: new NestedComputerBackend({
+          mode: nestedModeForChoice(selection.choice) ?? "virtual",
+          ...(size ? { size } : {}),
+          atspiMode: nestedAtspiMode(),
+        }),
+      };
+    }
+  }
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export const ComputerServiceLive = makeComputerServiceLayer();

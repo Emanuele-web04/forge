@@ -356,6 +356,16 @@ export interface ProvisionDependencies {
   readonly force?: boolean;
   /** Where to record what was installed, for a later load refusal to read back. */
   readonly stampPath: string;
+  /**
+   * Whether the compositor that will load this install can already see the
+   * plugin root. Defaults to reading the server's own `QT_PLUGIN_PATH`, which
+   * is the honest test for the human's session compositor — the server
+   * inherited the same environment KWin started with. A backend that spawns
+   * its own compositor with the root injected answers `true` here, because
+   * telling its user to log out would be asking them to fix a session the
+   * plugin never loads into.
+   */
+  readonly compositorSeesPluginRoot?: () => boolean;
   readonly now?: () => Date;
 }
 
@@ -373,7 +383,8 @@ export async function provisionKWinPlugin(deps: ProvisionDependencies): Promise<
   // the install visible to KWin at all, and it is cheap and idempotent, so there
   // is no case where skipping it is worth the risk of it having been deleted.
   await ensureEnvScript(envScriptPath(env), renderEnvScript(deps.target.qtPluginRoot));
-  const visible = sessionSeesPluginRoot(deps.target.qtPluginRoot, env);
+  const visible =
+    deps.compositorSeesPluginRoot?.() ?? sessionSeesPluginRoot(deps.target.qtPluginRoot, env);
 
   if (!deps.force && (await deps.isCurrent())) {
     // Current is not the same as loadable: until the session has been

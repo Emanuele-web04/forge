@@ -23,7 +23,14 @@ the macOS comparison.
   their own theme is indistinguishable from theirs, and telling the two apart is
   the whole point. It is a violet silhouette with a light rim and a dark outer
   stroke, so it reads against any wallpaper, sized from the human's own
-  `themeSize` so both cursors are the same physical size.
+  `themeSize` so both cursors are the same physical size. On a compositor the
+  agent owns (a nested session) the same drawn item stands in for KWin's native
+  cursor, which is hidden while a session runs: the native arrow depends on a
+  cursor theme the host distro may not ship and on clients not hiding or
+  replacing it, and the drawn item makes the agent's pointer look identical on
+  every machine. It follows the seat's `Cursor::posChanged` there, since clients
+  can warp the pointer and the human can drive it through the host window's
+  pointer grab.
 - A name badge — a pill naming the driving thread — is a second `ImageItem`
   child of the cursor item, offset below-right of the hotspot so it never covers
   the click point. It is fully opaque while the agent acts and fades out two
@@ -245,6 +252,9 @@ server's own guard uses, so a caller never has to know which side refused.
   open menu is part of what you are doing.
 - The release half of a press the agent already delivered is never refused — a
   latched button or a stuck Ctrl in your window is worse than the press was.
+- `SYNARA_COMPUTER_USE_OWNS_COMPOSITOR=1` disables the guard entirely. There the
+  agent's input rides seat0, so recency would count its own events, and there is
+  no human in that compositor to protect.
 - `setHumanActiveGuardMs(u milliseconds)` reconfigures it; `0` disables it,
   anything else outside 100 ms – 60 s is rejected with `false`. The server sends
   its configured value right after `start()`, and

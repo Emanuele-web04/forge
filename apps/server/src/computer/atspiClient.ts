@@ -66,8 +66,9 @@ export interface AtspiHelperClientOptions {
   readonly scriptPath?: string;
   readonly requestTimeoutMs?: number;
   /**
-   * Environment overrides for the helper process, including its
-   * `DBUS_SESSION_BUS_ADDRESS` when required by the session.
+   * Environment overrides for the helper process. The accessibility bus is
+   * reached through the session bus, so a nested session hands its own
+   * `DBUS_SESSION_BUS_ADDRESS` here to keep perception inside that session.
    */
   readonly env?: NodeJS.ProcessEnv;
   readonly spawnProcess?: (
