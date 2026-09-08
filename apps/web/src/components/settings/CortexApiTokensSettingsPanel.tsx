@@ -44,9 +44,9 @@ export function CortexApiTokensSettingsPanel({ active }: { readonly active: bool
           </div>
           <p className="border-t border-border/60 pt-3 text-xs text-muted-foreground">
             Initial scopes: <code>cortex.ai.invoke</code>, <code>projects.read</code>,
-            <code>projects.write</code>, <code>workspaces.read</code>, <code>workspaces.write</code>,
-            <code>repositories.read</code>, <code>repositories.write</code>, <code>tasks.read</code>,
-            <code>tasks.write</code>, and <code>organizations.read</code>.
+            <code>projects.write</code>, <code>workspaces.read</code>, <code>workspaces.write</code>
+            ,<code>repositories.read</code>, <code>repositories.write</code>,{" "}
+            <code>tasks.read</code>,<code>tasks.write</code>, and <code>organizations.read</code>.
           </p>
         </div>
       </SettingsSection>

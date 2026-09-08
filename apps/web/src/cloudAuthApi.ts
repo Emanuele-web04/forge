@@ -29,7 +29,12 @@ function endpoint(path: string): string {
 
 async function readError(response: Response): Promise<string> {
   const body = await response.json().catch(() => null);
-  if (typeof body === "object" && body !== null && "message" in body && typeof body.message === "string") {
+  if (
+    typeof body === "object" &&
+    body !== null &&
+    "message" in body &&
+    typeof body.message === "string"
+  ) {
     return body.message;
   }
   return "Cloud sign-in could not be completed. Please try again.";

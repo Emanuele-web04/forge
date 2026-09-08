@@ -3,8 +3,8 @@
 ## Decision
 
 **Do not position CORTEX as a hosted, multi-tenant AI development
-platform yet.** It is a capable and unusually well-tested *local-first agent
-workstation*. The recent cloud work establishes useful contracts and a PostgreSQL data
+platform yet.** It is a capable and unusually well-tested _local-first agent
+workstation_. The recent cloud work establishes useful contracts and a PostgreSQL data
 model, but it does not yet provide the cloud control plane, execution plane, or
 operational boundary that turns those foundations into a SaaS product.
 
@@ -58,8 +58,8 @@ yet,” which accurately describes the current state.
 **Foundation status (2026-09-08).** An initial, separate `apps/cloud-control` Bun service now
 exists with fail-fast PostgreSQL configuration, liveness/readiness endpoints, request IDs, and
 structured request logging. It deliberately rejects every `/v1/*` request until P0-PLATFORM-02
-can establish cloud identity and transaction-scoped tenant context. This closes the *absence of a
-process* only; it does not meet this workstream's exit gate or make cloud APIs available.
+can establish cloud identity and transaction-scoped tenant context. This closes the _absence of a
+process_ only; it does not meet this workstream's exit gate or make cloud APIs available.
 
 **Evidence.** Before the foundation-status update above, `apps/cloud-control` contained only
 three SQL migration files. It now has a package, source entrypoint, focused tests, and operational
@@ -156,7 +156,7 @@ event-stream cursor, transaction boundary, or runner-event ingestion endpoint. T
 local orchestration event log/replay mechanism is not connected to the cloud tables.
 
 **Impact.** A retry, browser reconnect, or runner crash would have no defined exactly-once
-*effect* boundary. Task state, UI transcript, quota, and runner status could diverge.
+_effect_ boundary. Task state, UI transcript, quota, and runner status could diverge.
 
 **Required remediation.** Before onboarding users, choose one durable authority per
 cloud aggregate: transactional command handling plus an outbox, monotonic aggregate

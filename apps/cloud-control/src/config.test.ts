@@ -6,7 +6,7 @@ describe("loadCloudControlConfig", () => {
   it("rejects missing and non-PostgreSQL database URLs", () => {
     expect(() => loadCloudControlConfig({})).toThrow("CORTEX_DATABASE_URL");
     expect(() => loadCloudControlConfig({ CORTEX_DATABASE_URL: "https://example.test" })).toThrow(
-      "PostgreSQL",
+      "must use the postgres or postgresql protocol.",
     );
   });
 
@@ -17,6 +17,6 @@ describe("loadCloudControlConfig", () => {
         PORT: "9443",
         CORTEX_ENVIRONMENT: "staging",
       }),
-    ).toMatchObject({ host: "127.0.0.1", port: 9443, environment: "staging" });
+    ).toMatchObject({ host: "0.0.0.0", port: 9443, environment: "staging" });
   });
 });

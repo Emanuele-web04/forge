@@ -14,12 +14,7 @@ import {
 // `.plans/Blueprint_de_la_version_cloud.md` §7–§8. Schema-only —
 // no runtime logic, kept in line with the `packages/contracts` role.
 
-const CloudWorkspaceStatus = Schema.Literals([
-  "provisioning",
-  "ready",
-  "suspended",
-  "destroyed",
-]);
+const CloudWorkspaceStatus = Schema.Literals(["provisioning", "ready", "suspended", "destroyed"]);
 export type CloudWorkspaceStatus = typeof CloudWorkspaceStatus.Type;
 
 const CloudTaskStatus = Schema.Literals([

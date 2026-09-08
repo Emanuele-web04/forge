@@ -5,7 +5,11 @@ import { passwordStrength, validateCloudAuthValues } from "./cloudAuthForm";
 describe("validateCloudAuthValues", () => {
   it("requires an email, password, and accepted terms when creating an account", () => {
     expect(
-      validateCloudAuthValues("signup", { email: "not-an-email", password: "short", acceptedTerms: false }),
+      validateCloudAuthValues("signup", {
+        email: "not-an-email",
+        password: "short",
+        acceptedTerms: false,
+      }),
     ).toEqual({
       acceptedTerms: "Accept the terms to create your account.",
       email: "Enter a valid email address.",

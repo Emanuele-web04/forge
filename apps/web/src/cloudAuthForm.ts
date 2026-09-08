@@ -16,7 +16,10 @@ export type CloudAuthErrors = Readonly<Partial<Record<CloudAuthField, string>>>;
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
 
-export function validateCloudAuthValues(mode: CloudAuthMode, values: CloudAuthValues): CloudAuthErrors {
+export function validateCloudAuthValues(
+  mode: CloudAuthMode,
+  values: CloudAuthValues,
+): CloudAuthErrors {
   const errors: Partial<Record<CloudAuthField, string>> = {};
 
   if (!emailPattern.test(values.email.trim())) {

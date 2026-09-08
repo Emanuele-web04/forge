@@ -2,7 +2,13 @@
 // Purpose: Reusable cloud login and registration panel using the application design system.
 // Layer: Web cloud onboarding
 
-import { IconBrandGithub, IconBrandGoogle, IconEye, IconEyeOff, IconLock } from "@tabler/icons-react";
+import {
+  IconBrandGithub,
+  IconBrandGoogle,
+  IconEye,
+  IconEyeOff,
+  IconLock,
+} from "@tabler/icons-react";
 import { Link } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
 
@@ -125,7 +131,10 @@ export function CloudAuthPanel({
             <div className="flex items-center justify-between gap-3">
               <Label htmlFor="cloud-password">Password</Label>
               {!isSignup ? (
-                <button className="text-xs text-muted-foreground hover:text-foreground" type="button">
+                <button
+                  className="text-xs text-muted-foreground hover:text-foreground"
+                  type="button"
+                >
                   Forgot password?
                 </button>
               ) : null}
@@ -204,7 +213,10 @@ export function CloudAuthPanel({
         </div>
         <p className="mt-6 text-center text-xs text-muted-foreground">
           {alternate.label}{" "}
-          <Link className="font-medium text-foreground underline-offset-4 hover:underline" to={alternate.to}>
+          <Link
+            className="font-medium text-foreground underline-offset-4 hover:underline"
+            to={alternate.to}
+          >
             {alternate.action}
           </Link>
         </p>

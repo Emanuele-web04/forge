@@ -65,9 +65,7 @@ describe("CloudWorkspace", () => {
   });
 
   it("rejects a missing organization id", () => {
-    expect(() =>
-      decodeWorkspace({ ...workspace(), organizationId: undefined }),
-    ).toThrow();
+    expect(() => decodeWorkspace({ ...workspace(), organizationId: undefined })).toThrow();
   });
 });
 
@@ -183,7 +181,11 @@ describe("CloudEvent", () => {
 
 describe("Cloud control-plane surface", () => {
   it("decodes a runner heartbeat", () => {
-    const decoded = decodeHeartbeat({ workspaceId: "workspace-cloud-1", cpu: 0.42, memoryMb: 2_048 });
+    const decoded = decodeHeartbeat({
+      workspaceId: "workspace-cloud-1",
+      cpu: 0.42,
+      memoryMb: 2_048,
+    });
     expect(decoded.memoryMb).toBe(2_048);
   });
 

@@ -45,7 +45,12 @@ const server = Bun.serve({
         // API handler. Rejecting rather than trusting caller-provided IDs is intentional.
         status = 503;
         return response(
-          { error: { code: "cloud_auth_not_configured", message: "CORTEX Cloud is in private preview." } },
+          {
+            error: {
+              code: "cloud_auth_not_configured",
+              message: "CORTEX Cloud is in private preview.",
+            },
+          },
           status,
           id,
         );
@@ -53,13 +58,40 @@ const server = Bun.serve({
       status = 404;
       return response({ error: { code: "not_found", message: "Not found." } }, status, id);
     } catch (cause) {
-      console.error(JSON.stringify({ event: "cloud_request_failed", requestId: id, path: pathname, cause: String(cause) }));
+      console.error(
+        JSON.stringify({
+          event: "cloud_request_failed",
+          requestId: id,
+          path: pathname,
+          cause: String(cause),
+        }),
+      );
       status = 503;
-      return response({ error: { code: "service_unavailable", message: "Service unavailable." } }, status, id);
+      return response(
+        { error: { code: "service_unavailable", message: "Service unavailable." } },
+        status,
+        id,
+      );
     } finally {
-      console.info(JSON.stringify({ event: "cloud_request", requestId: id, method: request.method, path: pathname, status, durationMs: Math.round(performance.now() - startedAt) }));
+      console.info(
+        JSON.stringify({
+          event: "cloud_request",
+          requestId: id,
+          method: request.method,
+          path: pathname,
+          status,
+          durationMs: Math.round(performance.now() - startedAt),
+        }),
+      );
     }
   },
 });
 
-console.info(JSON.stringify({ event: "cloud_control_started", host: server.hostname, port: server.port, environment: config.environment }));
+console.info(
+  JSON.stringify({
+    event: "cloud_control_started",
+    host: server.hostname,
+    port: server.port,
+    environment: config.environment,
+  }),
+);

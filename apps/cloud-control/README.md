@@ -24,12 +24,12 @@ CORTEX_DATABASE_URL=postgresql://app:password@127.0.0.1:5432/cortex \
 
 Configuration is fail-fast:
 
-| Variable | Required | Meaning |
-| --- | --- | --- |
-| `CORTEX_DATABASE_URL` | yes | PostgreSQL application-role URL. Never use the migration owner for HTTP traffic. |
-| `PORT` | no | Listener port; defaults to `8787`. |
-| `HOST` | no | Listener host; defaults to `127.0.0.1`. |
-| `CORTEX_ENVIRONMENT` | no | `development`, `staging`, or `production`; defaults to `development`. |
+| Variable              | Required | Meaning                                                                          |
+| --------------------- | -------- | -------------------------------------------------------------------------------- |
+| `CORTEX_DATABASE_URL` | yes      | PostgreSQL application-role URL. Never use the migration owner for HTTP traffic. |
+| `PORT`                | no       | Listener port; defaults to `8787`.                                               |
+| `HOST`                | no       | Listener host; defaults to `0.0.0.0`.                                            |
+| `CORTEX_ENVIRONMENT`  | no       | `development`, `staging`, or `production`; defaults to `development`.            |
 
 ## Token-security contract
 

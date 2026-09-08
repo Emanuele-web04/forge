@@ -67,5 +67,8 @@ export function generateCortexApiToken(): GeneratedApiToken {
 /** Constant-time comparison for a syntactically valid candidate against a persisted digest. */
 export function matchesCortexApiTokenHash(secret: string, persistedHash: Uint8Array): boolean {
   const candidateHash = hashCortexApiToken(secret);
-  return candidateHash.byteLength === persistedHash.byteLength && timingSafeEqual(candidateHash, persistedHash);
+  return (
+    candidateHash.byteLength === persistedHash.byteLength &&
+    timingSafeEqual(candidateHash, persistedHash)
+  );
 }

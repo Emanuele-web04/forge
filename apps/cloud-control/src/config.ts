@@ -10,7 +10,9 @@ export type CloudControlConfig = Readonly<{
 
 const environments = new Set(["development", "staging", "production"]);
 
-export function loadCloudControlConfig(env: Record<string, string | undefined>): CloudControlConfig {
+export function loadCloudControlConfig(
+  env: Record<string, string | undefined>,
+): CloudControlConfig {
   const databaseUrl = env.CORTEX_DATABASE_URL?.trim();
   if (!databaseUrl) throw new Error("CORTEX_DATABASE_URL is required.");
   let parsedUrl: URL;
