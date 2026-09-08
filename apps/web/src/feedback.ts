@@ -82,11 +82,12 @@ const SECRET_PATTERNS = [
   /(?<=:\/\/)[^/\s:@]+:[^@\s/]+(?=@)/gu,
   // Generic key=value secrets: .env lines and pasted config. The credential word
   // must be a whole key segment: standalone (`password=`), underscore-delimited
-  // inside a longer name (`AWS_SECRET_ACCESS_KEY=`, `MY_API_TOKEN=`), or plural
-  // (`secrets=`, `client_secrets=`). Words that merely start with a credential
-  // stem (`passwordless=`, `tokenizer=`, `myPassword=`) are not credentials and
+  // inside a longer name (`AWS_SECRET_ACCESS_KEY=`, `MY_API_TOKEN=`), plural
+  // (`secrets=`, `client_secrets=`), or numeric-suffixed (`TOKEN1=`,
+  // `API_KEY2=`). Words that merely start with a credential stem
+  // (`passwordless=`, `tokenizer=`, `myPassword=`) are not credentials and
   // must survive unredacted.
-  /(?<![A-Za-z0-9_])(?:[A-Za-z0-9]+_)*(?:password|passwd|secret|api[_-]?key|apikey|token)s?(?:_[A-Za-z0-9]+)*\s*[:=]\s*["']?[^\s"'`;,)}]+/giu,
+  /(?<![A-Za-z0-9_])(?:[A-Za-z0-9]+_)*(?:password|passwd|secret|api[_-]?key|apikey|token)s?[0-9]*(?:_[A-Za-z0-9]+)*\s*[:=]\s*["']?[^\s"'`;,)}]+/giu,
 ] as const;
 
 // Usernames may contain dots and other punctuation (john.doe), so the segment
