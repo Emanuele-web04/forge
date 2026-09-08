@@ -2446,6 +2446,7 @@ describe("ClaudeAdapterLive", () => {
         task_type: "local_bash",
         tool_use_id: "tool-bash-1",
         description: "Run browser tests",
+        is_backgrounded: true,
         session_id: "sdk-session-async-bash",
         uuid: "task-started-async-bash-1",
       } as unknown as SDKMessage);
@@ -2497,6 +2498,19 @@ describe("ClaudeAdapterLive", () => {
       );
       assert.equal(progress?.type, "tool.progress");
       assert.equal(progress?.providerRefs?.providerThreadId, undefined);
+      // The detached command's task carries the tool use it belongs to and the
+      // fact that it was launched straight into the background, which is what
+      // the web work log needs to keep the Bash row live past its tool_result.
+      const taskStarted = runtimeEvents.find(
+        (event) => event.type === "task.started" && event.payload.taskId === "task-bash-1",
+      );
+      assert.equal(taskStarted?.type, "task.started");
+      if (taskStarted?.type === "task.started") {
+        assert.equal(taskStarted.payload.taskType, "local_bash");
+        assert.equal(taskStarted.payload.toolUseId, "tool-bash-1");
+        assert.equal(taskStarted.payload.isBackgrounded, true);
+        assert.equal(taskStarted.payload.description, "Run browser tests");
+      }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

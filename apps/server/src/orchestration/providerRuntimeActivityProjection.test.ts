@@ -21,6 +21,30 @@ const CREATED_AT = "2026-07-20T10:00:00.000Z";
 const THREAD_ID = ThreadId.makeUnsafe("thread-activity-projection");
 const TURN_ID = TurnId.makeUnsafe("turn-activity-projection");
 
+it("persists process boundaries but does not retire tasks on ordinary ready states", () => {
+  for (const input of [
+    { type: "session.started", payload: {} },
+    { type: "session.exited", payload: { exitKind: "graceful" } },
+    { type: "session.state.changed", payload: { state: "stopped" } },
+    { type: "session.state.changed", payload: { state: "error" } },
+  ]) {
+    const [activity] = projectProviderRuntimeActivities(
+      runtimeEvent({ eventId: "boundary", ...input }),
+    );
+    expect(activity?.kind).toBe("provider.session.boundary");
+    expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+  }
+  expect(
+    projectProviderRuntimeActivities(
+      runtimeEvent({
+        eventId: "ready",
+        type: "session.state.changed",
+        payload: { state: "ready" },
+      }),
+    ),
+  ).toEqual([]);
+});
+
 function runtimeEvent(input: Record<string, unknown> & { eventId: string }): ProviderRuntimeEvent {
   return {
     provider: "codex",

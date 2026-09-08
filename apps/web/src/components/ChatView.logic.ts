@@ -1349,19 +1349,26 @@ export function hasServerAcknowledgedLocalDispatch(input: {
 export const LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS = 60_000;
 
 /** The exact label set the transcript's working indicator can render. */
-export type WorkingLabel = "Loading" | "Thinking" | `Starting ${string}…`;
+export type WorkingLabel = "Loading" | "Thinking" | `Starting ${string}…` | `Thinking · ${string}`;
 
 export function resolveWorkingLabel(input: {
   isSendBusy: boolean;
   turnTakenOver: boolean;
   isConnecting?: boolean;
   providerName?: string;
+  // Summary of detached work still running for the turn ("2 background
+  // commands running"); the shimmer names it so a turn idling on background
+  // work does not look identical to one generating text.
+  backgroundWorkSummary?: string | null;
 }): WorkingLabel {
   if (input.isSendBusy && !input.turnTakenOver) {
     return "Loading";
   }
   if (input.isConnecting && input.providerName) {
     return `Starting ${input.providerName}…`;
+  }
+  if (input.backgroundWorkSummary) {
+    return `Thinking · ${input.backgroundWorkSummary}`;
   }
   return "Thinking";
 }

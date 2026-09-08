@@ -23,12 +23,33 @@ function runningActivity(overrides: Partial<WorkLogLiveActivity> = {}): WorkLogL
 }
 
 describe("live activity presentation", () => {
+  it("freezes elapsed time and labels paused background work", () => {
+    const activity = runningActivity({ state: "paused", background: true });
+    const nowMs = Date.parse("2026-07-26T14:03:00.000Z");
+    expect(liveActivityElapsedMs(activity, nowMs)).toBe(131_000);
+    expect(liveActivityElapsedMs(activity, nowMs + 60_000)).toBe(131_000);
+    expect(formatLiveActivityMeta(activity, nowMs)).toContain("Paused");
+    expect(formatLiveActivityMeta(activity, nowMs)).not.toContain("Running in background");
+  });
   it("renders recent activity and elapsed time from one normalized state", () => {
     const activity = runningActivity();
     const nowMs = Date.parse("2026-07-26T14:02:14.000Z");
 
     expect(liveActivityElapsedMs(activity, nowMs)).toBe(134_000);
     expect(formatLiveActivityMeta(activity, nowMs)).toBe("Active 3s ago · 2m 14s elapsed");
+  });
+
+  it("describes detached work as running in the background instead of idle", () => {
+    const activity: WorkLogLiveActivity = {
+      state: "waiting",
+      label: "Bash",
+      startedAt: STARTED_AT,
+      lastActivityAt: STARTED_AT,
+      background: true,
+    };
+    const nowMs = Date.parse("2026-07-26T14:03:00.000Z");
+
+    expect(formatLiveActivityMeta(activity, nowMs)).toBe("Running in background · 3m elapsed");
   });
 
   it("reports quiet live tools without claiming they are frozen", () => {

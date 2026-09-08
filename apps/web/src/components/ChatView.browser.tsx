@@ -8864,6 +8864,38 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it.each(["claudeAgent", "antigravity"] as const)(
+    "gates background stop controls for %s",
+    async (provider) => {
+      const snapshot = createSnapshotWithActiveInlinePlan();
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: {
+          ...snapshot,
+          threads: snapshot.threads.map((thread) => ({
+            ...thread,
+            session: thread.session ? { ...thread.session, providerName: provider } : null,
+          })),
+        },
+      });
+      try {
+        await vi.waitFor(
+          () => {
+            expect(
+              document.querySelector('[data-testid="composer-background-tasks-panel"]'),
+            ).not.toBeNull();
+            expect(document.querySelector('button[aria-label="Stop Subagent"]') !== null).toBe(
+              provider === "claudeAgent",
+            );
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+  );
+
   it("shows the skinny inline plan card for active turn plans", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -8876,7 +8908,10 @@ describe("ChatView transcript geometry (full app)", () => {
           expect(document.body.textContent).toContain("1 out of 3 tasks completed");
           expect(document.body.textContent).toContain("Inspecting ChatView boundaries");
           expect(document.body.textContent).toContain("Patch the shared checklist receiver");
-          expect(document.body.textContent).toContain("1 background agent");
+          expect(document.body.textContent).toContain("1 background agent running");
+          expect(
+            document.querySelector('[data-testid="composer-background-tasks-panel"]'),
+          ).not.toBeNull();
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -8916,7 +8951,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("hides an unfinished task list once the latest turn is settled", async () => {
+  it("hides the settled turn's task list while keeping unfinished background work visible", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotWithSettledInlinePlan(),
@@ -8928,7 +8963,10 @@ describe("ChatView transcript geometry (full app)", () => {
           expect(document.body.textContent).toContain("Finished the investigation.");
           expect(document.body.textContent).not.toContain("1 out of 3 tasks completed");
           expect(document.querySelector('[data-testid="active-task-list-card"]')).toBeNull();
-          expect(document.body.textContent).not.toContain("1 background agent");
+          expect(document.body.textContent).toContain("1 background agent running");
+          expect(
+            document.querySelector('[data-testid="composer-background-tasks-panel"]'),
+          ).not.toBeNull();
         },
         { timeout: 8_000, interval: 16 },
       );

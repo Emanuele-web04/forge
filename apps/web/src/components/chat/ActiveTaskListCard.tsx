@@ -3,7 +3,6 @@
 // Layer: Chat composer UI
 // Exports: ActiveTaskListCard
 
-import { pluralize } from "@synara/shared/text";
 import {
   PiArrowsInSimple,
   PiArrowsOutSimple,
@@ -12,7 +11,7 @@ import {
 } from "react-icons/pi";
 
 import type { ActiveTaskListState } from "../../session-logic";
-import { BotIcon, CheckIcon, LoaderIcon } from "~/lib/icons";
+import { CheckIcon, LoaderIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import {
@@ -20,10 +19,8 @@ import {
   ComposerStackedPanelRowLabel,
   ComposerStackedPanelRowMain,
 } from "./ComposerStackedPanelContent";
-import { COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME } from "./ComposerStackedPanel";
 import {
   COMPOSER_STACKED_PANEL_BODY_PADDING_CLASS_NAME,
-  COMPOSER_STACKED_PANEL_FOOTER_ROW_CLASS_NAME,
   COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME,
   COMPOSER_STACKED_PANEL_ICON_CLASS_NAME,
   COMPOSER_STACKED_PANEL_SCROLL_REGION_CLASS_NAME,
@@ -31,7 +28,6 @@ import {
 
 interface ActiveTaskListCardProps {
   activeTaskList: ActiveTaskListState;
-  backgroundTaskCount?: number;
   compact?: boolean;
   onCompactChange: (compact: boolean) => void;
   onOpenSidebar: () => void;
@@ -50,12 +46,10 @@ function taskStatusIcon(status: ActiveTaskListState["tasks"][number]["status"]) 
 
 export function ActiveTaskListCard({
   activeTaskList,
-  backgroundTaskCount: backgroundTaskCountProp,
   compact: compactProp,
   onCompactChange,
   onOpenSidebar,
 }: ActiveTaskListCardProps) {
-  const backgroundTaskCount = backgroundTaskCountProp ?? 0;
   const compact = compactProp ?? false;
   const totalCount = activeTaskList.tasks.length;
   const completedCount = activeTaskList.tasks.filter((task) => task.status === "completed").length;
@@ -147,22 +141,6 @@ export function ActiveTaskListCard({
               );
             })}
           </ol>
-
-          {backgroundTaskCount > 0 ? (
-            <div
-              className={cn(
-                COMPOSER_STACKED_PANEL_FOOTER_ROW_CLASS_NAME,
-                COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME,
-              )}
-            >
-              <div className="flex min-w-0 items-center gap-1.5">
-                <BotIcon className="size-3 shrink-0" />
-                <span className="truncate">
-                  {backgroundTaskCount} background {pluralize(backgroundTaskCount, "agent")}
-                </span>
-              </div>
-            </div>
-          ) : null}
         </>
       )}
     </>

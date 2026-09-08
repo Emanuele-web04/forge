@@ -1138,11 +1138,86 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  // Keep bounded lifecycle evidence for unfinished tasks even when their turn has
+  // aged out of the activity tail. Both snapshot paths use the same ranked CTE.
+  const activeTaskActivityCtes = sql`
+    task_terminals AS (
+      SELECT thread_id, json_extract(payload_json, '$.taskId') AS task_id,
+        MIN(activity_rank) AS terminal_rank
+      FROM ranked
+      WHERE kind = 'task.completed'
+        OR (kind = 'task.updated' AND json_extract(payload_json, '$.status')
+          IN ('completed', 'failed', 'killed', 'stopped'))
+      GROUP BY thread_id, json_extract(payload_json, '$.taskId')
+    ),
+    session_boundaries AS (
+      SELECT thread_id, MIN(activity_rank) AS boundary_rank
+      FROM ranked WHERE kind = 'provider.session.boundary'
+      GROUP BY thread_id
+    ),
+    active_task_starts AS (
+      SELECT started.* FROM ranked AS started
+      LEFT JOIN task_terminals AS terminal
+        ON terminal.thread_id = started.thread_id
+        AND terminal.task_id = json_extract(started.payload_json, '$.taskId')
+      LEFT JOIN session_boundaries AS boundary ON boundary.thread_id = started.thread_id
+      WHERE started.kind = 'task.started'
+        AND json_extract(started.payload_json, '$.taskId') IS NOT NULL
+        AND (terminal.terminal_rank IS NULL OR started.activity_rank < terminal.terminal_rank)
+        AND (boundary.boundary_rank IS NULL OR started.activity_rank < boundary.boundary_rank)
+    ),
+    retained_task_activity_ids AS (
+      SELECT activity_id FROM active_task_starts
+      UNION
+      SELECT (
+        SELECT activity_id FROM ranked AS patch
+        WHERE patch.thread_id = started.thread_id AND patch.kind = 'task.updated'
+          AND json_extract(patch.payload_json, '$.taskId') = json_extract(started.payload_json, '$.taskId')
+          AND json_type(patch.payload_json, '$.status') = 'text'
+          AND patch.activity_rank < started.activity_rank
+        ORDER BY patch.activity_rank LIMIT 1
+      ) FROM active_task_starts AS started
+      UNION
+      SELECT (
+        SELECT activity_id FROM ranked AS patch
+        WHERE patch.thread_id = started.thread_id AND patch.kind = 'task.updated'
+          AND json_extract(patch.payload_json, '$.taskId') = json_extract(started.payload_json, '$.taskId')
+          AND json_type(patch.payload_json, '$.isBackgrounded') IN ('true', 'false')
+          AND patch.activity_rank < started.activity_rank
+        ORDER BY patch.activity_rank LIMIT 1
+      ) FROM active_task_starts AS started
+      UNION
+      SELECT (
+        SELECT activity_id FROM ranked AS tool
+        WHERE tool.thread_id = started.thread_id
+          AND tool.kind IN ('tool.started', 'tool.updated', 'tool.completed')
+          AND COALESCE(json_extract(tool.payload_json, '$.data.toolCallId'),
+            json_extract(tool.payload_json, '$.data.toolUseId')) =
+              json_extract(started.payload_json, '$.toolUseId')
+        ORDER BY tool.activity_rank LIMIT 1
+      ) FROM active_task_starts AS started
+    )
+  `;
+
   const listThreadActivityRows = SqlSchema.findAll({
     Request: Schema.Void,
     Result: ProjectionThreadActivityDbRowSchema,
     execute: () =>
       sql`
+        WITH ranked AS (
+          SELECT
+            *,
+            ROW_NUMBER() OVER (
+              PARTITION BY thread_id
+              ORDER BY
+                CASE WHEN sequence IS NULL THEN 0 ELSE 1 END DESC,
+                sequence DESC,
+                created_at DESC,
+                activity_id DESC
+            ) AS activity_rank
+          FROM projection_thread_activities
+          WHERE ${liveThreadScope}
+        ), ${activeTaskActivityCtes}
         SELECT
           activity_id AS "activityId",
           thread_id AS "threadId",
@@ -1175,21 +1250,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           ), ranked.payload_json) AS "payload",
           sequence,
           created_at AS "createdAt"
-        FROM (
-          SELECT
-            *,
-            ROW_NUMBER() OVER (
-              PARTITION BY thread_id
-              ORDER BY
-                CASE WHEN sequence IS NULL THEN 0 ELSE 1 END DESC,
-                sequence DESC,
-                created_at DESC,
-                activity_id DESC
-            ) AS activity_rank
-          FROM projection_thread_activities
-          WHERE ${liveThreadScope}
-        ) AS ranked
+        FROM ranked
         WHERE activity_rank <= ${MAX_SNAPSHOT_THREAD_ACTIVITIES}
+          OR activity_id IN (SELECT activity_id FROM retained_task_activity_ids)
           OR (
             kind IN ('approval.requested', 'user-input.requested')
             AND json_extract(payload_json, '$.requestId') IS NOT NULL
@@ -1736,6 +1799,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           FROM projection_thread_activities
           WHERE thread_id = ${threadId}
         ),
+        ${activeTaskActivityCtes},
         cutoff_turn AS (
           SELECT turn_id AS cutoff_turn_id
           FROM ranked
@@ -1793,7 +1857,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         FROM ranked
         WHERE thread_id = ${threadId}
           AND (
-            (
+            activity_id IN (SELECT activity_id FROM retained_task_activity_ids)
+            OR (
               activity_rank <= ${MAX_THREAD_DETAIL_ACTIVITIES}
               -- Drop a split oldest turn instead of extending the query beyond
               -- its cap. If one turn fills the entire window, retain the raw

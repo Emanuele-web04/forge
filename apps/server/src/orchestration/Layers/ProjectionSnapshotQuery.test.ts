@@ -955,6 +955,87 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.isTrue(
         bulk.threads[0]?.activities.some((activity) => activity.id === "oversized-activity-2001"),
       );
+
+      yield* sql`UPDATE projection_thread_activities SET sequence = sequence + 10
+        WHERE thread_id = 'thread-oversized-turn'`;
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+        ) VALUES
+          ('old-tool', 'thread-oversized-turn', 'old-turn', 'tool', 'tool.completed', 'Bash',
+            '{"data":{"toolCallId":"tool-bg","input":{"run_in_background":true}}}', 2, '2026-02-23T00:00:00.000Z'),
+          ('active-start', 'thread-oversized-turn', 'old-turn', 'info', 'task.started', 'Background task',
+            '{"taskId":"active","toolUseId":"tool-bg","isBackgrounded":true}', 3, '2026-02-23T00:00:00.000Z'),
+          ('old-background-patch', 'thread-oversized-turn', 'old-turn', 'info', 'task.updated', 'Background',
+            '{"taskId":"active","isBackgrounded":true}', 4, '2026-02-23T00:00:00.000Z'),
+          ('latest-background-patch', 'thread-oversized-turn', 'old-turn', 'info', 'task.updated', 'Foreground',
+            '{"taskId":"active","isBackgrounded":false}', 5, '2026-02-23T00:00:00.000Z'),
+          ('finished-start', 'thread-oversized-turn', 'old-turn', 'info', 'task.started', 'Old task',
+            '{"taskId":"finished","isBackgrounded":true}', 0, '2026-02-23T00:00:00.000Z'),
+          ('finished-end', 'thread-oversized-turn', 'old-turn', 'info', 'task.completed', 'Done',
+            '{"taskId":"finished"}', 1, '2026-02-23T00:00:00.000Z')
+      `;
+      const taskDetail = yield* snapshotQuery.getThreadDetailById(
+        asThreadId("thread-oversized-turn"),
+      );
+      const taskBulk = yield* snapshotQuery.getSnapshot();
+      for (const [rows, cap] of [
+        [Option.getOrThrow(taskDetail).activities, 2000],
+        [taskBulk.threads[0]!.activities, 500],
+      ] as const) {
+        assert.equal(rows.length, cap + 3);
+        assert.deepEqual(
+          rows.slice(0, 3).map((row) => row.id),
+          ["old-tool", "active-start", "latest-background-patch"],
+        );
+        assert.isFalse(rows.some((row) => row.id === "finished-start"));
+      }
+      // Paused tasks remain resumable, so their latest status must survive
+      // the cap too. Otherwise a reload would show a paused task as running.
+      for (const status of ["paused", "running"]) {
+        yield* sql`
+          INSERT OR REPLACE INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          ) VALUES ('task-status', 'thread-oversized-turn', 'old-turn', 'info', 'task.updated', 'Status',
+            ${JSON.stringify({ taskId: "active", status })}, 6, '2026-02-23T00:00:01.000Z')
+        `;
+        const stateDetail = yield* snapshotQuery.getThreadDetailById(
+          asThreadId("thread-oversized-turn"),
+        );
+        const stateBulk = yield* snapshotQuery.getSnapshot();
+        for (const [rows, cap] of [
+          [Option.getOrThrow(stateDetail).activities, 2000],
+          [stateBulk.threads[0]!.activities, 500],
+        ] as const) {
+          assert.equal(rows.length, cap + 4);
+          assert.deepEqual(rows.find((row) => row.id === "task-status")?.payload, {
+            taskId: "active",
+            status,
+          });
+        }
+      }
+      // Both an explicit completion and a later session boundary retire the
+      // retained evidence. Neither requires replaying the old task's turn.
+      for (const [kind, payload] of [
+        ["task.completed", '{"taskId":"active"}'],
+        ["provider.session.boundary", '{"state":"stopped"}'],
+      ]) {
+        yield* sql`
+          INSERT OR REPLACE INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          ) VALUES ('task-retired', 'thread-oversized-turn', NULL, 'info', ${kind}, 'Retired',
+            ${payload}, 2161, '2026-02-24T00:00:01.000Z')
+        `;
+        const retired = yield* snapshotQuery.getThreadDetailById(
+          asThreadId("thread-oversized-turn"),
+        );
+        // The newer turnless record also drops the split oldest turn under
+        // the existing detail-window alignment rule.
+        assert.equal(Option.getOrThrow(retired).activities.length, 1);
+        assert.isFalse(
+          Option.getOrThrow(retired).activities.some((row) => row.id === "active-start"),
+        );
+      }
     }),
   );
 

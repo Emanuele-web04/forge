@@ -581,6 +581,34 @@ export function projectProviderRuntimeActivities(
     ];
   }
   switch (event.type) {
+    case "session.started":
+    case "session.exited":
+    case "session.state.changed": {
+      if (
+        event.type === "session.state.changed" &&
+        event.payload.state !== "stopped" &&
+        event.payload.state !== "error"
+      ) {
+        return [];
+      }
+      const state =
+        (event.type === "session.exited" && event.payload.exitKind === "error") ||
+        (event.type === "session.state.changed" && event.payload.state === "error")
+          ? "error"
+          : "stopped";
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "provider.session.boundary",
+          summary: "Provider session boundary",
+          payload: { state },
+          turnId: null,
+          ...maybeSequence,
+        },
+      ];
+    }
     case "session.configured": {
       const payload = buildConfiguredContextWindowPayload(event);
       if (!payload) {
@@ -813,6 +841,9 @@ export function projectProviderRuntimeActivities(
               ? { workflowAgentPlans: event.payload.workflowAgentPlans }
               : {}),
             ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
+            ...(event.payload.isBackgrounded !== undefined
+              ? { isBackgrounded: event.payload.isBackgrounded }
+              : {}),
             ...(event.payload.description
               ? { detail: truncateDetail(event.payload.description) }
               : {}),

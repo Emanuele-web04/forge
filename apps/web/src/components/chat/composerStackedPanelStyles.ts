@@ -72,10 +72,6 @@ export const COMPOSER_STACKED_PANEL_BODY_PADDING_CLASS_NAME = "px-2.5 pb-1.5";
 export const COMPOSER_STACKED_PANEL_SCROLL_REGION_CLASS_NAME =
   "max-h-56 overflow-y-auto overscroll-contain";
 
-/** Footer/meta row below stacked panel content (background agents). */
-export const COMPOSER_STACKED_PANEL_FOOTER_ROW_CLASS_NAME =
-  "flex items-center justify-between gap-2 px-2.5 py-1.5 text-[11px] text-muted-foreground/70";
-
 /** Ghost icon button used in stacked panel header actions. */
 export const COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME =
   "size-5 rounded-md text-[var(--color-text-foreground-tertiary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]";

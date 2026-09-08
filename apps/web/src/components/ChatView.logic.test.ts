@@ -2483,6 +2483,26 @@ describe("hasLiveTurnTakenOver", () => {
 });
 
 describe("resolveWorkingLabel", () => {
+  it("names running background work once the turn is live", () => {
+    expect(
+      resolveWorkingLabel({
+        isSendBusy: false,
+        turnTakenOver: true,
+        backgroundWorkSummary: "2 background commands running",
+      }),
+    ).toBe("Thinking · 2 background commands running");
+    expect(
+      resolveWorkingLabel({
+        isSendBusy: true,
+        turnTakenOver: false,
+        backgroundWorkSummary: "2 background commands running",
+      }),
+    ).toBe("Loading");
+    expect(
+      resolveWorkingLabel({ isSendBusy: false, turnTakenOver: true, backgroundWorkSummary: null }),
+    ).toBe("Thinking");
+  });
+
   it("shows Loading only while an unacknowledged send is still local", () => {
     expect(resolveWorkingLabel({ isSendBusy: true, turnTakenOver: false })).toBe("Loading");
     expect(resolveWorkingLabel({ isSendBusy: true, turnTakenOver: true })).toBe("Thinking");

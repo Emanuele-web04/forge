@@ -9,6 +9,10 @@ import {
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 
 import { orderedActivities, parseTaskListTasks } from "./workLog";
+import {
+  backgroundTaskSessionBoundary,
+  collectTaskBackgroundStates,
+} from "./backgroundTaskLifecycle";
 
 import type {
   ChatMessage,
@@ -66,9 +70,22 @@ export interface ActiveTaskListState {
   }>;
 }
 
+// One still-running background task: a backgrounded shell
+// command (Claude's `local_bash`), a Task-tool subagent, a workflow run, or a
+// provider-native task. Carries enough identity for the UI to name it and stop it.
+export interface ActiveBackgroundTask {
+  taskId: string;
+  taskType?: string | undefined;
+  subagentType?: string | undefined;
+  description?: string | undefined;
+  toolUseId?: string | undefined;
+  startedAt: string;
+}
+
 export interface ActiveBackgroundTasksState {
   activeCount: number;
   taskIds: string[];
+  tasks: ActiveBackgroundTask[];
 }
 
 export interface LatestProposedPlanState {
@@ -272,15 +289,23 @@ export function deriveActiveTaskListState(
     : null;
 }
 
-// Counts still-running background work for the active turn so compact UI can surface agent activity.
+// Collects running tasks across the thread. Turn-tail detection supplies a turn
+// filter; persistent background-work UI omits it so tasks survive turn changes.
 export function deriveActiveBackgroundTasksState(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
-  latestTurnId: TurnId | undefined,
+  latestTurnId?: TurnId,
 ): ActiveBackgroundTasksState | null {
   const ordered = orderedActivities(activities);
-  const activeTasks = new Map<string, { taskType?: string | undefined }>();
+  const activeTasks = new Map<string, ActiveBackgroundTask>();
+  const pausedTaskIds = new Set<string>();
+  const taskBackgroundStates = collectTaskBackgroundStates(ordered);
 
   for (const activity of ordered) {
+    if (backgroundTaskSessionBoundary(activity)) {
+      activeTasks.clear();
+      pausedTaskIds.clear();
+      continue;
+    }
     if (
       latestTurnId &&
       activity.turnId &&
@@ -311,6 +336,7 @@ export function deriveActiveBackgroundTasksState(
 
     if (activity.kind === "task.completed") {
       activeTasks.delete(taskId);
+      pausedTaskIds.delete(taskId);
       continue;
     }
 
@@ -318,30 +344,62 @@ export function deriveActiveBackgroundTasksState(
     // task.completed notification following on the same turn.
     if (activity.kind === "task.updated") {
       const status = payload && typeof payload.status === "string" ? payload.status : undefined;
-      if (
-        status === "completed" ||
-        status === "failed" ||
-        status === "killed" ||
-        status === "paused"
-      ) {
+      if (status === "completed" || status === "failed" || status === "killed") {
         activeTasks.delete(taskId);
+        pausedTaskIds.delete(taskId);
+      } else if (status === "paused") {
+        pausedTaskIds.add(taskId);
+      } else if (status === "running") {
+        pausedTaskIds.delete(taskId);
       }
       continue;
     }
 
     const previous = activeTasks.get(taskId);
-    const taskType = payload && typeof payload.taskType === "string" ? payload.taskType : undefined;
+    if (activity.kind === "task.started") pausedTaskIds.delete(taskId);
+    if (latestTurnId === undefined && activity.kind === "task.progress" && !previous) {
+      continue;
+    }
+    const taskType = payloadString(payload, "taskType") ?? previous?.taskType;
+    const subagentType = payloadString(payload, "subagentType") ?? previous?.subagentType;
+    // The server projects task.started's description into `detail`; progress rows
+    // carry their own summaries there, so only the start row may name the task.
+    const description =
+      previous?.description ??
+      (activity.kind === "task.started"
+        ? (payloadString(payload, "detail") ?? payloadString(payload, "description"))
+        : undefined);
+    const toolUseId = payloadString(payload, "toolUseId") ?? previous?.toolUseId;
     activeTasks.set(taskId, {
-      taskType: taskType ?? previous?.taskType,
+      taskId,
+      startedAt: previous?.startedAt ?? activity.createdAt,
+      ...(taskType !== undefined ? { taskType } : {}),
+      ...(subagentType !== undefined ? { subagentType } : {}),
+      ...(description !== undefined ? { description } : {}),
+      ...(toolUseId !== undefined ? { toolUseId } : {}),
     });
   }
 
-  const activeTaskIds = [...activeTasks.entries()]
-    .filter(([, task]) => task.taskType !== "plan")
-    .map(([taskId]) => taskId);
-  return activeTaskIds.length > 0
-    ? { activeCount: activeTaskIds.length, taskIds: activeTaskIds }
+  const tasks = [...activeTasks.values()].filter(
+    (task) =>
+      task.taskType !== "plan" &&
+      !pausedTaskIds.has(task.taskId) &&
+      (latestTurnId !== undefined || taskBackgroundStates.get(task.taskId) !== false) &&
+      (latestTurnId !== undefined ||
+        taskBackgroundStates.get(task.taskId) === true ||
+        task.subagentType !== undefined ||
+        task.taskType === "subagent" ||
+        task.taskType === "local_agent" ||
+        task.taskType === "local_workflow"),
+  );
+  return tasks.length > 0
+    ? { activeCount: tasks.length, taskIds: tasks.map((task) => task.taskId), tasks }
     : null;
+}
+
+function payloadString(payload: Record<string, unknown> | null, key: string): string | undefined {
+  const value = payload?.[key];
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
 // Keeps the UI "working" while the provider still has visible assistant text or

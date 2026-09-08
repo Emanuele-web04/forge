@@ -193,6 +193,92 @@ describe("deriveActiveTaskListState", () => {
 });
 
 describe("deriveActiveBackgroundTasksState", () => {
+  it("excludes foreground Bash and Codex root tasks from persistent background work", () => {
+    for (const taskType of ["local_bash", "default", "plan"]) {
+      expect(
+        deriveActiveBackgroundTasksState([
+          makeActivity({
+            kind: "task.started",
+            payload: { taskId: "foreground", taskType, toolUseId: "tool-1" },
+          }),
+        ]),
+      ).toBeNull();
+    }
+  });
+
+  it("retires tasks at a session boundary and ignores late progress after reconnect", () => {
+    const activities = [
+      makeActivity({
+        id: "old-task",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "task.started",
+        payload: { taskId: "old", taskType: "local_bash", isBackgrounded: true },
+      }),
+      makeActivity({
+        id: "session-exit",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "provider.session.boundary",
+        payload: { state: "stopped" },
+      }),
+      makeActivity({
+        id: "late-progress",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "task.progress",
+        payload: { taskId: "old" },
+      }),
+    ];
+    expect(deriveActiveBackgroundTasksState(activities)).toBeNull();
+    expect(
+      deriveActiveBackgroundTasksState([
+        ...activities,
+        makeActivity({
+          id: "new-task",
+          createdAt: "2026-02-23T00:00:04.000Z",
+          kind: "task.started",
+          payload: { taskId: "new", taskType: "local_bash", isBackgrounded: true },
+        }),
+      ])?.taskIds,
+    ).toEqual(["new"]);
+  });
+
+  it("keeps detached work across turns until its task completes", () => {
+    const activities = [
+      makeActivity({
+        id: "detached-start",
+        kind: "task.started",
+        turnId: "turn-1",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        payload: { taskId: "bash-1", taskType: "local_bash", isBackgrounded: true },
+      }),
+      makeActivity({
+        id: "turn-done",
+        kind: "turn.completed",
+        turnId: "turn-1",
+        createdAt: "2026-02-23T00:00:02.000Z",
+      }),
+    ];
+    expect(deriveActiveBackgroundTasksState(activities)?.taskIds).toEqual(["bash-1"]);
+    activities.push(
+      makeActivity({
+        id: "next-turn",
+        kind: "turn.started",
+        turnId: "turn-2",
+        createdAt: "2026-02-23T00:00:03.000Z",
+      }),
+    );
+    expect(deriveActiveBackgroundTasksState(activities)?.taskIds).toEqual(["bash-1"]);
+    activities.push(
+      makeActivity({
+        id: "detached-done",
+        kind: "task.completed",
+        turnId: "turn-2",
+        createdAt: "2026-02-23T00:00:04.000Z",
+        payload: { taskId: "bash-1", status: "completed" },
+      }),
+    );
+    expect(deriveActiveBackgroundTasksState(activities)).toBeNull();
+  });
+
   it("counts only still-active non-plan background tasks for the current turn", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -246,6 +332,74 @@ describe("deriveActiveBackgroundTasksState", () => {
     expect(deriveActiveBackgroundTasksState(activities, TurnId.makeUnsafe("turn-1"))).toEqual({
       activeCount: 1,
       taskIds: ["task-subagent-1"],
+      tasks: [
+        {
+          taskId: "task-subagent-1",
+          taskType: "subagent",
+          startedAt: "2026-02-23T00:00:02.000Z",
+        },
+      ],
+    });
+  });
+
+  it("carries each background task's description, tool use, and start time", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "bash-start",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "task.started",
+        summary: "local_bash task started",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          taskId: "bash-1",
+          taskType: "local_bash",
+          toolUseId: "toolu_1",
+          isBackgrounded: true,
+          detail: "Wait for fork CI to complete",
+        },
+      }),
+      makeActivity({
+        id: "bash-progress",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "task.progress",
+        summary: "Reasoning update",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { taskId: "bash-1", detail: "still polling" },
+      }),
+      makeActivity({
+        id: "bash-2-start",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "task.started",
+        summary: "local_bash task started",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { taskId: "bash-2", taskType: "local_bash", toolUseId: "toolu_2" },
+      }),
+      makeActivity({
+        id: "bash-2-done",
+        createdAt: "2026-02-23T00:00:04.000Z",
+        kind: "task.completed",
+        summary: "Task completed",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { taskId: "bash-2", status: "completed" },
+      }),
+    ];
+
+    expect(deriveActiveBackgroundTasksState(activities, TurnId.makeUnsafe("turn-1"))).toEqual({
+      activeCount: 1,
+      taskIds: ["bash-1"],
+      tasks: [
+        {
+          taskId: "bash-1",
+          taskType: "local_bash",
+          description: "Wait for fork CI to complete",
+          toolUseId: "toolu_1",
+          startedAt: "2026-02-23T00:00:01.000Z",
+        },
+      ],
     });
   });
 
