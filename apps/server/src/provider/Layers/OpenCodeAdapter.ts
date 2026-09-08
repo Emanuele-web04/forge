@@ -347,7 +347,7 @@ function toToolLifecycleItemType(toolName: string): ToolLifecycleItemType {
 
 function mapPermissionToRequestType(
   permission: string,
-): "command_execution_approval" | "file_read_approval" | "file_change_approval" | "unknown" {
+): "command_execution_approval" | "file_read_approval" | "file_change_approval" | "tool_approval" {
   switch (permission) {
     case "bash":
       return "command_execution_approval";
@@ -356,7 +356,10 @@ function mapPermissionToRequestType(
     case "edit":
       return "file_change_approval";
     default:
-      return "unknown";
+      // Every other permission (MCP servers, provider-specific tools) is still an
+      // approval the user must answer. "unknown" has no request kind, so the card
+      // never renders and the turn hangs — classify it as a generic tool approval.
+      return "tool_approval";
   }
 }
 
@@ -974,7 +977,7 @@ function isMatchingHarnessPolicyDelivery(
 function buildOpenCodeResumeCursor(input: {
   readonly openCodeSessionId: string;
   readonly cwd: string;
-  readonly harnessPolicyDelivered?: boolean | undefined;
+  readonly harnessPolicyDelivered?: boolean;
   readonly gatewayControlAvailable: boolean;
 }): OpenCodeResumeCursor {
   return {
@@ -3389,7 +3392,12 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           // this exact Synara thread.
           const agentGatewaySessionLease = serverUrl
             ? undefined
-            : acquireAgentGatewaySessionLease(agentGatewayCredentials, input.threadId, provider);
+            : acquireAgentGatewaySessionLease(
+                agentGatewayCredentials,
+                input.threadId,
+                provider,
+                input,
+              );
           const agentGatewayConnection = agentGatewaySessionLease?.connection;
           const poolIsolationKey = agentGatewayConnection ? randomUUID() : undefined;
 

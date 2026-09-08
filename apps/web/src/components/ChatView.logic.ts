@@ -2,13 +2,17 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   ProjectId,
   ThreadId,
+  type AssistantDeliveryMode,
+  type ComputerAvailability,
   type GitWorktreeSetupPhase,
   type GitWorktreeSetupProgressEvent,
   type ModelSelection,
   type ModelSlug,
   type ProviderApprovalDecision,
+  type ProviderInteractionMode,
   type ProviderKind,
   type ProviderRequestKind,
+  type ProviderStartOptions,
   type RuntimeMode,
   type ServerProviderAuthStatus,
   type ThreadId as ThreadIdType,
@@ -27,7 +31,12 @@ import {
   type WorktreeSetupSnapshot,
   type WorktreeSetupStepId,
 } from "../types";
-import { type DraftThreadState } from "../composerDraftStore";
+import {
+  type DraftThreadEnvMode,
+  type DraftThreadState,
+  type QueuedComposerChatTurn,
+  type QueuedComposerTurn,
+} from "../composerDraftStore";
 import { Schema } from "effect";
 import {
   filterTerminalContextsWithText,
@@ -118,7 +127,10 @@ export function resolveRuntimeModeAfterApprovalDecision(
   // Permission-profile grants are narrower than a runtime-mode override.
   // Their acceptForSession decision is persisted by the provider for only
   // that permission set and must not silently broaden the whole thread.
-  if (requestKind === "permissions") {
+  // Tool approvals keep their own, properly scoped channel too (the provider
+  // remembers the specific tool); widening them here would un-supervise
+  // commands and file changes the user never saw.
+  if (requestKind === "permissions" || requestKind === "tool") {
     return null;
   }
   if (decision === "acceptForSession" && currentRuntimeMode === "approval-required") {
@@ -1608,6 +1620,156 @@ export function deriveComposerSendState(options: {
       options.fileCommentCount > 0 ||
       sendableTerminalContexts.length > 0 ||
       sendablePastedTexts.length > 0,
+  };
+}
+
+/**
+ * The effective per-chat computer-control flag.
+ *
+ * Tool access follows the user's choice, independently of backend readiness.
+ * Waiting for a healthy snapshot would disable tools on the first turn or
+ * when macOS permissions need setup, preventing the agent from asking for it.
+ * The server exposes tools only on supported backends and enforces permissions
+ * and approvals when they are called. A chat override never changes the default.
+ */
+export function resolveEffectiveComputerControl(input: {
+  readonly draftOverride: boolean | undefined;
+  readonly availability: ComputerAvailability | undefined;
+  readonly allowInNewChats: boolean;
+  /** True once the chat has any turn; the new-chat default no longer applies. */
+  readonly chatHasTurns: boolean;
+}): boolean {
+  if (input.availability?.kind === "unsupported-platform") return false;
+  return input.draftOverride ?? (!input.chatHasTurns && input.allowInNewChats);
+}
+
+/**
+ * Everything a dispatched turn carries besides its message: the composer's model
+ * choice, the provider start options, and the per-turn mode flags.
+ *
+ * ChatView assembles this once per render and every dispatch site spreads a
+ * projection of it. Before, each site re-derived the same six values inline and
+ * listed them one by one in its `useCallback` deps; a single missed dep shipped
+ * a stale computer-control flag (commit ca0e72f3e) and cost React Compiler the
+ * whole component. One object means one dep.
+ */
+export interface TurnDispatchSettings {
+  readonly modelSelection: ModelSelection;
+  /** Absent when the user has configured no provider overrides at all. */
+  readonly providerOptions: ProviderStartOptions | undefined;
+  readonly enableComputerControl: boolean;
+  readonly assistantDeliveryMode: AssistantDeliveryMode;
+  readonly runtimeMode: RuntimeMode;
+  readonly interactionMode: ProviderInteractionMode;
+  readonly envMode: DraftThreadEnvMode;
+}
+
+/**
+ * A queued turn froze its dispatch settings when it was queued, so dispatching
+ * it later must replay those, not whatever the composer shows now. Every field
+ * falls back to the live settings: queued turns restored from persisted drafts
+ * predate some of these fields, and `enableComputerControl` /
+ * `providerOptionsForDispatch` are optional even in the current shape.
+ *
+ * `interactionMode` is deliberately included here but overridden by the
+ * plan-follow-up path, which decides the mode from the follow-up itself.
+ */
+export function resolveQueuedTurnDispatchSettings(
+  settings: TurnDispatchSettings,
+  queuedTurn: QueuedComposerTurn | null | undefined,
+): TurnDispatchSettings {
+  if (!queuedTurn) {
+    return settings;
+  }
+  return {
+    ...settings,
+    modelSelection: queuedTurn.modelSelection ?? settings.modelSelection,
+    providerOptions: queuedTurn.providerOptionsForDispatch ?? settings.providerOptions,
+    enableComputerControl: queuedTurn.enableComputerControl ?? settings.enableComputerControl,
+    runtimeMode: queuedTurn.runtimeMode ?? settings.runtimeMode,
+    interactionMode: queuedTurn.interactionMode ?? settings.interactionMode,
+    // Plan follow-ups carry no environment of their own; they run wherever the
+    // thread already is.
+    envMode: (queuedTurn.kind === "chat" ? queuedTurn.envMode : undefined) ?? settings.envMode,
+  };
+}
+
+function turnDispatchIdentityFields(settings: TurnDispatchSettings) {
+  return {
+    modelSelection: settings.modelSelection,
+    ...(settings.providerOptions ? { providerOptions: settings.providerOptions } : {}),
+    enableComputerControl: settings.enableComputerControl,
+    assistantDeliveryMode: settings.assistantDeliveryMode,
+  };
+}
+
+function turnDispatchModeFields(settings: TurnDispatchSettings) {
+  return {
+    runtimeMode: settings.runtimeMode,
+    interactionMode: settings.interactionMode,
+  };
+}
+
+/** Settings half of a `thread.turn.start` command payload. */
+export function turnStartDispatchFields(
+  settings: TurnDispatchSettings,
+  dispatchMode: "queue" | "steer",
+) {
+  return {
+    ...turnDispatchIdentityFields(settings),
+    dispatchMode,
+    ...turnDispatchModeFields(settings),
+  };
+}
+
+/**
+ * Settings half of a `thread.message.edit-and-resend` command payload. Same
+ * fields as a turn start minus `dispatchMode`, which that command has no
+ * concept of.
+ */
+export function editAndResendDispatchFields(settings: TurnDispatchSettings) {
+  return {
+    ...turnDispatchIdentityFields(settings),
+    ...turnDispatchModeFields(settings),
+  };
+}
+
+/** Settings half of a queued chat turn stored in the composer draft. */
+export function queuedChatTurnDispatchFields(
+  settings: TurnDispatchSettings,
+  sourceProposedPlan: QueuedComposerChatTurn["sourceProposedPlan"],
+) {
+  return {
+    modelSelection: settings.modelSelection,
+    ...(settings.providerOptions ? { providerOptionsForDispatch: settings.providerOptions } : {}),
+    enableComputerControl: settings.enableComputerControl,
+    ...(sourceProposedPlan ? { sourceProposedPlan } : {}),
+    ...turnDispatchModeFields(settings),
+    envMode: settings.envMode,
+  };
+}
+
+/**
+ * Settings half of a queued plan follow-up. It carries no `interactionMode`
+ * (the follow-up itself decides that) and no `envMode`.
+ */
+export function queuedPlanFollowUpDispatchFields(settings: TurnDispatchSettings) {
+  return {
+    modelSelection: settings.modelSelection,
+    ...(settings.providerOptions ? { providerOptionsForDispatch: settings.providerOptions } : {}),
+    enableComputerControl: settings.enableComputerControl,
+    runtimeMode: settings.runtimeMode,
+  };
+}
+
+/**
+ * The thread-level half of the settings: what `thread.create` records on a new
+ * thread and what the pre-turn persistence call writes back to an existing one.
+ */
+export function threadSettingsDispatchFields(settings: TurnDispatchSettings) {
+  return {
+    modelSelection: settings.modelSelection,
+    ...turnDispatchModeFields(settings),
   };
 }
 

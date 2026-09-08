@@ -37,6 +37,7 @@
     "@opencode-ai/sdk": "^1.15.13",
     "@pierre/diffs": "^1.2.12",
     "@xterm/headless": "^6.0.0",
+    "dbus-next": "0.10.2",
     "effect": "catalog:",
     "node-pty": "^1.1.0",
     "open": "^10.1.0",

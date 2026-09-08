@@ -97,4 +97,15 @@ describe("Codex app-server transport", () => {
       CodexAppServerTransportError,
     );
   });
+
+  it("uses the Codex-specific message in the error stack header", () => {
+    const error = new CodexAppServerTransportError({
+      reason: "frame-too-large",
+      maxBytes: 16,
+      observedBytes: 17,
+    });
+
+    expect(error.message).toBe("Codex app-server JSONL frame exceeded its byte limit (17/16).");
+    expect(error.stack?.split("\n", 1)[0]).toContain(error.message);
+  });
 });

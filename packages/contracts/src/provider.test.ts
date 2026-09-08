@@ -40,6 +40,16 @@ describe("ProviderSessionStartInput", () => {
     expect(parsed.providerOptions?.codex?.homePath).toBe("/tmp/.codex");
   });
 
+  it("accepts explicit per-thread computer control provisioning", () => {
+    const parsed = decodeProviderSessionStartInput({
+      threadId: "thread-computer",
+      provider: "codex",
+      enableComputerControl: true,
+      runtimeMode: "full-access",
+    });
+    expect(parsed.enableComputerControl).toBe(true);
+  });
+
   it("rejects payloads without runtime mode", () => {
     expect(() =>
       decodeProviderSessionStartInput({

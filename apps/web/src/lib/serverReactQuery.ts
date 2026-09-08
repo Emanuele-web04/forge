@@ -1,4 +1,5 @@
 import type {
+  ComputerProvisionResult,
   ProviderKind,
   ServerConfig,
   ServerListProviderUsageInput,
@@ -31,6 +32,7 @@ export const serverQueryKeys = {
     ["server", "profileTokenStats", utcOffsetMinutes] as const,
   studioThreadOutputs: (threadId: ThreadId | null) =>
     ["server", "studioThreadOutputs", threadId] as const,
+  computerStatus: () => ["server", "computerStatus"] as const,
 };
 
 export const serverMutationKeys = {
@@ -46,6 +48,38 @@ export function serverConfigQueryOptions() {
     },
     staleTime: Infinity,
   });
+}
+
+/** Polled while the Computer use settings panel is visible, so keep it refetchable. */
+export const COMPUTER_STATUS_VISIBLE_REFETCH_INTERVAL_MS = 10_000;
+
+export function computerStatusQueryOptions() {
+  return queryOptions({
+    queryKey: serverQueryKeys.computerStatus(),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      // Desktop-bridge NativeApi implementations update out of band and may
+      // predate the computer namespace.
+      if (!api.computer) {
+        throw new Error("This app build cannot read computer status.");
+      }
+      return api.computer.getStatus({});
+    },
+    staleTime: LOCAL_SERVERS_DEFAULT_STALE_TIME_MS,
+  });
+}
+
+/** Share one setup request across the settings panel and transcript cards. */
+let computerProvisionInFlight: Promise<ComputerProvisionResult> | undefined;
+export function provisionComputer(): Promise<ComputerProvisionResult> {
+  if (computerProvisionInFlight) return computerProvisionInFlight;
+  const api = ensureNativeApi();
+  if (!api.computer?.provision)
+    return Promise.reject(new Error("This app build cannot set up computer control."));
+  computerProvisionInFlight = api.computer.provision({}).finally(() => {
+    computerProvisionInFlight = undefined;
+  });
+  return computerProvisionInFlight;
 }
 
 interface ProviderStatusSnapshot {

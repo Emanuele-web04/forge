@@ -343,6 +343,15 @@ export const AppSettingsSchema = Schema.Struct({
   appSnapPlaySound: Schema.Boolean.pipe(withDefaults(() => true)),
   // Deprecated rename bridge. Normalization migrates this value and then omits the key.
   enableAppshots: Schema.optionalKey(Schema.Boolean),
+  // Open the Computer pane automatically when an agent starts driving the desktop.
+  autoOpenComputerPane: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Computer tools are available by default. A conversation's explicit choice
+  // wins over this preference; changing one conversation never changes it.
+  // The server still checks backend support, macOS permissions, and approvals.
+  allowComputerControlInNewChats: Schema.Boolean.pipe(withDefaults(() => true)),
+  // One-shot composer hint that suggests Medium effort for faster desktop actions.
+  // Set when the user applies or dismisses it, so the hint never asks twice.
+  dismissedComputerControlEffortHint: Schema.Boolean.pipe(withDefaults(() => false)),
   sidebarProjectSortOrder: SidebarProjectSortOrder.pipe(
     withDefaults(() => DEFAULT_SIDEBAR_PROJECT_SORT_ORDER),
   ),

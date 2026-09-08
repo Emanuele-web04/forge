@@ -153,9 +153,28 @@ jobs:
       - name: Test
         run: bun run test
 
+  # Built inside this run on purpose: workflow artifacts are per-run, so the
+  # standalone prebuild runs a tag also triggers can never hand their output to
+  # this release. Every packaging job below stages both drop-in directories
+  # before building, which is what actually ships prebuilt natives to users; a
+  # leg the matrix cannot build was already reported-and-skipped inside the
+  # called workflow, and those users keep the source-build fallback.
+  kwin_plugin_prebuilds:
+    name: KWin plugin prebuilds
+    needs: preflight
+    permissions:
+      contents: read
+    uses: ./.github/workflows/kwin-plugin-prebuilds.yml
+    with:
+      # The provenance-verified commit, so the binaries match what ships; and
+      # strict, because a release with a distribution missing is a release
+      # that quietly sends those users to the source-build fallback.
+      ref: ${{ needs.preflight.outputs.ref }}
+      strict: true
+
   build:
     name: Build ${{ matrix.label }}
-    needs: preflight
+    needs: [preflight, kwin_plugin_prebuilds]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     permissions:
@@ -205,6 +224,12 @@ jobs:
         # Preflight already runs the full lifecycle-script install plus lint,
         # typecheck, and tests. Artifact jobs only need dependencies available.
         run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Stage KWin plugin prebuilts
+        uses: actions/download-artifact@v8
+        with:
+          name: kwin-plugin-prebuilt
+          path: apps/server/native/computer-use-kwin/prebuilt
 
       - id: build_artifact
         name: Build desktop artifact
@@ -382,14 +407,16 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: desktop-${{ matrix.platform }}-${{ matrix.arch }}
+          # desktop-app-*, not desktop-*: the release job's download glob must
+          # not also sweep in the kwin-plugin-* prebuild artifacts.
+          name: desktop-app-${{ matrix.platform }}-${{ matrix.arch }}
           path: release-publish/*
           if-no-files-found: error
 
   publish_cli:
     name: Publish CLI to npm
     if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_PUBLISH_CLI == '1' }}
-    needs: [preflight, build]
+    needs: [preflight, build, kwin_plugin_prebuilds]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -417,6 +444,12 @@ jobs:
         # needs dependencies available to build the package.
         run: bun install --frozen-lockfile --ignore-scripts
 
+      - name: Stage KWin plugin prebuilts
+        uses: actions/download-artifact@v8
+        with:
+          name: kwin-plugin-prebuilt
+          path: apps/server/native/computer-use-kwin/prebuilt
+
       - name: Build CLI package
         run: bun run build --filter=@synara/web --filter=@synara/cli
 
@@ -426,7 +459,7 @@ jobs:
   build_server_tarball:
     name: Build server tarball
     if: ${{ needs.preflight.outputs.publish_release == 'true' }}
-    needs: [preflight, build]
+    needs: [preflight, build, kwin_plugin_prebuilds]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -451,6 +484,12 @@ jobs:
         # Preflight already validates lifecycle scripts; this job only needs
         # dependencies available to build the package.
         run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Stage KWin plugin prebuilts
+        uses: actions/download-artifact@v8
+        with:
+          name: kwin-plugin-prebuilt
+          path: apps/server/native/computer-use-kwin/prebuilt
 
       - name: Build server package
         run: bun run build --filter=@synara/web --filter=@synara/cli
@@ -487,7 +526,7 @@ jobs:
       - name: Download all desktop artifacts
         uses: actions/download-artifact@v8
         with:
-          pattern: desktop-*
+          pattern: desktop-app-*
           merge-multiple: true
           path: release-assets
 

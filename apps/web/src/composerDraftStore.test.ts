@@ -374,6 +374,25 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
   });
 
+  it.each([true, false])(
+    "preserves computer control (%s) after the first send and promotion",
+    (enabled) => {
+      const store = useComposerDraftStore.getState();
+      store.setProjectDraftThreadId(projectId, threadId);
+      store.setPrompt(threadId, "use the computer");
+      store.setEnableComputerControl(threadId, enabled);
+      store.clearComposerContent(threadId);
+      markPromotedDraftThreads(new Set([threadId]));
+      finalizePromotedDraftThreads(new Set([threadId]));
+
+      expect(useComposerDraftStore.getState().getDraftThread(threadId)).toBeNull();
+      expect(
+        useComposerDraftStore.getState().draftsByThreadId[threadId]?.enableComputerControl,
+      ).toBe(enabled);
+      expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.prompt).toBe("");
+    },
+  );
+
   it("finalizes every promoted draft exposed by the facade batch helper", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectId, threadId);
