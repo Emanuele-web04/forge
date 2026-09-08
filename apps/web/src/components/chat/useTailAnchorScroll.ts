@@ -127,6 +127,7 @@ export function useTailAnchorScroll({
   animateAnchorSlide = true,
 }: UseTailAnchorScrollOptions): void {
   const anchorSlideCorrectionRef = useRef<(() => void) | null>(null);
+  const lastContentChangeAtRef = useRef(0);
   const animateAnchorSlideRef = useRef(animateAnchorSlide);
 
   // Capture the mode selected for each new anchor without restarting an active
@@ -361,7 +362,9 @@ export function useTailAnchorScroll({
       }
 
       const minHoldMs = easeToAnchor ? 0 : STEER_ANCHOR_MIN_SETTLE_MS;
-      const quiet = hasLanded && now - lastCorrectionAt >= ANCHOR_HOLD_QUIET_MS;
+      const quiet =
+        hasLanded &&
+        now - Math.max(lastCorrectionAt, lastContentChangeAtRef.current) >= ANCHOR_HOLD_QUIET_MS;
       if ((!quiet || elapsedMs < minHoldMs) && elapsedMs < ANCHOR_SLIDE_MAX_MS) {
         return false;
       }
@@ -413,10 +416,13 @@ export function useTailAnchorScroll({
     };
   }, [anchorMessageId, anchorScrollInFlightRef, listRef, onAnchorSlideFinished, timelineRootRef]);
 
+  // Receiving content is activity even before deferred Markdown changes row height.
+  // Keep the hold alive until both content arrival and geometry have settled.
   // React commits streamed text before paint. Re-apply the current slide
   // coordinate in that layout window so a chunk landing above the anchor cannot
   // push the anchored message for one visible frame.
   useLayoutEffect(() => {
+    lastContentChangeAtRef.current = performance.now();
     anchorSlideCorrectionRef.current?.();
   }, [contentChangeSignal]);
 }
