@@ -4,12 +4,16 @@ import { describe, expect, it, vi } from "vitest";
 import { BetterwrightCdpTarget } from "./betterwrightCdp";
 import type { BrowserAutomationVisibleRuntime } from "../browserManager";
 
+const focusState = vi.hoisted(() => ({ current: null as WebContents | null }));
+vi.mock("electron", () => ({ webContents: { getFocusedWebContents: () => focusState.current } }));
+
 function fixture(
   uploadFiles: readonly string[] = [],
   backendSessionId?: string,
   cookieImport = false,
   expectInput?: BrowserAutomationVisibleRuntime["expectAgentInput"],
 ) {
+  focusState.current = null;
   const debuggerApi = Object.assign(new EventEmitter(), {
     isAttached: () => true,
     sendCommand: vi.fn(
@@ -23,6 +27,9 @@ function fixture(
     getURL: () => "https://fixture.example/",
     getTitle: () => "Fixture",
     close: vi.fn(),
+    focus: vi.fn(() => {
+      focusState.current = contents as unknown as WebContents;
+    }),
   };
   const messages: Record<string, unknown>[] = [];
   const target = new BetterwrightCdpTarget(
@@ -39,6 +46,136 @@ function fixture(
 }
 
 describe("Betterwright target boundary", () => {
+  it.each([false, true])(
+    "serializes native focus across targets and skips revoked queued work (%s)",
+    async (cancelQueued) => {
+      const first = fixture([], "first-backend");
+      const second = fixture([], "second-backend");
+      for (const f of [first, second])
+        await f.target.receive({
+          id: 1,
+          method: "Target.attachToTarget",
+          params: { targetId: f.target.targetId },
+        });
+      const firstSession = (first.messages[0]!.result as { sessionId: string }).sessionId;
+      const secondSession = (second.messages[0]!.result as { sessionId: string }).sessionId;
+      const host = {
+        isDestroyed: () => false,
+        focus: vi.fn(() => {
+          focusState.current = host as unknown as WebContents;
+        }),
+      };
+      focusState.current = host as unknown as WebContents;
+      let finish!: (value: {}) => void;
+      first.debuggerApi.sendCommand.mockImplementation((method) => {
+        if (method !== "Input.insertText") return Promise.resolve({});
+        expect(focusState.current).toBe(first.contents);
+        return new Promise((resolve) => {
+          finish = resolve;
+        });
+      });
+      second.debuggerApi.sendCommand.mockImplementation(async (method) => {
+        if (method === "Input.insertText") expect(focusState.current).toBe(second.contents);
+        return {};
+      });
+      const a = first.target.receive({
+        id: 2,
+        sessionId: firstSession,
+        method: "Input.insertText",
+        params: { text: "first" },
+      });
+      await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+      const b = second.target.receive({
+        id: 2,
+        sessionId: secondSession,
+        method: "Input.insertText",
+        params: { text: "second" },
+      });
+      await Promise.resolve();
+      expect(second.contents.focus).not.toHaveBeenCalled();
+      expect(focusState.current).toBe(first.contents);
+      if (cancelQueued) await second.target.dispose(false);
+      finish({});
+      await Promise.all([a, b]);
+      expect(focusState.current).toBe(host);
+      expect(second.contents.focus).toHaveBeenCalledTimes(cancelQueued ? 0 : 1);
+      if (cancelQueued) {
+        expect(second.messages.find((message) => message.id === 2)).toHaveProperty("error");
+        expect(
+          second.debuggerApi.sendCommand.mock.calls.some(
+            ([method]) => method === "Input.insertText",
+          ),
+        ).toBe(false);
+      }
+      await first.target.dispose(false);
+      await second.target.dispose(false);
+    },
+  );
+
+  it.each(["Input.insertText", "Input.dispatchKeyEvent"])(
+    "scopes %s to the guest and restores the host focus afterward",
+    async (method) => {
+      const f = fixture();
+      const host = {
+        isDestroyed: () => false,
+        focus: vi.fn(() => {
+          focusState.current = host as unknown as WebContents;
+        }),
+      };
+      focusState.current = host as unknown as WebContents;
+      await f.target.receive({
+        id: 1,
+        method: "Target.attachToTarget",
+        params: { targetId: f.target.targetId },
+      });
+      const sessionId = (f.messages[0]!.result as { sessionId: string }).sessionId;
+      f.debuggerApi.sendCommand.mockImplementation(async () => {
+        expect(focusState.current).toBe(f.contents);
+        return {};
+      });
+      await f.target.receive({
+        id: 2,
+        sessionId,
+        method,
+        params: { type: "keyDown", key: "a", text: "a" },
+      });
+      expect(f.contents.focus).toHaveBeenCalledOnce();
+      expect(host.focus).toHaveBeenCalledOnce();
+      expect(focusState.current).toBe(host);
+      f.debuggerApi.sendCommand.mockResolvedValue({});
+      await f.target.dispose(false);
+    },
+  );
+
+  it.each(["user moved focus", "host destroyed", "dispatch failed"])(
+    "cleans up keyboard focus safely when %s",
+    async (outcome) => {
+      const f = fixture();
+      let destroyed = false;
+      const host = { isDestroyed: () => destroyed, focus: vi.fn() };
+      focusState.current = host as unknown as WebContents;
+      await f.target.receive({
+        id: 1,
+        method: "Target.attachToTarget",
+        params: { targetId: f.target.targetId },
+      });
+      const sessionId = (f.messages[0]!.result as { sessionId: string }).sessionId;
+      f.debuggerApi.sendCommand.mockImplementationOnce(async () => {
+        if (outcome === "user moved focus") focusState.current = null;
+        if (outcome === "host destroyed") destroyed = true;
+        if (outcome === "dispatch failed") throw new Error("Input failed");
+        return {};
+      });
+      await f.target.receive({
+        id: 2,
+        sessionId,
+        method: "Input.insertText",
+        params: { text: "synthetic" },
+      });
+      expect(host.focus).toHaveBeenCalledTimes(outcome === "dispatch failed" ? 1 : 0);
+      await f.target.dispose(false);
+    },
+  );
   it("blocks clipboard commands before provenance or dispatch across session aliases", async () => {
     const expected = vi.fn();
     const f = fixture([], undefined, false, expected);

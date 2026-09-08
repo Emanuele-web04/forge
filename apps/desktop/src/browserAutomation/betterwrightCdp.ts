@@ -1,10 +1,17 @@
 import { randomUUID } from "node:crypto";
-import type { WebContents } from "electron";
+import { webContents, type WebContents } from "electron";
 import type { BrowserAutomationVisibleRuntime } from "../browserManager";
 import { betterwrightExpectedInputs } from "./betterwrightInput";
 import { BetterwrightKeyboardPolicy } from "./betterwrightKeyboardPolicy";
 
 type Params = Record<string, unknown>;
+let nativeInputQueue: Promise<unknown> = Promise.resolve();
+
+function enqueueNativeInput(operation: () => Promise<unknown>): Promise<unknown> {
+  const pending = nativeInputQueue.then(operation, operation);
+  nativeInputQueue = pending.catch(() => {});
+  return pending;
+}
 export interface CdpMessage {
   readonly id?: number;
   readonly method?: string;
@@ -260,18 +267,38 @@ export class BetterwrightCdpTarget {
       requireWebUrl(params.url);
     }
     if (method === "Input.dispatchKeyEvent") this.keyboardPolicy.check(params);
-    const releases = betterwrightExpectedInputs(method, params).map((input) =>
-      this.expectAgentInput?.(input),
-    );
-    try {
-      return await this.send(
-        method,
-        params,
-        this.childSessions.has(sessionId!) ? sessionId : undefined,
+    const nativeInput = method.startsWith("Input.") || method === "Page.bringToFront";
+    const dispatch = async () => {
+      if (this.disposed || this.contents.isDestroyed())
+        throw new Error("Browser target lease ended.");
+      const releases = betterwrightExpectedInputs(method, params).map((input) =>
+        this.expectAgentInput?.(input),
       );
-    } finally {
-      for (const release of releases) release?.();
-    }
+      const previousFocus = nativeInput ? webContents.getFocusedWebContents() : null;
+      try {
+        // Native focus is shared across tabs; DOM focus alone cannot route text
+        // to an offscreen preview. Keep focus and dispatch in the same lease.
+        if (nativeInput && previousFocus !== this.contents) this.contents.focus();
+        return await this.send(
+          method,
+          params,
+          this.childSessions.has(sessionId!) ? sessionId : undefined,
+        );
+      } finally {
+        try {
+          if (
+            previousFocus &&
+            previousFocus !== this.contents &&
+            !previousFocus.isDestroyed() &&
+            webContents.getFocusedWebContents() === this.contents
+          )
+            previousFocus.focus();
+        } finally {
+          for (const release of releases) release?.();
+        }
+      }
+    };
+    return nativeInput ? enqueueNativeInput(dispatch) : dispatch();
   }
 
   dispose(cancel = true): Promise<void> {

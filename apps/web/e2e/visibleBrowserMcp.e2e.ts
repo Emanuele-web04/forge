@@ -376,8 +376,34 @@ test("production MCP controls one persistent Electron page across visibility cha
       const compact = await run('return await snapshot({interactive:true,selector:"main"});');
       expect(Buffer.byteLength(JSON.stringify(compact.structuredContent))).toBeLessThan(36_000);
       const hostComposer = page.getByLabel("Host composer");
+      await electronApp.evaluate(() => {
+        (
+          globalThis as typeof globalThis & {
+            __synaraVisibleBrowserE2E: { setPreviewEnabled(enabled: boolean): void };
+          }
+        ).__synaraVisibleBrowserE2E.setPreviewEnabled(true);
+      });
       await hostComposer.fill("HOST_SENTINEL");
       await hostComposer.focus();
+      await electronApp.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()[0]!.webContents.focus(),
+      );
+      await run(
+        'await page.getByLabel("Shared input",{exact:true}).fill("direct-filled"); return true;',
+      );
+      await expect(hostComposer).toHaveValue("HOST_SENTINEL");
+      expect(await read('document.querySelector("input").value')).toBe("direct-filled");
+      await electronApp.evaluate(() => {
+        (
+          globalThis as typeof globalThis & {
+            __synaraVisibleBrowserE2E: { setPreviewEnabled(enabled: boolean): void };
+          }
+        ).__synaraVisibleBrowserE2E.setPreviewEnabled(false);
+      });
+      await hostComposer.focus();
+      await electronApp.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()[0]!.webContents.focus(),
+      );
       await run(
         'await human.type(page.getByLabel("Shared input",{exact:true}),"shared-through-mcp",{clear:true}); return true;',
       );
