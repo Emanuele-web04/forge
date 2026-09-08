@@ -217,6 +217,16 @@ function paethReference(left: number, up: number, upLeft: number): number {
 }
 
 describe("estimateVerticalTravel", () => {
+  it("refuses repeating rows with multiple equally plausible offsets", () => {
+    const width = 120;
+    const height = 400;
+    const frame = (offset: number): LumaImage => ({
+      width, height,
+      luma: Uint8Array.from({ length: width * height }, (_, index) =>
+        (Math.floor(index / width) + offset) % 40 < 5 ? 20 : 240),
+    });
+    expect(estimateVerticalTravel(frame(0), frame(17))).toBeUndefined();
+  });
   const width = 64;
   const height = 400;
   const page = noise(width, height + 300, 20_260_822);
@@ -367,4 +377,28 @@ describe("ScrollGearingStore", () => {
     expect(store.gearing("w1")).toBe(1);
     expect(store.gearing("w2")).toBe(7);
   });
+});
+
+it("yields while reconstructing large captures and reuses an intermediate decode", async () => {
+  const bytes = grayPng(1536, 960, noise(1536, 960, 42));
+  let turns = 0;
+  let running = true;
+  const tick = () => {
+    if (running) {
+      turns += 1;
+      setImmediate(tick);
+    }
+  };
+  setImmediate(tick);
+  try {
+    const first = decodePngLuma(bytes);
+    expect(decodePngLuma(bytes)).toBe(first);
+    const image = await first;
+    expect(image?.width).toBe(1536);
+    // Inflation alone yields once. Scanline reconstruction must yield repeatedly.
+    expect(turns).toBeGreaterThan(10);
+    expect(await decodePngLuma(bytes)).toBe(image);
+  } finally {
+    running = false;
+  }
 });

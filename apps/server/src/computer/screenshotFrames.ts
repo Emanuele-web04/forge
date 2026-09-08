@@ -59,6 +59,18 @@ export class ScreenshotFrameRegistry {
   private readonly threads = new Map<string, ScreenshotFrame[]>();
   private readonly hashes = new WeakMap<ScreenshotFrame, string>();
   private sequence = 0;
+  private readonly sourceHashes = new WeakMap<ScreenshotFrameSource, string>();
+
+  private imageHash(screenshot: ScreenshotFrameSource): string {
+    let hash = this.sourceHashes.get(screenshot);
+    if (hash === undefined) {
+      hash = createHash("sha256")
+        .update(screenshot.bytesBase64 ?? "")
+        .digest("hex");
+      this.sourceHashes.set(screenshot, hash);
+    }
+    return hash;
+  }
 
   /**
    * Remembers a screenshot as the thread's newest frame and returns it, or
@@ -90,7 +102,7 @@ export class ScreenshotFrameRegistry {
       ...(windowId !== undefined ? { windowId } : {}),
     };
     if (screenshot.bytesBase64 !== undefined) {
-      this.hashes.set(frame, createHash("sha256").update(screenshot.bytesBase64).digest("hex"));
+      this.hashes.set(frame, this.imageHash(screenshot));
     }
     const frames = this.threads.get(threadId) ?? [];
     this.threads.delete(threadId);
@@ -130,7 +142,7 @@ export class ScreenshotFrameRegistry {
       frame.region.y !== region.y ||
       frame.region.width !== region.width ||
       frame.region.height !== region.height ||
-      this.hashes.get(frame) !== createHash("sha256").update(screenshot.bytesBase64).digest("hex")
+      this.hashes.get(frame) !== this.imageHash(screenshot)
     ) {
       return undefined;
     }

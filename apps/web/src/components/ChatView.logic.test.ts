@@ -4,6 +4,7 @@ import {
   MessageId,
   ThreadId,
   TurnId,
+  type ComputerAvailability,
   type GitWorktreeSetupProgressEvent,
   type ModelSlug,
   type RuntimeMode,
@@ -12,6 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { QueuedComposerChatTurn } from "../composerDraftStore";
 import type { WorkLogEntry } from "../session-logic";
+import { AppSettingsSchema } from "../appSettings";
 
 import {
   appendVoiceTranscriptToPrompt,
@@ -3141,22 +3143,35 @@ describe("turn dispatch settings", () => {
 });
 
 describe("resolveEffectiveComputerControl", () => {
-  it("defaults on for a new chat when the backend is available", () => {
-    expect(
-      resolveEffectiveComputerControl({
-        draftOverride: undefined,
-        backendAvailable: true,
-        allowInNewChats: true,
-        chatHasTurns: false,
-      }),
-    ).toBe(true);
-  });
+  it.each<ComputerAvailability | undefined>([
+    undefined,
+    { kind: "available", backend: "mac" },
+    {
+      kind: "permission-required",
+      missing: ["accessibility", "screenRecording"],
+      message: "Allow Synara in System Settings.",
+      buildSignature: "adhoc",
+    },
+    { kind: "backend-unavailable", message: "Reconnecting." },
+  ])(
+    "defaults tools on while the backend is ready, loading, or needs setup: %j",
+    (availability) => {
+      expect(
+        resolveEffectiveComputerControl({
+          draftOverride: undefined,
+          availability,
+          chatHasTurns: false,
+          allowInNewChats: AppSettingsSchema.makeUnsafe({}).allowComputerControlInNewChats,
+        }),
+      ).toBe(true);
+    },
+  );
 
-  it("stays off when the backend is unavailable, whatever the machine default", () => {
+  it("stays off on a server that cannot support computer use", () => {
     expect(
       resolveEffectiveComputerControl({
         draftOverride: undefined,
-        backendAvailable: false,
+        availability: { kind: "unsupported-platform", platform: "win32" },
         allowInNewChats: true,
         chatHasTurns: false,
       }),
@@ -3167,7 +3182,7 @@ describe("resolveEffectiveComputerControl", () => {
     expect(
       resolveEffectiveComputerControl({
         draftOverride: undefined,
-        backendAvailable: true,
+        availability: { kind: "available", backend: "mac" },
         allowInNewChats: false,
         chatHasTurns: false,
       }),
@@ -3181,7 +3196,7 @@ describe("resolveEffectiveComputerControl", () => {
     expect(
       resolveEffectiveComputerControl({
         draftOverride: undefined,
-        backendAvailable: true,
+        availability: { kind: "available", backend: "mac" },
         allowInNewChats: true,
         chatHasTurns: true,
       }),
@@ -3193,7 +3208,7 @@ describe("resolveEffectiveComputerControl", () => {
     expect(
       resolveEffectiveComputerControl({
         draftOverride: true,
-        backendAvailable: true,
+        availability: { kind: "available", backend: "mac" },
         allowInNewChats: false,
         chatHasTurns: true,
       }),
@@ -3202,22 +3217,18 @@ describe("resolveEffectiveComputerControl", () => {
     expect(
       resolveEffectiveComputerControl({
         draftOverride: false,
-        backendAvailable: true,
+        availability: { kind: "available", backend: "mac" },
         allowInNewChats: true,
         chatHasTurns: false,
       }),
     ).toBe(false);
   });
 
-  it("returns an explicit override verbatim", () => {
-    // Only the default branch is availability-gated. An explicit override is the
-    // draft's own choice and is returned as-is; the composer toggle that sets it
-    // is hidden when the backend is unavailable, so this branch is not reachable
-    // through the UI in that state.
+  it("keeps a conversation's choice while reconnecting", () => {
     expect(
       resolveEffectiveComputerControl({
         draftOverride: true,
-        backendAvailable: false,
+        availability: { kind: "backend-unavailable", message: "Reconnecting." },
         allowInNewChats: false,
         chatHasTurns: false,
       }),

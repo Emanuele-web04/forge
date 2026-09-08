@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   COMPUTER_FRAME_RESYNC_COOLDOWN_MS,
-  computerFrameSocketUrl,
   createComputerFrameSource,
   type WebSocketLike,
 } from "./computerFrameSource";
@@ -50,11 +49,20 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
-describe("computerFrameSocketUrl", () => {
+describe("computer frame socket url", () => {
   it("targets the computer frame route and query parameter", () => {
-    const url = new URL(
-      computerFrameSocketUrl({ computerId: COMPUTER_ID, explicitUrl: EXPLICIT_URL }),
-    );
+    const { socket } = createFakeSocket();
+    let requested = "";
+    createComputerFrameSource({
+      computerId: COMPUTER_ID,
+      explicitUrl: EXPLICIT_URL,
+      handlers: { onFrame: vi.fn(), onReset: vi.fn() },
+      createSocket: (url) => {
+        requested = url;
+        return socket;
+      },
+    });
+    const url = new URL(requested);
     expect(url.pathname).toBe("/ws/computer-frames");
     expect(url.searchParams.get("computerId")).toBe(COMPUTER_ID);
   });

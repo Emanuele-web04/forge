@@ -1,9 +1,12 @@
 import type {
   ComputerAvailability,
+  ComputerBuildSignature,
   ComputerCapabilities,
   ComputerHealth,
   ComputerId,
+  ComputerInputModifier,
   ComputerLaunchAppResult,
+  ComputerPermission,
   ComputerPoint,
   ComputerRect,
   ComputerScreenSize,
@@ -53,7 +56,8 @@ const DEFAULT_FAKE_CAPABILITIES: ComputerCapabilities = {
   capture: true,
   input: true,
   clipboard: true,
-  activation: true,
+  focus: true,
+  raise: true,
   ghostCursor: true,
   visibleDesktop: false,
 };
@@ -84,6 +88,8 @@ export class FakeComputerBackend implements ComputerBackend {
   readonly calls: FakeComputerCall[] = [];
 
   private currentAvailability: ComputerAvailability;
+  private currentMissingPermissions: readonly ComputerPermission[] = [];
+  private currentBuildSignature: ComputerBuildSignature | undefined;
   private currentHealth: ComputerHealth;
   private readonly currentCapabilities: ComputerCapabilities;
   private currentScreenSize: ComputerScreenSize;
@@ -144,6 +150,33 @@ export class FakeComputerBackend implements ComputerBackend {
     return this.currentCapabilities;
   }
 
+  /**
+   * No OS withholds anything from the fake. Declared rather than omitted so a
+   * test can substitute a backend that *is* missing a grant without the type
+   * complaining about a property the interface only optionally has.
+   */
+  async missingPermissions(): Promise<readonly ComputerPermission[]> {
+    return this.currentMissingPermissions;
+  }
+
+  setMissingPermissions(permissions: readonly ComputerPermission[]): void {
+    this.currentMissingPermissions = [...permissions];
+  }
+
+  /**
+   * Undefined by default: the fake is not a signed binary and has no signature
+   * to report, and reporting `signed` would be a lie a card could act on.
+   * Declared for the same reason `missingPermissions` is — so a test can
+   * substitute a build that *is* ad-hoc.
+   */
+  buildSignature(): ComputerBuildSignature | undefined {
+    return this.currentBuildSignature;
+  }
+
+  setBuildSignature(signature: ComputerBuildSignature | undefined): void {
+    this.currentBuildSignature = signature;
+  }
+
   async listWindows(): Promise<readonly ComputerWindow[]> {
     this.record("listWindows");
     this.throwIfFailed("listWindows");
@@ -161,7 +194,7 @@ export class FakeComputerBackend implements ComputerBackend {
 
   async getState(options: {
     readonly includeScreenshot?: boolean;
-    readonly includeText?: boolean;
+    readonly includeTree?: boolean;
   }): Promise<ComputerState> {
     this.record("getState", options);
     this.throwIfFailed("getState");
@@ -173,7 +206,6 @@ export class FakeComputerBackend implements ComputerBackend {
       windows: await this.listWindows(),
       screenSize: { ...this.currentScreenSize },
       root: this.currentRoot,
-      ...(options.includeText ? { text: describeTree(this.currentRoot) } : {}),
       ...(screenshot ? { screenshot } : {}),
       capturedAt: this.now(),
     } as ComputerState;
@@ -235,16 +267,36 @@ export class FakeComputerBackend implements ComputerBackend {
     this.currentWindows = this.currentWindows.map((item) => ({ ...item, focused: false }));
   }
 
-  async click(point: ComputerPoint): Promise<ComputerBackendActionResult> {
-    return await this.pointerAction("click", point);
+  async click(
+    point: ComputerPoint,
+    _windowId?: string,
+    modifiers?: readonly ComputerInputModifier[],
+  ): Promise<ComputerBackendActionResult> {
+    return await this.pointerAction("click", point, modifiers);
   }
 
-  async doubleClick(point: ComputerPoint): Promise<ComputerBackendActionResult> {
-    return await this.pointerAction("doubleClick", point);
+  async doubleClick(
+    point: ComputerPoint,
+    _windowId?: string,
+    modifiers?: readonly ComputerInputModifier[],
+  ): Promise<ComputerBackendActionResult> {
+    return await this.pointerAction("doubleClick", point, modifiers);
   }
 
-  async rightClick(point: ComputerPoint): Promise<ComputerBackendActionResult> {
-    return await this.pointerAction("rightClick", point);
+  async tripleClick(
+    point: ComputerPoint,
+    _windowId?: string,
+    modifiers?: readonly ComputerInputModifier[],
+  ): Promise<ComputerBackendActionResult> {
+    return await this.pointerAction("tripleClick", point, modifiers);
+  }
+
+  async rightClick(
+    point: ComputerPoint,
+    _windowId?: string,
+    modifiers?: readonly ComputerInputModifier[],
+  ): Promise<ComputerBackendActionResult> {
+    return await this.pointerAction("rightClick", point, modifiers);
   }
 
   async moveCursor(point: ComputerPoint): Promise<ComputerBackendActionResult> {
@@ -267,8 +319,13 @@ export class FakeComputerBackend implements ComputerBackend {
     point: ComputerPoint | null,
     deltaX: number,
     deltaY: number,
+    _windowId?: string,
+    modifiers?: readonly ComputerInputModifier[],
   ): Promise<ComputerBackendActionResult> {
-    this.record("scroll", point, deltaX, deltaY);
+    // Recorded only when present, so every existing assertion on a plain
+    // scroll keeps matching its three-argument shape.
+    if (modifiers && modifiers.length > 0) this.record("scroll", point, deltaX, deltaY, modifiers);
+    else this.record("scroll", point, deltaX, deltaY);
     this.throwIfFailed("scroll");
     if (point) this.validatePoint(point);
     return point ? { point } : {};
@@ -450,10 +507,14 @@ export class FakeComputerBackend implements ComputerBackend {
   }
 
   private async pointerAction(
-    method: "click" | "doubleClick" | "rightClick" | "moveCursor",
+    method: "click" | "doubleClick" | "tripleClick" | "rightClick" | "moveCursor",
     point: ComputerPoint,
+    modifiers?: readonly ComputerInputModifier[],
   ): Promise<ComputerBackendActionResult> {
-    this.record(method, point);
+    // Recorded only when present, so every existing assertion on a plain
+    // pointer call keeps matching its two-argument shape.
+    if (modifiers && modifiers.length > 0) this.record(method, point, modifiers);
+    else this.record(method, point);
     this.throwIfFailed(method);
     this.validatePoint(point);
     return { point };
@@ -583,19 +644,6 @@ function defaultRoot(
       },
     ],
   };
-}
-
-function describeTree(root: ComputerUiNode): string {
-  const lines: string[] = [];
-  const visit = (node: ComputerUiNode, depth: number) => {
-    const label = node.label ?? node.description ?? "(unlabelled)";
-    lines.push(
-      `${"  ".repeat(depth)}${node.role}: ${label}${node.value ? ` = ${node.value}` : ""}`,
-    );
-    for (const child of node.children) visit(child, depth + 1);
-  };
-  visit(root, 0);
-  return lines.join("\n");
 }
 
 function replaceNodeValue(

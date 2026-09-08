@@ -172,14 +172,16 @@ import type {
 import type {
   ComputerActionResult,
   ComputerEvent,
-  ComputerGetScreenSizeInput,
-  ComputerGetScreenSizeResult,
   ComputerGetStatusInput,
+  ComputerGetStateInput,
+  ComputerState,
   ComputerInputClickInput,
   ComputerInputKeyInput,
   ComputerInputScrollInput,
   ComputerListWindowsInput,
   ComputerListWindowsResult,
+  ComputerProvisionInput,
+  ComputerProvisionResult,
   ComputerStatusResult,
   ComputerThreadInput,
   ThreadComputerState,
@@ -965,9 +967,10 @@ export interface NativeApi {
   computer: {
     /** Thread-independent backend status for surfaces outside any conversation. */
     getStatus: (input: ComputerGetStatusInput) => Promise<ComputerStatusResult>;
+    /** Read-only observation used to check a paused window before resuming. */
+    getState: (input: ComputerGetStateInput) => Promise<ComputerState>;
+    provision: (input: ComputerProvisionInput) => Promise<ComputerProvisionResult>;
     getThreadState: (input: ComputerThreadInput) => Promise<ThreadComputerState>;
-    listWindows: (input: ComputerListWindowsInput) => Promise<ComputerListWindowsResult>;
-    getScreenSize: (input: ComputerGetScreenSizeInput) => Promise<ComputerGetScreenSizeResult>;
     /** User input from the computer dock pane; needs no agent turn in flight. */
     inputClick: (input: ComputerInputClickInput) => Promise<ComputerActionResult>;
     inputScroll: (input: ComputerInputScrollInput) => Promise<ComputerActionResult>;

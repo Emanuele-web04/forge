@@ -109,13 +109,14 @@ export function resolveComputerPoint(
 export function resolveComputerSemanticTarget(
   root: ComputerUiNode,
   target: ComputerTarget,
+  options: { readonly allowOffscreen?: boolean } = {},
 ): ComputerTargetMatch {
   const match = resolveUiTreeTarget({
     pool: flattenUiTree(root, childrenOf).filter((node) => matchesWindow(node, target.windowId)),
     query: { label: target.label, role: target.role },
     spec: computerTargetSpec(target),
   });
-  if (!match.onScreen) {
+  if (!match.onScreen && !options.allowOffscreen) {
     throw new ComputerTargetError({
       code: "computer_target_offscreen",
       message: `Computer target ${describeTarget(target)} is off-screen; refusing to guess a click.`,
@@ -162,10 +163,10 @@ function computerTargetSpec(target: ComputerTarget): UiTreeTargetSpec<ComputerUi
   return {
     labelOf: matchableLabel,
     matchesRole: (node, role) => node.role === role,
-    matchKey: (label) => label.toLocaleLowerCase(),
+    matchKey: (label) => normalizeLabelSpaces(label).toLocaleLowerCase(),
     // Promotion to "this is the label, exactly" is case-sensitive here while the
     // substring test is not, which is how the desktop family has always behaved.
-    exactKey: (label) => label,
+    exactKey: normalizeLabelSpaces,
     isOnScreen: (node) => node.onScreen,
     preferOnScreen: false,
     noMatch: (pool) =>
@@ -213,6 +214,22 @@ export function computerTargetCandidates(root: ComputerUiNode): readonly Compute
  * can be done with.
  */
 const ACTIONABLE_ROLES = new Set([
+  "AXButton",
+  "AXCheckBox",
+  "AXRadioButton",
+  "AXPopUpButton",
+  "AXComboBox",
+  "AXTextField",
+  "AXTextArea",
+  "AXSearchField",
+  "AXSecureTextField",
+  "AXLink",
+  "AXMenuBarItem",
+  "AXMenuItem",
+  "AXSlider",
+  "AXIncrementor",
+  "AXTab",
+  "AXSwitch",
   // Buttons.
   "push button",
   "button",
@@ -254,10 +271,28 @@ export interface ComputerActionableElement {
 export interface ComputerActionableElements {
   readonly items: readonly ComputerActionableElement[];
   /**
-   * False when the tree carried more actionable elements than fit. The caller
-   * should say so — an element missing from a truncated digest still exists.
+   * False when the source tree is partial or more actionable elements exist
+   * than fit. Missing controls may still exist in the application.
    */
   readonly complete: boolean;
+  readonly sourceIncomplete: boolean;
+  /**
+   * How many matching elements did not fit, so the caller can say how much it
+   * is not showing rather than only that it is not showing everything.
+   *
+   * Knowing the number is what makes the answer actionable: "3 more" means
+   * scroll or look again, while "412 more" means narrow the query, and the
+   * filters exist precisely for the second case.
+   */
+  readonly omitted: number;
+}
+
+/** Narrows the digest before the length cap applies, never after it. */
+export interface ComputerActionableElementFilter {
+  /** Only controls owned by this window. */
+  readonly windowId?: string | undefined;
+  /** Only controls whose label contains this text, case-insensitively. */
+  readonly labelContains?: string | undefined;
 }
 
 /**
@@ -272,37 +307,53 @@ export interface ComputerActionableElements {
  * the next digest. Duplicate labels are kept: two same-labeled controls is
  * real ambiguity the caller should see rather than have silently resolved.
  */
-export function actionableElements(root: ComputerUiNode): ComputerActionableElements {
+export function actionableElements(
+  root: ComputerUiNode,
+  filter: ComputerActionableElementFilter = {},
+): ComputerActionableElements {
   const items: ComputerActionableElement[] = [];
-  let overflow = false;
+  const wanted =
+    filter.labelContains === undefined
+      ? undefined
+      : normalizeLabelSpaces(filter.labelContains).toLocaleLowerCase();
+  let omitted = 0;
+  let sourceIncomplete = false;
   const walk = (node: ComputerUiNode): void => {
-    if (overflow) return;
+    if (node.truncated) sourceIncomplete = true;
+    const label = matchableLabel(node);
     const collectible =
       ACTIONABLE_ROLES.has(node.role) &&
       node.onScreen &&
       node.windowId !== null &&
-      matchableLabel(node) !== "";
-    if (collectible && items.length < ELEMENT_DIGEST_MAX_LENGTH) {
-      const label = clampTextToLength(matchableLabel(node), ELEMENT_TEXT_MAX_LENGTH);
-      items.push({
-        role: node.role,
-        label,
-        // An entry's empty value is real information — "this field is blank" —
-        // so presence, not truthiness, decides.
-        ...(node.value !== null && node.value !== undefined
-          ? { value: clampTextToLength(node.value, 40) }
-          : {}),
-        windowId: node.windowId,
-      });
-    } else if (collectible && items.length >= ELEMENT_DIGEST_MAX_LENGTH) {
-      // The list is full and something actionable did not fit: that has to be
-      // said out loud, or the caller reads a truncated digest as the truth.
-      overflow = true;
+      label !== "" &&
+      (filter.windowId === undefined || node.windowId === filter.windowId) &&
+      (wanted === undefined || normalizeLabelSpaces(label).toLocaleLowerCase().includes(wanted));
+    if (collectible) {
+      if (items.length < ELEMENT_DIGEST_MAX_LENGTH) {
+        items.push({
+          role: node.role,
+          label: clampTextToLength(label, ELEMENT_TEXT_MAX_LENGTH),
+          // An entry's empty value is real information — "this field is blank" —
+          // so presence, not truthiness, decides.
+          ...(node.value !== null && node.value !== undefined
+            ? { value: clampTextToLength(node.value, 40) }
+            : {}),
+          windowId: node.windowId,
+        });
+      } else {
+        // The list is full and something actionable did not fit: that has to be
+        // said out loud, or the caller reads a truncated digest as the truth.
+        omitted += 1;
+      }
     }
+    // The walk continues past the cap on purpose. Abandoning it made the count
+    // unknowable and the digest prefix-biased by window order — whatever the
+    // desktop happened to enumerate first filled the list, and the rest of the
+    // screen was not merely unlisted but uncounted.
     for (const child of node.children) walk(child);
   };
   walk(root);
-  return { items, complete: !overflow };
+  return { items, complete: omitted === 0 && !sourceIncomplete, omitted, sourceIncomplete };
 }
 
 export function describeTarget(target: ComputerTarget): string {
@@ -326,6 +377,17 @@ const childrenOf = (node: ComputerUiNode): readonly ComputerUiNode[] => node.chi
  */
 function matchableLabel(node: ComputerUiNode): string {
   return node.label ?? node.description ?? "";
+}
+
+/**
+ * Accessibility labels often use non-breaking spaces before required-field
+ * markers. They look like ordinary spaces in the screenshot; asking a model
+ * to reproduce the invisible distinction makes a visible field untargetable.
+ * Preserve whitespace positions and counts, case and the original labels in
+ * results. Equivalent labels still go through the normal ambiguity refusal.
+ */
+function normalizeLabelSpaces(label: string): string {
+  return label.replace(/[\u00a0\u2007\u202f]/g, " ");
 }
 
 function matchesWindow(node: ComputerUiNode, windowId: string | undefined): boolean {

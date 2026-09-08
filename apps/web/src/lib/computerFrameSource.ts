@@ -8,7 +8,6 @@ import {
 } from "@synara/shared/computerFrame";
 
 import {
-  binaryFrameSocketUrl,
   createBinaryFrameSource,
   type FrameSourceResetReason,
   type WebSocketLike,
@@ -38,18 +37,6 @@ export interface ComputerFrameSourceOptions {
 }
 
 export type { WebSocketLike };
-
-export function computerFrameSocketUrl(input: {
-  readonly computerId: ComputerId;
-  readonly explicitUrl?: string | null;
-}): string {
-  return binaryFrameSocketUrl({
-    streamId: input.computerId,
-    streamIdParam: COMPUTER_FRAME_WS_COMPUTER_ID_PARAM,
-    wsPath: COMPUTER_FRAME_WS_PATH,
-    ...(input.explicitUrl !== undefined ? { explicitUrl: input.explicitUrl } : {}),
-  });
-}
 
 export function createComputerFrameSource(
   options: ComputerFrameSourceOptions,

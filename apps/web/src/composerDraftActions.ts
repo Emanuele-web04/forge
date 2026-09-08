@@ -456,7 +456,16 @@ export const createComposerDraftStoreState =
       if (!draftThread?.promotedTo) {
         return;
       }
+      // Computer control is a chat preference, even though it is stored with
+      // the composer. Dropping it here silently removes tools on turn two.
+      const enableComputerControl = get().draftsByThreadId[threadId]?.enableComputerControl;
       get().clearDraftThread(threadId);
+      if (
+        enableComputerControl !== undefined &&
+        get().draftsByThreadId[draftThread.promotedTo]?.enableComputerControl === undefined
+      ) {
+        get().setEnableComputerControl(draftThread.promotedTo, enableComputerControl);
+      }
     },
     clearDraftThread: (threadId) => {
       if (threadId.length === 0) {

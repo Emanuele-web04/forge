@@ -42,6 +42,16 @@ describe("computer WebSocket handlers", () => {
     expect(backend.callsFor("getState")).toHaveLength(0);
   });
 
+  it("scopes a perception read to the requested window", async () => {
+    const { backend, handlers } = setup();
+    await Effect.runPromise(
+      handlers[COMPUTER_WS_METHODS.getState]({ windowId: "w1", includeText: true }),
+    );
+    expect(backend.callsFor("getState").map((call) => call.args)).toEqual([
+      [{ windowId: "w1", includeTree: true }],
+    ]);
+  });
+
   it("routes the right button and the double click to their own backend actions", async () => {
     const { backend, handlers } = setup();
 

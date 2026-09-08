@@ -1,4 +1,5 @@
 import type {
+  ComputerProvisionResult,
   ProviderKind,
   ServerConfig,
   ServerListProviderUsageInput,
@@ -66,6 +67,19 @@ export function computerStatusQueryOptions() {
     },
     staleTime: LOCAL_SERVERS_DEFAULT_STALE_TIME_MS,
   });
+}
+
+/** Share one setup request across the settings panel and transcript cards. */
+let computerProvisionInFlight: Promise<ComputerProvisionResult> | undefined;
+export function provisionComputer(): Promise<ComputerProvisionResult> {
+  if (computerProvisionInFlight) return computerProvisionInFlight;
+  const api = ensureNativeApi();
+  if (!api.computer?.provision)
+    return Promise.reject(new Error("This app build cannot set up computer control."));
+  computerProvisionInFlight = api.computer.provision({}).finally(() => {
+    computerProvisionInFlight = undefined;
+  });
+  return computerProvisionInFlight;
 }
 
 interface ProviderStatusSnapshot {

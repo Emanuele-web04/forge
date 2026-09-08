@@ -12,7 +12,7 @@ describe("FakeComputerBackend", () => {
     await backend.availability();
     await backend.listWindows();
     await backend.getScreenSize();
-    await backend.getState({ includeScreenshot: true, includeText: true });
+    await backend.getState({ includeScreenshot: true, includeTree: true });
     await backend.launchApp("org.example.Editor", ["--new"]);
     await backend.click({ x: 20, y: 20 });
     await backend.doubleClick({ x: 20, y: 20 });

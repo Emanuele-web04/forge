@@ -85,8 +85,10 @@ export function mcpToolResultError(text: string): McpToolCallResult {
   return { content: [{ type: "text", text }], isError: true };
 }
 
-export function mcpToolResultJson(value: unknown): McpToolCallResult {
-  return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
+export function mcpToolResultJson(value: unknown, compact = false): McpToolCallResult {
+  return {
+    content: [{ type: "text", text: JSON.stringify(value, null, compact ? undefined : 2) }],
+  };
 }
 
 export function jsonRpcResult(id: JsonRpcId, result: unknown): Record<string, unknown> {

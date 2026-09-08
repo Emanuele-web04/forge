@@ -1,9 +1,4 @@
-import {
-  decodeFrameEnvelope,
-  encodeFrameEnvelope,
-  peekFrameHeader,
-  FrameEncodeError,
-} from "./frameTransport";
+import { decodeFrameEnvelope, encodeFrameEnvelope, FrameEncodeError } from "./frameTransport";
 import {
   COMPUTER_FRAME_MAGIC,
   COMPUTER_FRAME_MAX_COMPUTER_ID_BYTES,
@@ -72,18 +67,6 @@ export const decodeComputerFrame = (bytes: Uint8Array): ComputerFrameDecodeResul
       },
       payload: result.frame.payload,
     },
-  };
-};
-
-export const peekComputerFrameHeader = (bytes: Uint8Array): ComputerFrameHeader | null => {
-  const header = peekFrameHeader(COMPUTER_FRAME_CODEC, bytes);
-  if (!header) return null;
-  return {
-    computerId: header.streamId,
-    sequence: header.sequence,
-    timestampMs: header.timestampMs,
-    keyframe: header.keyframe,
-    codecConfig: header.codecConfig,
   };
 };
 

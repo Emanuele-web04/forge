@@ -1,14 +1,22 @@
-import type {
-  ComputerFrameHeader,
-  ComputerHealth,
-  ThreadComputerState,
-  ThreadId,
+import {
+  COMPUTER_INPUT_SCROLL_LIMIT,
+  type ComputerFrameHeader,
+  type ComputerHealth,
+  type ThreadComputerState,
+  type ThreadId,
 } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
-  COMPUTER_SCROLL_DELTA_LIMIT,
+  computerActionLabel,
+  computerBackendIsVisibleDesktop,
+  computerCanvasLabel,
   computerContainRect,
+  computerControlReadiness,
+  computerDeliveryWarning,
+  computerPaneInputMode,
+  computerStatusNeedsSetup,
+  computerStopControlLabel,
   computerCursorPosition,
   computerKeyCommand,
   computerStreamRegion,
@@ -45,7 +53,8 @@ function state(overrides: Partial<ThreadComputerState> = {}): ThreadComputerStat
       capture: true,
       input: true,
       clipboard: true,
-      activation: true,
+      focus: true,
+      raise: true,
       ghostCursor: true,
       visibleDesktop: true,
     },
@@ -119,6 +128,52 @@ describe("computer panel state helpers", () => {
     ).toMatchObject({ kind: "blocked", description: "Backend is off" });
   });
 
+  it("names the withheld grants in the blocked title", () => {
+    // The settings panel and the pane both title themselves from this, and
+    // "Computer control is unavailable" is the one thing a user with a missing
+    // grant cannot act on — the switch has a name, so the title uses it.
+    const view = resolveComputerAvailabilityView({
+      kind: "permission-required",
+      missing: ["accessibility", "screenRecording"],
+      message: "Synara needs Accessibility and Screen Recording to control this Mac.",
+      buildSignature: "signed",
+    });
+    expect(view.kind).toBe("blocked");
+    expect(view.title).toBe("Computer control needs Accessibility and Screen Recording");
+    expect(view.description).toContain("Screen Recording");
+  });
+
+  it("does not call an installed but unprobed helper ready", () => {
+    expect(
+      resolveComputerAvailabilityView(
+        { kind: "available", backend: "mac" },
+        { ...connectedHealth(), status: "unavailable", captureAvailable: false },
+      ),
+    ).toMatchObject({ kind: "checking", title: "Computer access has not been checked" });
+  });
+
+  it("does not claim full desktop readiness when capture is denied", () => {
+    expect(
+      resolveComputerAvailabilityView(
+        { kind: "available", backend: "mac" },
+        { ...connectedHealth(), captureAvailable: false },
+      ),
+    ).toMatchObject({ kind: "blocked", title: "Screen capture is unavailable" });
+  });
+
+  it("keeps the pre-availability and unsupported copy platform-neutral", () => {
+    // macOS reaches both of these, so neither may name Linux alone.
+    const checking = resolveComputerAvailabilityView(undefined);
+    expect(checking.description).not.toContain("Linux");
+    const unsupported = resolveComputerAvailabilityView({
+      kind: "unsupported-platform",
+      platform: "win32",
+    });
+    expect(unsupported.kind).toBe("blocked");
+    expect(unsupported.description).toContain("win32");
+    expect(unsupported.description).toContain("macOS");
+  });
+
   it("shows a reconnecting backend as checking rather than blocked", () => {
     expect(
       resolveComputerAvailabilityView(
@@ -152,7 +207,7 @@ describe("computer panel state helpers", () => {
     });
     expect(reconnecting?.title).toContain("The backend vanished");
     expect(reconnecting?.title).toContain("3");
-    expect(reconnecting?.title).toContain("Reconnects since startup: 1.");
+    expect(reconnecting?.title).toContain("Reconnected once since startup.");
 
     // Non-connected with a clean record is the lazy backend that has simply
     // never been engaged — the server no longer connects at boot — and must
@@ -298,8 +353,8 @@ describe("computer pane wheel and key mapping", () => {
       deltaY: -800,
     });
     expect(computerWheelScrollDelta({ deltaX: 1e9, deltaY: -1e9, deltaMode: 0 })).toEqual({
-      deltaX: COMPUTER_SCROLL_DELTA_LIMIT,
-      deltaY: -COMPUTER_SCROLL_DELTA_LIMIT,
+      deltaX: COMPUTER_INPUT_SCROLL_LIMIT,
+      deltaY: -COMPUTER_INPUT_SCROLL_LIMIT,
     });
     expect(computerWheelScrollDelta({ deltaX: Number.NaN, deltaY: 0, deltaMode: 0 })).toEqual({
       deltaX: 0,
@@ -348,3 +403,246 @@ function keyEvent(
     metaKey: modifiers.metaKey ?? false,
   });
 }
+
+describe("computerStatusNeedsSetup", () => {
+  it("says no when there is no state yet, so no surface offers Set up on a guess", () => {
+    expect(computerStatusNeedsSetup(undefined)).toBe(false);
+  });
+
+  it("says no on a host that could never have a desktop backend", () => {
+    // "Set up" on Windows would install nothing and explain nothing; the
+    // unsupported-platform message is the whole answer.
+    expect(
+      computerStatusNeedsSetup(
+        state({ availability: { kind: "unsupported-platform", platform: "win32" } }),
+      ),
+    ).toBe(false);
+  });
+
+  it("says no on a ready desktop", () => {
+    expect(computerStatusNeedsSetup(state())).toBe(false);
+  });
+
+  it("says yes on a withheld grant and on a backend that is not there", () => {
+    expect(
+      computerStatusNeedsSetup(
+        state({
+          availability: {
+            kind: "permission-required",
+            missing: ["screenRecording"],
+            message: "needs Screen Recording",
+            buildSignature: "adhoc",
+          },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      computerStatusNeedsSetup(
+        state({ availability: { kind: "backend-unavailable", message: "no helper" } }),
+      ),
+    ).toBe(true);
+  });
+
+  it("says yes when the desktop is driveable but blind", () => {
+    // captureAvailable is live health, not a capability: a Mac with
+    // Accessibility but no Screen Recording answers "available" and still
+    // cannot take a frame, and Set up is exactly what fixes it.
+    expect(
+      computerStatusNeedsSetup(
+        state({ health: { ...connectedHealth(), captureAvailable: false } }),
+      ),
+    ).toBe(true);
+  });
+
+  it("says yes when the backend has not been provisioned into existence yet", () => {
+    // The nested backend reports the empty capability set until its compositor
+    // and plugin exist, which is what routes a first-time user to Set up.
+    expect(
+      computerStatusNeedsSetup(
+        state({
+          capabilities: { ...state().capabilities, input: false, capture: false },
+        }),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("computerControlReadiness", () => {
+  it("is unknown until live state arrives, so the card offers Set up rather than claiming ready", () => {
+    // The bug this replaces: a boolean latched inside the provision callback and
+    // never cleared, so every later card in the conversation said "ready".
+    expect(computerControlReadiness(undefined)).toBe("unknown");
+  });
+
+  it("reads ready and needs-setup off the same live state the desktop reports", () => {
+    expect(computerControlReadiness(state())).toBe("ready");
+    expect(
+      computerControlReadiness(
+        state({
+          availability: {
+            kind: "permission-required",
+            missing: ["accessibility"],
+            message: "needs Accessibility",
+            buildSignature: "adhoc",
+          },
+        }),
+      ),
+    ).toBe("needs-setup");
+  });
+
+  it("flips to ready with nothing pressed once the grant lands", () => {
+    // The expected path: the user allows the macOS dialog and touches nothing in
+    // Synara. Only a derived answer can notice that.
+    const blocked = state({
+      availability: {
+        kind: "permission-required",
+        missing: ["accessibility"],
+        message: "needs Accessibility",
+        buildSignature: "adhoc",
+      },
+    });
+    expect(computerControlReadiness(blocked)).toBe("needs-setup");
+    expect(computerControlReadiness({ ...blocked, availability: { kind: "available" } })).toBe(
+      "ready",
+    );
+  });
+
+  it("stays needs-setup when the desktop can be driven but not seen", () => {
+    // Screen Recording alone blocks nothing, so availability stays `available` —
+    // and the card must still offer the fix.
+    expect(
+      computerControlReadiness(
+        state({ health: { ...connectedHealth(), captureAvailable: false } }),
+      ),
+    ).toBe("needs-setup");
+  });
+
+  it("asks the same question of a thread state and a server status", () => {
+    // One rule, two shapes: the chat reads pushed thread state, the settings
+    // panel reads polled status, and a second copy of this test is how they
+    // would start disagreeing.
+    const threadState = state();
+    expect(computerStatusNeedsSetup(threadState)).toBe(false);
+    expect(
+      computerStatusNeedsSetup({
+        availability: threadState.availability,
+        health: threadState.health,
+        capabilities: threadState.capabilities,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("computerPaneInputMode", () => {
+  it("hides interactive mode entirely on a desktop the user is already sitting at", () => {
+    // The pane mirrors the real screen there — including a picture of Synara —
+    // so clicking it is a slower way to reach what the user's own mouse can.
+    expect(
+      computerPaneInputMode({ streamEnabled: true, visibleDesktop: true, agentActive: false }),
+    ).toBe("hidden");
+  });
+
+  it("blocks input while the agent is acting, rather than interleaving on one seat", () => {
+    expect(
+      computerPaneInputMode({ streamEnabled: true, visibleDesktop: false, agentActive: true }),
+    ).toBe("blocked-by-agent");
+  });
+
+  it("allows input on an idle agent desktop that is actually streaming", () => {
+    expect(
+      computerPaneInputMode({ streamEnabled: true, visibleDesktop: false, agentActive: false }),
+    ).toBe("available");
+    expect(
+      computerPaneInputMode({ streamEnabled: false, visibleDesktop: false, agentActive: false }),
+    ).toBe("hidden");
+  });
+});
+
+describe("computerStopControlLabel", () => {
+  it("offers a stop only while an agent is acting", () => {
+    expect(computerStopControlLabel({ agentActive: false, visibleDesktop: true })).toBeNull();
+  });
+
+  it("says which machine is being stopped", () => {
+    // On a visible desktop this is the only stop there is: macOS registers no
+    // compositor release hotkey, so `computerReleaseControlHint` is null there.
+    expect(computerStopControlLabel({ agentActive: true, visibleDesktop: true })).toContain(
+      "this computer",
+    );
+    expect(computerStopControlLabel({ agentActive: true, visibleDesktop: false })).toContain(
+      "the desktop",
+    );
+  });
+});
+
+describe("computerCanvasLabel", () => {
+  it("names the backend it is actually a picture of", () => {
+    // It said "Linux desktop" on every backend, macOS included — and whether the
+    // agent is driving a sandbox or the user's own machine is the single most
+    // important fact about this surface.
+    expect(
+      computerCanvasLabel({
+        availability: { kind: "available", backend: "mac" },
+        visibleDesktop: true,
+      }),
+    ).toBe("This Mac's desktop");
+    expect(
+      computerCanvasLabel({
+        availability: { kind: "available", backend: "nested-kwin" },
+        visibleDesktop: false,
+      }),
+    ).toBe("The agent's own desktop");
+    expect(
+      computerCanvasLabel({
+        availability: { kind: "available", backend: "kwin" },
+        visibleDesktop: true,
+      }),
+    ).toBe("This computer's desktop");
+    expect(computerCanvasLabel({ availability: undefined, visibleDesktop: false })).toBe(
+      "The agent's desktop",
+    );
+  });
+});
+
+describe("computerDeliveryWarning", () => {
+  it("speaks up only for the verdict a person must act on", () => {
+    // `unverifiable` is the ordinary answer for most native controls; reporting
+    // it would train the user to ignore the row.
+    expect(
+      computerDeliveryWarning({ delivery: { path: "pid", verified: "unconfirmed" } }),
+    ).toContain("could not confirm");
+    expect(
+      computerDeliveryWarning({ delivery: { path: "pid", verified: "unverifiable" } }),
+    ).toBeNull();
+    expect(
+      computerDeliveryWarning({ delivery: { path: "pid", verified: "confirmed" } }),
+    ).toBeNull();
+    expect(computerDeliveryWarning(undefined)).toBeNull();
+  });
+});
+
+describe("computerActionLabel", () => {
+  it("speaks the tool-shaped action name", () => {
+    expect(computerActionLabel({ action: "computer_double_click", ok: true })).toBe("Double click");
+    expect(computerActionLabel(undefined)).toBeNull();
+  });
+
+  it("keeps a failure's own message, which is the part worth the space", () => {
+    expect(
+      computerActionLabel({ action: "computer_click", ok: false, message: "window moved" }),
+    ).toBe("Click failed: window moved");
+    expect(computerActionLabel({ action: "computer_click", ok: false })).toBe("Click failed");
+  });
+});
+
+describe("computerBackendIsVisibleDesktop", () => {
+  it("decides whether the pane-auto-open preference controls anything at all", () => {
+    expect(computerBackendIsVisibleDesktop(state())).toBe(true);
+    expect(
+      computerBackendIsVisibleDesktop(
+        state({ capabilities: { ...state().capabilities, visibleDesktop: false } }),
+      ),
+    ).toBe(false);
+    expect(computerBackendIsVisibleDesktop(undefined)).toBe(false);
+  });
+});

@@ -1,4 +1,11 @@
 import {
+  COMPUTER_INPUT_SCROLL_LIMIT,
+  COMPUTER_MAC_BACKEND,
+  COMPUTER_NESTED_KWIN_BACKEND,
+  COMPUTER_RELEASE_CONTROL_HOTKEY,
+  COMPUTER_RELEASE_HOTKEY_BACKENDS,
+  type ComputerActionEvent,
+  type ComputerActionResult,
   type ComputerAvailability,
   type ComputerFrameHeader,
   type ComputerHealth,
@@ -6,8 +13,12 @@ import {
   type ComputerPoint,
   type ComputerRect,
   type ComputerScreenSize,
+  type ComputerStatusResult,
+  type ComputerWindow,
   type ThreadComputerState,
 } from "@synara/contracts";
+import { isComputerNamedKey } from "@synara/shared/computerKeyNames";
+import { listComputerPermissions } from "@synara/shared/computerPermissions";
 
 export interface ComputerFrameGateState {
   readonly lastSequence: number | null;
@@ -72,19 +83,32 @@ export function resolveComputerAvailabilityView(
     return {
       kind: "checking",
       title: "Reconnecting to the desktop",
-      description: health.lastFailure
-        ? health.lastFailure.message
-        : "The desktop backend dropped out and is being reconnected.",
+      description: health.lastFailure ? health.lastFailure.message : COMPUTER_RECONNECTING_NOTE,
     };
   }
   if (!availability) {
     return {
       kind: "checking",
       title: "Checking computer availability",
-      description: "Waiting for the computer backend.",
+      description: "Waiting for the desktop backend.",
     };
   }
   if (availability.kind === "available") {
+    if (health && health.status !== "connected") {
+      return {
+        kind: "checking",
+        title: "Computer access has not been checked",
+        description: "Choose Set up to check that Synara can see and control the desktop.",
+      };
+    }
+    if (health?.captureAvailable === false) {
+      return {
+        kind: "blocked",
+        title: "Screen capture is unavailable",
+        description:
+          "Desktop input is connected, but Synara cannot take screenshots. Choose Set up to check access.",
+      };
+    }
     return {
       kind: "ready",
       title: "Computer control available",
@@ -95,7 +119,17 @@ export function resolveComputerAvailabilityView(
     return {
       kind: "blocked",
       title: "Computer control is unavailable",
-      description: "No computer backend is available on this server.",
+      description: `This server is running on ${availability.platform}. Computer control needs macOS, or a Wayland desktop on Linux — KWin or Hyprland, or Synara's own nested desktop.`,
+    };
+  }
+  // A withheld grant is blocked like anything else, but it is the one blocked
+  // state with a name and a fix, so the title says which permission rather than
+  // making the user read the paragraph to find out.
+  if (availability.kind === "permission-required") {
+    return {
+      kind: "blocked",
+      title: `Computer control needs ${listComputerPermissions(availability.missing)}`,
+      description: availability.message,
     };
   }
   return {
@@ -103,6 +137,82 @@ export function resolveComputerAvailabilityView(
     title: "Computer control is unavailable",
     description: availability.message,
   };
+}
+
+/**
+ * Whether this desktop still needs something installed or granted — the test
+ * behind the settings panel's "Set up" button and behind the chat setup card's
+ * "did that work?" answer, which must agree.
+ *
+ * Keyed on live state, never on the static capability flags alone. Those
+ * describe what the backend *is able to* do — on macOS the helper advertises
+ * input and capture on a machine that has been granted neither, so a
+ * capabilities-only test never offers Set up at all. What separates "nothing to
+ * do" from "not ready" is whether a backend resolved, whether it can currently
+ * capture, and only then whether it claims the two abilities. A platform that
+ * can never run this is not a machine with something left to install.
+ *
+ * Typed on the three fields rather than on `ComputerStatusResult`, because the
+ * thread-scoped state a chat receives by push carries the same three and has to
+ * be answerable by the same question — the chat's setup card reads the live
+ * thread state, the settings panel reads the polled status, and a second copy
+ * of this rule for the other shape is how they would start disagreeing.
+ */
+export type ComputerSetupProbe = Pick<
+  ComputerStatusResult,
+  "availability" | "health" | "capabilities"
+>;
+
+export function computerStatusNeedsSetup(status: ComputerSetupProbe | undefined): boolean {
+  if (!status) return false;
+  if (status.availability.kind === "unsupported-platform") return false;
+  return (
+    status.availability.kind === "backend-unavailable" ||
+    status.availability.kind === "permission-required" ||
+    status.health.captureAvailable === false ||
+    !status.capabilities.input ||
+    !status.capabilities.capture
+  );
+}
+
+/**
+ * What the chat's setup card should say right now, from live state alone.
+ *
+ * The card used to latch: a boolean was set once inside the provision callback
+ * and never cleared, so every later card in that conversation claimed "Computer
+ * control is ready" — including after a rebuild invalidated the cdhash the
+ * grant was pinned to. And because only that callback could set it, the
+ * *expected* path — the user allowing the dialog macOS had already put on
+ * screen, without pressing anything in Synara — left the card saying "needs
+ * Accessibility" forever.
+ *
+ * So there is no remembered answer here at all: `unknown` while no live state
+ * has arrived (the conservative reading — offer Set up rather than claim
+ * readiness), and otherwise whatever the desktop currently reports.
+ */
+export type ComputerControlReadiness = "unknown" | "ready" | "needs-setup";
+
+export function computerControlReadiness(
+  state: ComputerSetupProbe | undefined,
+): ComputerControlReadiness {
+  if (!state) return "unknown";
+  return computerStatusNeedsSetup(state) ? "needs-setup" : "ready";
+}
+
+/**
+ * Whether the desktop this backend drives is the one the user is looking at.
+ *
+ * The distinction decides real UI, not just wording. On a shared desktop the
+ * server never asks Synara to open a Computer pane — the actions are already
+ * happening on the screen in front of the user, and
+ * `ComputerManager.surfacePaneForAgent` returns early — so the "Open
+ * automatically" preference controls nothing, and the pane's interactive mode
+ * would be a second cursor fighting the user's own on their real machine.
+ */
+export function computerBackendIsVisibleDesktop(
+  state: Pick<ComputerStatusResult, "capabilities"> | undefined,
+): boolean {
+  return state?.capabilities.visibleDesktop === true;
 }
 
 export interface ComputerHealthBadge {
@@ -139,19 +249,180 @@ export function resolveComputerHealthBadge(
   };
 }
 
+/**
+ * How a non-connected backend is described, in one place.
+ *
+ * Three surfaces said this — the pane's blocked view, the header badge's
+ * tooltip, and the settings panel's health notes — and three copies is three
+ * chances to describe the same supervision state differently.
+ */
+export const COMPUTER_RECONNECTING_NOTE =
+  "The desktop backend dropped out and is being reconnected.";
+const COMPUTER_DISCONNECTED_NOTE = "The desktop backend is not connected.";
+
+/** The note naming what the supervisor last saw fail, or null when nothing has. */
+export function computerLastFailureNote(health: ComputerHealth | undefined): string | null {
+  return health?.lastFailure ? `Last failure: ${health.lastFailure.message}` : null;
+}
+
+/** The note counting reconnects since startup, or null when there were none. */
+export function computerReconnectsNote(health: ComputerHealth | undefined): string | null {
+  const reconnects = health?.reconnects ?? 0;
+  if (reconnects <= 0) return null;
+  return `Reconnected ${reconnects === 1 ? "once" : `${reconnects} times`} since startup.`;
+}
+
 /** Counters belong in the badge's tooltip, not in chrome of their own. */
 function computerHealthDetail(health: ComputerHealth): string {
   const parts = [
-    health.status === "reconnecting"
-      ? "The desktop backend dropped out and is being reconnected."
-      : "The desktop backend is not connected.",
+    health.status === "reconnecting" ? COMPUTER_RECONNECTING_NOTE : COMPUTER_DISCONNECTED_NOTE,
   ];
-  if (health.lastFailure) parts.push(`Last failure: ${health.lastFailure.message}`);
+  const lastFailure = computerLastFailureNote(health);
+  if (lastFailure) parts.push(lastFailure);
   if (health.consecutiveFailures > 0) {
     parts.push(`Failed attempts since the last connection: ${health.consecutiveFailures}.`);
   }
-  if (health.reconnects > 0) parts.push(`Reconnects since startup: ${health.reconnects}.`);
+  const reconnects = computerReconnectsNote(health);
+  if (reconnects) parts.push(reconnects);
   return parts.join(" ");
+}
+
+/**
+ * The emergency-release hint for the viewport, or null where it would be a lie.
+ *
+ * The hotkey is a compositor shortcut the KWin and Hyprland plugins register,
+ * so it exists only on those backends. It also has to be the human's own
+ * compositor: a nested, offscreen KWin session registers the
+ * same shortcut, but the host desktop the human is typing at never routes keys
+ * into it. The hint is also only worth the pixels while the agent is acting.
+ */
+export interface ComputerReleaseControlHint {
+  readonly text: string;
+  /** Whether it is worth the pixels right now; the text stays put so it can fade. */
+  readonly visible: boolean;
+}
+
+export function computerReleaseControlHint(input: {
+  readonly availability: ComputerAvailability | undefined;
+  readonly visibleDesktop: boolean;
+  readonly agentActive: boolean;
+}): ComputerReleaseControlHint | null {
+  const availability = input.availability;
+  if (
+    availability?.kind !== "available" ||
+    availability.backend === undefined ||
+    !COMPUTER_RELEASE_HOTKEY_BACKENDS.includes(availability.backend) ||
+    !input.visibleDesktop
+  ) {
+    return null;
+  }
+  return {
+    text: `Press ${COMPUTER_RELEASE_CONTROL_HOTKEY} to stop the agent at any time.`,
+    visible: input.agentActive,
+  };
+}
+
+/**
+ * What the canvas is a picture of, for a screen reader.
+ *
+ * It said "Linux desktop" on every backend, including the Mac one, which is
+ * both wrong and the single most important fact about the surface: whether the
+ * agent is driving a sandbox or the machine the user is sitting at.
+ */
+export function computerCanvasLabel(input: {
+  readonly availability: ComputerAvailability | undefined;
+  readonly visibleDesktop: boolean;
+}): string {
+  const backend = input.availability?.kind === "available" ? input.availability.backend : undefined;
+  if (backend === COMPUTER_MAC_BACKEND) return "This Mac's desktop";
+  if (backend === COMPUTER_NESTED_KWIN_BACKEND) return "The agent's own desktop";
+  if (input.visibleDesktop) return "This computer's desktop";
+  return "The agent's desktop";
+}
+
+/**
+ * Whether the pane may forward the user's own clicks and keys to the desktop.
+ *
+ * Two separate refusals, and the first is not a policy but a category error: on
+ * a backend that shows the desktop the user is already sitting at, the pane is a
+ * mirror. Clicking it means clicking a picture of your own screen — including a
+ * picture of Synara, recursively — to reach something you could reach directly,
+ * with a round trip's worth of staleness in between. There is nothing to
+ * interact *with* that the mouse in the user's hand cannot reach first.
+ *
+ * The second is the desktop lease: while an agent is acting, pane input and the
+ * agent's input interleave on the same seat with no ordering between them, so a
+ * stray click lands in the middle of a drag. The pane does not take a lease, so
+ * the gate is the only thing standing between the two.
+ */
+export function computerPaneInputMode(input: {
+  readonly streamEnabled: boolean;
+  readonly visibleDesktop: boolean;
+  readonly agentActive: boolean;
+}): "hidden" | "blocked-by-agent" | "available" {
+  if (input.visibleDesktop) return "hidden";
+  if (!input.streamEnabled) return "hidden";
+  return input.agentActive ? "blocked-by-agent" : "available";
+}
+
+/**
+ * Whether to offer "Stop the agent" in the pane header, and what it means here.
+ *
+ * On a shared desktop this is the *only* stop there is: the emergency release is
+ * a compositor shortcut the KWin and Hyprland plugins register, and macOS has no
+ * such global — so `computerReleaseControlHint` is correctly null there and the
+ * user is left watching their own machine being driven with nothing to press.
+ * Stopping the turn is what actually ends it: the desktop lease is released the
+ * moment the owning thread stops being able to drive
+ * (`ComputerManager.releaseDesktopControl`, on turn end).
+ */
+export function computerStopControlLabel(input: {
+  readonly agentActive: boolean;
+  readonly visibleDesktop: boolean;
+}): string | null {
+  if (!input.agentActive) return null;
+  return input.visibleDesktop
+    ? "Stop the agent controlling this computer"
+    : "Stop the agent controlling the desktop";
+}
+
+/**
+ * The one delivery verdict a person needs to see.
+ *
+ * `confirmed` and `unverifiable` are both "nothing is wrong" — most native
+ * controls expose no readable value at all, so `unverifiable` is the ordinary
+ * answer and reporting it would train the user to ignore the row. `unconfirmed`
+ * is the backend saying it looked and could not see its own input arrive, which
+ * is the one case where what is on screen may not be what was asked for.
+ */
+export function computerDeliveryWarning(
+  result: Pick<ComputerActionResult, "delivery"> | undefined,
+): string | null {
+  return result?.delivery?.verified === "unconfirmed"
+    ? "The desktop accepted that input but could not confirm it arrived. Check the screen before relying on it."
+    : null;
+}
+
+/**
+ * The newest desktop action, in the words a person would use.
+ *
+ * The backend's `action` is a tool-shaped identifier (`computer_double_click`,
+ * `type_text`) and the pane is not a log viewer, so it is spoken rather than
+ * printed. A failure keeps its message, because that is the only part of a
+ * failed action worth the space.
+ */
+export function computerActionLabel(
+  action: Pick<ComputerActionEvent, "action" | "ok" | "message"> | undefined,
+): string | null {
+  if (!action) return null;
+  const spoken = action.action
+    .replace(/^computer[_.]/, "")
+    .replace(/[_.]+/g, " ")
+    .trim();
+  if (spoken.length === 0) return null;
+  const capitalized = `${spoken[0]!.toUpperCase()}${spoken.slice(1)}`;
+  if (action.ok) return capitalized;
+  return action.message ? `${capitalized} failed: ${action.message}` : `${capitalized} failed`;
 }
 
 export function shouldSubscribeToComputerStream(input: {
@@ -261,8 +532,6 @@ function clampToRange(value: number, minimum: number, maximum: number): number {
   return Math.min(Math.max(value, minimum), maximum);
 }
 
-/** Matches the contract's per-event scroll ceiling. */
-export const COMPUTER_SCROLL_DELTA_LIMIT = 4_096;
 /** Typical line box, used to turn a line-mode wheel event into pixels. */
 const COMPUTER_WHEEL_LINE_PX = 16;
 /** A page-mode notch is a viewport jump; the desktop expects pixels. */
@@ -298,7 +567,7 @@ export function computerWheelScrollDelta(event: ComputerWheelEventLike): {
 /** Whole pixels inside the contract's range, used per event and per coalesced burst. */
 export function clampComputerScrollDelta(value: number): number {
   if (!Number.isFinite(value)) return 0;
-  return clampToRange(Math.round(value), -COMPUTER_SCROLL_DELTA_LIMIT, COMPUTER_SCROLL_DELTA_LIMIT);
+  return clampToRange(Math.round(value), -COMPUTER_INPUT_SCROLL_LIMIT, COMPUTER_INPUT_SCROLL_LIMIT);
 }
 
 export interface ComputerKeyEventLike {
@@ -313,41 +582,6 @@ export interface ComputerKeyCommand {
   readonly key: string;
   readonly modifiers: readonly ComputerInputModifier[];
 }
-
-/**
- * DOM key names the seat can synthesize, lowercased. This mirrors the server's
- * server key name table rather than replacing it: the server stays the authority and
- * rejects anything else, but the pane must know what it may swallow, since a
- * key it forwards is a key the browser never sees.
- */
-const FORWARDED_NAMED_KEYS: ReadonlySet<string> = new Set([
-  "enter",
-  "escape",
-  "tab",
-  "backspace",
-  "delete",
-  "insert",
-  "home",
-  "end",
-  "pageup",
-  "pagedown",
-  "arrowup",
-  "arrowdown",
-  "arrowleft",
-  "arrowright",
-  "f1",
-  "f2",
-  "f3",
-  "f4",
-  "f5",
-  "f6",
-  "f7",
-  "f8",
-  "f9",
-  "f10",
-  "f11",
-  "f12",
-]);
 
 const PRINTABLE_ASCII_MIN = 0x21;
 const PRINTABLE_ASCII_MAX = 0x7e;
@@ -378,8 +612,13 @@ function resolveComputerKeyName(key: string): string | null {
     const codePoint = key.codePointAt(0) ?? 0;
     return codePoint >= PRINTABLE_ASCII_MIN && codePoint <= PRINTABLE_ASCII_MAX ? key : null;
   }
+  // The shared named-key vocabulary, which the server's evdev table is built
+  // from too: the pane must swallow exactly the keys the seat can synthesize,
+  // since a key it forwards is a key the browser never sees. Modifiers are
+  // deliberately not in that list — the browser needs to see a bare modifier
+  // press to keep its own state straight.
   const normalized = key.toLowerCase();
-  return FORWARDED_NAMED_KEYS.has(normalized) ? normalized : null;
+  return isComputerNamedKey(normalized) ? normalized : null;
 }
 
 export function computerCursorPosition(input: {
@@ -396,4 +635,21 @@ export function computerCursorPosition(input: {
     top:
       input.containRect.top + (input.cursor.y / input.screenSize.height) * input.containRect.height,
   };
+}
+
+/** The action, target application, and actual delivery mode for the desktop overlay. */
+export function computerActionStatusLabel(
+  action: ComputerActionEvent | undefined,
+  windows: readonly ComputerWindow[] | undefined,
+): string | null {
+  const label = computerActionLabel(action);
+  if (!label) return null;
+  const app = windows?.find((window) => window.id === action?.windowId)?.appName;
+  const path = action?.delivery?.path;
+  const delivery = path
+    ? path.includes("foreground")
+      ? "Brought app forward"
+      : "Background input"
+    : undefined;
+  return [label, app, delivery].filter(Boolean).join(" · ");
 }

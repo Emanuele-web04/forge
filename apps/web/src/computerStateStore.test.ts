@@ -14,7 +14,8 @@ const FULL_CAPABILITIES: ThreadComputerState["capabilities"] = {
   capture: true,
   input: true,
   clipboard: true,
-  activation: true,
+  focus: true,
+  raise: true,
   ghostCursor: true,
   visibleDesktop: true,
 };
@@ -81,13 +82,20 @@ describe("computerStateStore", () => {
       visible: true,
     };
     useComputerStateStore.getState().applyWindowsChanged([window]);
-    const action = { type: "computer.action", action: "click", ok: true } as const;
+    const action = {
+      type: "computer.action",
+      action: "click",
+      ok: true,
+      threadId: "thread-1" as ThreadId,
+    } as const;
     useComputerStateStore.getState().recordAction(action);
 
     expect(useComputerStateStore.getState().threadStatesByThreadId["thread-1"]?.windows).toEqual([
       window,
     ]);
-    expect(useComputerStateStore.getState().lastAction).toEqual(action);
+    expect(
+      selectThreadComputerAction("thread-1" as ThreadId)(useComputerStateStore.getState()),
+    ).toEqual(action);
   });
 
   it("attributes an action to its thread and leaves other threads untouched", () => {
@@ -101,6 +109,7 @@ describe("computerStateStore", () => {
     const paneClick = { type: "computer.action", action: "computer_click", ok: true } as const;
 
     useComputerStateStore.getState().recordAction(typed);
+    const beforePaneClick = useComputerStateStore.getState();
     useComputerStateStore.getState().recordAction(paneClick);
 
     expect(
@@ -109,8 +118,11 @@ describe("computerStateStore", () => {
     expect(
       selectThreadComputerAction("thread-2" as ThreadId)(useComputerStateStore.getState()),
     ).toBeUndefined();
-    // Unattributed pane input still moves the global cursor of activity.
-    expect(useComputerStateStore.getState().lastAction).toBe(paneClick);
+    // Unattributed pane input belongs to no thread, so it must not become any
+    // thread's last action — and it leaves the store identity untouched, since
+    // nothing reads a cross-thread "newest action".
+    expect(useComputerStateStore.getState().lastActionByThreadId).toEqual({ "thread-1": typed });
+    expect(beforePaneClick).toBe(useComputerStateStore.getState());
   });
 
   it("forgets a removed thread's action along with its snapshot", () => {
@@ -134,7 +146,6 @@ describe("computerStateStore", () => {
   it("clears snapshots and action history", () => {
     useComputerStateStore.getState().clear();
     expect(useComputerStateStore.getState().threadStatesByThreadId).toEqual({});
-    expect(useComputerStateStore.getState().lastAction).toBeNull();
     expect(useComputerStateStore.getState().lastActionByThreadId).toEqual({});
   });
 });

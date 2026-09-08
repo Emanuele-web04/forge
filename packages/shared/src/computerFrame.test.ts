@@ -1,5 +1,4 @@
 import {
-  COMPUTER_FRAME_HEADER_FIXED_BYTES,
   COMPUTER_FRAME_MAGIC,
   COMPUTER_FRAME_VERSION,
   DEVICE_FRAME_MAGIC,
@@ -10,8 +9,8 @@ import {
   ComputerFrameEncodeError,
   decodeComputerFrame,
   encodeComputerFrame,
-  peekComputerFrameHeader,
 } from "./computerFrame";
+import { FRAME_HEADER_FIXED_BYTES } from "./frameTransport";
 import { decodeDeviceFrame, encodeDeviceFrame } from "./deviceFrame";
 
 const header = {
@@ -81,7 +80,7 @@ describe("decodeComputerFrame malformed input", () => {
   const encoded = encodeComputerFrame({ header, payload });
 
   it("rejects buffers shorter than the fixed header", () => {
-    expect(decodeComputerFrame(new Uint8Array(COMPUTER_FRAME_HEADER_FIXED_BYTES - 1))).toEqual({
+    expect(decodeComputerFrame(new Uint8Array(FRAME_HEADER_FIXED_BYTES - 1))).toEqual({
       ok: false,
       reason: "too-short",
     });
@@ -113,17 +112,10 @@ describe("decodeComputerFrame malformed input", () => {
     });
 
     const invalidUtf8 = encoded.slice();
-    invalidUtf8[COMPUTER_FRAME_HEADER_FIXED_BYTES] = 0xff;
+    invalidUtf8[FRAME_HEADER_FIXED_BYTES] = 0xff;
     expect(decodeComputerFrame(invalidUtf8)).toEqual({
       ok: false,
       reason: "invalid-computer-id",
     });
-  });
-});
-
-describe("peekComputerFrameHeader", () => {
-  it("returns the header for a valid frame and null otherwise", () => {
-    expect(peekComputerFrameHeader(encodeComputerFrame({ header, payload }))).toEqual(header);
-    expect(peekComputerFrameHeader(new Uint8Array(4))).toBeNull();
   });
 });

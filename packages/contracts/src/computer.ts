@@ -9,6 +9,10 @@ export const COMPUTER_WS_METHODS = {
   // such as the settings screen. Everything else on this surface either acts on
   // the desktop or answers for one thread.
   getStatus: "computer.getStatus",
+  // Installs or compiles whatever this desktop is missing, on the user's
+  // explicit request from the settings panel. Separate from `getStatus`
+  // because reading status must never be the thing that compiles a helper.
+  provision: "computer.provision",
   listWindows: "computer.listWindows",
   getState: "computer.getState",
   getScreenSize: "computer.getScreenSize",
@@ -62,6 +66,13 @@ export const COMPUTER_LABEL_MAX_LENGTH = 1_024;
  */
 export const COMPUTER_MESSAGE_MAX_LENGTH = 2_048;
 /**
+ * Caps `ComputerActionResult.delivery.path`. Exported because the name comes
+ * off a backend helper's reply verbatim, and the backend must clamp it before
+ * putting it on a result — an over-long name would fail the encode of an action
+ * that actually happened.
+ */
+export const COMPUTER_DELIVERY_PATH_MAX_LENGTH = 64;
+/**
  * Caps both a reported window list and one window's occluder list. Exported
  * because a backend enumerator must clamp its own list to this.
  */
@@ -72,13 +83,105 @@ export const COMPUTER_WINDOW_LIST_MAX_LENGTH = 512;
  * needs hundreds of occluders. Exported for the same reason as above.
  */
 export const COMPUTER_OCCLUDERS_MAX_LENGTH = 32;
+/**
+ * Caps `ComputerProvisionResult.summary`. Exported because the sentence is
+ * composed from output the backend does not control — a compiler's stderr, a
+ * package manager's transcript — and an unbounded one would either fail the
+ * encode of a provision that actually succeeded or push a build log into the
+ * settings card. The producer clamps to this.
+ */
+export const COMPUTER_PROVISION_SUMMARY_MAX_LENGTH = 4_096;
+/**
+ * The longest gesture `computer_drag` may spread over. Exported because the
+ * tool layer advertises the same ceiling it validates against, and a second
+ * literal there drifted from this one.
+ */
+export const COMPUTER_DRAG_MAX_DURATION_MS = 30_000;
+/** Most keys one `computer_hotkey` chord may carry. Exported with the above. */
+export const COMPUTER_HOTKEY_MAX_KEYS = 16;
+/** Longest single key name in a chord. Exported with the above. */
+export const COMPUTER_KEY_NAME_MAX_LENGTH = 128;
+/** Longest semantic action name `computer_perform_action` accepts. */
+export const COMPUTER_SEMANTIC_ACTION_MAX_LENGTH = 256;
 
 /**
  * Thread-activity kind appended by the agent gateway when a computer tool call
- * is rejected because the chat does not have computer control enabled. The web
- * app keys its actionable "enable computer control" chat card off this kind.
+ * failed because the OS has not granted Synara the privacy permissions the
+ * desktop backend needs. The web app keys its actionable "set up computer
+ * control" chat card off this kind, so the user can grant them from the chat
+ * instead of hunting through Settings.
+ *
+ * Only a missing-permission failure appends it: an ordinary action failure (a
+ * target that moved, an undelivered keystroke, bad arguments) is the agent's to
+ * recover from and needs no card.
+ *
+ * Payload: `ComputerSetupRequiredPayload` (below, where the permission and
+ * signature schemas it is built from are defined). The grant names travel with
+ * the activity so the card can say which permission is missing; an empty list
+ * means the backend reported a refusal without naming one, and the card falls
+ * back to the general wording.
  */
 export const COMPUTER_CONTROL_DENIED_ACTIVITY_KIND = "computer.control-denied";
+
+export const COMPUTER_SETUP_REQUIRED_ACTIVITY_KIND = "computer.setup-required";
+
+/**
+ * The backend name reported in `ComputerAvailability.backend` by the KWin
+ * plugin backend. Shared because the hotkey below exists only there, so every
+ * surface that advertises it has to recognise that one backend by name.
+ */
+export const COMPUTER_KWIN_BACKEND = "kwin";
+
+/**
+ * The backend name reported by the nested-KWin backend: the same plugin and
+ * capability set as `COMPUTER_KWIN_BACKEND`, but loaded into a private
+ * compositor this server owns rather than the desktop the human is sitting at.
+ * Its own name because the release hotkey above does not apply — the nested
+ * compositor never hears the human's keys — and because the settings panel
+ * names the two integrations differently.
+ */
+export const COMPUTER_NESTED_KWIN_BACKEND = "nested-kwin";
+
+/**
+ * The backend name reported by the Hyprland plugin backend: the KWin plugin's
+ * twin, driving the human's real desktop on a Hyprland session with the same
+ * dedicated agent seat, ghost cursor, and release hotkey.
+ */
+export const COMPUTER_HYPRLAND_BACKEND = "hyprland";
+
+/**
+ * The backend name reported by the macOS backend: a native helper that drives
+ * the human's real Mac desktop the way Codex's computer use does — a
+ * "Software Cursor" overlay drawn by the helper, input posted to the target
+ * process (never the shared HID stream, so the real pointer never warps), and
+ * AX-first perception. Its own name because the Linux release hotkey does not
+ * apply — the macOS release affordance is not a compositor global — and because
+ * the settings panel names the integration differently. `visibleDesktop` is
+ * true: like the KWin plugin, the agent drives the display the human is already
+ * looking at, only through a picture of a cursor rather than a second seat.
+ */
+export const COMPUTER_MAC_BACKEND = "mac";
+
+/**
+ * The human's emergency release: it takes the desktop back from the agent and
+ * latches until it is pressed again, which hands control back.
+ *
+ * Must match `releaseShortcut()` in the KWin plugin
+ * (`apps/server/native/computer-use-kwin/synaracomputeruseplugin.cpp`), which
+ * registers it with KGlobalAccel, and the same chord the Hyprland plugin
+ * (`apps/server/native/computer-use-hyprland/synarahyprlandplugin.cpp`) binds
+ * through its keybind hook. It is a compositor shortcut and exists only where
+ * a plugin binds it: no surface may advertise it unless
+ * `ComputerAvailability.backend` is a backend in
+ * `COMPUTER_RELEASE_HOTKEY_BACKENDS`.
+ */
+export const COMPUTER_RELEASE_CONTROL_HOTKEY = "Meta+Shift+Esc";
+
+/** The backends whose compositor plugin binds the release hotkey above. */
+export const COMPUTER_RELEASE_HOTKEY_BACKENDS: readonly string[] = [
+  COMPUTER_KWIN_BACKEND,
+  COMPUTER_HYPRLAND_BACKEND,
+];
 
 export const ComputerId = TrimmedNonEmptyString.check(
   Schema.isMaxLength(COMPUTER_ID_MAX_LENGTH),
@@ -90,6 +193,64 @@ export const ComputerWindowId = TrimmedNonEmptyString.check(
 );
 export type ComputerWindowId = typeof ComputerWindowId.Type;
 
+/**
+ * An OS privacy grant desktop control needs and the user alone can give.
+ *
+ * Named rather than described so every surface says the same words: the chat's
+ * setup card, the settings panel, and the tool result the agent reads all key
+ * off these two identifiers, and their user-facing labels live in one place
+ * (`@synara/shared/computerPermissions`). There is no fourth surface — the
+ * Electron-side permission preflight that used to be one was deleted, because
+ * the prompt has to come from the process that actually needs the grant.
+ *
+ * macOS is the only platform with such a model today. The two are not
+ * equivalent: without Accessibility nothing can be driven at all, while without
+ * Screen Recording the desktop is driveable but unseeable.
+ */
+export const ComputerPermission = Schema.Literals(["accessibility", "screenRecording"]);
+export type ComputerPermission = typeof ComputerPermission.Type;
+
+/**
+ * How the running build is code-signed, which decides whether a *stale* grant is
+ * a plausible explanation for a missing permission.
+ *
+ * macOS pins an ad-hoc signature's TCC grant to the binary's cdhash, so every
+ * local rebuild silently invalidates it while System Settings keeps showing the
+ * app switched on — the user sees "Synara: on" and the helper still reports the
+ * permission missing. A Developer ID signature keys on identifier plus team and
+ * survives rebuilds, so that advice must never be shown for one.
+ */
+export const ComputerBuildSignature = Schema.Literals(["adhoc", "signed"]);
+export type ComputerBuildSignature = typeof ComputerBuildSignature.Type;
+
+/**
+ * The payload the agent gateway attaches to a
+ * `COMPUTER_SETUP_REQUIRED_ACTIVITY_KIND` activity, and the chat card reads back.
+ *
+ * `buildSignature` is optional because only a backend with a permission model
+ * reports one: it is what lets the card explain the case where System Settings
+ * already shows Synara switched on (an ad-hoc build's grant is pinned to a
+ * cdhash a rebuild replaced) instead of leaving the user staring at a switch
+ * that looks correct.
+ *
+ * `bundleId` is the identifier of the app the grant is *filed against* — the
+ * desktop shell that started this server, which on a `.dev` or `.canary` build
+ * is not the released Synara. It rides along because the card's recovery advice
+ * names it in a `tccutil reset` command, and a command naming the wrong app
+ * revokes a different Synara's grants while fixing nothing. Optional for the
+ * same reason it cannot be guessed: a server started outside the desktop shell
+ * has no responsible app, and the card must then omit the command entirely.
+ */
+export const ComputerSetupRequiredPayload = Schema.Struct({
+  /** The tool whose call raised the card; never empty. */
+  toolName: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+  /** Empty means the backend refused without naming a grant, and the card falls back. */
+  missing: Schema.Array(ComputerPermission).check(Schema.isMaxLength(8)),
+  buildSignature: Schema.optional(ComputerBuildSignature),
+  bundleId: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
+});
+export type ComputerSetupRequiredPayload = typeof ComputerSetupRequiredPayload.Type;
+
 export const ComputerAvailability = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("available"),
@@ -98,6 +259,26 @@ export const ComputerAvailability = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("unsupported-platform"),
     platform: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
+  }),
+  /**
+   * The backend exists and works; the OS is withholding a grant it cannot run
+   * without. Its own kind rather than a `backend-unavailable` message because
+   * this is the one unavailability a user can fix in thirty seconds, and every
+   * surface has to be able to *act* on it — name the grants, offer the button,
+   * raise the chat's setup card — which reading English out of a message field
+   * cannot do.
+   *
+   * Only a grant whose absence blocks control is reported this way. A desktop
+   * that can be driven but not seen (Screen Recording alone) stays `available`
+   * with `health.captureAvailable` false, because refusing the whole feature
+   * over a blind spot would take away the half that still works.
+   */
+  Schema.Struct({
+    kind: Schema.Literal("permission-required"),
+    /** Every grant currently missing, not only the blocking one. Never empty. */
+    missing: Schema.Array(ComputerPermission).check(Schema.isMinLength(1), Schema.isMaxLength(8)),
+    message: TrimmedNonEmptyString.check(Schema.isMaxLength(COMPUTER_MESSAGE_MAX_LENGTH)),
+    buildSignature: ComputerBuildSignature,
   }),
   Schema.Struct({
     kind: Schema.Literal("backend-unavailable"),
@@ -147,6 +328,17 @@ export const ComputerHealth = Schema.Struct({
    * difference between a blank pane and a broken one.
    */
   captureAvailable: Schema.Boolean,
+  /**
+   * The connected backend can drive the desktop, but not without the human
+   * seeing it: one rung of its input delivery ladder is missing, so reaching a
+   * background window means briefly bringing that window forward.
+   *
+   * True today only on macOS releases where the helper cannot resolve the
+   * private SkyLight symbol that routes a key event into an unfocused web view.
+   * Optional because a backend with no delivery ladder has no answer to give,
+   * and absent is not the same claim as `false`.
+   */
+  backgroundInputDegraded: Schema.optional(Schema.Boolean),
 });
 export type ComputerHealth = typeof ComputerHealth.Type;
 
@@ -154,9 +346,10 @@ export type ComputerHealth = typeof ComputerHealth.Type;
  * What this desktop backend can actually do, as opposed to what the tool
  * surface describes in general.
  *
- * The backends differ in kind, not only in quality: one backend may enumerate
- * windows with geometry, stack them, and draw a ghost cursor, while another may
- * have none of that. A caller that cannot tell those apart lies to the model — "no windows"
+ * The backends differ in kind, not only in quality: a compositor plugin owning
+ * a dedicated seat can enumerate windows with geometry, stack them, and draw a
+ * ghost cursor, while a backend still being provisioned may have none of that
+ * yet. A caller that cannot tell those apart lies to the model — "no windows"
  * when the truth is "no window enumeration exists here" — so the answer travels
  * with the state instead of being inferred from the backend's name.
  */
@@ -170,17 +363,30 @@ export const ComputerCapabilities = Schema.Struct({
   capture: Schema.Boolean,
   input: Schema.Boolean,
   clipboard: Schema.Boolean,
-  /** A window can be focused or raised, so window-targeted typing is possible. */
-  activation: Schema.Boolean,
+  /**
+   * A window can be given the agent's keyboard focus, so window-targeted typing
+   * is possible. Split from `raise` because the two are genuinely separate
+   * abilities and the macOS helper deliberately does one without the other:
+   * it aims the keyboard at a window's process while leaving the stacking order
+   * exactly as the human left it.
+   */
+  focus: Schema.Boolean,
+  /**
+   * A window can be brought in front of the ones covering it. This is the only
+   * ability in this set whose whole effect is on what the person sitting at the
+   * machine sees, which is why `computer_activate_window` — the one tool that
+   * uses it — is gated on this flag alone rather than on `focus`.
+   */
+  raise: Schema.Boolean,
   /** A second pointer the agent drives, drawn without moving the human's cursor. */
   ghostCursor: Schema.Boolean,
   /**
    * The driven desktop is the display the human is already looking at, so every
    * action is visible without a preview. Auto-opening the Computer pane keys
-   * off this being false: on an offscreen desktop the pane is the only window
-   * onto the agent's work, while mirroring the human's own screen back at them
-   * is noise. The agent still drives that visible desktop through a seat of its
-   * own — never the human's.
+   * off this being false: on a nested or offscreen desktop the pane is the only
+   * window onto the agent's work, while mirroring the human's own screen back
+   * at them is noise. The agent still drives that visible desktop through a
+   * seat of its own — never the human's.
    */
   visibleDesktop: Schema.Boolean,
 });
@@ -216,9 +422,10 @@ export const ComputerWindow = Schema.Struct({
   pid: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
   /**
    * Absent when the backend exposes no window geometry — a client under
-   * Some display servers cannot expose client geometry. Callers must treat an
-   * absent rect as unknown rather than as the origin, and
-   * `ComputerCapabilities.windowBounds` says up front which case this is.
+   * Wayland cannot ask where a window is, so only an in-compositor plugin can
+   * answer. Callers must treat an absent rect as unknown rather than as the
+   * origin, and `ComputerCapabilities.windowBounds` says up front which case
+   * this is.
    */
   bounds: Schema.optional(ComputerRect),
   focused: Schema.Boolean,
@@ -272,8 +479,15 @@ export interface ComputerUiNode {
    * pair stays valid across helper restarts while the tree is unchanged.
    */
   readonly nodePath?: readonly number[] | undefined;
+  readonly accessibilityRoot?: "window" | "menu-bar" | "menu-bar-extra" | undefined;
   /** The node accepts a semantic text write (AT-SPI `EditableText`). */
   readonly editable?: boolean | undefined;
+  /**
+   * The walk stopped short under this node, so `children` is incomplete.
+   * Without it an agent reads a budget-truncated subtree as a complete one and
+   * concludes a control is absent when the walk simply never reached it.
+   */
+  readonly truncated?: boolean | undefined;
   readonly children: readonly ComputerUiNode[];
 }
 
@@ -286,10 +500,12 @@ export const ComputerUiNode: Schema.Schema<ComputerUiNode> = Schema.Struct({
   activationPoint: Schema.NullOr(ComputerUiPoint),
   onScreen: Schema.Boolean,
   windowId: Schema.NullOr(ComputerWindowId),
+  accessibilityRoot: Schema.optional(Schema.Literals(["window", "menu-bar", "menu-bar-extra"])),
   nodePath: Schema.optional(
     Schema.Array(NonNegativeInt).check(Schema.isMaxLength(COMPUTER_NODE_PATH_MAX_DEPTH)),
   ),
   editable: Schema.optional(Schema.Boolean),
+  truncated: Schema.optional(Schema.Boolean),
   children: Schema.Array(Schema.suspend((): Schema.Schema<ComputerUiNode> => ComputerUiNode)).check(
     Schema.isMaxLength(2_048),
   ),
@@ -309,10 +525,34 @@ export const ComputerScreenshot = Schema.Struct({
 });
 export type ComputerScreenshot = typeof ComputerScreenshot.Type;
 
+export const ComputerInputPause = Schema.Struct({
+  windowId: Schema.optional(ComputerWindowId),
+  message: Schema.String.check(Schema.isMaxLength(COMPUTER_MESSAGE_MAX_LENGTH)),
+});
+export type ComputerInputPause = typeof ComputerInputPause.Type;
+
 export const ComputerState = Schema.Struct({
+  inputPause: Schema.optional(ComputerInputPause),
+  accessibility: Schema.optional(
+    Schema.Struct({
+      status: Schema.Literals(["complete", "partial", "unavailable"]),
+      unavailableWindowIds: Schema.Array(ComputerWindowId),
+    }),
+  ),
   computerId: ComputerId,
   windows: Schema.Array(ComputerWindow).check(Schema.isMaxLength(COMPUTER_WINDOW_LIST_MAX_LENGTH)),
   screenSize: ComputerScreenSize,
+  /**
+   * What the desktop could establish about itself while answering.
+   *
+   * Optional because a backend with no permission model has nothing to add, but
+   * load-bearing where there is one: a perception read is the primary tool an
+   * agent reaches for, and without this field the one result that most needs to
+   * say "the OS is withholding a grant" was the one result that could not. The
+   * window list and screen-size results have carried it all along; the state
+   * read is the outlier this closes.
+   */
+  availability: Schema.optional(ComputerAvailability),
   root: Schema.optional(ComputerUiNode),
   text: Schema.optional(Schema.String.check(Schema.isMaxLength(4 * 1024 * 1024))),
   screenshot: Schema.optional(ComputerScreenshot),
@@ -328,6 +568,13 @@ export const ThreadComputerState = Schema.Struct({
   screenSize: ComputerScreenSize,
   cursor: Schema.optional(ComputerPoint),
   agentActive: Schema.Boolean,
+  activity: Schema.optional(Schema.String.check(Schema.isMaxLength(128))),
+  inputPause: Schema.optional(ComputerInputPause),
+  /** Current desktop owner; used by the global Stop control between tool calls. */
+  controlOwnerThreadId: Schema.optional(ThreadId),
+  controlOwnerLabel: Schema.optional(
+    Schema.String.check(Schema.isMaxLength(COMPUTER_LABEL_MAX_LENGTH)),
+  ),
   /**
    * Another conversation holds the exclusive desktop lease, so this thread's
    * agent actions are refused until it is released. Perception is unaffected.
@@ -370,6 +617,20 @@ export const ComputerStatusResult = Schema.Struct({
 });
 export type ComputerStatusResult = typeof ComputerStatusResult.Type;
 
+export const ComputerProvisionInput = Schema.Struct({});
+export type ComputerProvisionInput = typeof ComputerProvisionInput.Type;
+
+/**
+ * The refreshed status travels with the summary so the panel repaints from one
+ * round trip: provisioning is the one action whose whole point is that the
+ * card it was pressed from is now wrong.
+ */
+export const ComputerProvisionResult = Schema.Struct({
+  summary: TrimmedNonEmptyString.check(Schema.isMaxLength(COMPUTER_PROVISION_SUMMARY_MAX_LENGTH)),
+  status: ComputerStatusResult,
+});
+export type ComputerProvisionResult = typeof ComputerProvisionResult.Type;
+
 export const ComputerListWindowsInput = Schema.Struct({});
 export type ComputerListWindowsInput = typeof ComputerListWindowsInput.Type;
 
@@ -383,6 +644,17 @@ export type ComputerListWindowsResult = typeof ComputerListWindowsResult.Type;
 export const ComputerGetStateInput = Schema.Struct({
   includeScreenshot: Schema.optional(Schema.Boolean),
   includeText: Schema.optional(Schema.Boolean),
+  /** Restrict the elements digest to controls owned by this window. */
+  windowId: Schema.optional(ComputerWindowId),
+  /**
+   * Restrict the elements digest to controls whose label contains this text,
+   * case-insensitively. The scoping lever for a busy desktop: without it the
+   * digest is capped at a fixed length and whatever the caller was looking for
+   * may simply not have fitted.
+   */
+  labelContains: Schema.optional(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(COMPUTER_LABEL_MAX_LENGTH)),
+  ),
 });
 export type ComputerGetStateInput = typeof ComputerGetStateInput.Type;
 
@@ -421,6 +693,28 @@ export type ComputerLaunchAppResult = typeof ComputerLaunchAppResult.Type;
 
 // ── Action inputs ───────────────────────────────────────────────────
 
+/**
+ * The modifier vocabulary both input surfaces speak: the human's pane keys and
+ * the agent's modifier-held gestures. One list, because a chord the pane can
+ * express and the agent cannot (or the reverse) is a difference nothing in the
+ * product means.
+ */
+export const ComputerInputModifier = Schema.Literals(["ctrl", "alt", "shift", "meta"]);
+export type ComputerInputModifier = typeof ComputerInputModifier.Type;
+
+/** One of each at most, so the bound is the vocabulary's own size. */
+export const COMPUTER_MODIFIERS_MAX_ITEMS = 4;
+
+/**
+ * Modifiers held down for the duration of one pointer gesture and released
+ * after it, in the order given. This is what shift-click, cmd-click and
+ * ctrl-scroll are, and it is not expressible as a hotkey: `computer_hotkey`
+ * presses and releases, so nothing is still held when the click arrives.
+ */
+const ComputerHeldModifiers = Schema.optional(
+  Schema.Array(ComputerInputModifier).check(Schema.isMaxLength(COMPUTER_MODIFIERS_MAX_ITEMS)),
+);
+
 const ComputerTargetFields = {
   x: Schema.optional(Schema.Finite),
   y: Schema.optional(Schema.Finite),
@@ -434,24 +728,61 @@ const ComputerTargetFields = {
 export const ComputerTarget = Schema.Struct(ComputerTargetFields);
 export type ComputerTarget = typeof ComputerTarget.Type;
 
-export const ComputerClickInput = ComputerTarget;
+/** A pointer target that may also hold modifiers down across the gesture. */
+const ComputerModifiedTargetFields = {
+  ...ComputerTargetFields,
+  modifiers: ComputerHeldModifiers,
+} as const;
+
+export const ComputerClickInput = Schema.Struct(ComputerModifiedTargetFields);
 export type ComputerClickInput = typeof ComputerClickInput.Type;
-export const ComputerDoubleClickInput = ComputerTarget;
+export const ComputerDoubleClickInput = Schema.Struct(ComputerModifiedTargetFields);
 export type ComputerDoubleClickInput = typeof ComputerDoubleClickInput.Type;
-export const ComputerRightClickInput = ComputerTarget;
+export const ComputerTripleClickInput = Schema.Struct(ComputerModifiedTargetFields);
+export type ComputerTripleClickInput = typeof ComputerTripleClickInput.Type;
+export const ComputerRightClickInput = Schema.Struct(ComputerModifiedTargetFields);
 export type ComputerRightClickInput = typeof ComputerRightClickInput.Type;
+/**
+ * No modifiers: a hover holds nothing down, and it deliberately does not aim
+ * the keyboard either — only a real gesture or an explicit window does.
+ */
 export const ComputerMoveCursorInput = ComputerTarget;
 export type ComputerMoveCursorInput = typeof ComputerMoveCursorInput.Type;
+
+/**
+ * Bring one window forward. The only computer call whose whole purpose is to
+ * change what the human sees on their own screen, which is why it is a tool of
+ * its own rather than a flag on the pointer tools.
+ */
+export const ComputerActivateWindowInput = Schema.Struct({ windowId: ComputerWindowId });
+export type ComputerActivateWindowInput = typeof ComputerActivateWindowInput.Type;
+
+/**
+ * Longest pause an agent may ask the desktop for.
+ *
+ * Bounded because the wait holds the turn: a model that reads "wait for the
+ * installer" as a number of minutes would stall the conversation behind a sleep
+ * nothing can interrupt. Ten seconds covers a window appearing, a menu
+ * animating, and a page painting; anything slower is a poll loop, not a wait.
+ */
+export const COMPUTER_WAIT_MAX_MS = 10_000;
+
+export const ComputerWaitInput = Schema.Struct({
+  durationMs: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: COMPUTER_WAIT_MAX_MS })),
+});
+export type ComputerWaitInput = typeof ComputerWaitInput.Type;
 
 export const ComputerDragInput = Schema.Struct({
   from: ComputerTarget,
   to: ComputerTarget,
-  durationMs: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 30_000 }))),
+  durationMs: Schema.optional(
+    Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: COMPUTER_DRAG_MAX_DURATION_MS })),
+  ),
 });
 export type ComputerDragInput = typeof ComputerDragInput.Type;
 
 export const ComputerScrollInput = Schema.Struct({
-  ...ComputerTargetFields,
+  ...ComputerModifiedTargetFields,
   deltaX: Schema.Finite,
   deltaY: Schema.Finite,
 });
@@ -468,10 +799,9 @@ export const ComputerPressKeyInput = Schema.Struct({
 export type ComputerPressKeyInput = typeof ComputerPressKeyInput.Type;
 
 export const ComputerHotkeyInput = Schema.Struct({
-  keys: Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLength(128))).check(
-    Schema.isMinLength(1),
-    Schema.isMaxLength(16),
-  ),
+  keys: Schema.Array(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(COMPUTER_KEY_NAME_MAX_LENGTH)),
+  ).check(Schema.isMinLength(1), Schema.isMaxLength(COMPUTER_HOTKEY_MAX_KEYS)),
 });
 export type ComputerHotkeyInput = typeof ComputerHotkeyInput.Type;
 
@@ -483,7 +813,7 @@ export type ComputerSetValueInput = typeof ComputerSetValueInput.Type;
 
 export const ComputerPerformActionInput = Schema.Struct({
   ...ComputerTargetFields,
-  action: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+  action: TrimmedNonEmptyString.check(Schema.isMaxLength(COMPUTER_SEMANTIC_ACTION_MAX_LENGTH)),
 });
 export type ComputerPerformActionInput = typeof ComputerPerformActionInput.Type;
 
@@ -496,7 +826,7 @@ const COMPUTER_INPUT_COORDINATE_MAX = 32_767;
  * is a runaway accumulator rather than a gesture, and forwarding it would spin
  * the desktop through thousands of lines.
  */
-const COMPUTER_INPUT_SCROLL_LIMIT = 4_096;
+export const COMPUTER_INPUT_SCROLL_LIMIT = 4_096;
 
 /**
  * Desktop logical pixels, the same space as window bounds. Integers only: the
@@ -514,9 +844,6 @@ const ComputerInputDelta = Schema.Finite.check(
 /** Only the buttons the seat can synthesize as a complete press/release pair. */
 export const ComputerInputButton = Schema.Literals(["left", "right"]);
 export type ComputerInputButton = typeof ComputerInputButton.Type;
-
-export const ComputerInputModifier = Schema.Literals(["ctrl", "alt", "shift", "meta"]);
-export type ComputerInputModifier = typeof ComputerInputModifier.Type;
 
 export const ComputerInputClickInput = Schema.Struct({
   x: ComputerInputCoordinate,
@@ -551,6 +878,18 @@ export const ComputerInputKeyInput = Schema.Struct({
 });
 export type ComputerInputKeyInput = typeof ComputerInputKeyInput.Type;
 
+/**
+ * What a backend could establish about an input it delivered. Named here rather
+ * than inlined so the server's backend contract and the agent-facing tool
+ * guidance both spell the three cases exactly once.
+ */
+export const ComputerDeliveryVerification = Schema.Literals([
+  "confirmed",
+  "unconfirmed",
+  "unverifiable",
+]);
+export type ComputerDeliveryVerification = typeof ComputerDeliveryVerification.Type;
+
 export const ComputerActionResult = Schema.Struct({
   computerId: ComputerId,
   action: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
@@ -559,6 +898,7 @@ export const ComputerActionResult = Schema.Struct({
   clampedTo: Schema.optional(ComputerPoint),
   windowId: Schema.optional(ComputerWindowId),
   value: Schema.optional(Schema.String.check(Schema.isMaxLength(COMPUTER_TEXT_MAX_LENGTH))),
+  textLength: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
   /**
    * Scroll telemetry: what was asked, what was injected after gearing
    * correction, and what the window content measurably did. `traveledY` is in
@@ -569,10 +909,35 @@ export const ComputerActionResult = Schema.Struct({
    */
   scroll: Schema.optional(
     Schema.Struct({
-      requested: Schema.Struct({ deltaX: Schema.Number, deltaY: Schema.Number }),
-      injected: Schema.Struct({ deltaX: Schema.Number, deltaY: Schema.Number }),
-      traveledY: Schema.optional(Schema.Number),
-      gearing: Schema.optional(Schema.Number),
+      requested: Schema.Struct({ deltaX: Schema.Finite, deltaY: Schema.Finite }),
+      injected: Schema.Struct({ deltaX: Schema.Finite, deltaY: Schema.Finite }),
+      /** Requested distance limited to preserve overlap between observations. */
+      limitedTo: Schema.optional(Schema.Struct({ deltaX: Schema.Finite, deltaY: Schema.Finite })),
+      traveledY: Schema.optional(Schema.Finite),
+      gearing: Schema.optional(Schema.Finite),
+    }),
+  ),
+  /**
+   * Input delivery telemetry: which rung of the backend's delivery ladder
+   * carried the input (`path`), and what the backend could establish about the
+   * outcome (`verified`).
+   *
+   * `verified` is three-valued on purpose, because the two things a boolean
+   * conflated are not the same failure. `confirmed` means the backend read the
+   * effect back. `unconfirmed` means it tried to read the effect back and could
+   * not see it — the one case where a caller must look at the screen before
+   * building on the action. `unverifiable` means the surface exposes no readable
+   * value at all, which is the ordinary answer for most native controls: the
+   * input was delivered, nothing about it is suspect, and a caller that treated
+   * it as a failure would take a screenshot after every keystroke for nothing.
+   *
+   * Optional because only backends with a delivery ladder answer it; the Linux
+   * backends never set it, and their results encode exactly as before.
+   */
+  delivery: Schema.optional(
+    Schema.Struct({
+      path: Schema.String.check(Schema.isMaxLength(COMPUTER_DELIVERY_PATH_MAX_LENGTH)),
+      verified: ComputerDeliveryVerification,
     }),
   ),
 });
@@ -593,6 +958,8 @@ export const ComputerWindowsChangedEvent = Schema.Struct({
 export type ComputerWindowsChangedEvent = typeof ComputerWindowsChangedEvent.Type;
 
 export const ComputerActionEvent = Schema.Struct({
+  windowId: Schema.optional(ComputerWindowId),
+  delivery: ComputerActionResult.fields.delivery,
   type: Schema.Literal("computer.action"),
   action: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
   ok: Schema.Boolean,
@@ -640,9 +1007,6 @@ export type ComputerEvent = typeof ComputerEvent.Type;
 
 export const COMPUTER_FRAME_MAGIC = 0x5343;
 export const COMPUTER_FRAME_VERSION = 1;
-export const COMPUTER_FRAME_FLAG_KEYFRAME = 0b0000_0001;
-export const COMPUTER_FRAME_FLAG_CODEC_CONFIG = 0b0000_0010;
-export const COMPUTER_FRAME_HEADER_FIXED_BYTES = 17;
 export const COMPUTER_FRAME_MAX_COMPUTER_ID_BYTES = 255;
 
 export const ComputerFrameHeader = Schema.Struct({

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { DESKTOP_OPERATION_QUEUE_LIMIT, DesktopOperationQueue } from "./DesktopOperationQueue.ts";
+import {
+  DESKTOP_OPERATION_QUEUE_LIMIT,
+  DesktopOperationQueue,
+  desktopOperationSignal,
+} from "./DesktopOperationQueue.ts";
 
 function deferred() {
   return Promise.withResolvers<void>();
@@ -76,4 +80,74 @@ describe("DesktopOperationQueue", () => {
     expect(queuedRuns).toBe(0);
     await expect(queue.run(async () => undefined)).rejects.toThrow("closed");
   });
+});
+
+it("cancels running native work before completing shutdown", async () => {
+  const queue = new DesktopOperationQueue();
+  const entered = deferred();
+  const running = queue.run(async () => {
+    const signal = desktopOperationSignal()!;
+    const aborted = new Promise<void>((resolve) => {
+      signal.addEventListener("abort", () => resolve(), { once: true });
+    });
+    entered.resolve();
+    await aborted;
+    expect(signal.aborted).toBe(true);
+  });
+  await entered.promise;
+  await queue.close();
+  await running;
+});
+
+it("does not retain a cancelled turn's signal in detached background work", async () => {
+  const queue = new DesktopOperationQueue();
+  const controller = new AbortController();
+  const release = deferred();
+  let detached!: Promise<AbortSignal | undefined>;
+  await queue.run(async () => {
+    detached = release.promise.then(() => desktopOperationSignal());
+    expect(desktopOperationSignal()?.aborted).toBe(false);
+  }, controller.signal);
+  controller.abort();
+  release.resolve();
+  expect(await detached).toBeUndefined();
+  await queue.close();
+});
+
+it("allows perception during input and waiting without releasing the input lane", async () => {
+  const queue = new DesktopOperationQueue();
+  const entered = deferred();
+  const held = deferred();
+  const input = queue.run(async () => {
+    entered.resolve();
+    await held.promise;
+  });
+  await entered.promise;
+  expect(await queue.read(async () => "desktop")).toBe("desktop");
+  let nextInputRan = false;
+  const next = queue.run(async () => {
+    nextInputRan = true;
+  });
+  await Promise.resolve();
+  expect(nextInputRan).toBe(false);
+  held.resolve();
+  await Promise.all([input, next]);
+  await queue.close();
+});
+
+it("cancels concurrent reads on shutdown and rejects later reads", async () => {
+  const queue = new DesktopOperationQueue();
+  const entered = deferred();
+  const reading = queue.read(async () => {
+    const signal = desktopOperationSignal()!;
+    entered.resolve();
+    await new Promise<void>((resolve) =>
+      signal.addEventListener("abort", () => resolve(), { once: true }),
+    );
+    expect(signal.aborted).toBe(true);
+  });
+  await entered.promise;
+  await queue.close();
+  await reading;
+  await expect(queue.read(async () => undefined)).rejects.toThrow("closed");
 });

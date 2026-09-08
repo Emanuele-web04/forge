@@ -23,6 +23,7 @@ function node(partial: Partial<ComputerUiNode> & { readonly role: string }): Com
     activationPoint: partial.activationPoint ?? null,
     onScreen: partial.onScreen ?? true,
     windowId: partial.windowId ?? null,
+    ...(partial.truncated === undefined ? {} : { truncated: partial.truncated }),
     children: partial.children ?? [],
   };
 }
@@ -117,6 +118,31 @@ describe("resolving a labelled desktop target", () => {
     expect(error.code).toBe("computer_target_not_found");
   });
 
+  it.each(["\u00a0", "\u2007", "\u202f"])(
+    "matches a visible form label containing a non-breaking space (%j)",
+    (space) => {
+      const field = node({ role: "AXTextField", label: `First name${space}*` });
+      const desktop = node({
+        role: "desktop",
+        children: [field, node({ role: "AXTextField", label: "First name * (optional)" })],
+      });
+      expect(resolveComputerSemanticTarget(desktop, { label: "First name *" }).node).toBe(field);
+    },
+  );
+
+  it("refuses ambiguity between labels differing only in non-breaking spaces", () => {
+    const desktop = node({
+      role: "desktop",
+      children: [
+        node({ role: "AXTextField", label: "First name\u00a0*" }),
+        node({ role: "AXTextField", label: "First name *" }),
+      ],
+    });
+    const error = thrown(() => resolveComputerSemanticTarget(desktop, { label: "First name *" }));
+    expect(error.code).toBe("computer_target_ambiguous");
+    expect(error.candidates).toHaveLength(2);
+  });
+
   it("refuses a label that names a control in two windows", () => {
     const error = thrown(() => resolveComputerSemanticTarget(DESKTOP, { label: "Save" }));
     expect(error.code).toBe("computer_target_ambiguous");
@@ -139,6 +165,10 @@ describe("resolving a labelled desktop target", () => {
     const error = thrown(() => resolveComputerSemanticTarget(desktop, { label: "Hidden" }));
     expect(error.code).toBe("computer_target_offscreen");
     expect(error.candidates).toHaveLength(1);
+    expect(
+      resolveComputerSemanticTarget(desktop, { label: "Hidden" }, { allowOffscreen: true }).node
+        .label,
+    ).toBe("Hidden");
   });
 });
 
@@ -181,6 +211,20 @@ describe("naming the candidates", () => {
  * exactly the clunkiness this exists to remove.
  */
 describe("actionableElements", () => {
+  it("finds non-breaking-space labels through the same query used for targeting", () => {
+    const field = node({
+      role: "AXTextField",
+      label: "First name\u00a0*",
+      windowId: windowId("browser"),
+    });
+    const result = actionableElements(node({ role: "desktop", children: [field] }), {
+      windowId: "browser",
+      labelContains: "FIRST NAME *",
+    });
+    expect(result.items.map((item) => item.label)).toEqual(["First name\u00a0*"]);
+    expect(result.complete).toBe(true);
+  });
+
   it("lists labeled on-screen actionable elements in tree order", () => {
     const desktop = node({
       role: "desktop",
@@ -199,6 +243,8 @@ describe("actionableElements", () => {
 
     expect(actionableElements(desktop)).toEqual({
       complete: true,
+      sourceIncomplete: false,
+      omitted: 0,
       items: [
         { role: "push button", label: "Reload", windowId: windowId("browser") },
         { role: "entry", label: "Email", value: "", windowId: windowId("browser") },
@@ -298,4 +344,19 @@ describe("actionableElements", () => {
     expect(elements.items).toHaveLength(60);
     expect(elements.complete).toBe(false);
   });
+});
+
+it("includes native macOS controls and reports a partial accessibility source", () => {
+  const tree = node({
+    role: "desktop",
+    truncated: true,
+    children: [
+      node({ role: "AXButton", label: "Save", windowId: windowId("native") }),
+      node({ role: "AXMenuBarItem", label: "File", windowId: windowId("native") }),
+    ],
+  });
+  const result = actionableElements(tree);
+  expect(result.items.map((item) => item.label)).toEqual(["Save", "File"]);
+  expect(result.complete).toBe(false);
+  expect(result.sourceIncomplete).toBe(true);
 });

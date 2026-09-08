@@ -3,6 +3,7 @@ import {
   ProjectId,
   ThreadId,
   type AssistantDeliveryMode,
+  type ComputerAvailability,
   type GitWorktreeSetupPhase,
   type GitWorktreeSetupProgressEvent,
   type ModelSelection,
@@ -1625,30 +1626,21 @@ export function deriveComposerSendState(options: {
 /**
  * The effective per-chat computer-control flag.
  *
- * Desktop access is an explicit opt-in. A chat's own override always wins — a
- * user can turn it on (or back off) for one chat without touching anything
- * global. Without an override, only a chat that has not started yet follows the
- * machine-wide default (`allowInNewChats`), and only while the backend is
- * available, because there is nothing to grant otherwise. A chat that already
- * has turns and never recorded a choice stays off: the default is captured on
- * a chat's first send (see ChatView), so flipping the setting later affects
- * only chats that start after it, as the setting advertises. The machine
- * default is a plain default, never rewritten by a per-chat choice.
+ * Tool access follows the user's choice, independently of backend readiness.
+ * Waiting for a healthy snapshot would disable tools on the first turn or
+ * when macOS permissions need setup, preventing the agent from asking for it.
+ * The server exposes tools only on supported backends and enforces permissions
+ * and approvals when they are called. A chat override never changes the default.
  */
 export function resolveEffectiveComputerControl(input: {
   readonly draftOverride: boolean | undefined;
-  readonly backendAvailable: boolean;
+  readonly availability: ComputerAvailability | undefined;
   readonly allowInNewChats: boolean;
   /** True once the chat has any turn; the new-chat default no longer applies. */
   readonly chatHasTurns: boolean;
 }): boolean {
-  if (input.draftOverride !== undefined) {
-    return input.draftOverride;
-  }
-  if (input.chatHasTurns || !input.backendAvailable) {
-    return false;
-  }
-  return input.allowInNewChats;
+  if (input.availability?.kind === "unsupported-platform") return false;
+  return input.draftOverride ?? (!input.chatHasTurns && input.allowInNewChats);
 }
 
 /**

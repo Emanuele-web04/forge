@@ -1,3 +1,4 @@
+import { cursorRuntimeActivity } from "../cursorActivity.ts";
 /**
  * Releases the exclusive desktop lease when its owner can no longer drive the
  * desktop.
@@ -61,9 +62,16 @@ const make = Effect.gen(function* () {
 
   const start: ComputerLeaseReactorShape["start"] = () =>
     Effect.forkScoped(
-      Stream.runForEach(providerService.streamEvents, (event) =>
-        releasesDesktopControl(event) ? releaseDesktopControl(event) : Effect.void,
-      ),
+      Stream.runForEach(providerService.streamEvents, (event) => {
+        if (releasesDesktopControl(event)) return releaseDesktopControl(event);
+        return Effect.sync(() => {
+          const activity = cursorRuntimeActivity(event);
+          if (activity !== undefined) computerService.manager.cursorActivity.setRuntime(
+            event.threadId, activity,
+            event.type === "user-input.resolved" || event.type === "request.resolved",
+          );
+        });
+      }),
     ).pipe(Effect.asVoid);
 
   return { start } satisfies ComputerLeaseReactorShape;

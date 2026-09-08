@@ -177,6 +177,7 @@ export interface RuntimeUsageControlsProps {
   onRuntimeModeChange?: ((mode: RuntimeMode) => void) | undefined;
   computerControlEnabled?: boolean | undefined;
   computerControlAvailable?: boolean | undefined;
+  computerControlSupported?: boolean | undefined;
   computerControlDisabledReason?: string | undefined;
   onComputerControlChange?: ((enabled: boolean) => void) | undefined;
   contextWindow?: ContextWindowSnapshot | null | undefined;
@@ -198,6 +199,7 @@ export function RuntimeUsageControls({
   onRuntimeModeChange,
   computerControlEnabled = false,
   computerControlAvailable = false,
+  computerControlSupported = computerControlAvailable,
   computerControlDisabledReason = "Checking computer availability.",
   onComputerControlChange,
   className,
@@ -299,7 +301,7 @@ export function RuntimeUsageControls({
                 <MenuCheckboxItem
                   variant="switch"
                   checked={computerControlEnabled}
-                  disabled={!computerControlAvailable}
+                  disabled={!computerControlSupported}
                   onCheckedChange={(checked) => onComputerControlChange(checked === true)}
                   title={computerControlAvailable ? undefined : computerControlDisabledReason}
                 >

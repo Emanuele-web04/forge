@@ -26,12 +26,11 @@ import {
   type ComputerWindow,
 } from "@synara/contracts";
 
+import { pngDimensions } from "../pngHeader.ts";
 import { ComputerBackendError } from "./ComputerBackend.ts";
 import { unwrapDbusValue } from "./dbusPlumbing.ts";
 import { clampTextToLength } from "./utf8Truncation.ts";
 
-const PNG_SIGNATURE = Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a);
-const PNG_IHDR = Uint8Array.of(0x49, 0x48, 0x44, 0x52);
 /** Prefix of the message a capture failure carries when no backend names itself. */
 const DEFAULT_CAPTURE_SOURCE = "The desktop capture";
 
@@ -128,6 +127,115 @@ function asWindowIds(value: unknown): readonly ComputerWindow["id"][] | undefine
  * fail the schema encode of every state payload and push event for the whole
  * session. The list itself is clamped to the same ceiling the contract checks.
  */
+/**
+ * A cheap identity for a window-list payload, used to decide whether to emit a
+ * `windows-changed` event.
+ *
+ * It fingerprints the payload the desktop sent, not the parsed and translated
+ * list: parsing is the expensive half, the raw document already reflects every
+ * change worth reporting, and re-serialising the parsed list on this path costs
+ * a full JSON encode per state read on both backends. The focused id travels
+ * with it because focus moving is a change even when no window did.
+ */
+export function windowsPayloadFingerprint(
+  payload: unknown,
+  focusedWindowId: string | null,
+): string {
+  const unwrapped = unwrapDbusValue(payload);
+  const body = typeof unwrapped === "string" ? unwrapped : JSON.stringify(unwrapped);
+  return `${focusedWindowId ?? ""} ${body}`;
+}
+
+/**
+ * The same identity, built from the parsed list instead of the payload it came
+ * from.
+ *
+ * The macOS helper answers `list-windows` with a decoded JSON object rather than
+ * the string document the KWin plugin sends, so `windowsPayloadFingerprint`
+ * there means "re-encode the whole array" — on a call that runs several times
+ * per action and per publish. This digests only the fields a `windows-changed`
+ * event is about: identity, geometry, stacking, focus, visibility, and the
+ * labels a viewer reads. Anything else the desktop reports (occluders, for one)
+ * is derived from those, so a change it would catch is a change these catch
+ * first.
+ */
+export function windowsDigestFingerprint(
+  windows: readonly ComputerWindow[],
+  focusedWindowId: string | null,
+): string {
+  const parts = [focusedWindowId ?? ""];
+  for (const window of windows) {
+    const bounds = window.bounds;
+    parts.push(
+      [
+        window.id,
+        bounds?.x ?? "",
+        bounds?.y ?? "",
+        bounds?.width ?? "",
+        bounds?.height ?? "",
+        window.stackingIndex ?? "",
+        window.focused ? 1 : 0,
+        window.active === true ? 1 : window.active === false ? 0 : "",
+        window.minimized ? 1 : 0,
+        window.visible ? 1 : 0,
+        window.title,
+        window.appName ?? "",
+      ].join("\u0001"),
+    );
+  }
+  return parts.join("\u0002");
+}
+
+/**
+ * Emits `windows-changed` only when an enumeration differs from the last one.
+ *
+ * Every backend enumerates windows several times per action, and every
+ * enumeration that reported a change schedules a state publish — which
+ * enumerates again. Both backends therefore kept a "previous fingerprint" field
+ * and the same three-line compare beside it; this is that loop, owned once, so
+ * the two cannot drift on what counts as a change.
+ */
+export class WindowListChangeNotifier {
+  #fingerprint: string | undefined;
+
+  constructor(private readonly emit: (windows: readonly ComputerWindow[]) => void) {}
+
+  observe(fingerprint: string, windows: readonly ComputerWindow[]): void {
+    if (fingerprint === this.#fingerprint) return;
+    this.#fingerprint = fingerprint;
+    this.emit(windows);
+  }
+}
+
+/**
+ * How far a landed pointer may sit from the requested point before it counts as
+ * a clamp. A display server that puts the pointer in the nearest output when a
+ * coordinate falls in a gap between monitors lands a pixel or two off for
+ * ordinary rounding reasons; past this it moved the action somewhere else and
+ * the agent has to be told.
+ */
+export const POINTER_CLAMP_TOLERANCE_PX = 2;
+
+/**
+ * The action result for a pointer request, reporting `clampedTo` when the
+ * desktop put the pointer somewhere other than where it was asked to.
+ * Shared so every backend answers the same question the same way; `actual` is
+ * null when the backend cannot observe where the pointer ended up.
+ */
+export function pointerClampResult(
+  requested: ComputerPoint,
+  actual: ComputerPoint | null,
+): { readonly point: ComputerPoint; readonly clampedTo?: ComputerPoint } {
+  if (
+    !actual ||
+    (Math.abs(actual.x - requested.x) <= POINTER_CLAMP_TOLERANCE_PX &&
+      Math.abs(actual.y - requested.y) <= POINTER_CLAMP_TOLERANCE_PX)
+  ) {
+    return { point: requested };
+  }
+  return { point: requested, clampedTo: actual };
+}
+
 export function parseWindows(value: unknown, focusedWindowId: string | null): ComputerWindow[] {
   const parsed = parseJsonPayload(value);
   const items = Array.isArray(parsed) ? parsed : [];
@@ -140,7 +248,13 @@ export function parseWindows(value: unknown, focusedWindowId: string | null): Co
     // An oversized id cannot be addressed through the schema either way, so
     // the tail is cut rather than the whole window dropped.
     const id = clampTextToLength(rawId, COMPUTER_ID_MAX_LENGTH);
-    const appNameSource = asString(record.appId) ?? asString(record.resourceClass);
+    // Every backend names the owning application, but not with the same key:
+    // KWin reports `resourceClass`, Hyprland an `appId`, and the macOS helper an
+    // `appName` taken from `kCGWindowOwnerName`. All three land in `appName`,
+    // which is the only field the contract has — reading just the two Linux
+    // spellings silently dropped the app name from every macOS window.
+    const appNameSource =
+      asString(record.appName) ?? asString(record.appId) ?? asString(record.resourceClass);
     const stackingIndex = asNonNegativeInt(record.stackingIndex);
     const occludedBy = asWindowIds(record.occludedBy);
     windows.push({
@@ -301,9 +415,16 @@ export function requireWindowBounds(
 export function screenSizeFromWindows(
   windows: readonly ComputerWindow[],
   workspace?: ComputerRect | null,
+  /**
+   * The desktop's backing-store scale, when the backend knows it. Defaults to 1
+   * because a display server that reports logical pixels and nothing else has
+   * no better answer — but on a Retina Mac 1 is simply false, and a caller
+   * reading the reported size cannot tell a truthful 1 from a placeholder.
+   */
+  scale = 1,
 ): ComputerScreenSize {
   const rect = workspaceRectFromWindows(windows, workspace);
-  return { width: rect.width, height: rect.height, scale: 1 };
+  return { width: rect.width, height: rect.height, scale: scale > 0 ? scale : 1 };
 }
 
 /**
@@ -341,21 +462,13 @@ export function readPngDimensions(
   bytes: Uint8Array,
   options: { readonly source?: string } = {},
 ): { readonly width: number; readonly height: number } {
-  const source = options.source ?? DEFAULT_CAPTURE_SOURCE;
-  if (
-    bytes.byteLength < 24 ||
-    !PNG_SIGNATURE.every((byte, index) => bytes[index] === byte) ||
-    !PNG_IHDR.every((byte, index) => bytes[12 + index] === byte)
-  ) {
-    throw new ComputerBackendError(`${source} did not return a PNG image.`);
+  const dimensions = pngDimensions(bytes);
+  if (!dimensions) {
+    throw new ComputerBackendError(
+      `${options.source ?? DEFAULT_CAPTURE_SOURCE} did not return a usable PNG image.`,
+    );
   }
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const width = view.getUint32(16);
-  const height = view.getUint32(20);
-  if (width < 1 || height < 1) {
-    throw new ComputerBackendError(`${source} has invalid dimensions.`);
-  }
-  return { width, height };
+  return dimensions;
 }
 
 /**
@@ -368,6 +481,14 @@ export function screenshotFromPng(input: {
   readonly region: ComputerRect;
   readonly capturedAt: string;
   readonly source?: string;
+  /**
+   * The same image already encoded, when the caller was handed base64 to begin
+   * with. A backend whose transport speaks base64 decoded it only to read the
+   * PNG header, and re-encoding it here made every screenshot a base64 → bytes
+   * → base64 round trip over a multi-megabyte payload. Omitted by callers that
+   * genuinely hold only bytes.
+   */
+  readonly bytesBase64?: string;
 }): ComputerScreenshot {
   const dimensions = readPngDimensions(
     input.bytes,
@@ -378,7 +499,7 @@ export function screenshotFromPng(input: {
     width: dimensions.width,
     height: dimensions.height,
     sizeBytes: input.bytes.byteLength,
-    bytesBase64: Buffer.from(input.bytes).toString("base64"),
+    bytesBase64: input.bytesBase64 ?? Buffer.from(input.bytes).toString("base64"),
     region: input.region,
     scale: dimensions.width / input.region.width,
     capturedAt: input.capturedAt,

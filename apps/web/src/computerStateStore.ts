@@ -6,13 +6,12 @@ import type {
   ThreadId,
 } from "@synara/contracts";
 import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 
 type ComputerActionEvent = Extract<ComputerEvent, { type: "computer.action" }>;
 
 interface ComputerStateStore {
   threadStatesByThreadId: Record<string, ThreadComputerState | undefined>;
-  /** Newest desktop action from any source, including unattributed pane input. */
-  lastAction: ComputerActionEvent | null;
   /** Newest desktop action per thread, so one thread never reads another's. */
   lastActionByThreadId: Record<string, ComputerActionEvent | undefined>;
   /** Open requests no surface has honored yet, latest per thread. */
@@ -28,7 +27,6 @@ interface ComputerStateStore {
 
 export const useComputerStateStore = create<ComputerStateStore>()((set, get) => ({
   threadStatesByThreadId: {},
-  lastAction: null,
   lastActionByThreadId: {},
   pendingOpenRequests: {},
   queueOpenRequest: (event) =>
@@ -64,24 +62,28 @@ export const useComputerStateStore = create<ComputerStateStore>()((set, get) => 
         if (!state || state.windows === windows) {
           continue;
         }
-        nextStates[threadId] = { ...state, windows: [...windows] };
+        nextStates[threadId] = { ...state, windows };
         changed = true;
       }
       return changed ? { ...current, threadStatesByThreadId: nextStates } : current;
     }),
   recordAction: (action) =>
-    set((current) => ({
-      ...current,
-      lastAction: action,
-      ...(action.threadId
-        ? {
-            lastActionByThreadId: {
-              ...current.lastActionByThreadId,
-              [action.threadId]: action,
-            },
-          }
-        : {}),
-    })),
+    set((current) => {
+      // Unattributed pane input belongs to no thread, and nothing reads a
+      // cross-thread "newest action": keeping the state identical leaves every
+      // subscriber unnotified instead of re-rendering them for nobody.
+      const threadId = action.threadId;
+      if (!threadId) {
+        return current;
+      }
+      return {
+        ...current,
+        lastActionByThreadId: {
+          ...current.lastActionByThreadId,
+          [threadId]: action,
+        },
+      };
+    }),
   removeThreadState: (threadId) =>
     set((current) => {
       const hasState = Object.hasOwn(current.threadStatesByThreadId, threadId);
@@ -106,7 +108,6 @@ export const useComputerStateStore = create<ComputerStateStore>()((set, get) => 
   clear: () =>
     set({
       threadStatesByThreadId: {},
-      lastAction: null,
       lastActionByThreadId: {},
       pendingOpenRequests: {},
     }),
@@ -122,4 +123,11 @@ export function selectThreadComputerAction(
   threadId: ThreadId,
 ): (store: ComputerStateStore) => ComputerActionEvent | undefined {
   return (store) => store.lastActionByThreadId[threadId];
+}
+
+/** Composer availability must not subscribe to desktop activity or geometry. */
+export function useThreadComputerAvailability(threadId: ThreadId) {
+  return useComputerStateStore(
+    useShallow((state) => state.threadStatesByThreadId[threadId]?.availability),
+  );
 }

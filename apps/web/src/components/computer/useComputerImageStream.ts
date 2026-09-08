@@ -59,9 +59,18 @@ export function useComputerImageStream(input: {
   const [status, setStatus] = useState<ComputerImageStreamStatus>({ kind: "idle" });
   const [dimensions, setDimensions] = useState<ComputerImageDimensions | null>(null);
   const generationRef = useRef(0);
+  const [pageVisible, setPageVisible] = useState(
+    () => typeof document !== "undefined" && document.visibilityState !== "hidden",
+  );
+  useEffect(() => {
+    const update = () => setPageVisible(document.visibilityState !== "hidden");
+    document.addEventListener("visibilitychange", update);
+    update();
+    return () => document.removeEventListener("visibilitychange", update);
+  }, []);
 
   useEffect(() => {
-    if (!enabled || computerId === null) {
+    if (!enabled || !pageVisible || computerId === null) {
       setStatus({ kind: "idle" });
       setDimensions(null);
       const canvas = canvasRef.current;
@@ -183,7 +192,7 @@ export function useComputerImageStream(input: {
       if (reconnectTimer !== null) clearTimeout(reconnectTimer);
       source?.close();
     };
-  }, [canvasRef, computerId, enabled]);
+  }, [canvasRef, computerId, enabled, pageVisible]);
 
   return { status, dimensions };
 }

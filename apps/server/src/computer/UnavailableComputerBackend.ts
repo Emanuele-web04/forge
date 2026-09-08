@@ -116,6 +116,10 @@ export class UnavailableComputerBackend implements ComputerBackend {
     return this.refuse();
   }
 
+  tripleClick(): Promise<never> {
+    return this.refuse();
+  }
+
   rightClick(): Promise<never> {
     return this.refuse();
   }
