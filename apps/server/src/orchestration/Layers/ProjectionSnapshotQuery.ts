@@ -1138,7 +1138,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
-  // Keep bounded lifecycle evidence for active tasks even when their turn has
+  // Keep bounded lifecycle evidence for unfinished tasks even when their turn has
   // aged out of the activity tail. Both snapshot paths use the same ranked CTE.
   const activeTaskActivityCtes = sql`
     task_terminals AS (
@@ -1147,7 +1147,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       FROM ranked
       WHERE kind = 'task.completed'
         OR (kind = 'task.updated' AND json_extract(payload_json, '$.status')
-          IN ('completed', 'failed', 'killed', 'stopped', 'paused'))
+          IN ('completed', 'failed', 'killed', 'stopped'))
       GROUP BY thread_id, json_extract(payload_json, '$.taskId')
     ),
     session_boundaries AS (
@@ -1168,6 +1168,15 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     ),
     retained_task_activity_ids AS (
       SELECT activity_id FROM active_task_starts
+      UNION
+      SELECT (
+        SELECT activity_id FROM ranked AS patch
+        WHERE patch.thread_id = started.thread_id AND patch.kind = 'task.updated'
+          AND json_extract(patch.payload_json, '$.taskId') = json_extract(started.payload_json, '$.taskId')
+          AND json_type(patch.payload_json, '$.status') = 'text'
+          AND patch.activity_rank < started.activity_rank
+        ORDER BY patch.activity_rank LIMIT 1
+      ) FROM active_task_starts AS started
       UNION
       SELECT (
         SELECT activity_id FROM ranked AS patch

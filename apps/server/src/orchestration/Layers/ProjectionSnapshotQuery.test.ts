@@ -990,6 +990,30 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         );
         assert.isFalse(rows.some((row) => row.id === "finished-start"));
       }
+      // Paused tasks remain resumable, so their latest status must survive
+      // the cap too. Otherwise a reload would show a paused task as running.
+      for (const status of ["paused", "running"]) {
+        yield* sql`
+          INSERT OR REPLACE INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          ) VALUES ('task-status', 'thread-oversized-turn', 'old-turn', 'info', 'task.updated', 'Status',
+            ${JSON.stringify({ taskId: "active", status })}, 6, '2026-02-23T00:00:01.000Z')
+        `;
+        const stateDetail = yield* snapshotQuery.getThreadDetailById(
+          asThreadId("thread-oversized-turn"),
+        );
+        const stateBulk = yield* snapshotQuery.getSnapshot();
+        for (const [rows, cap] of [
+          [Option.getOrThrow(stateDetail).activities, 2000],
+          [stateBulk.threads[0]!.activities, 500],
+        ] as const) {
+          assert.equal(rows.length, cap + 4);
+          assert.deepEqual(rows.find((row) => row.id === "task-status")?.payload, {
+            taskId: "active",
+            status,
+          });
+        }
+      }
       // Both an explicit completion and a later session boundary retire the
       // retained evidence. Neither requires replaying the old task's turn.
       for (const [kind, payload] of [

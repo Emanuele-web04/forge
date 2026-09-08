@@ -120,6 +120,8 @@ export function formatLiveActivityStateLabel(state: WorkLogLiveActivity["state"]
       return "Waiting";
     case "streaming":
       return "Streaming";
+    case "paused":
+      return "Paused";
     case "completed":
       return "Completed";
     case "failed":

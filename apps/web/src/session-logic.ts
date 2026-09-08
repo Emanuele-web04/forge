@@ -297,11 +297,13 @@ export function deriveActiveBackgroundTasksState(
 ): ActiveBackgroundTasksState | null {
   const ordered = orderedActivities(activities);
   const activeTasks = new Map<string, ActiveBackgroundTask>();
+  const pausedTaskIds = new Set<string>();
   const taskBackgroundStates = collectTaskBackgroundStates(ordered);
 
   for (const activity of ordered) {
     if (backgroundTaskSessionBoundary(activity)) {
       activeTasks.clear();
+      pausedTaskIds.clear();
       continue;
     }
     if (
@@ -334,6 +336,7 @@ export function deriveActiveBackgroundTasksState(
 
     if (activity.kind === "task.completed") {
       activeTasks.delete(taskId);
+      pausedTaskIds.delete(taskId);
       continue;
     }
 
@@ -341,18 +344,19 @@ export function deriveActiveBackgroundTasksState(
     // task.completed notification following on the same turn.
     if (activity.kind === "task.updated") {
       const status = payload && typeof payload.status === "string" ? payload.status : undefined;
-      if (
-        status === "completed" ||
-        status === "failed" ||
-        status === "killed" ||
-        status === "paused"
-      ) {
+      if (status === "completed" || status === "failed" || status === "killed") {
         activeTasks.delete(taskId);
+        pausedTaskIds.delete(taskId);
+      } else if (status === "paused") {
+        pausedTaskIds.add(taskId);
+      } else if (status === "running") {
+        pausedTaskIds.delete(taskId);
       }
       continue;
     }
 
     const previous = activeTasks.get(taskId);
+    if (activity.kind === "task.started") pausedTaskIds.delete(taskId);
     if (latestTurnId === undefined && activity.kind === "task.progress" && !previous) {
       continue;
     }
@@ -379,6 +383,7 @@ export function deriveActiveBackgroundTasksState(
   const tasks = [...activeTasks.values()].filter(
     (task) =>
       task.taskType !== "plan" &&
+      !pausedTaskIds.has(task.taskId) &&
       (latestTurnId !== undefined || taskBackgroundStates.get(task.taskId) !== false) &&
       (latestTurnId !== undefined ||
         taskBackgroundStates.get(task.taskId) === true ||

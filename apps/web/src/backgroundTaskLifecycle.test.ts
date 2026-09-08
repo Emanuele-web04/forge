@@ -4,6 +4,30 @@ import { makeActivity } from "./storeTestFixtures";
 import { deriveActiveBackgroundTasksState } from "./session-logic";
 
 describe("background task evidence", () => {
+  it("keeps task identity through pause and resume", () => {
+    const started = makeActivity({
+      sequence: 1,
+      kind: "task.started",
+      payload: { taskId: "paused-task", taskType: "local_bash", isBackgrounded: true },
+    });
+    const paused = makeActivity({
+      sequence: 2,
+      kind: "task.updated",
+      payload: { taskId: "paused-task", status: "paused" },
+    });
+    expect(deriveActiveBackgroundTasksState([started, paused])).toBeNull();
+    expect(
+      deriveActiveBackgroundTasksState([
+        started,
+        paused,
+        makeActivity({
+          sequence: 3,
+          kind: "task.updated",
+          payload: { taskId: "paused-task", status: "running" },
+        }),
+      ])?.taskIds,
+    ).toEqual(["paused-task"]);
+  });
   it("lets the latest explicit transition override background tool input", () => {
     const activities = [
       makeActivity({

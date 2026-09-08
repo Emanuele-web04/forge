@@ -112,6 +112,7 @@ export type WorkLogLiveActivityState =
   | "running_tool"
   | "waiting"
   | "streaming"
+  | "paused"
   | "completed"
   | "failed"
   | "cancelled";
@@ -1344,7 +1345,7 @@ interface BackgroundTaskLink {
   taskId: string;
   startedAt: string;
   settled?: {
-    state: Extract<WorkLogLiveActivityState, "completed" | "failed" | "cancelled">;
+    state: Extract<WorkLogLiveActivityState, "completed" | "failed" | "cancelled" | "paused">;
     settledAt: string;
     summary?: string;
   };
@@ -1365,7 +1366,9 @@ function collectBackgroundTaskLinks(
     const boundary = backgroundTaskSessionBoundary(activity);
     if (boundary) {
       for (const link of linksByToolUseId.values()) {
-        link.settled ??= { state: boundary, settledAt: activity.createdAt };
+        if (!link.settled || link.settled.state === "paused") {
+          link.settled = { state: boundary, settledAt: activity.createdAt };
+        }
       }
       continue;
     }
@@ -1396,12 +1399,16 @@ function collectBackgroundTaskLinks(
     }
     const toolUseId = toolUseIdByTaskId.get(taskId);
     const link = toolUseId ? linksByToolUseId.get(toolUseId) : undefined;
-    if (!link || link.settled) {
+    if (!link || (link.settled && link.settled.state !== "paused")) {
       continue;
     }
     const status = asTrimmedString(payload?.status);
     if (activity.kind === "task.updated") {
-      if (status === "completed" || status === "failed" || status === "killed") {
+      if (status === "running") {
+        delete link.settled;
+      } else if (status === "paused") {
+        link.settled = { state: "paused", settledAt: activity.createdAt };
+      } else if (status === "completed" || status === "failed" || status === "killed") {
         link.settled = {
           state:
             status === "completed" ? "completed" : status === "failed" ? "failed" : "cancelled",
@@ -1451,14 +1458,10 @@ function linkBackgroundTaskRows(
         },
       };
     }
+    const { toolStatus: _toolStatus, ...inactiveEntry } = entry;
     return {
-      ...entry,
-      toolStatus:
-        link.settled.state === "failed"
-          ? "failed"
-          : link.settled.state === "cancelled"
-            ? "cancelled"
-            : "completed",
+      ...inactiveEntry,
+      ...(link.settled.state === "paused" ? {} : { toolStatus: link.settled.state }),
       liveActivity: {
         state: link.settled.state,
         label,
@@ -1533,7 +1536,10 @@ function reconcileSettledLiveActivities(
     : Number.NaN;
   return entries.map((entry) => {
     const liveActivity = entry.liveActivity;
-    if (!liveActivity || !isInProgressLiveActivityState(liveActivity.state)) {
+    if (
+      !liveActivity ||
+      (!isInProgressLiveActivityState(liveActivity.state) && liveActivity.state !== "paused")
+    ) {
       return entry;
     }
 

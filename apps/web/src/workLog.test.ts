@@ -272,6 +272,47 @@ describe("deriveWorkLogEntries", () => {
       { activeTurnId: TurnId.makeUnsafe("turn-1") },
     );
     expect(stopped?.toolStatus).toBe("cancelled");
+    const pausedActivities = [
+      ...activities,
+      makeActivity({
+        id: "task-paused",
+        kind: "task.updated",
+        turnId: "turn-1",
+        createdAt: "2026-02-23T00:00:05.000Z",
+        payload: { taskId: "bg-1", status: "paused" },
+      }),
+    ];
+    const [paused] = deriveWorkLogEntries(pausedActivities, TurnId.makeUnsafe("turn-1"));
+    expect(paused?.toolStatus).toBeUndefined();
+    expect(paused?.liveActivity).toMatchObject({ state: "paused", background: true });
+    const [resumed] = deriveWorkLogEntries(
+      [
+        ...pausedActivities,
+        makeActivity({
+          id: "task-resumed",
+          kind: "task.updated",
+          turnId: "turn-1",
+          createdAt: "2026-02-23T00:00:06.000Z",
+          payload: { taskId: "bg-1", status: "running" },
+        }),
+      ],
+      TurnId.makeUnsafe("turn-1"),
+    );
+    expect(resumed?.toolStatus).toBe("running");
+    const [pausedThenCompleted] = deriveWorkLogEntries(
+      [
+        ...pausedActivities,
+        makeActivity({
+          id: "paused-task-completed",
+          kind: "task.completed",
+          turnId: "turn-1",
+          createdAt: "2026-02-23T00:00:06.000Z",
+          payload: { taskId: "bg-1", status: "completed" },
+        }),
+      ],
+      TurnId.makeUnsafe("turn-1"),
+    );
+    expect(pausedThenCompleted?.toolStatus).toBe("completed");
   });
 
   it("leaves foreground tool rows alone when a subagent task shares the turn", () => {

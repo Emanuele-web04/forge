@@ -23,6 +23,14 @@ function runningActivity(overrides: Partial<WorkLogLiveActivity> = {}): WorkLogL
 }
 
 describe("live activity presentation", () => {
+  it("freezes elapsed time and labels paused background work", () => {
+    const activity = runningActivity({ state: "paused", background: true });
+    const nowMs = Date.parse("2026-07-26T14:03:00.000Z");
+    expect(liveActivityElapsedMs(activity, nowMs)).toBe(131_000);
+    expect(liveActivityElapsedMs(activity, nowMs + 60_000)).toBe(131_000);
+    expect(formatLiveActivityMeta(activity, nowMs)).toContain("Paused");
+    expect(formatLiveActivityMeta(activity, nowMs)).not.toContain("Running in background");
+  });
   it("renders recent activity and elapsed time from one normalized state", () => {
     const activity = runningActivity();
     const nowMs = Date.parse("2026-07-26T14:02:14.000Z");
