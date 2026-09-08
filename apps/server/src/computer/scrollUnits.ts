@@ -2,8 +2,10 @@
  * The pixel↔notch boundary for anything whose wheel speaks whole notches.
  *
  * Everything above the backends — the tool surface, the pane, every `scroll`
- * call — speaks logical pixels. This module holds the constant and the
- * truncate-and-carry semantics for any backend that has to convert on its side,
+ * call — speaks logical pixels. The KWin plugin takes pixels directly and
+ * converts at the last moment (value120). This module holds the constant it
+ * converts with and the truncate-and-carry semantics for any path that has to
+ * convert on this side,
  * because one scroll must mean one thing on every desktop.
  */
 
@@ -28,6 +30,8 @@
  * injectors convert pixels to notches with this constant and emit the
  * continuous axis value as notches × 15 on their own.
  *
+ * Keep in sync with `s_scrollPixelsPerNotch` in
+ * apps/server/native/computer-use-kwin/synaracomputeruseplugin.cpp.
  */
 export const SCROLL_STEP_PX = 80;
 

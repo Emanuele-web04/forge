@@ -4,8 +4,8 @@ import { SCROLL_STEP_PX, takeDiscreteSteps } from "./scrollUnits.ts";
 
 /**
  * The invariant these pins buy: one scroll means one thing on every desktop.
- * Backends that convert pixels at their boundary use SCROLL_STEP_PX = 80 and
- * the truncate-and-carry semantics asserted below.
+ * KWin converts pixels at the plugin boundary (value120), using
+ * SCROLL_STEP_PX = 80 and the truncate-and-carry semantics asserted below.
  */
 describe("takeDiscreteSteps", () => {
   it("converts exact multiples of a notch exactly", () => {

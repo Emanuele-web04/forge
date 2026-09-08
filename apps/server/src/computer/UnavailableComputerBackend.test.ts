@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { ComputerBackendError, NO_COMPUTER_CAPABILITIES } from "./ComputerBackend.ts";
 import { UnavailableComputerBackend } from "./UnavailableComputerBackend.ts";
 
-const REASON = "No computer backend is available.";
+const REASON = "No KWin compositor is answering on the session bus.";
 
 describe("UnavailableComputerBackend", () => {
   it("reports the same sentence through availability, health, and every action", async () => {

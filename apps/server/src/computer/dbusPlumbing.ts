@@ -17,7 +17,7 @@
  * @module computer/dbusPlumbing
  */
 
-/** Unwraps a D-Bus variant, however many layers deep it was wrapped. */
+/** Unwraps a `dbus-next` variant, however many layers deep it was wrapped. */
 export function unwrapDbusValue(value: unknown): unknown {
   if (isDbusVariant(value)) {
     return unwrapDbusValue((value as { readonly value: unknown }).value);
