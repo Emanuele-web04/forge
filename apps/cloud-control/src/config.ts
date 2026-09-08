@@ -35,7 +35,7 @@ export function loadCloudControlConfig(env: Record<string, string | undefined>):
   }
 
   return {
-    host: env.HOST?.trim() || "127.0.0.1",
+    host: env.HOST?.trim() || "0.0.0.0",
     port,
     databaseUrl,
     environment: environment as CloudControlConfig["environment"],
