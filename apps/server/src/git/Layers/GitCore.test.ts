@@ -184,6 +184,192 @@ it.layer(TestLayer)("git integration", (it) => {
     );
   });
 
+
+  describe("bounded working-tree and ref reads", () => {
+    for (const edited of [false, true]) {
+      it.effect(
+        "preserves " + (edited ? "edited" : "pure") + " rename metadata in a destination-only read",
+        () => Effect.gen(function* () {
+          const core = yield* GitCore;
+          const tmp = yield* makeTmpDir();
+          yield* initRepoWithCommit(tmp);
+          yield* writeTextFile(path.join(tmp, "old.txt"), "unchanged\n".repeat(20));
+          yield* git(tmp, ["add", "."]);
+          yield* git(tmp, ["commit", "-m", "base"]);
+          yield* git(tmp, ["mv", "old.txt", "new.txt"]);
+          if (edited) {
+            yield* writeTextFile(path.join(tmp, "new.txt"), "unchanged\n".repeat(19) + "edited\n");
+          }
+          const fullPatch = (yield* core.readWorkingTreePatch(tmp)).patch;
+          expect((yield* core.readWorkingTreePatch(tmp, "new.txt")).patch).toBe(fullPatch);
+          expect(fullPatch).toContain("rename from old.txt");
+          expect(fullPatch).toContain("rename to new.txt");
+        }),
+      );
+    }
+
+    it.effect("keeps an ignored renamed symbolic link as a link in ref comparisons", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, ".gitignore"), "new-link\n");
+        yield* Effect.promise(() => fs.symlink("README.md", path.join(tmp, "old-link")));
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "link"]);
+        yield* Effect.promise(() => fs.rename(path.join(tmp, "old-link"), path.join(tmp, "new-link")));
+        yield* git(tmp, ["add", "-u"]);
+        yield* git(tmp, ["add", "-f", "new-link"]);
+        const patch = (yield* core.readRefPatch(tmp, "HEAD")).patch;
+        expect(patch).toContain("new file mode 120000");
+        expect(patch).toContain("+README.md");
+        expect(yield* core.readDiffStats(tmp, "ref", "HEAD")).toEqual({
+          additions: 1, deletions: 1, fileCount: 2,
+        });
+      }),
+    );
+
+    it.effect("keeps progress lines after the retained prefix fills across chunks", () =>
+      Effect.gen(function* () {
+        const lines: string[] = [];
+        const output = yield* collectGitOutput(
+          { operation: "test output", cwd: process.cwd(), args: ["clone"] },
+          Stream.fromIterable(
+            ["first\nsecond\n", "third\nfourth\n"].map((text) => new TextEncoder().encode(text)),
+          ),
+          8,
+          (line) => Effect.sync(() => {
+            lines.push(line);
+          }),
+          "truncate",
+        );
+        expect(output).toBe("first\nse");
+        expect(lines).toEqual(["first", "second", "third", "fourth"]);
+      }),
+    );
+
+    it.effect("includes a force-added ignored rename destination with its file mode", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, ".gitignore"), "renamed.sh\n");
+        yield* writeTextFile(path.join(tmp, "old.sh"), "echo unchanged\n".repeat(5));
+        yield* Effect.promise(() => fs.chmod(path.join(tmp, "old.sh"), 0o755));
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "base"]);
+        yield* Effect.promise(() => fs.rename(path.join(tmp, "old.sh"), path.join(tmp, "renamed.sh")));
+        yield* git(tmp, ["add", "-u"]);
+        yield* git(tmp, ["add", "-f", "renamed.sh"]);
+        const patch = (yield* core.readRefPatch(tmp, "HEAD")).patch;
+        expect(patch).toContain("b/renamed.sh");
+        expect(patch).toContain("new file mode 100755");
+        expect(yield* core.readDiffStats(tmp, "ref", "HEAD")).toEqual({
+          additions: 5, deletions: 5, fileCount: 2,
+        });
+      }),
+    );
+
+    for (const initialized of [true, false]) {
+      it.effect(
+        `includes a new ${initialized ? "initialized" : "uninitialized"} gitlink and preserves the real index`,
+        () => Effect.gen(function* () {
+          const core = yield* GitCore;
+          const tmp = yield* makeTmpDir();
+          const sub = yield* makeTmpDir();
+          yield* initRepoWithCommit(tmp);
+          yield* initRepoWithCommit(sub);
+          yield* git(tmp, ["-c", "protocol.file.allow=always", "submodule", "add", sub, "vendor"]);
+          if (!initialized) {
+            yield* git(tmp, ["submodule", "deinit", "-f", "vendor"]);
+          }
+          const indexBefore = yield* Effect.promise(() => fs.readFile(path.join(tmp, ".git", "index")));
+          const patch = (yield* core.readRefPatch(tmp, "HEAD")).patch;
+          expect(patch).toContain("new file mode 160000");
+          expect(patch).toContain("+Subproject commit ");
+          expect(patch.match(/diff --git a\/vendor b\/vendor/g)).toHaveLength(1);
+          expect(yield* core.readDiffStats(tmp, "ref", "HEAD")).toEqual({
+            additions: 4, deletions: 0, fileCount: 2,
+          });
+          const indexAfter = yield* Effect.promise(() => fs.readFile(path.join(tmp, ".git", "index")));
+          expect(indexAfter).toEqual(indexBefore);
+        }),
+      );
+    }
+
+    it.effect("reads literal numeric-colon filenames from index stage zero", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "1:foo.txt"), "literal filename\n");
+        yield* git(tmp, ["add", "--", "1:foo.txt"]);
+        expect(yield* core.readFileAtRev({
+          cwd: tmp, filePath: "1:foo.txt", base: "index",
+        })).toMatchObject({ missing: false, contents: "literal filename\n" });
+      }),
+    );
+
+    it.effect("bounds tracked and untracked patches to a literal requested file", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "[a].txt"), "before\n");
+        yield* writeTextFile(path.join(tmp, "a.txt"), "before\n");
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "files"]);
+        yield* writeTextFile(path.join(tmp, "[a].txt"), "selected\n");
+        yield* writeTextFile(path.join(tmp, "a.txt"), "unrelated\n");
+        yield* writeTextFile(path.join(tmp, "untracked.txt"), "new selected\n");
+        const tracked = (yield* core.readWorkingTreePatch(tmp, "[a].txt")).patch;
+        expect(tracked).toContain("+selected");
+        expect(tracked).not.toContain("unrelated");
+        expect(tracked).not.toContain("untracked.txt");
+        const untracked = (yield* core.readWorkingTreePatch(tmp, "untracked.txt")).patch;
+        expect(untracked).toContain("+new selected");
+        expect(untracked).not.toContain("a.txt");
+        expect((yield* core.readWorkingTreePatch(tmp, "missing.txt")).patch).toBe("");
+      }),
+    );
+
+    it.effect("bounds unborn and ignored staged rename destinations without unrelated files", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithoutCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "selected.txt"), "selected\n");
+        yield* writeTextFile(path.join(tmp, "other.txt"), "other\n");
+        yield* git(tmp, ["add", "."]);
+        expect((yield* core.readWorkingTreePatch(tmp, "selected.txt")).patch).not.toContain("other.txt");
+        yield* writeTextFile(path.join(tmp, ".gitignore"), "renamed.txt\n");
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "base"]);
+        yield* Effect.promise(() => fs.rename(path.join(tmp, "selected.txt"), path.join(tmp, "renamed.txt")));
+        yield* git(tmp, ["add", "-u"]);
+        yield* git(tmp, ["add", "-f", "renamed.txt"]);
+        yield* writeTextFile(path.join(tmp, "other.txt"), "unrelated change\n");
+        const patch = (yield* core.readWorkingTreePatch(tmp, "renamed.txt")).patch;
+        expect(patch).toContain("b/renamed.txt");
+        expect(patch).not.toContain("other.txt");
+      }),
+    );
+
+    it.effect("rejects traversal and directories instead of expanding a file request", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* Effect.promise(() => fs.mkdir(path.join(tmp, "folder")));
+        yield* writeTextFile(path.join(tmp, "folder", "child.txt"), "child\n");
+        for (const filePath of ["../outside.txt", "/tmp/outside.txt", "folder", "folder/", ""]) {
+          const exit = yield* core.readWorkingTreePatch(tmp, filePath).pipe(Effect.exit);
+          expect(Exit.isFailure(exit)).toBe(true);
+        }
+      }),
+    );
+  });
+
   describe("blameLine", () => {
     it.effect("attributes a committed line at a resolved revision", () =>
       Effect.gen(function* () {

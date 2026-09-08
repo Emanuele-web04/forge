@@ -225,9 +225,11 @@ export interface GitCoreShape {
 
   /**
    * Read a unified patch for the current working tree, including untracked files.
+   * An optional file path limits the patch to that literal path and its rename source.
    */
   readonly readWorkingTreePatch: (
     cwd: string,
+    filePath?: string,
   ) => Effect.Effect<GitWorkingTreePatch, GitCommandError>;
 
   /**

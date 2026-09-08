@@ -3,7 +3,7 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { Effect, FileSystem, Layer, PlatformError, Scope } from "effect";
+import { Effect, Exit, FileSystem, Layer, PlatformError, Scope } from "effect";
 import { expect } from "vitest";
 import type { GitActionProgressEvent } from "@synara/contracts";
 import type {
@@ -382,6 +382,35 @@ const GitManagerTestLayer = GitCoreLive.pipe(
 );
 
 it.layer(GitManagerTestLayer)("GitManager", (it) => {
+  it.effect("routes file-scoped working-tree diffs and rejects other scopes", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-file-diff-");
+      yield* initRepo(repoDir);
+      yield* Effect.sync(() => {
+        fs.writeFileSync(path.join(repoDir, "selected.txt"), "selected\n");
+        fs.writeFileSync(path.join(repoDir, "other.txt"), "other\n");
+      });
+      const { manager } = yield* makeManager();
+      const { patch } = yield* manager.readWorkingTreeDiff({
+        cwd: repoDir, scope: "workingTree", filePath: "selected.txt",
+      });
+      expect(patch).toContain("selected.txt");
+      expect(patch).not.toContain("other.txt");
+      for (const scope of ["staged", "unstaged", "branch", "ref"] as const) {
+        const exit = yield* manager.readWorkingTreeDiff({
+          cwd: repoDir, scope, filePath: "selected.txt", compareRef: "HEAD",
+        }).pipe(Effect.exit);
+        expect(Exit.isFailure(exit)).toBe(true);
+        if (Exit.isFailure(exit)) expect(String(exit.cause)).toContain("only supported for the working tree");
+      }
+      expect(Exit.isFailure(yield* manager.readWorkingTreeDiffStats({
+        cwd: repoDir,
+        scope: "workingTree",
+        filePath: "selected.txt",
+      }).pipe(Effect.exit))).toBe(true);
+    }),
+  );
+
   it.effect("status includes PR metadata when branch already has an open PR", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("synara-git-manager-");

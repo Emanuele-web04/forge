@@ -622,9 +622,9 @@ export const collectGitOutput = Effect.fn(function* <E>(
     Effect.gen(function* () {
       // In truncate mode the retained prefix is complete once `text` is full:
       // keep draining the pipe so the child can exit promptly, but skip the
-      // decoding and line-scanning work for everything past the limit so a
-      // huge blob costs O(1) per chunk instead of proportional processing.
-      if (outputMode === "truncate" && text.length >= maxOutputBytes) {
+      // decoding and line-scanning work when no progress listener needs it.
+      // A capture limit must not stop later progress lines from reaching callers.
+      if (outputMode === "truncate" && text.length >= maxOutputBytes && !onLine) {
         return;
       }
       bytes += chunk.byteLength;
@@ -1651,11 +1651,22 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         };
       });
 
-    const listUntrackedFiles = (cwd: string, operationPrefix: string, env?: NodeJS.ProcessEnv) =>
+    const listUntrackedFiles = (
+      cwd: string,
+      operationPrefix: string,
+      env?: NodeJS.ProcessEnv,
+      filePath?: string,
+    ) =>
       executeGit(
         `${operationPrefix}.untrackedFiles`,
         cwd,
-        ["ls-files", "--others", "--exclude-standard", "-z"],
+        [
+          "ls-files",
+          "--others",
+          "--exclude-standard",
+          "-z",
+          ...(filePath === undefined ? [] : ["--", `:(literal)${filePath}`]),
+        ],
         { allowNonZeroExit: true, ...(env ? { env } : {}) },
       ).pipe(Effect.map((result) => result.stdout.split("\0").filter((entry) => entry.length > 0)));
 
@@ -1815,8 +1826,19 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         },
       ).pipe(Effect.map((result) => ({ patch: result.stdout })));
 
-    const readWorkingTreePatch: GitCoreShape["readWorkingTreePatch"] = (cwd) =>
+    const readWorkingTreePatch: GitCoreShape["readWorkingTreePatch"] = (cwd, filePath) =>
       Effect.gen(function* () {
+        if (
+          filePath !== undefined &&
+          (!isWorkspaceRelativePathSafe(filePath) || filePath.includes("\0"))
+        ) {
+          return yield* createGitCommandError(
+            "GitCore.readWorkingTreePatch.path",
+            cwd,
+            ["diff"],
+            "File path must be a workspace-relative file path.",
+          );
+        }
         const headExists = yield* executeGit(
           "GitCore.readWorkingTreePatch.headExists",
           cwd,
@@ -1824,19 +1846,90 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           { allowNonZeroExit: true },
         ).pipe(Effect.map((result) => result.code === 0));
 
+        const paths: string[] = filePath === undefined ? [] : [filePath];
+        let untrackedFiles: ReadonlyArray<string> | undefined;
+        if (filePath !== undefined) {
+          const isDirectory = yield* Effect.tryPromise({
+            try: () => nodeFs.lstat(nodePath.join(cwd, filePath)).then(
+              (stat) => stat.isDirectory(),
+              (error: NodeJS.ErrnoException) => {
+                if (error.code === "ENOENT" || error.code === "ENOTDIR") return false;
+                throw error;
+              },
+            ),
+            catch: (cause) =>
+              createGitCommandError(
+                "GitCore.readWorkingTreePatch.path",
+                cwd,
+                ["diff"],
+                String(cause),
+              ),
+          });
+          const baseType = headExists
+            ? yield* executeGit(
+                "GitCore.readWorkingTreePatch.baseType",
+                cwd,
+                ["cat-file", "-t", `HEAD:${filePath}`],
+                { allowNonZeroExit: true },
+              )
+            : null;
+          if (isDirectory || baseType?.stdout.trim() === "tree") {
+            return yield* createGitCommandError(
+              "GitCore.readWorkingTreePatch.path",
+              cwd,
+              ["diff"],
+              "A file diff cannot target a directory.",
+            );
+          }
+          untrackedFiles = yield* listUntrackedFiles(
+            cwd,
+            "GitCore.readWorkingTreePatch",
+            undefined,
+            filePath,
+          );
+          // A destination alone hides its rename relationship from Git. Read
+          // only name metadata when HEAD lacks the path, then include its old
+          // name in the bounded patch so a rename is not shown as a new file.
+          if (headExists && baseType?.code !== 0 && !untrackedFiles.includes(filePath)) {
+            const records = yield* executeGit(
+              "GitCore.readWorkingTreePatch.renamePaths",
+              cwd,
+              ["diff", "--name-status", "-z", "--no-ext-diff", "HEAD"],
+              { timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS },
+            ).pipe(Effect.map((result) => result.stdout.split("\0")));
+            for (let index = 0; index < records.length;) {
+              const status = records[index++];
+              const oldPath = records[index++];
+              if (status?.startsWith("R") || status?.startsWith("C")) {
+                const newPath = records[index++];
+                if (status.startsWith("R") && newPath === filePath && oldPath) paths.push(oldPath);
+              }
+            }
+          }
+        }
+
         const trackedPatch = yield* executeGit(
           "GitCore.readWorkingTreePatch.trackedPatch",
           cwd,
-          headExists
-            ? ["diff", "--patch", "--no-color", "--no-ext-diff", "HEAD"]
-            : ["diff", "--patch", "--no-color", "--no-ext-diff", EMPTY_TREE_OBJECT_ID],
+          [
+            "diff",
+            "--patch",
+            "--no-color",
+            "--no-ext-diff",
+            headExists ? "HEAD" : EMPTY_TREE_OBJECT_ID,
+            ...(filePath === undefined ? [] : ["--", ...paths.map((path) => `:(literal)${path}`)]),
+          ],
           {
             allowNonZeroExit: true,
             timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
           },
         ).pipe(Effect.map((result) => result.stdout));
 
-        const untrackedPatches = yield* readUntrackedPatches(cwd, "GitCore.readWorkingTreePatch");
+        const untrackedPatches = yield* readUntrackedPatches(
+          cwd,
+          "GitCore.readWorkingTreePatch",
+          untrackedFiles,
+        );
 
         return {
           patch: joinPatchSegments([trackedPatch, ...untrackedPatches]),
@@ -1872,7 +1965,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             ? "index"
             : yield* resolveCommitObjectId(input.cwd, baseRev, "GitCore.readFileAtRev.revParse");
 
-        const blobRef = baseRev === null ? `:${filePath}` : `${resolvedRev}:${filePath}`;
+        const blobRef = baseRev === null ? `:0:${filePath}` : `${resolvedRev}:${filePath}`;
         const sizeResult = yield* executeGit(
           "GitCore.readFileAtRev.size",
           input.cwd,
@@ -2015,7 +2108,10 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       cwd: string,
       resolvedRef: string,
       operationPrefix: string,
-      use: (env: NodeJS.ProcessEnv) => Effect.Effect<A, GitCommandError>,
+      use: (
+        env: NodeJS.ProcessEnv,
+        addedGitlinks: ReadonlySet<string>,
+      ) => Effect.Effect<A, GitCommandError>,
     ): Effect.Effect<A, GitCommandError> =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -2036,7 +2132,39 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             env,
             fallbackErrorMessage: "git read-tree failed",
           });
-          return yield* use(env);
+          // Seed new gitlinks from the real index so Git, rather than a
+          // /dev/null filesystem comparison, renders their mode and commit.
+          // This also works when a submodule has not been initialized.
+          const additions = yield* executeGit(
+            `${operationPrefix}.gitlinkAdditions`,
+            cwd,
+            [
+              "diff",
+              "--cached",
+              "--raw",
+              "--no-abbrev",
+              "--no-renames",
+              "--diff-filter=A",
+              "-z",
+              resolvedRef,
+            ],
+            { env: { GIT_OPTIONAL_LOCKS: "0" }, timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS },
+          ).pipe(Effect.map((result) => result.stdout.split("\0")));
+          const addedGitlinks = new Set<string>();
+          for (let index = 0; index + 1 < additions.length; index += 2) {
+            const entry = additions[index]?.split(" ");
+            const filePath = additions[index + 1];
+            const objectId = entry?.[3];
+            if (entry?.[1] !== "160000" || !objectId || !filePath) continue;
+            yield* executeGit(
+              `${operationPrefix}.seedGitlink`,
+              cwd,
+              ["update-index", "--add", "--replace", "--cacheinfo", `160000,${objectId},${filePath}`],
+              { env, timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS },
+            );
+            addedGitlinks.add(filePath);
+          }
+          return yield* use(env, addedGitlinks);
         }),
       );
 
@@ -2048,18 +2176,29 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       resolvedRef: string,
       env: NodeJS.ProcessEnv,
       operationPrefix: string,
+      addedGitlinks: ReadonlySet<string>,
     ) =>
       Effect.gen(function* () {
         const others = yield* listUntrackedFiles(cwd, operationPrefix, env);
         const trackedAdditions = yield* executeGit(
           `${operationPrefix}.trackedAdditions`,
           cwd,
-          ["diff", "--name-only", "--diff-filter=A", "-z", "--no-ext-diff", resolvedRef],
-          { timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS },
+          [
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "--diff-filter=A",
+            "-z",
+            "--no-ext-diff",
+            resolvedRef,
+          ],
+          { env: { GIT_OPTIONAL_LOCKS: "0" }, timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS },
         ).pipe(
           Effect.map((result) => result.stdout.split("\0").filter((entry) => entry.length > 0)),
         );
-        return [...new Set([...others, ...trackedAdditions])];
+        return [...new Set([...others, ...trackedAdditions])].filter(
+          (filePath) => !addedGitlinks.has(filePath.replace(/\/$/, "")),
+        );
       });
 
     const readRefPatch: GitCoreShape["readRefPatch"] = (cwd, ref) =>
@@ -2080,7 +2219,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           );
         }
 
-        return yield* withRefIndex(cwd, resolvedRef, "GitCore.readRefPatch", (env) =>
+        return yield* withRefIndex(cwd, resolvedRef, "GitCore.readRefPatch", (env, addedGitlinks) =>
           Effect.gen(function* () {
             const trackedPatch = yield* executeGit(
               "GitCore.readRefPatch.trackedPatch",
@@ -2097,6 +2236,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
               resolvedRef,
               env,
               "GitCore.readRefPatch",
+              addedGitlinks,
             );
             const untrackedPatches = yield* readUntrackedPatches(
               cwd,
@@ -2143,7 +2283,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                 `Cannot resolve "${compareRef}" to a commit in this repository.`,
               );
             }
-            return yield* withRefIndex(cwd, resolvedRef, "GitCore.readDiffStats", (env) =>
+            return yield* withRefIndex(cwd, resolvedRef, "GitCore.readDiffStats", (env, addedGitlinks) =>
               Effect.gen(function* () {
                 const tracked = yield* executeGit(
                   "GitCore.readDiffStats.tracked",
@@ -2159,6 +2299,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                     resolvedRef,
                     env,
                     "GitCore.readDiffStats",
+                    addedGitlinks,
                   ),
                 );
                 const totals = summarizeGitNumstatOutputs([tracked, ...untracked]);

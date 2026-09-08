@@ -1411,6 +1411,12 @@ export const makeGitManager = Effect.gen(function* () {
 
   const readWorkingTreeDiff: GitManagerShape["readWorkingTreeDiff"] = Effect.fnUntraced(
     function* (input) {
+      if (input.filePath !== undefined && input.scope !== undefined && input.scope !== "workingTree") {
+        return yield* gitManagerError(
+          "readWorkingTreeDiff",
+          "File-scoped diffs are only supported for the working tree scope.",
+        );
+      }
       switch (input.scope) {
         case "ref": {
           const compareRef = input.compareRef?.trim() ?? "";
@@ -1430,7 +1436,7 @@ export const makeGitManager = Effect.gen(function* () {
           return yield* gitCore.readUnstagedPatch(input.cwd);
         case "workingTree":
         default:
-          return yield* gitCore.readWorkingTreePatch(input.cwd);
+          return yield* gitCore.readWorkingTreePatch(input.cwd, input.filePath);
       }
     },
   );
@@ -1448,6 +1454,12 @@ export const makeGitManager = Effect.gen(function* () {
   // identical to the ones a client-side parse produced, so no surface changes what it displays.
   const readWorkingTreeDiffStats: GitManagerShape["readWorkingTreeDiffStats"] = Effect.fnUntraced(
     function* (input) {
+      if (input.filePath !== undefined) {
+        return yield* gitManagerError(
+          "readWorkingTreeDiffStats",
+          "File-scoped diff statistics are not supported.",
+        );
+      }
       if (input.scope === "ref") {
         const compareRef = input.compareRef?.trim() ?? "";
         if (compareRef.length === 0) {
