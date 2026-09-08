@@ -53,6 +53,7 @@ const SESSION_CONTEXT_RECAP_PREVIEW_MAX_CHARS = 600;
 export type ProviderContextLifecycleReason =
   | "conversation-rebuilt"
   | "fresh-session"
+  | "interrupt-escalation"
   | "native-history-unavailable"
   | "native-resume-failed";
 
@@ -522,6 +523,7 @@ function isProviderContextLifecycleReason(value: unknown): value is ProviderCont
   return (
     value === "conversation-rebuilt" ||
     value === "fresh-session" ||
+    value === "interrupt-escalation" ||
     value === "native-history-unavailable" ||
     value === "native-resume-failed"
   );
