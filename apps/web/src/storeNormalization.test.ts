@@ -387,7 +387,7 @@ describe("accounting activity retention", () => {
         sequence: index + 1,
       }),
     );
-    const normalized = normalizeActivities(activities);
+    const normalized = normalizeActivities(activities, undefined);
     expect(normalized).toHaveLength(2000);
     const accumulator = createThreadActivityAccumulator(normalized);
     accumulator.append(
