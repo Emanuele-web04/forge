@@ -38,6 +38,7 @@ import {
   formatClockDuration,
   formatClockElapsed,
   isFileChangeWorkLogEntry,
+  type TimelineEntry,
   type WorkLogEntry,
 } from "../../session-logic";
 import {
@@ -781,6 +782,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     activeFindMatchRef.current = findHighlight?.activeMatch ?? null;
   }, [findHighlight]);
   const observeTimelineRow = useTimelineRowOverlapGuard();
+  const messageTimelineEntries = useStableMessageTimelineEntries(timelineEntries);
   useTailAnchorScroll({
     listRef: resolvedListRef,
     timelineRootRef,
@@ -790,6 +792,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     anchorScrollInFlightRef: tailAnchorScrollInFlightRef,
     onAnchorSlideFinished: handleTailAnchorSlideFinished,
     contentChangeSignal: timelineEntries,
+    messageChangeSignal: messageTimelineEntries,
     animateAnchorSlide: !followLiveOutput,
   });
 
@@ -2734,6 +2737,61 @@ function useStableRows(rows: MessagesTimelineRow[]): MessagesTimelineRow[] {
   });
 
   return useMemo(() => reconcileStableTimelineRows(rows, previousStateRef), [rows]);
+}
+
+// Only message and message-segment entries should change the tail-anchor hold.
+// `timelineEntries` is rebuilt on every render, so a plain `.filter()` would
+// return a new array even when the messages themselves are unchanged. Reuse the
+// previous filtered result when the message subset is identical so the hook's
+// `messageChangeSignal` stays stable across tool/work-only timeline updates.
+type MessageTimelineEntry = Extract<
+  TimelineEntry,
+  { kind: "message" } | { kind: "message-segment" }
+>;
+
+function isMessageTimelineEntry(entry: TimelineEntry): entry is MessageTimelineEntry {
+  return entry.kind === "message" || entry.kind === "message-segment";
+}
+
+function useStableMessageTimelineEntries(
+  timelineEntries: ReturnType<typeof deriveTimelineEntries>,
+): readonly MessageTimelineEntry[] {
+  const previousRef = useRef<readonly MessageTimelineEntry[] | null>(null);
+
+  return useMemo(
+    () => reconcileMessageTimelineEntries(timelineEntries, previousRef),
+    [timelineEntries],
+  );
+}
+
+function messageTimelineEntriesEqual(
+  left: MessageTimelineEntry,
+  right: MessageTimelineEntry,
+): boolean {
+  if (left.id !== right.id || left.kind !== right.kind || left.message !== right.message) {
+    return false;
+  }
+  if (left.kind === "message-segment" && right.kind === "message-segment") {
+    return left.segmentIndex === right.segmentIndex;
+  }
+  return true;
+}
+
+function reconcileMessageTimelineEntries(
+  timelineEntries: readonly TimelineEntry[],
+  previousRef: RefObject<readonly MessageTimelineEntry[] | null>,
+): readonly MessageTimelineEntry[] {
+  const filtered = timelineEntries.filter(isMessageTimelineEntry);
+  const previous = previousRef.current;
+  if (
+    previous != null &&
+    previous.length === filtered.length &&
+    filtered.every((entry, index) => messageTimelineEntriesEqual(entry, previous[index]!))
+  ) {
+    return previous;
+  }
+  previousRef.current = filtered;
+  return filtered;
 }
 
 // The reconciliation reads and rewrites the previous-state cache during the memo,

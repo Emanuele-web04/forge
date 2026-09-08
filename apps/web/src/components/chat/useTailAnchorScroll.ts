@@ -69,8 +69,10 @@ interface UseTailAnchorScrollOptions {
   anchorScrollInFlightRef?: RefObject<boolean> | undefined;
   /** Lets the list suspend its own end-follow until the anchor slide is settled. */
   onAnchorSlideFinished?: ((messageId: MessageId) => void) | undefined;
-  /** Changes whenever transcript content may have moved the anchor row. */
+  /** Changes whenever transcript geometry may have moved the anchor row. */
   contentChangeSignal?: unknown;
+  /** Changes only when a real transcript message is added or updated. */
+  messageChangeSignal?: unknown;
   /** Normal sends slide; steering an already-streaming turn anchors immediately. */
   animateAnchorSlide?: boolean | undefined;
 }
@@ -126,6 +128,7 @@ export function useTailAnchorScroll({
   anchorScrollInFlightRef,
   onAnchorSlideFinished,
   contentChangeSignal,
+  messageChangeSignal,
   animateAnchorSlide = true,
 }: UseTailAnchorScrollOptions): void {
   const anchorSlideCorrectionRef = useRef<(() => void) | null>(null);
@@ -418,13 +421,23 @@ export function useTailAnchorScroll({
     };
   }, [anchorMessageId, anchorScrollInFlightRef, listRef, onAnchorSlideFinished, timelineRootRef]);
 
-  // Receiving content is activity even before deferred Markdown changes row height.
-  // Keep the hold alive until both content arrival and geometry have settled.
+  // Only real message changes should restart the quiet-period hold. Tool and
+  // work activity also update the full timeline, but they must not extend the
+  // live-output anchor past the message-stream settle window.
+  //
+  // This effect is declared before the geometry correction so that, when a new
+  // message and a content change land in the same commit, the timestamp updates
+  // before the correction runs. If the correction ran first it could observe
+  // the old timestamp, finish the hold, and stop the slide before the new
+  // message gets a chance to extend ownership.
+  useLayoutEffect(() => {
+    lastContentChangeAtRef.current = performance.now();
+  }, [messageChangeSignal]);
+
   // React commits streamed text before paint. Re-apply the current slide
   // coordinate in that layout window so a chunk landing above the anchor cannot
   // push the anchored message for one visible frame.
   useLayoutEffect(() => {
-    lastContentChangeAtRef.current = performance.now();
     anchorSlideCorrectionRef.current?.();
   }, [contentChangeSignal]);
 }
