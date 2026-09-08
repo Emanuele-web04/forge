@@ -74,6 +74,7 @@ type ProviderInstallTextKey =
   | "claudeBinaryPath"
   | "codexBinaryPath"
   | "codexHomePath"
+  | "codexLaunchArgs"
   | "cursorBinaryPath"
   | "cursorApiEndpoint"
   | "devinBinaryPath"
@@ -151,6 +152,19 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
         label: "CODEX_HOME path",
         placeholder: "CODEX_HOME",
         description: "Optional custom Codex home and config directory.",
+      },
+      {
+        kind: "text",
+        settingsKey: "codexLaunchArgs",
+        label: "Codex launch args",
+        placeholder: '-c model_provider="apitoken"',
+        description: (
+          <>
+            Extra CLI flags inserted before <code>app-server</code>. Tokens after an unquoted{" "}
+            <code>--</code> are appended after <code>app-server</code>. Example:{" "}
+            <code>-c model_provider=&quot;apitoken&quot;</code>.
+          </>
+        ),
       },
     ],
   },

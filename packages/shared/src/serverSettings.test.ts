@@ -14,6 +14,7 @@ describe("providerStartOptionsFromServerSettings", () => {
           ...DEFAULT_SERVER_SETTINGS.providers.codex,
           binaryPath: "",
           homePath: "",
+          launchArgs: "",
         },
         claudeAgent: {
           ...DEFAULT_SERVER_SETTINGS.providers.claudeAgent,
@@ -83,6 +84,7 @@ describe("providerStartOptionsFromServerSettings", () => {
           ...DEFAULT_SERVER_SETTINGS.providers.codex,
           binaryPath: "/custom/bin/codex",
           homePath: "/custom/codex-home",
+          launchArgs: '-c model_provider="apitoken"',
         },
         opencode: {
           ...DEFAULT_SERVER_SETTINGS.providers.opencode,
@@ -102,6 +104,7 @@ describe("providerStartOptionsFromServerSettings", () => {
     expect(providerOptions.codex).toEqual({
       binaryPath: "/custom/bin/codex",
       homePath: "/custom/codex-home",
+      launchArgs: '-c model_provider="apitoken"',
     });
     expect(providerOptions.opencode).toEqual({
       binaryPath: "/custom/bin/opencode",

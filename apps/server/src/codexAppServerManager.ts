@@ -38,6 +38,7 @@ import { prewarmChatGptVoiceTranscriptionConnection } from "@synara/shared/chatG
 import { getModelSelectionBooleanOptionValue, normalizeModelSlug } from "@synara/shared/model";
 import { decodeSubagentReceiverThreadIds } from "@synara/shared/subagents";
 import { spawnProcess } from "@synara/shared/processRuntime";
+import { buildCodexAppServerArgs } from "@synara/shared/providerLaunchArgs";
 import { Effect, ServiceMap } from "effect";
 
 import {
@@ -713,8 +714,9 @@ function spawnCodexAppServer(input: {
   readonly binaryPath: string;
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
+  readonly launchArgs?: string;
 }): ChildProcessWithoutNullStreams {
-  return spawnProcess(input.binaryPath, ["app-server"], {
+  return spawnProcess(input.binaryPath, buildCodexAppServerArgs(input.launchArgs), {
     requireExecutable: true,
     cwd: input.cwd,
     env: input.env,
@@ -1066,6 +1068,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const codexOptions = readCodexProviderOptions(input);
       const codexBinaryPath = codexOptions.binaryPath ?? "codex";
       const codexHomePath = codexOptions.homePath;
+      const codexLaunchArgs = codexOptions.launchArgs;
       await this.assertSupportedCodexCliVersion({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
@@ -1082,6 +1085,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           codexHomePath,
           gatewaySessionLease?.connection.bearerToken,
         ),
+        ...(codexLaunchArgs ? { launchArgs: codexLaunchArgs } : {}),
       });
 
       context = {
@@ -1867,6 +1871,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       });
       const codexBinaryPath = codexOptions.binaryPath ?? "codex";
       const codexHomePath = codexOptions.homePath;
+      const codexLaunchArgs = codexOptions.launchArgs;
       await this.assertSupportedCodexCliVersion({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
@@ -1883,6 +1888,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           codexHomePath,
           gatewaySessionLease?.connection.bearerToken,
         ),
+        ...(codexLaunchArgs ? { launchArgs: codexLaunchArgs } : {}),
       });
 
       context = {
@@ -4077,6 +4083,7 @@ function normalizeProviderThreadId(value: string | undefined): string | undefine
 function readCodexProviderOptions(input: CodexAppServerStartSessionInput): {
   readonly binaryPath?: string;
   readonly homePath?: string;
+  readonly launchArgs?: string;
 } {
   const options = input.providerOptions?.codex;
   if (!options) {
@@ -4085,6 +4092,7 @@ function readCodexProviderOptions(input: CodexAppServerStartSessionInput): {
   return {
     ...(options.binaryPath ? { binaryPath: options.binaryPath } : {}),
     ...(options.homePath ? { homePath: options.homePath } : {}),
+    ...(options.launchArgs?.trim() ? { launchArgs: options.launchArgs.trim() } : {}),
   };
 }
 

@@ -18,6 +18,9 @@ export const CodexServerProviderSettings = Schema.Struct({
   ...ProviderSettingsBase,
   binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "codex")),
   homePath: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
+  launchArgs: Schema.String.check(Schema.isMaxLength(4096)).pipe(
+    Schema.withDecodingDefault(() => ""),
+  ),
 });
 export type CodexServerProviderSettings = typeof CodexServerProviderSettings.Type;
 
@@ -149,6 +152,7 @@ export const ServerSettingsPatch = Schema.Struct({
         Schema.Struct({
           ...ProviderSettingsBasePatch,
           homePath: Schema.optionalKey(StringSetting),
+          launchArgs: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(4096))),
         }),
       ),
       claudeAgent: Schema.optionalKey(
