@@ -17,6 +17,7 @@ import {
 import { ComputerTargetError } from "../computer/uiTreeTargeting.ts";
 import { ComputerManager } from "../computer/ComputerManager.ts";
 import { FakeComputerBackend } from "../computer/FakeComputerBackend.ts";
+import { isModelDesktopObservationActive } from "../computer/modelDesktopObservation.ts";
 import {
   COMPUTER_APPROVAL_REQUIRED_TOOLS,
   computerToolInstructions,
@@ -141,6 +142,50 @@ function windowIdDescription(byName: ToolsByName, tool: string): string {
 }
 
 describe("agent gateway computer tools", () => {
+  it("reserves model observation authority for explicit perception tools", async () => {
+    const { backend, manager, call } = await setup();
+    const observations: boolean[] = [];
+    const getState = backend.getState.bind(backend);
+    const capture = backend.captureScreenshot.bind(backend);
+    backend.getState = async (options) => {
+      observations.push(isModelDesktopObservationActive());
+      return getState(options);
+    };
+    backend.captureScreenshot = async (request) => {
+      observations.push(isModelDesktopObservationActive());
+      return capture(request);
+    };
+    try {
+      for (const [name, args] of [
+        ["computer_get_state", { window_id: "fake-calculator" }],
+        ["computer_screenshot", { window_id: "fake-calculator" }],
+        [
+          "computer_wait",
+          {
+            window_id: "fake-calculator",
+            label: "Display",
+            duration_ms: 0,
+            include_screenshot: false,
+          },
+        ],
+      ] as const) {
+        observations.length = 0;
+        expect((await call(name, args)).isError).not.toBe(true);
+        expect(observations.length).toBeGreaterThan(0);
+        expect(observations.every(Boolean)).toBe(true);
+        expect(isModelDesktopObservationActive()).toBe(false);
+      }
+      observations.length = 0;
+      expect(
+        (await call("computer_set_value", { label: "Display", value: "468" })).isError,
+      ).not.toBe(true);
+      expect(observations.length).toBeGreaterThan(0);
+      expect(observations.every((active) => !active)).toBe(true);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
   it("describes exact targeting separately from foreground promotion", async () => {
     const { byName } = await setup();
     const notes = computerToolInstructions();
@@ -183,7 +228,7 @@ describe("agent gateway computer tools", () => {
   it("spells out all three delivery verdicts once, in the shared notes", async () => {
     // Collapsing "unverifiable" into "not confirmed" buys a screenshot after
     // every keystroke on the many native controls that expose no readable value.
-    // The full three-way explanation lives in the MCP instructions now — it was
+    // The full three-way explanation lives in the active host context now — it was
     // eleven identical copies across the tool schemas — and each input tool
     // carries the short form plus a pointer to it.
     const { byName } = await setup();
@@ -282,12 +327,9 @@ describe("agent gateway computer tools", () => {
     }
   });
 
-  it("defers every computer tool: none preloaded, none carrying _meta", async () => {
+  it("does not force provider preloading and keeps every computer tool capability-gated", async () => {
     const { tools, byName } = await setup();
-    // Computer control is available to any chat the backend serves, so preloading
-    // even the act-loop schemas would tax every chat's prompt. All of them are
-    // deferred instead — skill semantics: a chat pays ~0 tokens until an agent
-    // reaches for the desktop, at which point one tool search pulls the family in.
+    // Capability filtering controls exposure; vendor tool-search behavior varies.
     const preloaded = tools.filter(
       (tool) => tool.definition._meta?.["anthropic/alwaysLoad"] === true,
     );
@@ -322,6 +364,7 @@ describe("agent gateway computer tools", () => {
     // its coordinates are in. Region and scale still travel for the pane and
     // for debugging, but the model is never asked to do arithmetic with them.
     const text = state.content.find((entry) => entry.type === "text");
+    if (text?.type === "text") expect(text.text).toBe(JSON.stringify(JSON.parse(text.text)));
     expect(JSON.parse(text?.type === "text" ? text.text : "{}")).toMatchObject({
       screenshot: {
         screenshotId: "shot-1",

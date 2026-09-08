@@ -1,3 +1,5 @@
+import type { ComposerComputerControlMode } from "../computerControlMode";
+import { requestCurrentAppSnap } from "../appSnap.logic";
 // FILE: BranchToolbar.tsx
 // Purpose: Renders the chat thread's compact workspace controls, including the
 // local usage popover, inline workspace handoff actions, and runtime access toggle.
@@ -23,7 +25,6 @@ import {
   RUNTIME_MODE_PRESENTATION,
   providerModelSupportsAutoRuntimeMode,
 } from "../lib/runtimeMode";
-import { Badge } from "./ui/badge";
 import { useStore } from "../store";
 import {
   createAccountRateLimitThreadsSelector,
@@ -61,7 +62,6 @@ import { Collapsible, CollapsiblePanel } from "./ui/collapsible";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
 import {
   Menu,
-  MenuCheckboxItem,
   MenuGroup,
   MenuGroupLabel,
   MenuItem,
@@ -175,6 +175,8 @@ export interface RuntimeUsageControlsProps {
   providerStatus?: ServerProviderStatus | null | undefined;
   runtimeMode?: RuntimeMode | undefined;
   onRuntimeModeChange?: ((mode: RuntimeMode) => void) | undefined;
+  computerControlMode?: ComposerComputerControlMode | undefined;
+  onComputerControlModeChange?: ((mode: ComposerComputerControlMode) => void) | undefined;
   computerControlEnabled?: boolean | undefined;
   computerControlAvailable?: boolean | undefined;
   computerControlSupported?: boolean | undefined;
@@ -198,6 +200,8 @@ export function RuntimeUsageControls({
   runtimeMode,
   onRuntimeModeChange,
   computerControlEnabled = false,
+  computerControlMode = computerControlEnabled ? "chat" : "off",
+  onComputerControlModeChange,
   computerControlAvailable = false,
   computerControlSupported = computerControlAvailable,
   computerControlDisabledReason = "Checking computer availability.",
@@ -248,7 +252,11 @@ export function RuntimeUsageControls({
               {computerControlEnabled ? (
                 <>
                   <MonitorIcon className="size-3.5 shrink-0" aria-hidden />
-                  <span className="sr-only">Computer control is on.</span>
+                  <span className="text-xs">
+                    {computerControlMode === "request"
+                      ? "Computer for this request."
+                      : "Computer enabled for this chat."}
+                  </span>
                 </>
               ) : null}
               <ChevronDownIcon
@@ -295,30 +303,39 @@ export function RuntimeUsageControls({
                 icon={<CentralIcon name="shield-access" className="size-4 shrink-0" />}
               />
             </MenuRadioGroup>
-            {onComputerControlChange ? (
+            {onComputerControlModeChange || onComputerControlChange ? (
               <>
                 <MenuSeparator />
-                <MenuCheckboxItem
-                  variant="switch"
-                  checked={computerControlEnabled}
-                  disabled={!computerControlSupported}
-                  onCheckedChange={(checked) => onComputerControlChange(checked === true)}
-                  title={computerControlAvailable ? undefined : computerControlDisabledReason}
+                <MenuRadioGroup
+                  value={computerControlMode}
+                  onValueChange={(value) => {
+                    if (value !== "off" && value !== "request" && value !== "chat") return;
+                    if (onComputerControlModeChange) onComputerControlModeChange(value);
+                    else onComputerControlChange?.(value !== "off");
+                  }}
                 >
-                  <span className="flex min-w-0 flex-col gap-0.5 py-0.5">
-                    <span className="flex items-center gap-1.5">
-                      <span className="font-medium text-xs">Computer control</span>
-                      <Badge variant="warning" size="sm">
-                        Beta
-                      </Badge>
-                    </span>
-                    <span className="text-[11px] leading-4 text-muted-foreground">
-                      {computerControlAvailable
-                        ? "Lets the agent see and control the desktop with a separate cursor."
-                        : computerControlDisabledReason}
-                    </span>
-                  </span>
-                </MenuCheckboxItem>
+                  <MenuRadioItem value="off">Computer: Off</MenuRadioItem>
+                  <MenuRadioItem
+                    value="request"
+                    disabled={!computerControlSupported}
+                    title={computerControlAvailable ? undefined : computerControlDisabledReason}
+                  >
+                    Computer: For this request
+                  </MenuRadioItem>
+                  <MenuRadioItem
+                    value="chat"
+                    disabled={!computerControlSupported}
+                    title={computerControlAvailable ? undefined : computerControlDisabledReason}
+                  >
+                    Computer: Keep enabled in this chat
+                  </MenuRadioItem>
+                </MenuRadioGroup>
+              </>
+            ) : null}
+            {typeof window !== "undefined" && window.desktopBridge?.appSnap?.captureCurrentApp ? (
+              <>
+                <MenuSeparator />
+                <MenuItem onClick={requestCurrentAppSnap}>Share current app</MenuItem>
               </>
             ) : null}
           </ComposerPickerMenuPopup>

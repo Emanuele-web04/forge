@@ -55,7 +55,10 @@ import {
   buildCodexMcpConfigToml,
   SYNARA_AGENT_GATEWAY_TOKEN_ENV,
 } from "./agentGateway/mcpInjection.ts";
-import { SYNARA_GATEWAY_HARNESS_POLICY } from "./agentGateway/harnessPolicy.ts";
+import {
+  SYNARA_GATEWAY_HARNESS_POLICY,
+  renderSynaraHarnessPolicy,
+} from "./agentGateway/harnessPolicy.ts";
 import {
   AGENT_GATEWAY_TURN_AUTHORITY_RETIRED,
   type AgentGatewayCapabilityInput,
@@ -158,6 +161,7 @@ type CodexSessionApprovalOverride = {
 };
 
 interface CodexSessionContext {
+  readonly enableComputerControl?: boolean;
   readonly gatewaySessionLease?: AgentGatewaySessionLease;
   /** Set once this runtime's bearer is permanently fenced to a terminal turn. */
   gatewayCredentialRetired?: boolean;
@@ -758,7 +762,8 @@ export function buildCodexInitializeParams() {
   } as const;
 }
 
-function buildCodexCollaborationMode(input: {
+export function buildCodexCollaborationMode(input: {
+  readonly enableComputerControl?: boolean;
   readonly interactionMode?: ProviderInteractionMode;
   readonly model?: string;
   readonly effort?: string;
@@ -772,20 +777,30 @@ function buildCodexCollaborationMode(input: {
       };
     }
   | undefined {
-  if (input.interactionMode === undefined) {
+  if (input.interactionMode === undefined && input.enableComputerControl !== true) {
     return undefined;
   }
   const model = normalizeCodexModelSlug(input.model) ?? "gpt-5.3-codex";
   const nativeMode = input.interactionMode === "plan" ? "plan" : "default";
+  const instructions =
+    nativeMode === "plan"
+      ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
+      : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS;
   return {
     mode: nativeMode,
     settings: {
       model,
       reasoning_effort: input.effort ?? "medium",
       developer_instructions:
-        nativeMode === "plan"
-          ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
-          : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
+        input.enableComputerControl === true
+          ? instructions.replace(
+              SYNARA_GATEWAY_HARNESS_POLICY,
+              renderSynaraHarnessPolicy({
+                gatewayControlAvailable: true,
+                enableComputerControl: true,
+              }),
+            )
+          : instructions,
     },
   };
 }
@@ -1101,6 +1116,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       });
 
       context = {
+        enableComputerControl:
+          gatewaySessionLease !== undefined &&
+          input.agentGatewayCapabilityInput?.enableComputerControl === true,
         ...(gatewaySessionLease ? { gatewaySessionLease } : {}),
         session,
         ...(input.lifecycleGeneration !== undefined
@@ -1383,6 +1401,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       turnStartParams.effort = input.effort;
     }
     const collaborationMode = buildCodexCollaborationMode({
+      enableComputerControl: context.enableComputerControl === true,
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
       ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
       ...(input.effort !== undefined ? { effort: input.effort } : {}),

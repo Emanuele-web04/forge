@@ -86,3 +86,23 @@ describe("normalizeComposerImageSource", () => {
     });
   });
 });
+
+describe("AppSnap upload source label", () => {
+  it("keeps provenance bounded and removes control characters", async () => {
+    const { appSnapUploadName } = await import("./composerImageSource");
+    const name = appSnapUploadName(
+      {
+        kind: "appsnap",
+        captureId: "capture",
+        capturedAt: "2026-09-08T12:00:00Z",
+        appName: "Preview\nApp",
+        windowTitle: "a/".repeat(200),
+      },
+      "capture.webp",
+    );
+    expect(name).toContain("AppSnap - Preview App - ");
+    expect(name).toContain("2026-09-08T12:00:00.000Z.webp");
+    expect(name).not.toMatch(/[\n/\\]/);
+    expect(name.length).toBeLessThan(180);
+  });
+});

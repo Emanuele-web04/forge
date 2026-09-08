@@ -154,10 +154,10 @@ describe("wsNativeApi", () => {
       includeScreenshot: false,
     });
     requestMock.mockClear();
-    requestMock.mockResolvedValue({ enabled: false });
+    requestMock.mockResolvedValue({ enabled: false, generation: 1 });
     await expect(
       api.computer.setControlEnabled({ threadId: ThreadId.makeUnsafe("thread-1"), enabled: false }),
-    ).resolves.toEqual({ enabled: false });
+    ).resolves.toEqual({ enabled: false, generation: 1 });
     expect(requestMock).toHaveBeenCalledExactlyOnceWith("computer.setControlEnabled", {
       threadId: "thread-1",
       enabled: false,

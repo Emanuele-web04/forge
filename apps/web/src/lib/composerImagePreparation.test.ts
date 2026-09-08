@@ -99,3 +99,34 @@ describe("prepareComposerImageFile", () => {
     expect(createImageBitmapMock).not.toHaveBeenCalled();
   });
 });
+
+describe("model screen image budget", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it("keeps small captures identical and resizes only the upload copy", async () => {
+    const { prepareModelScreenImage } = await import("./composerImagePreparation");
+    const small = new File([pngHeader(800, 600)], "small.png", { type: "image/png" });
+    await expect(prepareModelScreenImage(small)).resolves.toBe(small);
+    const original = new File([pngHeader(3072, 2048)], "large.png", { type: "image/png" });
+    const close = vi.fn();
+    const decode = vi.fn().mockResolvedValue({ width: 1536, height: 1024, close });
+    vi.stubGlobal("createImageBitmap", decode);
+    const drawImage = vi.fn();
+    vi.stubGlobal("document", {
+      createElement: () => ({
+        width: 0,
+        height: 0,
+        getContext: () => ({ fillRect: vi.fn(), drawImage }),
+        toBlob: (callback: BlobCallback, type: string) => callback(new Blob(["encoded"], { type })),
+      }),
+    });
+    const copy = await prepareModelScreenImage(original);
+    expect(copy).not.toBe(original);
+    expect(original.name).toBe("large.png");
+    expect(decode).toHaveBeenCalledWith(
+      original,
+      expect.objectContaining({ resizeWidth: 1536, resizeHeight: 1024 }),
+    );
+    expect(drawImage).toHaveBeenCalledWith(expect.anything(), 0, 0, 1536, 1024);
+    expect(close).toHaveBeenCalledOnce();
+  });
+});

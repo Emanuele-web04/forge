@@ -1,3 +1,4 @@
+import { MODEL_SCREEN_IMAGE_MAX_DIMENSION } from "@synara/shared/modelImageBudget";
 import {
   COMPUTER_DELIVERY_PATH_MAX_LENGTH,
   COMPUTER_MESSAGE_MAX_LENGTH,
@@ -43,7 +44,7 @@ import {
  * scaled, and the real savings comes from the byte-identical dedupe
  * (`screenshotUnchanged`) that never resends an unchanged frame at all.
  */
-export const COMPUTER_AGENT_IMAGE_MAX_DIMENSION = 1_536;
+export const COMPUTER_AGENT_IMAGE_MAX_DIMENSION = MODEL_SCREEN_IMAGE_MAX_DIMENSION;
 /**
  * Longest screenshot side in pixels before a capture is downscaled. Identical
  * to the observation budget, and for the identical reason: both pictures are

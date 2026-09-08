@@ -26,7 +26,7 @@ export function makeAgentGatewaySessionRegistry(options?: {
   const now = options?.now ?? Date.now;
   const randomId = options?.randomId ?? randomUUID;
   interface RegisteredSession {
-    readonly identity: AgentGatewaySessionIdentity;
+    identity: AgentGatewaySessionIdentity;
     retiredWriteTurnId: string | undefined;
   }
   const sessions = new Map<string, RegisteredSession>();
@@ -45,7 +45,20 @@ export function makeAgentGatewaySessionRegistry(options?: {
   return {
     setComputerControlEnabled: (threadId, enabled) => {
       if (enabled) disabledComputerThreads.delete(threadId);
-      else disabledComputerThreads.add(threadId);
+      else {
+        disabledComputerThreads.add(threadId);
+        for (const row of sessionsByKey.values()) {
+          if (row.identity.threadId !== threadId) continue;
+          row.identity = {
+            ...row.identity,
+            capabilities: new Set(
+              [...row.identity.capabilities].filter(
+                (capability) => capability !== "computer:control",
+              ),
+            ),
+          };
+        }
+      }
     },
     computerControlProvisioned: (threadId, provider) => {
       const candidates = [...sessionsByKey.values()].filter(
@@ -68,7 +81,10 @@ export function makeAgentGatewaySessionRegistry(options?: {
         issuedAt,
         capabilities: new Set<AgentGatewayCapability>([
           ...PROVIDER_SESSION_CAPABILITIES,
-          ...(issueOptions?.additionalCapabilities ?? []),
+          ...(issueOptions?.additionalCapabilities ?? []).filter(
+            (capability) =>
+              capability !== "computer:control" || !disabledComputerThreads.has(threadId),
+          ),
         ]),
       };
       const registered: RegisteredSession = {

@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./modelImageBudget": {
+      "types": "./src/modelImageBudget.ts",
+      "import": "./src/modelImageBudget.ts"
+    },
     "./model": {
       "types": "./src/model.ts",
       "import": "./src/model.ts"

@@ -173,6 +173,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     show: (input) => ipcRenderer.invoke(IPC.notificationsShow, input),
   },
   appSnap: {
+    captureCurrentApp: (requestId) => ipcRenderer.invoke(IPC.appSnap.captureCurrentApp, requestId),
+    cancelCapture: (requestId) => ipcRenderer.invoke(IPC.appSnap.cancelCapture, requestId),
     getState: () => ipcRenderer.invoke(IPC.appSnap.getState),
     setEnabled: (enabled) => ipcRenderer.invoke(IPC.appSnap.setEnabled, enabled),
     checkShortcut: (shortcut) => ipcRenderer.invoke(IPC.appSnap.checkShortcut, shortcut),

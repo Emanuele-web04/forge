@@ -6,21 +6,29 @@ import { CuaTransportError, type cuaRequest } from "@synara/shared/cuaDriverProt
 import { ComputerManager } from "./ComputerManager.ts";
 import { FakeComputerBackend } from "./FakeComputerBackend.ts";
 import { withDesktopDeliveryMode } from "./DesktopOperationQueue.ts";
+import { withModelDesktopObservation } from "./modelDesktopObservation.ts";
 
 const isTyping = (name?: string) => name === "type_text";
 
 function fixture() {
-  const calls: Array<{ name?: string; args?: Record<string, unknown> }> = [];
+  const calls: Array<{
+    name?: string;
+    args?: Record<string, unknown>;
+    modelObservation?: boolean;
+  }> = [];
   let bounds = { x: -300, y: 20, width: 200, height: 100 };
   let live = true;
   let failure: Error | undefined;
   let nativeRefusal = false;
+  let desktopPaused = false;
+  let desktopEpoch = 0;
   let missingPermissions = false;
   let captureWindowId = 20;
   let capturePid = 10;
   let visible = true;
   let ready: Record<string, unknown> = { ready: true, pid: 10, window_id: 20 };
   let afterCapture: (() => void) | undefined;
+  let overviewWait: Promise<void> | undefined;
   let actionResult: Record<string, unknown> = {
     route: "synthetic_events",
     delivery: { mode: "background" },
@@ -33,11 +41,27 @@ function fixture() {
   header.writeUInt32BE(200, 20);
   const request = vi.fn(async (_endpoint, request) => {
     calls.push(request);
-    if (request.method === "probe" || request.method === "stop") return { ok: true };
+    const responseEpoch = desktopEpoch;
+    if (request.method === "probe" || request.method === "stop")
+      return { ok: true, desktopEpoch: responseEpoch };
+    if (desktopPaused && (request.name === "click" || isTyping(request.name)))
+      return {
+        ok: true,
+        desktopEpoch: responseEpoch,
+        result: {
+          isError: true,
+          structuredContent: {
+            effect: "refused",
+            code: "desktop_input_paused",
+            message: "Desktop is locked.",
+          },
+        },
+      };
     if (isTyping(request.name) && failure) throw failure;
     if (isTyping(request.name) && nativeRefusal)
       return {
         ok: true,
+        desktopEpoch: responseEpoch,
         result: {
           isError: true,
           structuredContent: { effect: "refused", code: "same_pid_keyboard_ambiguity" },
@@ -66,6 +90,17 @@ function fixture() {
       };
     if (request.name === "check_input_ready") data = ready;
     if (request.name === "get_screen_size") data = { width: 1000, height: 800, scale_factor: 2 };
+    if (request.name === "get_desktop_state") {
+      await overviewWait;
+      return {
+        ok: true,
+        desktopEpoch: responseEpoch,
+        result: {
+          structuredContent: { screen_width: 200, screen_height: 100 },
+          content: [{ type: "image", mimeType: "image/png", data: header.toString("base64") }],
+        },
+      };
+    }
     if (request.name === "get_window_state") {
       const result = {
         structuredContent: {
@@ -78,15 +113,24 @@ function fixture() {
         content: [{ type: "image", mimeType: "image/png", data: header.toString("base64") }],
       };
       afterCapture?.();
-      return { ok: true, result };
+      return { ok: true, result, desktopEpoch: responseEpoch };
     }
     if (isTyping(request.name)) data = actionResult;
-    return { ok: true, result: { structuredContent: data } };
+    return { ok: true, result: { structuredContent: data }, desktopEpoch: responseEpoch };
   }) as unknown as typeof cuaRequest;
   const backend = new CuaComputerBackend({ endpoint: "/fixture-only", request });
   return {
     backend,
+    pauseDesktop: (paused: boolean) => {
+      desktopPaused = paused;
+    },
+    changeDesktop: () => {
+      desktopEpoch += 1;
+    },
     calls,
+    delayOverview: (wait: Promise<void>) => {
+      overviewWait = wait;
+    },
     setVisible: (value: boolean) => {
       visible = value;
     },
@@ -124,6 +168,69 @@ function fixture() {
 }
 
 describe("Cua native boundary", () => {
+  it("marks only scoped model state reads and keeps inherited preview captures unmarked", async () => {
+    const f = fixture();
+    try {
+      await f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+      expect(f.calls.find((call) => call.name === "get_window_state")?.modelObservation).toBe(
+        false,
+      );
+      f.calls.length = 0;
+      await withModelDesktopObservation(async () => {
+        await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
+        await f.backend.getState({ includeScreenshot: true });
+        await f.backend.attachStream(() => undefined);
+      });
+      expect(f.calls.find((call) => call.name === "get_window_state")?.modelObservation).toBe(true);
+      expect(
+        f.calls
+          .filter((call) => call.name === "get_desktop_state")
+          .map((call) => call.modelObservation),
+      ).toEqual([true, false]);
+      expect(
+        f.calls
+          .filter((call) => !["get_window_state", "get_desktop_state"].includes(call.name ?? ""))
+          .every((call) => call.modelObservation === undefined),
+      ).toBe(true);
+    } finally {
+      await f.backend.dispose();
+    }
+  });
+  it("invalidates old coordinate grounding when lock and resume occurred between requests", async () => {
+    const f = fixture();
+    await f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+    f.changeDesktop();
+    await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).rejects.toMatchObject({
+      effect: "not-dispatched",
+      code: "stale_geometry",
+    });
+    expect(f.calls.some((call) => call.name === "click")).toBe(false);
+    await withModelDesktopObservation(() =>
+      f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" }),
+    );
+    await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).resolves.toBeDefined();
+  });
+  it("rejects a delayed observation from before a known desktop interruption", async () => {
+    const f = fixture();
+    let finish!: () => void;
+    f.delayOverview(
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const observing = f.backend.getState({ includeScreenshot: true });
+    const failure = expect(observing).rejects.toMatchObject({
+      effect: "not-dispatched",
+      code: "stale_desktop_epoch",
+    });
+    await vi.waitFor(() =>
+      expect(f.calls.some((call) => call.name === "get_desktop_state")).toBe(true),
+    );
+    f.changeDesktop();
+    await f.backend.checkInputReady("cua:10:20");
+    finish();
+    await failure;
+  });
   it("checks exact native input readiness without capturing or dispatching input", async () => {
     const f = fixture();
     await expect(f.backend.checkInputReady("cua:10:20")).resolves.toBeUndefined();
@@ -189,7 +296,7 @@ describe("Cua native boundary", () => {
   it("rejects a drag if its prepared window moves before input admission", async () => {
     const f = fixture();
     await f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
-    f.moveAfterCapture();
+    f.move();
     await expect(
       withDesktopDeliveryMode("foreground", () =>
         f.backend.drag({ x: -275, y: 30 }, { x: -225, y: 50 }, 500, "cua:10:20"),
@@ -209,10 +316,11 @@ describe("Cua native boundary", () => {
           pid: 10,
           window_id: 20,
           delivery_mode: "foreground",
-          from_x: 50,
-          from_y: 20,
-          to_x: 150,
-          to_y: 60,
+          from_x: 25,
+          from_y: 10,
+          to_x: 75,
+          to_y: 30,
+          coordinate_space: "window_points",
           duration_ms: 500,
           expected_window_bounds: { x: -300, y: 20, width: 200, height: 100 },
         },
@@ -237,22 +345,41 @@ describe("Cua native boundary", () => {
     ).rejects.toMatchObject({ effect: "not-dispatched" });
     expect(f.calls.some((call) => call.name === "click")).toBe(false);
   });
-  it.each([
-    { pid: 11, windowId: 20 },
-    { pid: 10, windowId: 21 },
-  ])(
-    "rejects preparation from pid $pid window $windowId before clicking",
-    async ({ pid, windowId }) => {
-      const f = fixture();
-      await f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
-      // Identical geometry does not establish that the native frame is ours.
-      f.captureWindow(windowId, pid);
-      await expect(f.backend.click({ x: -200, y: 70 }, "cua:10:20")).rejects.toMatchObject({
-        effect: "not-dispatched",
+  it("clears targeting after desktop pause and requires a fresh observation", async () => {
+    const f = fixture();
+    await f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+    f.pauseDesktop(true);
+    await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).rejects.toMatchObject({
+      effect: "not-dispatched",
+      code: "desktop_input_paused",
+      inputPause: { windowId: "cua:10:20" },
+    });
+    f.pauseDesktop(false);
+    await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).rejects.toMatchObject({
+      code: "stale_geometry",
+    });
+    await f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+    await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).resolves.toBeDefined();
+  });
+  it("dispatches logical coordinate input without a preparation PNG", async () => {
+    const f = fixture();
+    await f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+    f.calls.length = 0;
+    await f.backend.click({ x: -275, y: 30 }, "cua:10:20");
+    await f.backend.scroll({ x: -275, y: 30 }, 0, 120, "cua:10:20");
+    await withDesktopDeliveryMode("foreground", () =>
+      f.backend.drag({ x: -275, y: 30 }, { x: -225, y: 50 }, 500, "cua:10:20"),
+    );
+    expect(f.calls.some((c) => c.name === "get_window_state")).toBe(false);
+    for (const call of f.calls.filter((c) => ["click", "scroll", "drag"].includes(c.name ?? ""))) {
+      expect(call.args).toMatchObject({
+        pid: 10,
+        window_id: 20,
+        coordinate_space: "window_points",
+        expected_window_bounds: { x: -300, y: 20, width: 200, height: 100 },
       });
-      expect(f.calls.some((call) => call.name === "click")).toBe(false);
-    },
-  );
+    }
+  });
   it("keeps explicitly approved foreground text on the native foreground tool", async () => {
     const f = fixture();
     await withDesktopDeliveryMode("foreground", () => f.backend.typeText("abc", "cua:10:20"));
@@ -383,8 +510,9 @@ describe("Cua native boundary", () => {
     expect(image).toMatchObject({ width: 400, height: 200, scale: 2, region: { x: -300, y: 20 } });
     await f.backend.click({ x: -275, y: 30 }, "cua:10:20");
     expect(f.calls.find((c) => c.name === "click")?.args).toMatchObject({
-      x: 50,
-      y: 20,
+      x: 25,
+      y: 10,
+      coordinate_space: "window_points",
       force_synthetic: true,
       expected_window_bounds: { x: -300, y: 20, width: 200, height: 100 },
     });
@@ -474,4 +602,52 @@ describe("Computer authority", () => {
     await expect(manager.withAgentActivity("fixture", work)).resolves.toBe("input");
     await manager.dispose();
   });
+});
+
+describe("Cua preview image lifetime", () => {
+  const retainedImage = (backend: CuaComputerBackend) =>
+    (backend as unknown as { cachedImage: ComputerScreenshot | undefined }).cachedImage;
+  it("releases cached pixels when a new desktop epoch arrives on a metadata read", async () => {
+    const f = fixture();
+    try {
+      await f.backend.attachStream(() => undefined);
+      expect(retainedImage(f.backend)).toBeDefined();
+      f.changeDesktop();
+      await f.backend.checkInputReady("cua:10:20");
+      expect(retainedImage(f.backend)).toBeUndefined();
+    } finally {
+      await f.backend.dispose();
+    }
+  });
+  it("retains no image for model-only perception and releases a detached preview", async () => {
+    const f = fixture();
+    await f.backend.getState({ includeScreenshot: true });
+    expect(retainedImage(f.backend)).toBeUndefined();
+    await f.backend.attachStream(() => undefined);
+    expect(retainedImage(f.backend)).toBeDefined();
+    await f.backend.detachStream();
+    expect(retainedImage(f.backend)).toBeUndefined();
+    await f.backend.dispose();
+  });
+  it.each(["detachStream", "stopInput", "dispose"] as const)(
+    "late overview cannot repopulate cache after %s",
+    async (boundary) => {
+      const f = fixture();
+      let resolve!: () => void;
+      f.delayOverview(
+        new Promise<void>((r) => {
+          resolve = r;
+        }),
+      );
+      const attaching = f.backend.attachStream(() => undefined);
+      await vi.waitFor(() =>
+        expect(f.calls.some((c) => c.name === "get_desktop_state")).toBe(true),
+      );
+      await f.backend[boundary]();
+      resolve();
+      await attaching;
+      expect(retainedImage(f.backend)).toBeUndefined();
+      await f.backend.dispose();
+    },
+  );
 });

@@ -1,0 +1,29 @@
+{
+  "changed_files": [
+    "libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs",
+    "libs/cua-driver/rust/crates/cua-driver/src/serve.rs",
+    "libs/cua-driver/rust/crates/cua-driver-core/src/authorization.rs",
+    "libs/cua-driver/rust/crates/platform-macos/src/browser/platform.rs",
+    "libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs",
+    "libs/cua-driver/rust/crates/platform-macos/src/input/ax_actions.rs",
+    "libs/cua-driver/rust/crates/platform-macos/src/input/cancellation.rs",
+    "libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs",
+    "libs/cua-driver/rust/crates/platform-macos/src/input/mod.rs",
+    "libs/cua-driver/rust/crates/platform-macos/src/input/mouse.rs",
+    "libs/cua-driver/rust/crates/platform-macos/src/input/skylight.rs",
+    "libs/cua-driver/rust/crates/platform-macos/src/input/target_guard.rs",
+    "libs/cua-driver/rust/crates/platform-macos/src/tools/bring_to_front.rs",
+    "libs/cua-driver/rust/crates/platform-macos/src/tools/check_input_ready.rs",
+    "libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs",
+    "libs/cua-driver/rust/crates/platform-macos/src/tools/drag.rs",
+    "libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs",
+    "libs/cua-driver/rust/crates/platform-macos/src/tools/px_frame.rs",
+    "libs/cua-driver/rust/crates/platform-macos/src/tools/scroll.rs",
+    "libs/cua-driver/rust/crates/platform-macos/src/tools/set_value.rs",
+    "libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs",
+    "libs/cua-driver/rust/crates/platform-macos/src/windows.rs"
+  ],
+  "patchSha256": "0465b33894f15fe9cf57118f4d8e3299ea6ac52af60366677949afa70bff336c",
+  "patchBytes": 201479,
+  "sourceArchiveSha256": "ea2422e37e164ac9b5f27100de01b0be5e9232207430118ee0ca9ba941ac1030"
+}

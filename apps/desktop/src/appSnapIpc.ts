@@ -35,6 +35,18 @@ export function sendAppSnapError(
 }
 
 export function registerAppSnapIpcHandlers(ipcMain: IpcMain, manager: DesktopAppSnapManager): void {
+  ipcMain.removeHandler(APPSNAP_IPC_CHANNELS.captureCurrentApp);
+  ipcMain.handle(APPSNAP_IPC_CHANNELS.captureCurrentApp, async (_event, requestId: unknown) => {
+    if (typeof requestId !== "string" || !/^[a-zA-Z0-9-]{1,128}$/.test(requestId)) {
+      throw new Error("Invalid AppSnap request.");
+    }
+    return manager.captureCurrentApp(requestId);
+  });
+  ipcMain.removeHandler(APPSNAP_IPC_CHANNELS.cancelCapture);
+  ipcMain.handle(APPSNAP_IPC_CHANNELS.cancelCapture, async (_event, requestId: unknown) => {
+    if (typeof requestId === "string") manager.cancelCapture(requestId);
+  });
+
   ipcMain.removeHandler(APPSNAP_IPC_CHANNELS.getState);
   ipcMain.handle(APPSNAP_IPC_CHANNELS.getState, async () => manager.refreshState());
 

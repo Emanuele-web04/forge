@@ -224,3 +224,10 @@ export function resolveAppSnapTarget(input: {
 
   return { kind: "fresh" };
 }
+
+export const REQUEST_CURRENT_APP_SNAP_EVENT = "synara:request-current-app-snap";
+
+/** Explicit UI gesture only. Capturing never sends a turn or enables Computer. */
+export function requestCurrentAppSnap(): void {
+  window.dispatchEvent(new Event(REQUEST_CURRENT_APP_SNAP_EVENT));
+}

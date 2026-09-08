@@ -1,3 +1,5 @@
+import { appendAppSnapPromptContext } from "../../provider/appSnapPromptContext.ts";
+import { computerActivationMetadata } from "../../computer/computerActivation.ts";
 import { AgentGatewaySessionRegistry } from "../../agentGateway/Services/AgentGatewaySessionRegistry";
 import { ComputerService } from "../../computer/Services/ComputerService";
 // FILE: ProviderCommandReactor.ts
@@ -1980,6 +1982,8 @@ const make = Effect.gen(function* () {
     readonly modelSelection?: ModelSelection;
     readonly providerOptions?: ProviderStartOptions;
     readonly enableComputerControl?: boolean;
+    readonly computerControlMode?: "off" | "request" | "chat";
+    readonly computerControlGeneration?: number;
     readonly runtimeMode?: RuntimeMode;
     readonly interactionMode?: ProviderInteractionMode;
     readonly dispatchMode?: "queue" | "steer";
@@ -2054,7 +2058,11 @@ const make = Effect.gen(function* () {
         goal: activeThreadGoal(thread),
         text: normalizeSkillMentionTextForProvider({
           provider: steerProvider,
-          messageText: steerMessageWithSkills,
+          messageText: appendAppSnapPromptContext(
+            steerMessageWithSkills,
+            input.attachments,
+            PROVIDER_SEND_TURN_MAX_INPUT_CHARS - providerPromptOverheadChars,
+          ),
           ...(input.skills !== undefined ? { skills: input.skills } : {}),
         }),
       });
@@ -2090,6 +2098,20 @@ const make = Effect.gen(function* () {
       });
       return;
     }
+    const activation = computerActivationMetadata(input);
+    const enableComputerControl = Option.isNone(computerService)
+      ? activation.enableComputerControl
+      : input.turnKind === "goal-continuation"
+        ? computerService.value.manager.canContinueChatControl(input.threadId)
+        : input.dispatchMode === "steer" && activation.computerControlMode === "off"
+          ? false // A consumed request chip does not change the live turn's intent.
+          : yield* Effect.promise(() =>
+              computerService.value.manager.admitControl(
+                input.threadId,
+                activation.computerControlMode,
+                activation.computerControlGeneration,
+              ),
+            );
     const transcriptBoundaryMessageId =
       input.turnKind === "goal-continuation" ? undefined : input.messageId;
     const selectedProvider =
@@ -2109,9 +2131,7 @@ const make = Effect.gen(function* () {
     } = yield* ensureSessionForThread(input.threadId, input.createdAt, {
       ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
       ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
-      ...(input.enableComputerControl !== undefined
-        ? { enableComputerControl: input.enableComputerControl }
-        : {}),
+      ...(input.dispatchMode === "steer" ? {} : { enableComputerControl }),
       ...(input.runtimeMode !== undefined ? { runtimeMode: input.runtimeMode } : {}),
       ...(registerPriorTranscriptBootstrapOnFreshStart
         ? { registerPriorTranscriptBootstrapOnFreshStart: true }
@@ -2123,8 +2143,8 @@ const make = Effect.gen(function* () {
     if (input.modelSelection !== undefined) {
       threadSessionModelSelections.set(input.threadId, input.modelSelection);
     }
-    if (input.enableComputerControl !== undefined) {
-      threadSessionComputerControl.set(input.threadId, input.enableComputerControl);
+    if (input.dispatchMode !== "steer") {
+      threadSessionComputerControl.set(input.threadId, enableComputerControl);
     }
     // Bootstrap prompts wrap the user message in `<latest_user_message>` tags;
     // mentioned-thread context is appended after the assembled provider input
@@ -2325,7 +2345,11 @@ const make = Effect.gen(function* () {
           goal: activeThreadGoal(thread),
           text: normalizeSkillMentionTextForProvider({
             provider: selectedProvider as ProviderKind,
-            messageText: withSkills,
+            messageText: appendAppSnapPromptContext(
+              withSkills,
+              input.attachments,
+              PROVIDER_SEND_TURN_MAX_INPUT_CHARS - providerPromptOverheadChars,
+            ),
             ...(input.skills !== undefined ? { skills: input.skills } : {}),
           }),
         }),
@@ -2471,9 +2495,7 @@ const make = Effect.gen(function* () {
       const ensureSessionForStaleRetry = ensureSessionForThread(input.threadId, input.createdAt, {
         ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
         ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
-        ...(input.enableComputerControl !== undefined
-          ? { enableComputerControl: input.enableComputerControl }
-          : {}),
+        enableComputerControl,
         ...(input.runtimeMode !== undefined ? { runtimeMode: input.runtimeMode } : {}),
       });
       const replayWithTranscriptBootstrap = (
@@ -3013,10 +3035,29 @@ const make = Effect.gen(function* () {
       // still projected as running), so recheck live state and dispatch a
       // settled "steer" as a normal queued turn — the native steer path
       // would skip the turn-start checkpoint.
+      const activation = computerActivationMetadata(event.payload);
+      const requiresComputerProfile =
+        hasLiveTurn &&
+        event.payload.dispatchMode === "steer" &&
+        activation.enableComputerControl &&
+        (Option.isNone(computerService) ||
+          computerService.value.manager.canActivateControl(
+            event.payload.threadId,
+            activation.computerControlGeneration,
+          )) &&
+        !(Option.isSome(gatewaySessions) && gatewaySessions.value.computerControlProvisioned
+          ? gatewaySessions.value.computerControlProvisioned(
+              event.payload.threadId,
+              providerName as ProviderKind,
+            )
+          : (threadSessionComputerControl.get(event.payload.threadId) ?? false));
+      // Installing a new catalog requires a turn boundary; a live steer cannot
+      // gain tools merely because the composer consumed its activation chip.
       const isNativeSteer =
         event.payload.dispatchMode === "steer" &&
         providerSupportsNativeTurnSteering(providerName) &&
-        hasLiveTurn;
+        hasLiveTurn &&
+        !requiresComputerProfile;
       if (!isNativeSteer && hasLiveTurn) {
         yield* enqueueQueuedTurnStart(event);
         // The promotion raced another live turn and was re-queued. Release
@@ -3115,9 +3156,7 @@ const make = Effect.gen(function* () {
         ...(event.payload.providerOptions !== undefined
           ? { providerOptions: event.payload.providerOptions }
           : {}),
-        ...(event.payload.enableComputerControl !== undefined
-          ? { enableComputerControl: event.payload.enableComputerControl }
-          : {}),
+        ...computerActivationMetadata(event.payload),
         ...(event.payload.runtimeMode !== undefined
           ? { runtimeMode: event.payload.runtimeMode }
           : {}),
@@ -3248,9 +3287,7 @@ const make = Effect.gen(function* () {
           ...(nextQueuedTurn.providerOptions !== undefined
             ? { providerOptions: nextQueuedTurn.providerOptions }
             : {}),
-          ...(nextQueuedTurn.enableComputerControl !== undefined
-            ? { enableComputerControl: nextQueuedTurn.enableComputerControl }
-            : {}),
+          ...computerActivationMetadata(nextQueuedTurn),
           ...(nextQueuedTurn.reviewTarget !== undefined
             ? { reviewTarget: nextQueuedTurn.reviewTarget }
             : {}),
@@ -4164,9 +4201,7 @@ const make = Effect.gen(function* () {
       ...(payload.providerOptions !== undefined
         ? { providerOptions: payload.providerOptions }
         : {}),
-      ...(payload.enableComputerControl !== undefined
-        ? { enableComputerControl: payload.enableComputerControl }
-        : {}),
+      ...computerActivationMetadata(payload),
       ...(payload.assistantDeliveryMode !== undefined
         ? { assistantDeliveryMode: payload.assistantDeliveryMode }
         : {}),

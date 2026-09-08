@@ -1,0 +1,17 @@
+{
+  "kind": "source-serialization-not-provider-tokens",
+  "before": {
+    "definitions": 21,
+    "catalogBytes": 53649,
+    "instructionBytes": 6339,
+    "schemaBytes": 33340
+  },
+  "after": {
+    "definitions": 21,
+    "catalogBytes": 46546,
+    "instructionBytes": 2972,
+    "schemaBytes": 26137,
+    "offInstructionOccurrences": 0,
+    "onInstructionOccurrences": 1
+  }
+}

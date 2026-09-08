@@ -1,0 +1,37 @@
+{
+  "date": "2026-09-08",
+  "formatting": "passed; focused formatting repeated after integration corrections",
+  "lint": "passed; full pass had zero errors; subsequent edited files passed focused lint",
+  "typecheck": {
+    "result": "passed",
+    "packages": 7,
+    "log": "typecheck.log"
+  },
+  "builds": {
+    "result": "passed",
+    "tasks": 4,
+    "applications": ["desktop", "web", "server"],
+    "log": "builds.log"
+  },
+  "affectedRegressions": {
+    "distinctTests": 214,
+    "result": "passed after wait test used normal server timeout",
+    "initialLog": "changed-regressions-initial.log",
+    "timeoutResolutionLog": "tool-regressions.log"
+  },
+  "interfaceRegressions": {
+    "tests": 77,
+    "result": "passed",
+    "log": "interfaces.log"
+  },
+  "nativeControlProbe": {
+    "cases": 6,
+    "result": "passed",
+    "inputToolsCalled": 0,
+    "captures": 0
+  },
+  "liveQualification": "blocked by absent grants in signed temporary fixture; zero input/captures",
+  "actualProviderUsageMeasurements": null,
+  "matchedProcessTreeResourceMeasurements": null,
+  "publication": "not published"
+}

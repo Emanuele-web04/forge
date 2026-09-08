@@ -110,6 +110,8 @@ export interface CuaToolResult {
 }
 export interface CuaReply {
   ok: boolean;
+  /** GUI-host desktop interruption generation; absent on direct native replies. */
+  desktopEpoch?: number;
   result?: CuaToolResult & Record<string, unknown>;
   error?: string;
   effect?: CuaEffect;

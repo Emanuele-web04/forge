@@ -20,6 +20,7 @@ import {
   hasPersistedAppSnapCapture,
   persistedAppSnapCaptureBlobKeys,
   resolveAppSnapTarget,
+  REQUEST_CURRENT_APP_SNAP_EVENT,
 } from "../appSnap.logic";
 import {
   type ComposerImageAttachment,
@@ -220,7 +221,11 @@ export function AppSnapCoordinator() {
   const blobHydrationInFlightRef = useRef(new Set<string>());
   const hydratePersistedAppSnapsRef = useRef<(captureId?: string) => Promise<void>>(async () => {});
   const attachCaptureRef = useRef<
-    ((capture: DesktopAppSnapCapture) => Promise<"persisted" | "unverified">) | null
+    | ((
+        capture: DesktopAppSnapCapture,
+        explicitTarget?: AppSnapThreadTarget,
+      ) => Promise<"persisted" | "unverified">)
+    | null
   >(null);
   // Read through a ref so toggling the sound preference doesn't resubscribe the
   // capture listener (which would re-deliver pending captures).
@@ -359,7 +364,7 @@ export function AppSnapCoordinator() {
   );
 
   const attachCapture = useCallback(
-    async (capture: DesktopAppSnapCapture) => {
+    async (capture: DesktopAppSnapCapture, explicitTarget?: AppSnapThreadTarget) => {
       const captureAtMs = captureTimestampMs(capture);
       const resolvedTarget = resolveAppSnapTarget({
         captureAtMs,
@@ -369,7 +374,11 @@ export function AppSnapCoordinator() {
       });
 
       let target: AppSnapThreadTarget;
-      if (resolvedTarget.kind === "existing") {
+      if (explicitTarget) {
+        if (!isThreadAvailable(explicitTarget.threadId))
+          throw new Error("The destination task is no longer available.");
+        target = explicitTarget;
+      } else if (resolvedTarget.kind === "existing") {
         target = resolvedTarget.target;
         await activateExistingTarget(target);
       } else {
@@ -468,7 +477,7 @@ export function AppSnapCoordinator() {
         throw error;
       }
       lastAppSnapRef.current = { ...target, atMs: captureAtMs };
-      requestComposerFocus(target.threadId);
+      if (!explicitTarget) requestComposerFocus(target.threadId);
       toastManager.add({
         type: persistenceResult === "unverified" ? "warning" : "success",
         title:
@@ -491,6 +500,59 @@ export function AppSnapCoordinator() {
   useEffect(() => {
     attachCaptureRef.current = attachCapture;
   }, [attachCapture]);
+
+  useEffect(() => {
+    const bridge = window.desktopBridge?.appSnap;
+    if (!bridge?.captureCurrentApp) return;
+    let cancelActive: (() => void) | undefined;
+    const onRequest = () => {
+      cancelActive?.();
+      const target = focusedTargetRef.current;
+      if (!target) return;
+      const requestId = crypto.randomUUID();
+      let cancelled = false;
+      const cancel = () => {
+        cancelled = true;
+        clearTimeout(timer);
+        void bridge.cancelCapture(requestId).catch(() => {});
+      };
+      cancelActive = cancel;
+      const timer = setTimeout(() => {
+        void bridge
+          .captureCurrentApp(requestId)
+          .then(async (capture) => {
+            if (cancelled) return;
+            const attach = attachCaptureRef.current;
+            if (!attach) throw new Error("The AppSnap composer is not ready yet.");
+            await attach(capture, target);
+          })
+          .catch((error: unknown) => {
+            if (!cancelled)
+              toastManager.add({
+                type: "error",
+                title: "AppSnap could not capture the app",
+                description: error instanceof Error ? error.message : "Capture failed.",
+              });
+          })
+          .finally(() => {
+            if (cancelActive === cancel) cancelActive = undefined;
+          });
+      }, 3_000);
+      toastManager.add({
+        type: "info",
+        title: "Switch to the app to share",
+        description:
+          "A window from the active app will be captured in 3 seconds and attached to this task. Nothing is sent automatically.",
+        actionProps: { children: "Cancel", onClick: cancel },
+        data: { allowCrossThreadVisibility: true },
+      });
+    };
+    window.addEventListener(REQUEST_CURRENT_APP_SNAP_EVENT, onRequest);
+    return () => {
+      window.removeEventListener(REQUEST_CURRENT_APP_SNAP_EVENT, onRequest);
+      cancelActive?.();
+    };
+  }, []);
 
   useEffect(() => {
     const bridge = window.desktopBridge?.appSnap;

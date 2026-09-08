@@ -678,7 +678,11 @@ export const ComputerSetControlEnabledInput = Schema.Struct({
   enabled: Schema.Boolean,
 });
 export type ComputerSetControlEnabledInput = typeof ComputerSetControlEnabledInput.Type;
-export const ComputerControlEnabledResult = Schema.Struct({ enabled: Schema.Boolean });
+export const ComputerControlEnabledResult = Schema.Struct({
+  enabled: Schema.Boolean,
+  generation: Schema.optional(NonNegativeInt),
+});
+export type ComputerControlEnabledResult = typeof ComputerControlEnabledResult.Type;
 export const ComputerThreadInput = Schema.Struct({ threadId: ThreadId });
 export type ComputerThreadInput = typeof ComputerThreadInput.Type;
 

@@ -1,4 +1,8 @@
 import {
+  resolveComputerControlMode,
+  type ComposerComputerControlMode,
+} from "../computerControlMode";
+import {
   DEFAULT_MODEL_BY_PROVIDER,
   ProjectId,
   ThreadId,
@@ -1634,13 +1638,16 @@ export function deriveComposerSendState(options: {
  */
 export function resolveEffectiveComputerControl(input: {
   readonly draftOverride: boolean | undefined;
+  readonly mode?: ComposerComputerControlMode | undefined;
   readonly availability: ComputerAvailability | undefined;
   readonly allowInNewChats: boolean;
   /** True once the chat has any turn; the new-chat default no longer applies. */
   readonly chatHasTurns: boolean;
 }): boolean {
   if (input.availability?.kind === "unsupported-platform") return false;
-  return input.draftOverride ?? (!input.chatHasTurns && input.allowInNewChats);
+  return input.mode !== undefined
+    ? input.mode !== "off"
+    : (input.draftOverride ?? (!input.chatHasTurns && input.allowInNewChats));
 }
 
 /**
@@ -1658,6 +1665,8 @@ export interface TurnDispatchSettings {
   /** Absent when the user has configured no provider overrides at all. */
   readonly providerOptions: ProviderStartOptions | undefined;
   readonly enableComputerControl: boolean;
+  readonly computerControlMode?: ComposerComputerControlMode | undefined;
+  readonly computerControlGeneration?: number | undefined;
   readonly assistantDeliveryMode: AssistantDeliveryMode;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
@@ -1667,9 +1676,8 @@ export interface TurnDispatchSettings {
 /**
  * A queued turn froze its dispatch settings when it was queued, so dispatching
  * it later must replay those, not whatever the composer shows now. Every field
- * falls back to the live settings: queued turns restored from persisted drafts
- * predate some of these fields, and `enableComputerControl` /
- * `providerOptionsForDispatch` are optional even in the current shape.
+ * falls back to the live settings except Computer access: a legacy missing
+ * access choice stays off rather than inheriting unrelated live authorization.
  *
  * `interactionMode` is deliberately included here but overridden by the
  * plan-follow-up path, which decides the mode from the follow-up itself.
@@ -1685,7 +1693,16 @@ export function resolveQueuedTurnDispatchSettings(
     ...settings,
     modelSelection: queuedTurn.modelSelection ?? settings.modelSelection,
     providerOptions: queuedTurn.providerOptionsForDispatch ?? settings.providerOptions,
-    enableComputerControl: queuedTurn.enableComputerControl ?? settings.enableComputerControl,
+    enableComputerControl:
+      resolveComputerControlMode(
+        queuedTurn.computerControlMode,
+        queuedTurn.enableComputerControl,
+      ) !== "off",
+    computerControlGeneration: queuedTurn.computerControlGeneration ?? 0,
+    computerControlMode: resolveComputerControlMode(
+      queuedTurn.computerControlMode,
+      queuedTurn.enableComputerControl,
+    ),
     runtimeMode: queuedTurn.runtimeMode ?? settings.runtimeMode,
     interactionMode: queuedTurn.interactionMode ?? settings.interactionMode,
     // Plan follow-ups carry no environment of their own; they run wherever the
@@ -1699,6 +1716,11 @@ function turnDispatchIdentityFields(settings: TurnDispatchSettings) {
     modelSelection: settings.modelSelection,
     ...(settings.providerOptions ? { providerOptions: settings.providerOptions } : {}),
     enableComputerControl: settings.enableComputerControl,
+    computerControlGeneration: settings.computerControlGeneration ?? 0,
+    computerControlMode: resolveComputerControlMode(
+      settings.computerControlMode,
+      settings.enableComputerControl,
+    ),
     assistantDeliveryMode: settings.assistantDeliveryMode,
   };
 }
@@ -1743,6 +1765,11 @@ export function queuedChatTurnDispatchFields(
     modelSelection: settings.modelSelection,
     ...(settings.providerOptions ? { providerOptionsForDispatch: settings.providerOptions } : {}),
     enableComputerControl: settings.enableComputerControl,
+    computerControlGeneration: settings.computerControlGeneration ?? 0,
+    computerControlMode: resolveComputerControlMode(
+      settings.computerControlMode,
+      settings.enableComputerControl,
+    ),
     ...(sourceProposedPlan ? { sourceProposedPlan } : {}),
     ...turnDispatchModeFields(settings),
     envMode: settings.envMode,
@@ -1758,6 +1785,11 @@ export function queuedPlanFollowUpDispatchFields(settings: TurnDispatchSettings)
     modelSelection: settings.modelSelection,
     ...(settings.providerOptions ? { providerOptionsForDispatch: settings.providerOptions } : {}),
     enableComputerControl: settings.enableComputerControl,
+    computerControlGeneration: settings.computerControlGeneration ?? 0,
+    computerControlMode: resolveComputerControlMode(
+      settings.computerControlMode,
+      settings.enableComputerControl,
+    ),
     runtimeMode: settings.runtimeMode,
   };
 }
@@ -1766,6 +1798,13 @@ export function queuedPlanFollowUpDispatchFields(settings: TurnDispatchSettings)
  * The thread-level half of the settings: what `thread.create` records on a new
  * thread and what the pre-turn persistence call writes back to an existing one.
  */
+/** A new implementation thread starts its own revocation generation. */
+export function planImplementationDispatchSettings(
+  settings: TurnDispatchSettings,
+): TurnDispatchSettings {
+  return { ...settings, interactionMode: "default", computerControlGeneration: 0 };
+}
+
 export function threadSettingsDispatchFields(settings: TurnDispatchSettings) {
   return {
     modelSelection: settings.modelSelection,

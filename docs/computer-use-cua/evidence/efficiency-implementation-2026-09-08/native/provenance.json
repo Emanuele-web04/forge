@@ -1,0 +1,23 @@
+{
+  "version": "0.24.0",
+  "source": "4b3396d9fe4bd3cf723b0eb8db83c18a8764b520",
+  "nativeRevision": 3,
+  "patchSha256": "0465b33894f15fe9cf57118f4d8e3299ea6ac52af60366677949afa70bff336c",
+  "rustVersion": "1.97.1",
+  "rustcVersion": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "architectures": ["arm64", "x64"],
+  "binarySha256": "479467d617ce576920bb7b7b392514d4db127ef104439f6798ffd534c4c2d39f",
+  "upstreamArchiveSha256": "31790cb49baa206f6455fbc259f8f83ae27e86be908f5c8cac5ec2f8521f8382",
+  "sourceArchiveUrl": "https://api.github.com/repos/trycua/cua/tarball/4b3396d9fe4bd3cf723b0eb8db83c18a8764b520",
+  "sourceArchiveSha256": "ea2422e37e164ac9b5f27100de01b0be5e9232207430118ee0ca9ba941ac1030",
+  "sliceSha256": {
+    "arm64": "226a71ef761561ea308aca0b84ecd8877c48f1a3c376cd9380ecbff75ac3e5cd",
+    "x64": "fa745d9877403c295cd0f194bd0b9b7d3fbda0fa404018a788ba16e74c9f85df"
+  },
+  "buildEnvironment": {
+    "developerDir": "/Library/Developer/CommandLineTools",
+    "isolatedToolchain": true,
+    "locked": true,
+    "offline": true
+  }
+}

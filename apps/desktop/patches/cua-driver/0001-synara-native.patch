@@ -1,6 +1,6 @@
 --- a/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
-@@ -143,7 +143,81 @@
+@@ -143,7 +143,83 @@
          daemon_tools_list_from(&self.tools_list)
      }
  
@@ -41,7 +41,9 @@
 +        #[cfg(target_os = "macos")]
 +        if native_target.is_some() {
 +            if let Some(args) = arguments.as_object_mut() {
-+                args.remove("expected_window_bounds");
++                if args.get("coordinate_space").and_then(Value::as_str) != Some("window_points") {
++                    args.remove("expected_window_bounds");
++                }
 +            }
 +        }
 +        #[cfg(target_os = "macos")]
@@ -97,7 +99,7 @@
 +        .expect("daemon metadata is serializable");
 +    #[cfg(target_os = "macos")]
 +    {
-+        metadata["synara_native_revision"] = serde_json::json!(2);
++        metadata["synara_native_revision"] = serde_json::json!(3);
 +    }
 +    DaemonResponse::ok(metadata)
  }
@@ -3483,15 +3485,17 @@
  
  use super::ToolState;
  
-@@ -159,6 +160,7 @@
+@@ -159,6 +160,9 @@
              // cua_driver_core::tool_schema.)
              "required": [],
              "properties": {
++                "expected_window_bounds": {"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"}},"required":["x","y","width","height"]},
++                "coordinate_space": {"type":"string","enum":["screenshot_pixels","window_points"],"description":"Internal logical window points require expected_window_bounds and exact pid/window_id; default screenshot pixels."},
 +                "force_synthetic": { "type": "boolean", "default": false, "description": "For coordinate clicks, select the native mouse-event route before dispatch instead of the AX hit-test shortcut. Exact-window and delivery-mode admission still apply; this does not authorize foreground input or retry." },
                  "session": { "type": "string", "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session." },
                  "pid":           { "type": "integer", "description": "Target process ID." },
                  "window_id":     { "type": "integer", "description": "Target window ID. Required for element_index. Optional when element_token is supplied (the token carries it)." },
-@@ -398,6 +400,10 @@
+@@ -398,6 +402,10 @@
              button_str
          };
          let count = args.u64_or("count", 1) as usize;
@@ -3502,7 +3506,7 @@
          let from_zoom = args.bool_or("from_zoom", false);
          let debug_image_out = args.opt_str("debug_image_out");
          let modifiers: Vec<String> = args.str_array("modifier");
-@@ -548,11 +554,9 @@
+@@ -548,11 +556,9 @@
                      .update_position(&cursor_key, cx, cy);
              }
  
@@ -3517,7 +3521,7 @@
              let selection_candidate = if effective_action == "press" {
                  tokio::task::spawn_blocking(move || {
                      crate::input::ax_actions::nearest_container_selection_state(element_ptr)
-@@ -706,15 +710,9 @@
+@@ -706,15 +712,9 @@
                          tokio::time::sleep(std::time::Duration::from_millis(800)).await;
                      }
                      msg.push_str(&changes.result_suffix());
@@ -3536,7 +3540,7 @@
                      let mut structured = serde_json::json!({
                          "path": if selection_via_pixel {
                              if fronted { "cgevent_fg" } else { "cgevent" }
-@@ -726,8 +724,6 @@
+@@ -726,8 +726,6 @@
                          "verified": selection_verified,
                          "effect": if selection_verified {
                              "confirmed"
@@ -3545,7 +3549,7 @@
                          } else {
                              "unverifiable"
                          },
-@@ -738,18 +734,12 @@
+@@ -738,18 +736,12 @@
                          ]);
                      }
                      if suspected_noop {
@@ -3567,7 +3571,30 @@
              }
          } else if let (Some(mut cx), Some(mut cy)) = (x, y) {
              // ── Pixel path ─────────────────────────────────────────────────
-@@ -892,6 +882,7 @@
+@@ -811,7 +803,12 @@
+                         ))
+                     }
+                 }
+-            } else if let Some(ratio) = self.state.resize_registry.ratio(pid, window_id) {
++            } else if let Some(ratio) = self
++                .state
++                .resize_registry
++                .ratio(pid, window_id)
++                .filter(|_| !super::px_frame::is_window_points(&args))
++            {
+                 // Coordinates are in the downscaled image space; scale back to native pixels.
+                 cx *= ratio;
+                 cy *= ratio;
+@@ -828,7 +825,7 @@
+             // win_local_x/y: window-local logical-pixel coords needed for
+             // CGEventSetWindowLocation in the Chromium recipe.
+             let (screen_x, screen_y, win_local_x, win_local_y) = if let Some(wid) = window_id {
+-                match super::px_frame::resolve_or_refuse(wid).await {
++                match super::px_frame::resolve_input_frame(wid, &args).await {
+                     Ok(frame) => {
+                         let (sx, sy, lx, ly) = frame.to_screen(cx, cy);
+                         // A window-local point outside the live frame would
+@@ -892,6 +889,7 @@
              // targeting (PX) orthogonal to delivery (AX) and avoids making a
              // Chromium/AppKit window key merely to satisfy first-mouse rules.
              if !delivery_mode.is_foreground()
@@ -3575,7 +3602,7 @@
                  && window_id.is_some()
                  && button_str == "left"
                  && count == 1
-@@ -913,14 +904,18 @@
+@@ -913,14 +911,18 @@
                          return Ok(false);
                      }
                      let delivered = if focus_only {
@@ -3599,7 +3626,7 @@
                  })
                  .await;
                  match ax_result {
-@@ -943,13 +938,9 @@
+@@ -943,13 +945,9 @@
                              "code": "background_unavailable"
                          }));
                      }
@@ -3616,7 +3643,7 @@
                  }
              }
  
-@@ -1034,6 +1025,8 @@
+@@ -1034,6 +1032,8 @@
              );
  
              let mods_owned = modifiers.clone();
@@ -3625,7 +3652,7 @@
              // Surface 5: route to the right/middle CGEvent primitives when
              // button != left. Left-button path stays on the existing Chromium-
              // routed `click_at_xy_with_window_local` for back-compat.
-@@ -1084,7 +1077,7 @@
+@@ -1084,7 +1084,7 @@
                                      // and Chromium-specific fields (f40, f51, f58, f91, f92) onto events
                                      // for better backgrounded-target delivery.
                                      if let Some(wid) = window_id {
@@ -3634,11 +3661,10 @@
                                              return crate::input::mouse::click_at_xy_with_window_local(
                                                  pid, screen_x, screen_y,
                                                  win_local_x, win_local_y,
-@@ -1192,15 +1185,26 @@
- }
+@@ -1193,14 +1193,25 @@
  
  // ── AX click implementation (blocking) ───────────────────────────────────────
-+
+ 
 +fn ax_click_failure(error: anyhow::Error) -> ToolResult {
 +    crate::input::ax_actions::action_failure_result(error, "AX action failed")
 +}
@@ -3652,7 +3678,7 @@
 +        error
 +    })
 +}
- 
++
  /// Returns `(summary_text, needs_webkit_delay, suspected_noop,
  /// selection_verified, selection_via_pixel)`.
  ///
@@ -3666,7 +3692,7 @@
  fn perform_ax_click(
      element_ptr: usize,
      idx: usize,
-@@ -1219,7 +1223,8 @@
+@@ -1219,7 +1230,8 @@
      // enable menu items that were disabled in the cached snapshot, while a
      // background transition can disable them after that snapshot. macOS may
      // otherwise return success for a disabled action that did nothing.
@@ -3676,7 +3702,7 @@
  
      // Capture advertised actions BEFORE dispatching so we can detect silent no-ops
      // (AX returns success even when the element doesn't advertise the action).
-@@ -1234,19 +1239,35 @@
+@@ -1234,19 +1246,35 @@
      // or forcing the caller onto a less stable pixel coordinate.
      if ax_action == "AXPress" && !advertised.iter().any(|action| action == ax_action) {
          if modifiers.is_empty() {
@@ -3725,7 +3751,7 @@
              }
          }
  
-@@ -1256,7 +1277,10 @@
+@@ -1256,7 +1284,10 @@
          ) {
              let selected_role = selection.role().to_owned();
              let Some((before, _)) = selection.observe() else {
@@ -3737,7 +3763,7 @@
              };
              let modifier_refs: Vec<&str> = modifiers.iter().map(String::as_str).collect();
              if foreground && !modifier_refs.is_empty() {
-@@ -1332,41 +1356,21 @@
+@@ -1332,41 +1363,21 @@
              if modifiers.is_empty() {
                  anyhow::bail!(
                      "coordinate click did not produce a stable AXSelected transition; \
@@ -3784,7 +3810,7 @@
  
      let mut summary = format!("✅ Performed {ax_action} on [{idx}] {role} \"{title}\".");
  
-@@ -1420,7 +1424,7 @@
+@@ -1420,7 +1431,7 @@
          };
          summary.push_str(&format!(
              "\n⚠️ Element does not advertise {ax_action} (actions: {adv_list}). \
@@ -3793,7 +3819,7 @@
          ));
      }
  
-@@ -1454,9 +1458,50 @@
+@@ -1454,9 +1465,50 @@
  
  #[cfg(test)]
  mod selection_fallback_tests {
@@ -3845,6 +3871,40 @@
      fn plain_click_requires_selected_readback() {
          assert!(selection_readback_confirms(false, true, false, true));
          assert!(selection_readback_confirms(true, true, false, true));
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/drag.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/drag.rs
+@@ -56,6 +56,8 @@
+             "type": "object",
+             "required": ["from_x", "from_y", "to_x", "to_y"],
+             "properties": {
++                "expected_window_bounds": {"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"}},"required":["x","y","width","height"]},
++                "coordinate_space": {"type":"string","enum":["screenshot_pixels","window_points"],"description":"Internal logical window points require expected_window_bounds and exact pid/window_id; default screenshot pixels."},
+                 "session": { "type": "string", "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session." },
+                 "pid": { "type": "integer", "description": "Target process ID." },
+                 "window_id": {
+@@ -253,7 +255,12 @@
+                     ))
+                 }
+             }
+-        } else if let Some(ratio) = self.state.resize_registry.ratio(pid, window_id) {
++        } else if let Some(ratio) = self
++            .state
++            .resize_registry
++            .ratio(pid, window_id)
++            .filter(|_| !super::px_frame::is_window_points(&args))
++        {
+             from_x *= ratio;
+             from_y *= ratio;
+             to_x *= ratio;
+@@ -266,7 +273,7 @@
+         // refuses rather than dragging across the desktop behind it.
+         let (from_sx, from_sy, from_lx, from_ly, to_sx, to_sy, to_lx, to_ly) =
+             if let Some(wid) = window_id {
+-                match super::px_frame::resolve_or_refuse(wid).await {
++                match super::px_frame::resolve_input_frame(wid, &args).await {
+                     Ok(frame) => {
+                         let (fsx, fsy, flx, fly) = frame.to_screen(from_x, from_y);
+                         let (tsx, tsy, tlx, tly) = frame.to_screen(to_x, to_y);
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
 @@ -24,6 +24,7 @@
@@ -3863,6 +3923,154 @@
      registry.register(Box::new(get_screen_size::GetScreenSizeTool));
      registry.register(Box::new(get_desktop_state::GetDesktopStateTool));
      registry.register(Box::new(get_cursor_position::GetCursorPositionTool));
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/px_frame.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/px_frame.rs
+@@ -215,10 +215,111 @@
+     }
+ }
+ 
++/// Synara already maps delivered-image pixels into logical desktop points.
++/// This mode uses exact window-local logical points, so no capture/backing-scale
++/// conversion is necessary. Native admission still validates the live target.
++pub fn is_window_points(args: &serde_json::Value) -> bool {
++    args.get("coordinate_space")
++        .and_then(serde_json::Value::as_str)
++        == Some("window_points")
++}
++
++fn logical_frame(args: &serde_json::Value) -> Result<WindowPxFrame, ToolResult> {
++    let refuse = || {
++        ToolResult::error("Logical coordinates require exact finite window bounds and in-window points; zoom is not supported.")
++        .with_structured(serde_json::json!({"effect":"refused","code":"stale_geometry"}))
++    };
++    if args.get("from_zoom").and_then(serde_json::Value::as_bool) == Some(true) {
++        return Err(refuse());
++    }
++    let b = args.get("expected_window_bounds").ok_or_else(refuse)?;
++    let number = |key: &str| {
++        b.get(key)
++            .and_then(serde_json::Value::as_f64)
++            .filter(|v| v.is_finite())
++            .ok_or_else(refuse)
++    };
++    let bounds = WindowBounds {
++        x: number("x")?,
++        y: number("y")?,
++        width: number("width")?,
++        height: number("height")?,
++    };
++    if bounds.width <= 0.0 || bounds.height <= 0.0 {
++        return Err(refuse());
++    }
++    for (x, y) in [("x", "y"), ("from_x", "from_y"), ("to_x", "to_y")] {
++        if args.get(x).is_none() && args.get(y).is_none() {
++            continue;
++        }
++        let px = args
++            .get(x)
++            .and_then(serde_json::Value::as_f64)
++            .filter(|v| v.is_finite())
++            .ok_or_else(refuse)?;
++        let py = args
++            .get(y)
++            .and_then(serde_json::Value::as_f64)
++            .filter(|v| v.is_finite())
++            .ok_or_else(refuse)?;
++        if px < 0.0 || py < 0.0 || px >= bounds.width || py >= bounds.height {
++            return Err(refuse());
++        }
++    }
++    Ok(WindowPxFrame { bounds, scale: 1.0 })
++}
++
++pub async fn resolve_input_frame(
++    window_id: u32,
++    args: &serde_json::Value,
++) -> Result<WindowPxFrame, ToolResult> {
++    if !is_window_points(args) {
++        return resolve_or_refuse(window_id).await;
++    }
++    let frame = logical_frame(args)?;
++    let args = args.clone();
++    tokio::task::spawn_blocking(move || {
++        let target =
++            crate::input::target_guard::InputTarget::prepare(&args).map_err(|e| e.tool_result())?;
++        if target.window_id != window_id {
++            return Err(ToolResult::error(
++                "Logical frame target differs from input target.",
++            ));
++        }
++        target.verify().map_err(|e| e.tool_result())?;
++        Ok(frame)
++    })
++    .await
++    .map_err(|e| ToolResult::error(format!("Logical frame lookup failed before dispatch: {e}")))?
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn logical_points_preserve_negative_origin_without_capture_scale() {
++        let args = serde_json::json!({"expected_window_bounds":{"x":-300.0,"y":20.0,"width":200.0,"height":100.0},"x":25.0,"y":10.0});
++        let frame = logical_frame(&args).unwrap();
++        assert_eq!(frame.to_screen(25.0, 10.0), (-275.0, 30.0, 25.0, 10.0));
++    }
++    #[test]
++    fn logical_points_refuse_missing_bounds_zoom_and_outside_points() {
++        let base = serde_json::json!({"expected_window_bounds":{"x":0,"y":0,"width":200,"height":100},"x":25,"y":10});
++        for (key, value) in [
++            ("x", serde_json::json!(200)),
++            ("y", serde_json::json!(-1)),
++            ("from_zoom", serde_json::json!(true)),
++            ("expected_window_bounds", serde_json::Value::Null),
++        ] {
++            let mut args = base.clone();
++            args[key] = value;
++            assert!(logical_frame(&args).is_err());
++        }
++        let mut drag = base.clone();
++        drag["to_x"] = serde_json::json!(1);
++        assert!(logical_frame(&drag).is_err());
++    }
+     fn frame(scale: f64) -> WindowPxFrame {
+         WindowPxFrame {
+             bounds: WindowBounds {
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/scroll.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/scroll.rs
+@@ -79,6 +79,8 @@
+             // schema — keeps the contract consistent across platforms.
+             "required": ["direction"],
+             "properties": {
++                "expected_window_bounds": {"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"}},"required":["x","y","width","height"]},
++                "coordinate_space": {"type":"string","enum":["screenshot_pixels","window_points"],"description":"Internal logical window points require expected_window_bounds and exact pid/window_id; default screenshot pixels."},
+                 "session": { "type": "string", "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session." },
+                 "pid": { "type": "integer" },
+                 "direction": {
+@@ -451,7 +453,12 @@
+             // click pixel path — undo any session downscale, then translate
+             // through the shared window frame (which refuses a window with no
+             // live frame rather than scrolling at screen-absolute coords).
+-            if let Some(ratio) = self.state.resize_registry.ratio(pid, window_id) {
++            if let Some(ratio) = self
++                .state
++                .resize_registry
++                .ratio(pid, window_id)
++                .filter(|_| !super::px_frame::is_window_points(&args))
++            {
+                 cx *= ratio;
+                 cy *= ratio;
+             }
+@@ -462,7 +469,7 @@
+                     "window_id is required when scrolling by window-local x,y pixels.".to_string(),
+                 );
+             };
+-            match super::px_frame::resolve_or_refuse(wid).await {
++            match super::px_frame::resolve_input_frame(wid, &args).await {
+                 Ok(frame) => {
+                     let (sx, sy, lx, ly) = frame.to_screen(cx, cy);
+                     Some(WheelTarget {
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/set_value.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/set_value.rs
 @@ -4,9 +4,8 @@

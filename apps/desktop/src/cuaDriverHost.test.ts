@@ -8,6 +8,7 @@ import {
   cuaRequest as rawCuaRequest,
   CUA_DRIVER_VERSION,
   CUA_NATIVE_REVISION,
+  type CuaReply,
 } from "@synara/shared/cuaDriverProtocol";
 const capability = "isolated-fixture-authority-00000000000000";
 const cuaRequest: typeof rawCuaRequest = (path, request, options) =>
@@ -23,6 +24,7 @@ async function fixture(
     unpatched?: boolean;
     failAction?: boolean;
     crash?: boolean;
+    delayObservation?: boolean;
   } = {},
 ) {
   const directory = await mkdtemp(join(tmpdir(), "synara-cua-host-test-"));
@@ -59,6 +61,9 @@ net.createServer(s=>{
       else if(options.failAction) s.destroy();
       else timer=setTimeout(()=>{write('effect');reply({});action=undefined},10000);
     }
+    else if(r.name==='press_key') { write('key'); reply({}); }
+    else if(r.name==='get_window_state' && !r.args?.empty) { write('observe'); setTimeout(()=>reply({structuredContent:{elements:[]}}),options.delayObservation?60:0); }
+    else if(r.name==='get_desktop_state') reply({content:[{type:'image',data:'fixture-image'}]});
     else reply({});
   });
   s.on('error',()=>{});
@@ -103,6 +108,125 @@ process.stdin.resume(); process.stdin.on('end',retire);
   return { host, endpoint, events };
 }
 describe("Cua GUI host retirement", () => {
+  it("does not start while locked and requires fresh state after all desktop pauses end", async () => {
+    const f = await fixture();
+    await f.host.pauseDesktop("screen-lock");
+    await f.host.pauseDesktop("system-sleep");
+    f.host.resume(); // A backend restart cannot unlock the desktop.
+    const press = () => cuaRequest(f.endpoint, { method: "call", name: "press_key" });
+    await expect(press()).resolves.toMatchObject({
+      result: {
+        isError: true,
+        structuredContent: { code: "desktop_input_paused", effect: "refused" },
+      },
+    });
+    await expect(f.events()).rejects.toMatchObject({ code: "ENOENT" });
+    f.host.resumeDesktop("screen-lock");
+    await expect(press()).resolves.toMatchObject({ result: { isError: true } });
+    f.host.resumeDesktop("system-sleep");
+    await cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    await expect(press()).resolves.toMatchObject({ result: { isError: true } });
+    await cuaRequest(f.endpoint, {
+      method: "call",
+      name: "get_window_state",
+      modelObservation: true,
+      args: { pid: 1, window_id: 2 },
+    });
+    await expect(press()).resolves.toMatchObject({ ok: true });
+    expect((await f.events()).filter((event) => event.event === "key")).toHaveLength(1);
+  });
+
+  it("locking cancels active native input and rejects waiting input before dispatch", async () => {
+    const f = await fixture();
+    const active = cuaRequest(f.endpoint, {
+      method: "call",
+      name: "type_text",
+      args: { text: "fixture" },
+    });
+    for (let attempt = 0; attempt < 200; attempt++) {
+      if ((await f.events().catch(() => [])).some((event) => event.event === "dispatch")) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect((await f.events()).some((event) => event.event === "dispatch")).toBe(true);
+    const queued = cuaRequest<CuaReply>(f.endpoint, { method: "call", name: "press_key" });
+    await f.host.pauseDesktop("screen-lock");
+    expect(await active).toMatchObject({ ok: false });
+    const queuedReply = await queued;
+    expect(queuedReply.ok === false || queuedReply.result?.isError === true).toBe(true);
+    const events = await f.events();
+    expect(events.some((event) => event.event === "cleanup-ack")).toBe(true);
+    expect(events.some((event) => event.event === "effect" || event.event === "key")).toBe(false);
+  });
+
+  it("unlock does not bypass an unacknowledged cleanup barrier", async () => {
+    const f = await fixture(capability, { cleanup: "incomplete" });
+    await cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    await expect(f.host.pauseDesktop("screen-lock")).rejects.toThrow(
+      "did not confirm native input cleanup",
+    );
+    f.host.resumeDesktop("screen-lock");
+    await expect(
+      cuaRequest(f.endpoint, { method: "call", name: "get_window_state" }),
+    ).resolves.toMatchObject({ ok: false });
+    expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(1);
+  });
+
+  it("preview and readiness reads cannot release the post-unlock model observation gate", async () => {
+    const f = await fixture();
+    await f.host.pauseDesktop("screen-lock");
+    f.host.resumeDesktop("screen-lock");
+    const press = () => cuaRequest(f.endpoint, { method: "call", name: "press_key" });
+    await expect(
+      cuaRequest(f.endpoint, { method: "call", name: "get_desktop_state" }),
+    ).resolves.toMatchObject({ ok: true, desktopEpoch: 1 });
+    await cuaRequest(f.endpoint, { method: "call", name: "get_window_state" });
+    await cuaRequest(f.endpoint, {
+      method: "call",
+      name: "get_window_state",
+      modelObservation: true,
+      args: { empty: true },
+    });
+    await expect(
+      cuaRequest(f.endpoint, { method: "call", name: "check_input_ready" }),
+    ).resolves.toMatchObject({ result: { isError: true } });
+    await expect(press()).resolves.toMatchObject({ result: { isError: true } });
+    await cuaRequest(f.endpoint, {
+      method: "call",
+      name: "get_window_state",
+      modelObservation: true,
+    });
+    await expect(press()).resolves.toMatchObject({ ok: true });
+    expect((await f.events()).filter((event) => event.event === "key")).toHaveLength(1);
+  });
+
+  it("a disconnected observation cannot release the post-unlock gate", async () => {
+    const f = await fixture(capability, { delayObservation: true });
+    await f.host.pauseDesktop("screen-lock");
+    f.host.resumeDesktop("screen-lock");
+    const controller = new AbortController();
+    const observation = cuaRequest(
+      f.endpoint,
+      {
+        method: "call",
+        name: "get_window_state",
+        modelObservation: true,
+      },
+      { signal: controller.signal },
+    ).catch((error: unknown) => error);
+    for (let attempt = 0; attempt < 200; attempt++) {
+      if ((await f.events().catch(() => [])).some((event) => event.event === "observe")) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect((await f.events()).some((event) => event.event === "observe")).toBe(true);
+    controller.abort();
+    expect(await observation).toBeInstanceOf(Error);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await expect(
+      cuaRequest(f.endpoint, { method: "call", name: "press_key" }),
+    ).resolves.toMatchObject({ result: { isError: true } });
+    expect((await f.events()).some((event) => event.event === "key")).toBe(false);
+  });
+
   it("preserves multibyte UTF-8 across incoming socket chunks", async () => {
     const authority = capability + "-è🧪";
     const f = await fixture(authority);

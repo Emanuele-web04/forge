@@ -39,6 +39,7 @@ import {
   desktopDeliveryMode,
 } from "./DesktopOperationQueue.ts";
 import { StillFramePublisher } from "./stillFramePublisher.ts";
+import { isModelDesktopObservationActive } from "./modelDesktopObservation.ts";
 import { pngDimensions } from "../pngHeader.ts";
 
 export class CuaActionError extends ComputerBackendError {
@@ -135,6 +136,12 @@ export class CuaComputerBackend implements ComputerBackend {
   private readonly observedGeometry = new Map<string, ComputerRect>();
   private readonly stills: StillFramePublisher;
   private cachedImage: ComputerScreenshot | undefined;
+  private desktopEpoch: number | undefined;
+  private imageGeneration = 0;
+  private clearCachedImage(): void {
+    this.imageGeneration += 1;
+    this.cachedImage = undefined;
+  }
   private disposed = false;
   constructor(
     options: {
@@ -153,7 +160,7 @@ export class CuaComputerBackend implements ComputerBackend {
         const image =
           this.cachedImage && Date.now() - Date.parse(this.cachedImage.capturedAt) < 1_500
             ? this.cachedImage
-            : await this.captureOverview();
+            : await this.captureOverview(false);
         return Buffer.from(image.bytesBase64, "base64");
       },
       prepare: async () => {
@@ -175,7 +182,11 @@ export class CuaComputerBackend implements ComputerBackend {
     this.currentHealth = health;
     for (const listener of this.listeners) listener({ type: "health-changed", health });
   }
-  private async host(request: Record<string, unknown>, mutation = false): Promise<CuaReply> {
+  private async host(
+    request: Record<string, unknown>,
+    mutation = false,
+    allowModelObservation = true,
+  ): Promise<CuaReply> {
     if (this.disposed || !this.endpoint)
       throw new CuaActionError(
         "Open this session in the Synara macOS desktop app to use Computer.",
@@ -186,9 +197,31 @@ export class CuaComputerBackend implements ComputerBackend {
     try {
       const reply = await this.request<CuaReply>(
         this.endpoint,
-        { ...request, capability: this.capability },
+        {
+          ...request,
+          ...(request.method === "call" &&
+          (request.name === "get_window_state" || request.name === "get_desktop_state")
+            ? { modelObservation: allowModelObservation && isModelDesktopObservationActive() }
+            : {}),
+          capability: this.capability,
+        },
         { signal: desktopOperationSignal(), mutation, timeoutMs: 35_000 },
       );
+      const epoch = reply.desktopEpoch;
+      if (epoch !== undefined && Number.isSafeInteger(epoch) && epoch >= 0) {
+        if (this.desktopEpoch !== undefined && epoch < this.desktopEpoch)
+          throw new CuaActionError(
+            "The desktop changed while this operation was in flight. Observe again before continuing.",
+            mutation ? "dispatched-unknown" : "not-dispatched",
+            "stale_desktop_epoch",
+          );
+        if (epoch !== this.desktopEpoch) {
+          this.desktopEpoch = epoch;
+          this.clearCachedImage();
+          this.observedGeometry.clear();
+          this.snapshotAt = 0;
+        }
+      }
       if (!reply.ok)
         throw new CuaActionError(
           reply.error ?? "Cua host failed.",
@@ -204,8 +237,9 @@ export class CuaComputerBackend implements ComputerBackend {
     name: string,
     args: Record<string, unknown> = {},
     mutation = false,
+    allowModelObservation = true,
   ): Promise<CuaToolResult> {
-    const reply = await this.host({ method: "call", name, args }, mutation);
+    const reply = await this.host({ method: "call", name, args }, mutation, allowModelObservation);
     const result = reply.result ?? {};
     if (result.isError || result.structuredContent?.effect === "refused") {
       const structured = result.structuredContent ?? {};
@@ -221,9 +255,13 @@ export class CuaComputerBackend implements ComputerBackend {
         text(structured.reason) ||
         "The native operation could not complete.";
       const code = text(structured.code) || "cua_refusal";
+      if (refused && code === "desktop_input_paused") {
+        this.clearCachedImage();
+        this.observedGeometry.clear();
+      }
       const inputPause =
         refused &&
-        code === "target_not_on_active_space" &&
+        (code === "target_not_on_active_space" || code === "desktop_input_paused") &&
         Number.isSafeInteger(args.pid) &&
         Number.isSafeInteger(args.window_id)
           ? { windowId: `cua:${args.pid}:${args.window_id}`, message }
@@ -446,8 +484,9 @@ export class CuaComputerBackend implements ComputerBackend {
         "not-dispatched",
         "capture_unavailable",
       );
-    const bytes = Buffer.from(image.data, "base64");
-    const dimensions = pngDimensions(bytes);
+    // The PNG header contains the dimensions; do not decode the full image
+    // until its bytes are needed by the preview transport.
+    const dimensions = pngDimensions(Buffer.from(image.data.slice(0, 32), "base64"));
     const region = data.window_bounds ? rect(data.window_bounds) : fallback;
     if (!dimensions || !region) throw new Error("Cua screenshot is missing its coordinate frame.");
     const scale = dimensions.width / region.width;
@@ -456,16 +495,17 @@ export class CuaComputerBackend implements ComputerBackend {
     return {
       mimeType: "image/png",
       ...dimensions,
-      sizeBytes: bytes.length,
+      sizeBytes: Buffer.byteLength(image.data, "base64"),
       bytesBase64: image.data,
       region,
       scale,
       capturedAt: new Date().toISOString(),
     };
   }
-  private async captureOverview(): Promise<ComputerScreenshot> {
+  private async captureOverview(allowModelObservation = true): Promise<ComputerScreenshot> {
+    const generation = this.imageGeneration;
     try {
-      const result = await this.call("get_desktop_state");
+      const result = await this.call("get_desktop_state", {}, false, allowModelObservation);
       const data = result.structuredContent ?? {};
       const image = this.screenshot(result, {
         x: 0,
@@ -473,7 +513,9 @@ export class CuaComputerBackend implements ComputerBackend {
         width: number(data.screen_width),
         height: number(data.screen_height),
       });
-      this.cachedImage = image;
+      if (generation === this.imageGeneration && this.stills.attached && !this.disposed) {
+        this.cachedImage = image;
+      }
       this.captureFailed = false;
       this.setHealth({
         ...this.currentHealth,
@@ -629,28 +671,21 @@ export class CuaComputerBackend implements ComputerBackend {
       );
     let pixel: Record<string, unknown> = {};
     if (point) {
-      // Cua accepts window-local screenshot pixels. Its fresh frame resolver
-      // proves the current backing scale before native injection.
-      const capture = await this.call("get_window_state", {
-        pid,
-        window_id,
-        include_accessibility_tree: false,
-        include_screenshot: true,
-        max_dimension: 16384,
-      });
-      this.assertObservedWindow(capture, pid, window_id);
-      const image = this.screenshot(capture);
-      if (!sameRect(image.region!, bounds))
-        throw new CuaActionError(
-          "Target moved during action preparation.",
-          "not-dispatched",
-          "stale_geometry",
-        );
-      const x = (point.x - bounds.x) * image.scale!,
-        y = (point.y - bounds.y) * image.scale!;
-      if (x < 0 || y < 0 || x >= image.width || y >= image.height)
+      // Model image pixels have already been mapped to desktop logical points.
+      // Native revision 3 validates the exact current target and converts these
+      // local logical points without capturing another PNG to infer scale.
+      const x = point.x - bounds.x,
+        y = point.y - bounds.y;
+      if (
+        !Number.isFinite(x) ||
+        !Number.isFinite(y) ||
+        x < 0 ||
+        y < 0 ||
+        x >= bounds.width ||
+        y >= bounds.height
+      )
         throw new CuaActionError("Point is outside the target window.", "not-dispatched");
-      pixel = { x, y };
+      pixel = { x, y, coordinate_space: "window_points" };
     }
     assertDesktopOperationActive();
     let result: CuaToolResult;
@@ -669,7 +704,7 @@ export class CuaComputerBackend implements ComputerBackend {
       );
     } finally {
       // An error can follow partial input, so cached pixels cannot survive it.
-      this.cachedImage = undefined;
+      this.clearCachedImage();
       this.snapshotAt = 0;
     }
     const data = result.structuredContent ?? {};
@@ -773,22 +808,18 @@ export class CuaComputerBackend implements ComputerBackend {
         "not-dispatched",
         "stale_geometry",
       );
-    const image = await this.captureScreenshot({
-      kind: "window",
-      windowId: target.window.id,
-      maxDimension: 16384,
-    });
-    const bounds = image.region!;
-    if (!sameRect(observed, bounds))
-      throw new CuaActionError(
-        "Target moved during drag preparation.",
-        "not-dispatched",
-        "stale_geometry",
-      );
+    const bounds = target.window.bounds!;
     const local = (p: ComputerPoint) => {
-      const x = (p.x - bounds.x) * image.scale!,
-        y = (p.y - bounds.y) * image.scale!;
-      if (x < 0 || y < 0 || x >= image.width || y >= image.height)
+      const x = p.x - bounds.x,
+        y = p.y - bounds.y;
+      if (
+        !Number.isFinite(x) ||
+        !Number.isFinite(y) ||
+        x < 0 ||
+        y < 0 ||
+        x >= bounds.width ||
+        y >= bounds.height
+      )
         throw new CuaActionError("Drag crosses outside its target window.", "not-dispatched");
       return { x, y };
     };
@@ -796,7 +827,14 @@ export class CuaComputerBackend implements ComputerBackend {
       end = local(to);
     return this.input(
       "drag",
-      { from_x: start.x, from_y: start.y, to_x: end.x, to_y: end.y, duration_ms: durationMs },
+      {
+        from_x: start.x,
+        from_y: start.y,
+        to_x: end.x,
+        to_y: end.y,
+        duration_ms: durationMs,
+        coordinate_space: "window_points",
+      },
       target.window.id,
       undefined,
       bounds,
@@ -939,12 +977,14 @@ export class CuaComputerBackend implements ComputerBackend {
     await this.stills.attach(listener);
   }
   async detachStream() {
+    this.clearCachedImage();
     await this.stills.detach();
   }
   async requestKeyframe() {
     await this.stills.requestKeyframe();
   }
   async stopInput() {
+    this.clearCachedImage();
     if (this.endpoint) {
       const result = await this.request<CuaReply>(this.endpoint, {
         method: "stop",
@@ -960,6 +1000,7 @@ export class CuaComputerBackend implements ComputerBackend {
     this.snapshotAt = 0;
   }
   async dispose() {
+    this.clearCachedImage();
     await this.stills.detach();
     await this.stopInput();
     this.disposed = true;

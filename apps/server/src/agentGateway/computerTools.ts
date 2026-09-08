@@ -54,9 +54,10 @@ import {
 } from "../computer/screenshotFrames.ts";
 import { withDesktopDeliveryMode } from "../computer/DesktopOperationQueue.ts";
 import { CuaActionError } from "../computer/CuaComputerBackend.ts";
+import { withModelDesktopObservation } from "../computer/modelDesktopObservation.ts";
 import { PROVIDERS_WITHOUT_APPROVAL_GATE } from "./approvalGate.ts";
-import { DELIVERY_VERDICT_GUIDANCE } from "./computerGuidance.ts";
-import { mcpToolResultError, mcpToolResultJson, type McpToolCallResult } from "./protocol.ts";
+export { computerToolInstructions } from "./computerGuidance.ts";
+import { mcpToolResultError, type McpToolCallResult } from "./protocol.ts";
 import {
   ToolInputError,
   errorText,
@@ -73,6 +74,11 @@ import {
   type ToolContext,
   type ToolEntry,
 } from "./toolRuntime.ts";
+
+/** Compact only Computer result JSON; preserve every value and other tool families. */
+function mcpToolResultJson(value: unknown): McpToolCallResult {
+  return { content: [{ type: "text", text: JSON.stringify(value) }] };
+}
 
 export const COMPUTER_CONTROL_CAPABILITY = "computer:control" as const;
 
@@ -115,8 +121,8 @@ export function computerToolRequiresApproval(name: string): boolean {
   return COMPUTER_APPROVAL_REQUIRED_TOOLS.has(name);
 }
 
-/** Computer tools are deferred and capability-gated. Providers with tool search
- * discover them when needed without preloading the schemas into coding turns. */
+/** Computer tools are capability-gated. Provider-side schema loading varies;
+ * inactive sessions receive no computer definitions. */
 export interface AgentGatewayComputerToolsOptions {
   readonly manager: ComputerManager;
   readonly authorizeAction?: (
@@ -159,54 +165,6 @@ type ObservedActionOutcome =
     };
 
 /**
- * The prose every computer tool used to repeat, said once.
- *
- * Eleven of these tools carried the same three or four paragraphs — how a
- * coordinate is read, what the post-action screenshot is, what a delivery
- * verdict means, where keys land — which is around twelve thousand characters
- * of identical text resident in every session that loads the family. MCP has
- * one place for exactly this: the server's `initialize.instructions`, delivered
- * once. Each tool now carries the short form and a pointer to the section,
- * which is enough for a model reading a single tool definition in isolation and
- * costs a line rather than a page.
- *
- * The sections are named so a description can point at one by name. Keep those
- * names in step with the pointers below.
- *
- * @see makeAgentGatewayComputerTools — the tool descriptions that reference these.
- */
-export function computerToolInstructions(): string {
-  return [
-    "## Synara computer use",
-    "",
-    "These notes apply to every computer_* tool. The tool descriptions are the short form of them.",
-    "",
-    "### Pointing at the desktop",
-    SCREENSHOT_FRAME_NOTE,
-    POINTER_COORDINATE_NOTE,
-    SEMANTIC_TARGETING_NOTE,
-    "",
-    "### The screenshot on every action",
-    ACTION_SCREENSHOT_NOTE,
-    "",
-    "### Aiming the keyboard",
-    KEYBOARD_TARGET_NOTE,
-    WINDOW_FOCUS_NOTE,
-    "",
-    "### Reading a delivery verdict",
-    DELIVERY_NOTE,
-    "",
-    "### When a computer tool refuses",
-    REFUSAL_NOTE,
-    "A computer_input_paused refusal means input is suspended, while screenshots still work. Stop sending mutations, including activation or launch attempts. Tell the user which window needs attention and what remains. After the user returns it, call computer_get_state scoped to that window to check readiness before continuing. Resume from the current form contents; do not replay completed fields.",
-    "",
-    "### Form progress and handback",
-    "When submission is forbidden, do not use Enter to finish a form dropdown: it can submit the form if the popup has closed. Prefer clicking the visible option. If using typeahead or arrows, leave the control with Tab or Escape and verify its value. A dropdown value write may be a no-op even when the accessibility API accepts it.",
-    "Read the form before filling it and collect missing choices together when they determine later fields. Use computer_set_value for addressable fields and respect character limits. A successful delivery is not proof of the intended field's contents: check meaningful section boundaries and the final required values using the returned observations, without adding a screenshot after every keystroke. Read new state after revealing conditional fields. Never blindly repeat typing, paste, or checkbox toggles. At handback, distinguish verified values, attempted but unverified values, and missing fields, and preserve the user's submission boundary.",
-  ].join("\n");
-}
-
-/**
  * One wording for how the model points at things, shared by every tool that
  * returns an image: it points into the picture it was given, in that picture's
  * own pixels, and the server does the geometry (see screenshotFrames.ts). The
@@ -225,12 +183,9 @@ const SCREENSHOT_FRAME_NOTE =
 const SHARED_CLIPBOARD_NOTE =
   "The desktop has a single clipboard shared with the human user, not a private one for the agent.";
 
-const POINTER_COORDINATE_NOTE =
-  "x/y are pixel coordinates in a screenshot you received — by default the most recent one this conversation was given, otherwise the one named by screenshot_id — measured from that image's top-left corner. Never hide, minimize, activate, or rearrange the user's other windows to bypass an input refusal. Preserve the intended window and report the obstruction. Never convert screenshot pixels into desktop coordinates yourself; the server does that. Point at what you can see: if you have not looked at the desktop yet, or a window has moved or resized since your last screenshot, take a new screenshot first.";
-
 /** The short form each pointer tool carries in place of the paragraph above. */
 const POINTER_COORDINATE_HINT =
-  'x/y are pixels in a screenshot you were already given (the latest, or the one named by screenshot_id) — never desktop coordinates, and never converted by you. See "Pointing at the desktop" in this server\'s instructions.';
+  'x/y are pixels in a screenshot you were already given (the latest, or the one named by screenshot_id) — never desktop coordinates, and never converted by you. See "Pointing at the desktop" in the active Synara host context.';
 
 /**
  * The parity lever for visual grounding: when the model knows a control's
@@ -240,50 +195,28 @@ const POINTER_COORDINATE_HINT =
 const SEMANTIC_TARGETING_NOTE =
   'Prefer "label" (plus optional "role") from the latest computer_get_state elements list over raw x/y whenever the control appears there.';
 
-/**
- * Every mutating action carries its own after-screenshot so the model can act
- * on the result directly instead of spending a separate perception round trip
- * — the see-act loop is one model turn per action, not two.
- *
- * It says the observation is downscaled, and where to get more detail, because
- * an action screenshot spends a smaller pixel budget than a perception one: an
- * agent that cannot read a label in it must know the answer is one
- * `computer_screenshot` away rather than that the label is unreadable.
- */
-const ACTION_SCREENSHOT_NOTE = `Every mutating computer tool returns a screenshot taken shortly after the action, zoomed to the window the action affected — the window it named, or the window under its coordinates — falling back to the whole workspace when neither identifies one, capped at ${COMPUTER_ACTION_OBSERVATION_MAX_DIMENSION} pixels on its longest side so a typical application window comes back at full resolution. It becomes the screenshot your next x/y are measured in: read the next state from it and aim your next action at its pixels instead of making a separate screenshot call, and call computer_screenshot only when this one is too small to read the detail you need. Pass include_screenshot: false on an action whose picture you will not read — an action in the middle of a chain in one response — and never on the last one, because skipping it and then calling computer_screenshot costs the extra round trip the attached screenshot exists to avoid. When the new capture and its coordinate mapping are identical to the latest screenshot delivered to this conversation, the result reports screenshotUnchanged instead of repeating the image: keep reading the previous one, which remains the screenshot your coordinates refer to. Unchanged means the pixels did not move, not that the action failed — the screen may not have settled yet, and Synara has already checked whether the action opened a new window and photographed that instead if it did — so use computer_wait with label and window_id for a known next control, or a fresh screenshot when accessibility is unavailable. Discard earlier coordinates after controls move, and never replay an uncertain action. When the action closed its own target window, the result reports targetWindowClosed instead of a screenshot — the picture of a different window would not show your action's outcome.`;
-
 /** The short form the action tools carry. */
 const ACTION_SCREENSHOT_HINT =
-  'The result carries a screenshot taken shortly after the action, zoomed to the window it affected; read your next coordinates from it. See "The screenshot on every action" in this server\'s instructions.';
+  'The result carries a screenshot taken shortly after the action, zoomed to the window it affected; read your next coordinates from it. See "The screenshot on every action" in the active Synara host context.';
 
 const INCLUDE_ACTION_SCREENSHOT_PROPERTY = {
   include_screenshot: {
     type: "boolean",
     description:
-      "Attach the post-action screenshot to the result. Defaults to true. Pass false only when another action follows in this same response and you will read that action's screenshot instead. Never pass false on the last action before you need to see the result: skipping it and then calling computer_screenshot costs the extra round trip the attached screenshot exists to avoid.",
+      "Attach post-action screenshot (default true). Use false only for an intermediate action; read the final action's screenshot. Never pass false on the last action.",
   },
 } as const;
-
-const KEYBOARD_TARGET_NOTE =
-  "Pass window_id to select an exact input target. Otherwise keys go to the last aimed window. Background delivery is the default and can still change focus inside the target app. Foreground delivery requires explicit approval for each action. The drawn cursor is only an indicator and does not aim the keyboard. With no target or a closed target, input is refused: aim first instead of retrying unchanged.";
 
 const WINDOW_FOCUS_NOTE =
   "A window's focused flag identifies Synara's selected input target; it does not prove that the window became frontmost. The optional active flag reports native activation; an absent active flag means activation is unknown.";
 
 /** The short form the keyboard tools carry. */
 const KEYBOARD_TARGET_HINT =
-  'Keys go where the agent seat is aimed: click into the window first, or pass window_id. A hover does not aim it. See "Aiming the keyboard" in this server\'s instructions.';
-
-/** Delivery is judged from the result, never by replaying an action blindly. */
-const DELIVERY_NOTE = DELIVERY_VERDICT_GUIDANCE;
-
-/** Admission refusals and uncertain native failures require different handling. */
-const REFUSAL_NOTE =
-  "Inspect both the error code and its effect. computer_controlled_by_other_thread means another conversation holds the desktop; read or re-plan instead of competing for it. computer_target_ambiguous requires a narrower target. computer_target_not_found or stale_geometry requires a fresh observation. computer_target_offscreen requires a point inside the scoped window. ComputerApprovalRequired means this session cannot ask the user; explain the missing approval. Only effect=not-dispatched proves no input was delivered. After effect=dispatched-unknown, inspect the application and never blindly replay the action. Background targeting does not guarantee isolation from concurrent human input.";
+  'Keys go where the agent seat is aimed: click into the window first, or pass window_id. A hover does not aim it. See "Aiming the keyboard" in the active Synara host context.';
 
 /** The short form the input tools carry. */
 const DELIVERY_HINT =
-  'The result may carry delivery.verified; delivery.effect distinguishes a verified outcome from an unknown dispatched effect; no verdict justifies a blind retry. See "Reading a delivery verdict" in this server\'s instructions.';
+  'The result may carry delivery.verified; delivery.effect distinguishes a verified outcome from an unknown dispatched effect; no verdict justifies a blind retry. See "Reading a delivery verdict" in the active Synara host context.';
 
 function keyboardTargetProperty(): Record<string, unknown> {
   return {
@@ -330,26 +263,24 @@ const SCREENSHOT_ID_PROPERTY = {
   screenshot_id: {
     type: "string",
     description:
-      "screenshotId of the screenshot that x/y (and any region) are measured in. Defaults to the most recent screenshot this conversation received. Pass it only when pointing into an earlier screenshot that is still valid, such as a workspace overview taken just before a zoomed window capture.",
+      "Frame for x/y; defaults to the latest delivered screenshot. An earlier screenshot must still be valid.",
   },
 } as const;
 
 const TARGET_PROPERTIES = {
   x: {
     type: "number",
-    description:
-      "X pixel coordinate in the screenshot (the most recent one, or the one named by screenshot_id), measured from its left edge.",
+    description: "Pixel x from the screenshot's left edge.",
   },
   y: {
     type: "number",
-    description:
-      "Y pixel coordinate in the screenshot (the most recent one, or the one named by screenshot_id), measured from its top edge.",
+    description: "Pixel y from the screenshot's top edge.",
   },
   ...SCREENSHOT_ID_PROPERTY,
   label: {
     type: "string",
     description:
-      "Accessible label to resolve from a fresh UI snapshot — use the exact label from computer_get_state's elements list. Matched verbatim, including leading and trailing spaces, so copy it as printed rather than tidying it.",
+      "Exact accessible label from computer_get_state; matched verbatim, including leading and trailing spaces, against fresh state.",
   },
   role: { type: "string", description: "Optional accessible role used to disambiguate a label." },
 } as const;
@@ -768,7 +699,7 @@ function withSetupNoteInText(text: string, note: string): string {
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     return `${text}\n\n${note}`;
   }
-  return JSON.stringify({ ...(parsed as Record<string, unknown>), setupRequired: note }, null, 2);
+  return JSON.stringify({ ...(parsed as Record<string, unknown>), setupRequired: note });
 }
 
 export function makeAgentGatewayComputerTools(
@@ -806,18 +737,14 @@ export function makeAgentGatewayComputerTools(
       content: [
         {
           type: "text",
-          text: JSON.stringify(
-            {
-              ...payload,
-              screenshot: {
-                ...(frame ? { screenshotId: frame.id } : {}),
-                ...(windowId !== undefined ? { windowId } : {}),
-                ...metadata,
-              },
+          text: JSON.stringify({
+            ...payload,
+            screenshot: {
+              ...(frame ? { screenshotId: frame.id } : {}),
+              ...(windowId !== undefined ? { windowId } : {}),
+              ...metadata,
             },
-            null,
-            2,
-          ),
+          }),
         },
         { type: "image", data: bytesBase64, mimeType: "image/png" },
       ],
@@ -925,6 +852,14 @@ export function makeAgentGatewayComputerTools(
           // desktop, and the badge has to name this thread from the first
           // action rather than from the second.
           manager.setThreadLabel(context.callerThreadId, context.callerThreadLabel);
+          // Action targeting and automatic previews do not replace a model's
+          // explicit observation after a desktop interruption.
+          const invoke = () =>
+            name === "computer_get_state" ||
+            name === "computer_screenshot" ||
+            name === "computer_wait"
+              ? withModelDesktopObservation(() => run(args, context))
+              : run(args, context);
           const value =
             name === "computer_wait"
               ? await (async () => {
@@ -935,7 +870,7 @@ export function makeAgentGatewayComputerTools(
                     manager.cursorActivity.during(
                       context.callerThreadId,
                       cursorToolActivity(name),
-                      () => run(args, context),
+                      invoke,
                     ),
                   );
                   await Effect.runPromise(context.assertCallerTurnActive(), {
@@ -958,7 +893,7 @@ export function makeAgentGatewayComputerTools(
                         manager.cursorActivity.during(
                           context.callerThreadId,
                           cursorToolActivity(name),
-                          () => run(args, context),
+                          invoke,
                         ),
                     );
                   },

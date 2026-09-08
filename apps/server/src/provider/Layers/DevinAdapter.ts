@@ -155,6 +155,16 @@ import {
 import { DevinAdapter, type DevinAdapterShape } from "../Services/DevinAdapter.ts";
 
 const PROVIDER = "devin" as const;
+
+export const takeDevinSynaraHarnessPolicyTextPart = (
+  state: SynaraHarnessPolicyDeliveryState,
+  scopedGatewayConnectionAvailable: boolean,
+) =>
+  takeSynaraHarnessPolicyTextPartForProviderSession(state, {
+    provider: PROVIDER,
+    scopedGatewayConnectionAvailable,
+  });
+
 const DEVIN_RESUME_VERSION = 1 as const;
 
 const DEVIN_TURN_IDLE_TIMEOUT_MS = resolveAcpTurnIdleTimeoutMs({
@@ -2089,6 +2099,7 @@ export function makeDevinAdapter(
           };
 
           ctx = {
+            enableComputerControl: input.enableComputerControl === true,
             threadId: input.threadId,
             lifecycleGeneration: input.lifecycleGeneration,
             session,
@@ -2748,10 +2759,10 @@ export function makeDevinAdapter(
           });
         }
 
-        const harnessPolicy = takeSynaraHarnessPolicyTextPartForProviderSession(ctx, {
-          provider: PROVIDER,
-          scopedGatewayConnectionAvailable: ctx.devinSessionConfig?.installed === true,
-        });
+        const harnessPolicy = takeDevinSynaraHarnessPolicyTextPart(
+          ctx,
+          ctx.devinSessionConfig?.installed === true,
+        );
         if (harnessPolicy) {
           promptParts.unshift(harnessPolicy);
         }

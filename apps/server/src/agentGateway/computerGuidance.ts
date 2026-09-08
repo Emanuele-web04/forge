@@ -1,20 +1,6 @@
-/**
- * Prose about desktop control that more than one surface has to say.
- *
- * Two surfaces tell a model how to read a computer tool result: the harness
- * policy (`harnessPolicy.ts`), delivered in the system context of every
- * supported provider session, and the computer family's own MCP instructions
- * (`computerTools.ts`), delivered only where the tools are registered. They are
- * separate deliveries on purpose — a session may see one without the other —
- * but the *facts* they state must be one text, because a model that reads both
- * and finds two different accounts of the same three-valued verdict has been
- * given a reason to distrust either.
- *
- * Only sentences that are true on every backend belong here. Anything that
- * varies by desktop (what naming a window does, which chord spellings exist)
- * stays where the per-backend branch is.
- *
- * @module agentGateway/computerGuidance
+import { COMPUTER_ACTION_OBSERVATION_MAX_DIMENSION } from "../computer/ComputerBackend.ts";
+/** Shared provider-host Computer guidance. Never included in MCP initialize:
+ * clients may expand server instructions per tool, and Pi uses native tools.
  */
 
 /**
@@ -35,3 +21,23 @@ export const DELIVERY_VERDICT_GUIDANCE =
   'delivery.effect is "verified" only when established; "dispatched-unknown" means input may have taken effect. ' +
   "For unknown effects, inspect the returned observation or request fresh state before deciding the next action. " +
   'Never replay an uncertain action or promote it to foreground automatically. A "not-dispatched" refusal permits a corrected request.';
+
+/** Delivered only in an activated provider session, never through MCP initialize. */
+export function computerToolInstructions(): string {
+  return [
+    "## Synara computer use",
+    "Computer is enabled for this session. For desktop/app requests use computer_* directly; no mention syntax is needed. Do not substitute shell, AppleScript or another automation surface to bypass a refusal. In-app browser requests still use browser_*.",
+    "### Pointing at the desktop",
+    "Observe before acting. Prefer label and role from computer_get_state. For x/y use pixel coordinates in a screenshot you received, optionally named by screenshot_id. Never convert screenshot pixels into desktop coordinates. Observe again after the window or controls move.",
+    "### Aiming the keyboard",
+    "Pass window_id to select an exact input target; otherwise keys go to the last aimed window. The drawn cursor does not aim keys. Background delivery may affect app focus and does not isolate human input. Foreground delivery requires explicit approval for each action. Never rearrange other windows to bypass refusal. focused means selected input target; active reports native activation when known.",
+    "### The screenshot on every action",
+    `Use returned post-action observations, capped at ${COMPUTER_ACTION_OBSERVATION_MAX_DIMENSION} pixels, for the next step. include_screenshot:false is for intermediate actions only; inspect the final result. screenshotUnchanged reuses the previous image and mapping, not that the action failed. targetWindowClosed means the target is gone. Use computer_wait for a known next control; request computer_screenshot detail when needed, not after every keystroke.`,
+    "### Reading a delivery verdict",
+    DELIVERY_VERDICT_GUIDANCE,
+    "### When a computer tool refuses",
+    "For computer_target_ambiguous narrow the target; for stale or missing targets observe again. computer_controlled_by_other_thread means wait, not compete. When input is paused, stop mutations and hand back to the user; check window readiness after return. Missing permission or ComputerApprovalRequired needs user attention. Only effect=not-dispatched proves no input; effect=dispatched-unknown means inspect and never blindly replay. Never automatically retry an unknown effect or escalate it to foreground.",
+    "### Form progress and handback",
+    "Read existing values, group missing choices, prefer set_value for editable controls, and verify meaningful section boundaries. Never blindly repeat typing or toggles. If submission is forbidden avoid Enter in dropdowns: click an option, use Tab/Escape and verify. Distinguish verified, uncertain and missing values at handback; preserve the user's submission boundary.",
+  ].join("\n");
+}

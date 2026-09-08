@@ -1,3 +1,4 @@
+import type { ComposerComputerControlMode } from "./computerControlMode";
 // FILE: composerDraftDomain.ts
 // Purpose: Defines composer draft state, stable defaults, and content/project normalization.
 // Exports: Internal domain primitives plus public facade types.
@@ -132,6 +133,8 @@ export interface QueuedComposerChatTurn {
   modelSelection: ModelSelection;
   providerOptionsForDispatch?: ProviderStartOptions | undefined;
   enableComputerControl?: boolean | undefined;
+  computerControlMode?: ComposerComputerControlMode | undefined;
+  computerControlGeneration?: number | undefined;
   sourceProposedPlan?: NonNullable<OrchestrationLatestTurn["sourceProposedPlan"]> | undefined;
   runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;
@@ -157,6 +160,8 @@ export interface QueuedComposerPlanFollowUp {
   modelSelection: ModelSelection;
   providerOptionsForDispatch?: ProviderStartOptions | undefined;
   enableComputerControl?: boolean | undefined;
+  computerControlMode?: ComposerComputerControlMode | undefined;
+  computerControlGeneration?: number | undefined;
   runtimeMode: RuntimeMode;
 }
 
@@ -187,6 +192,8 @@ export interface ComposerThreadDraftState {
   runtimeMode: RuntimeMode | null;
   interactionMode: ProviderInteractionMode | null;
   enableComputerControl?: boolean | undefined;
+  computerControlMode?: ComposerComputerControlMode | undefined;
+  computerControlGeneration?: number | undefined;
 }
 
 export interface DraftThreadState {
@@ -329,6 +336,11 @@ export interface ComposerDraftStoreState {
   setInteractionMode: (
     threadId: ThreadId,
     interactionMode: ProviderInteractionMode | null | undefined,
+  ) => void;
+  setComputerControlMode: (
+    threadId: ThreadId,
+    mode: ComposerComputerControlMode,
+    options?: { revokeQueued?: boolean; generation?: number },
   ) => void;
   setEnableComputerControl: (threadId: ThreadId, enabled: boolean) => void;
   enqueueQueuedTurn: (threadId: ThreadId, queuedTurn: QueuedComposerTurn) => void;
@@ -543,7 +555,7 @@ export function createEmptyThreadDraft(): ComposerThreadDraftState {
     interactionMode: null,
     // Tri-state: undefined means "no explicit choice". A chat that has not
     // started yet then follows the machine-wide allowComputerControlInNewChats
-    // setting (on by default), including while permission setup is needed; its
+    // setting (off by default), including while permission setup is needed; its
     // first send records the resolved value here so later setting changes leave
     // the chat alone. A chat with turns and no recorded choice is off.
     enableComputerControl: undefined,
@@ -780,6 +792,9 @@ export function buildTransferredComposerDraft(input: {
     skills: [...sourceDraft.skills],
     mentions: [...sourceDraft.mentions],
     enableComputerControl: sourceDraft.enableComputerControl,
+    computerControlMode: sourceDraft.computerControlMode,
+    // Revocation generations belong to the target thread, never the copied prompt.
+    computerControlGeneration: base.computerControlGeneration ?? 0,
     restoredSourceProposedPlan: null,
   };
 }
@@ -848,7 +863,8 @@ export function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.interactionMode === null &&
     // An explicit false is still content: it records the user's choice to keep
     // computer control off in this chat when the new-chat default is on.
-    draft.enableComputerControl === undefined
+    draft.enableComputerControl === undefined &&
+    draft.computerControlMode === undefined
   );
 }
 

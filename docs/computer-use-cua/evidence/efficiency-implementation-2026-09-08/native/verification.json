@@ -1,0 +1,50 @@
+{
+  "nativeRevision": 3,
+  "status": "implemented-built-and-staged",
+  "coordinates": {
+    "mode": "window_points",
+    "preparationPngRequestsForClickScrollDrag": 0,
+    "evidence": "backend-tests.log",
+    "nativeAdmission": "Exact PID/window, expected logical bounds and active Space remain validated before native posts; logical points require no backing scale inference. Legacy screenshot-pixel mode retains capture-based frame validation.",
+    "nativeGeometryTests": 10
+  },
+  "resourceLifetime": {
+    "backendTests": 30,
+    "cache": "Only attached previews retain overview; detach, stop, disposal and desktop-input pause invalidate it, including delayed captures.",
+    "decode": "Dimensions read from first 24 PNG header bytes; complete base64 decoding happens only when preview needs image bytes."
+  },
+  "verification": {
+    "pureNativeTests": 70,
+    "architecturesBuilt": ["arm64", "x64"],
+    "architectureExecuted": "arm64 pure tests only",
+    "sourceReconstruction": "source-reconstruction.json",
+    "artifact": "provenance.json",
+    "nativeInputToolsCalled": 0,
+    "nativeCapturesCalled": 0,
+    "signedFixture": {
+      "built": true,
+      "signatureVerified": true,
+      "launch": "LaunchServices",
+      "permissionCheck": "signed-fixture-permission-check.json",
+      "accessibility": false,
+      "screenRecording": false,
+      "nativeInputToolsCalled": 0,
+      "nativeCapturesCalled": 0,
+      "outcome": "Stopped before input because existing host grants are unavailable for this signed temporary build."
+    },
+    "nativeControlProbe": {
+      "casesPassed": 6,
+      "inputToolsCalled": 0,
+      "captureToolsCalled": 0,
+      "log": "native-control-probe.log",
+      "executedBy": "root"
+    },
+    "resourceSampling": "No usable samples: runner exited at missing-permission preflight before sampling; no resource benchmark claimed."
+  },
+  "limits": [
+    "Signed temporary fixture launched but host Accessibility and Screen Recording grants were absent; revision3 GUI actuation and provider roundtrip remain unqualified.",
+    "No matched CPU, process-tree RSS or provider-token benchmark.",
+    "Intel compiled but not executed.",
+    "No isolation from simultaneous physical human input guaranteed."
+  ]
+}

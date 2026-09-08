@@ -71,7 +71,7 @@ function attempt<A>(
 export interface WsComputerHandlers {
   readonly [COMPUTER_WS_METHODS.setControlEnabled]: (
     input: ComputerSetControlEnabledInput,
-  ) => Effect.Effect<{ enabled: boolean }, WsRpcError>;
+  ) => Effect.Effect<{ enabled: boolean; generation: number }, WsRpcError>;
   readonly [COMPUTER_WS_METHODS.getStatus]: (
     input: ComputerGetStatusInput,
   ) => Effect.Effect<ComputerStatusResult, WsRpcError>;
@@ -204,10 +204,14 @@ export function makeWsComputerHandlers(
   const manager = computerService.manager;
   return {
     [COMPUTER_WS_METHODS.setControlEnabled]: (input) =>
-      attempt(() => {
-        registry?.setComputerControlEnabled?.(input.threadId, input.enabled);
-        if (!input.enabled) computerApprovalGate.cancelThread(input.threadId);
-        return manager.setControlEnabled(input.threadId, input.enabled);
+      attempt(async () => {
+        if (!input.enabled) {
+          registry?.setComputerControlEnabled?.(input.threadId, false);
+          computerApprovalGate.cancelThread(input.threadId);
+        }
+        const result = await manager.setControlEnabled(input.threadId, input.enabled);
+        registry?.setComputerControlEnabled?.(input.threadId, result.enabled);
+        return result;
       }, "Failed to change computer authority"),
     [COMPUTER_WS_METHODS.getStatus]: () =>
       attempt(() => manager.getStatus(), "Failed to read computer status"),

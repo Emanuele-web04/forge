@@ -64,3 +64,21 @@ export function toPersistedComposerImageSource(
   const { appIconDataUrl: _appIconDataUrl, ...persistedSource } = source;
   return persistedSource;
 }
+
+function compactCaptureLabel(value: string | null | undefined, limit: number): string {
+  return (value ?? "")
+    .replace(/[\p{Cc}/\\]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, limit);
+}
+
+/** Bounded attachment label, never executable instructions or an input target. */
+export function appSnapUploadName(source: ComposerAppSnapSource, fileName: string): string {
+  const timestamp = Date.parse(source.capturedAt);
+  const capturedAt = Number.isFinite(timestamp)
+    ? new Date(timestamp).toISOString()
+    : "unknown time";
+  const extension = fileName.endsWith(".webp") ? "webp" : fileName.endsWith(".jpg") ? "jpg" : "png";
+  return `AppSnap - ${compactCaptureLabel(source.appName, 40) || "app"} - ${compactCaptureLabel(source.windowTitle, 80) || "window"} - ${capturedAt}.${extension}`;
+}

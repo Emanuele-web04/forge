@@ -131,3 +131,50 @@ describe("Synara harness policy", () => {
     assert.notInclude(policy, "device_describe_ui");
   });
 });
+
+it("adds Computer guidance only for an explicitly enabled scoped session across all providers", () => {
+  const providers = [
+    "codex",
+    "claudeAgent",
+    "cursor",
+    "grok",
+    "droid",
+    "devin",
+    "opencode",
+    "pi",
+    "antigravity",
+  ] as const;
+  for (const provider of providers) {
+    const off = takeSynaraHarnessPolicyForProviderSession(
+      {},
+      { provider, scopedGatewayConnectionAvailable: true },
+    );
+    const explicitOff = takeSynaraHarnessPolicyForProviderSession(
+      { enableComputerControl: false },
+      { provider, scopedGatewayConnectionAvailable: true },
+    );
+    assert.strictEqual(off, explicitOff);
+    assert.notInclude(off ?? "", "## Synara computer use");
+    const state = { enableComputerControl: true };
+    const on =
+      takeSynaraHarnessPolicyForProviderSession(state, {
+        provider,
+        scopedGatewayConnectionAvailable: true,
+      }) ?? "";
+    assert.equal(on.split("## Synara computer use").length - 1, 1, provider);
+    assert.include(on, "Never replay an uncertain action");
+    assert.isNull(
+      takeSynaraHarnessPolicyForProviderSession(state, {
+        provider,
+        scopedGatewayConnectionAvailable: true,
+      }),
+    );
+    assert.notInclude(
+      takeSynaraHarnessPolicyForProviderSession(
+        { enableComputerControl: true },
+        { provider, scopedGatewayConnectionAvailable: false },
+      ) ?? "",
+      "## Synara computer use",
+    );
+  }
+});

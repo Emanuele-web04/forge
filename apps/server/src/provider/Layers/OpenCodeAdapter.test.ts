@@ -585,6 +585,51 @@ describe("OpenCode host policy delivery", () => {
     }
   });
 
+  it("refreshes Computer context on activation profile changes while preserving unchanged resume delivery", async () => {
+    const runtime = createMockOpenCodeRuntime();
+    const gateway = makeGatewayCredentials();
+    const threadId = asThreadId("thread-computer-profile-resume");
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        let resumeCursor: unknown = undefined;
+        for (const enableComputerControl of [false, true, true, false]) {
+          yield* adapter.startSession({
+            provider: "opencode",
+            threadId,
+            runtimeMode: "full-access",
+            enableComputerControl,
+            ...(resumeCursor ? { resumeCursor } : {}),
+          });
+          const result = yield* adapter.sendTurn({
+            threadId,
+            input: "next",
+            attachments: [],
+            modelSelection,
+          });
+          resumeCursor = result.resumeCursor;
+        }
+        yield* adapter.stopSession(threadId);
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provide(Layer.succeed(AgentGatewayCredentials, gateway.credentials)),
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-computer-context-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+    expect(runtime.promptCalls.map(promptContainsHarnessPolicy)).toEqual([true, true, false, true]);
+    expect(
+      runtime.promptCalls.map((prompt) =>
+        JSON.stringify(prompt).includes("## Synara computer use"),
+      ),
+    ).toEqual([false, true, false, false]);
+  });
+
   it("does not re-inject the host policy when the same native session is restarted", async () => {
     const runtime = createMockOpenCodeRuntime();
     const threadId = asThreadId("thread-host-policy-same-session-restart");
@@ -1125,6 +1170,18 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             cwd: "/computer/repo",
             enableComputerControl,
           });
+          yield* adapter.sendTurn({
+            threadId,
+            input: "inspect",
+            attachments: [],
+            modelSelection: { provider: "opencode", model: "openai/gpt-4o" },
+          });
+          yield* adapter.sendTurn({
+            threadId,
+            input: "continue",
+            attachments: [],
+            modelSelection: { provider: "opencode", model: "openai/gpt-4o" },
+          });
           yield* adapter.stopSession(threadId);
         }).pipe(
           Effect.provide(
@@ -1139,6 +1196,10 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         ),
       );
 
+      expect(JSON.stringify(runtime.promptCalls[0]).includes("## Synara computer use")).toBe(
+        enableComputerControl,
+      );
+      expect(JSON.stringify(runtime.promptCalls[1])).not.toContain("## Synara computer use");
       expect(gateway.leasedCapabilities).toEqual([
         enableComputerControl ? ["computer:control"] : [],
       ]);

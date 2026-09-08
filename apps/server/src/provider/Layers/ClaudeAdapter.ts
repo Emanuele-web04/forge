@@ -1157,7 +1157,10 @@ const CLAUDE_CONTEXT_USAGE_TIMEOUT_MS = 1_000;
 // The SDK's interrupt resolves only once the CLI acknowledges it; a wedged CLI
 // would otherwise stall the caller (and the provider command reactor) forever.
 const CLAUDE_INTERRUPT_TIMEOUT = Duration.seconds(10);
-export const buildEmbeddedClaudeSystemPromptAppend = (gatewayControlAvailable: boolean) =>
+export const buildEmbeddedClaudeSystemPromptAppend = (
+  gatewayControlAvailable: boolean,
+  enableComputerControl = false,
+) =>
   [
     "You are running inside Synara, a coding app that embeds the Claude Agent SDK.",
     "Do not present the host app as Claude Code unless the user is explicitly asking about Claude Code.",
@@ -1165,7 +1168,7 @@ export const buildEmbeddedClaudeSystemPromptAppend = (gatewayControlAvailable: b
     "When the user asks about the current project, codebase, or repository, proactively inspect files in the current working directory before asking the user where to look.",
     "When spawning subagents, set the Agent tool's `model` parameter and pick reasoning effort by choosing a worker-<tier> subagent type (worker-low, worker-medium, worker-high, worker-xhigh).",
     "Honor explicit user instructions about a subagent's model or effort verbatim; otherwise match task complexity: mechanical work → haiku or worker-low, standard work → sonnet or worker-medium, hard reasoning → opus or fable with worker-high and above.",
-    renderSynaraHarnessPolicy({ gatewayControlAvailable }),
+    renderSynaraHarnessPolicy({ gatewayControlAvailable, enableComputerControl }),
   ].join("\n");
 
 const CLAUDE_WORKER_EFFORT_TIERS = ["low", "medium", "high", "xhigh"] as const;
@@ -5327,7 +5330,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           systemPrompt: {
             type: "preset",
             preset: "claude_code",
-            append: buildEmbeddedClaudeSystemPromptAppend(agentGatewayCredentials !== undefined),
+            append: buildEmbeddedClaudeSystemPromptAppend(
+              agentGatewayCredentials !== undefined,
+              input.enableComputerControl === true,
+            ),
             // Strip per-user dynamic sections (working directory, auto-memory
             // path) into the first user message so the cached system-prompt
             // prefix stays static across sessions and users. Tradeoff: that

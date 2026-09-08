@@ -315,7 +315,7 @@ export function ComputerSettingsPanel({
       <SettingsSection title="Computer control">
         <SettingsRow
           title="Enable by default"
-          description="Make computer tools available to agents unless you turn them off in a conversation."
+          description="Keep computer tools available in new chats. This adds provider context even on ordinary messages. Leave off to enable only when needed."
           resetAction={
             settings.allowComputerControlInNewChats !== defaults.allowComputerControlInNewChats ? (
               <SettingResetButton

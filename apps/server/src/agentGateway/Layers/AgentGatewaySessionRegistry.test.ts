@@ -4,12 +4,17 @@ import { ThreadId } from "@synara/contracts";
 import { makeAgentGatewaySessionRegistry } from "./AgentGatewaySessionRegistry.ts";
 
 describe("AgentGatewaySessionRegistry", () => {
-  it("revokes current computer calls while keeping actual provider provisioning separate", () => {
+  it("permanently revokes old computer credentials through re-enable", () => {
     const registry = makeAgentGatewaySessionRegistry();
     const thread = ThreadId.makeUnsafe("thread-1");
     const old = registry.issue(thread, "codex", { additionalCapabilities: ["computer:control"] });
     registry.setComputerControlEnabled?.(thread, false);
     assert.isFalse(registry.verify(old.token)?.capabilities.has("computer:control"));
+    assert.isFalse(registry.computerControlProvisioned?.(thread, "codex"));
+    registry.setComputerControlEnabled?.(thread, true);
+    assert.isFalse(registry.verify(old.token)?.capabilities.has("computer:control"));
+    const fresh = registry.issue(thread, "codex", { additionalCapabilities: ["computer:control"] });
+    assert.isTrue(registry.verify(fresh.token)?.capabilities.has("computer:control"));
     assert.isTrue(registry.computerControlProvisioned?.(thread, "codex"));
     assert.isFalse(registry.computerControlProvisioned?.(thread, "claudeAgent"));
     registry.issue(thread, "codex");

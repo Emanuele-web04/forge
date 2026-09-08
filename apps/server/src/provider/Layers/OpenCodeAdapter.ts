@@ -139,6 +139,7 @@ interface OpenCodeHarnessPolicyDelivery {
   readonly sessionId: string;
   readonly policyVersion: string;
   readonly gatewayControlAvailable: boolean;
+  readonly enableComputerControl?: boolean;
 }
 
 interface OpenCodeResumeCursor {
@@ -151,6 +152,7 @@ interface OpenCodeSessionContext {
   harnessPolicyDelivered?: boolean;
   pendingHarnessPolicyTurnId: TurnId | undefined;
   readonly gatewayControlAvailable: boolean;
+  readonly enableComputerControl?: boolean;
   gatewaySessionLease?: AgentGatewaySessionLease;
   session: ProviderSession;
   readonly lifecycleGeneration?: string;
@@ -954,6 +956,8 @@ function extractHarnessPolicyDelivery(
         sessionId: delivery.sessionId.trim(),
         policyVersion: delivery.policyVersion.trim(),
         gatewayControlAvailable: delivery.gatewayControlAvailable,
+        enableComputerControl:
+          "enableComputerControl" in delivery && delivery.enableComputerControl === true,
       };
     }
   }
@@ -965,12 +969,14 @@ function isMatchingHarnessPolicyDelivery(
   input: {
     readonly sessionId: string;
     readonly gatewayControlAvailable: boolean;
+    readonly enableComputerControl?: boolean;
   },
 ): boolean {
   return (
     delivery?.sessionId === input.sessionId &&
     delivery.policyVersion === SYNARA_HARNESS_POLICY_VERSION &&
-    delivery.gatewayControlAvailable === input.gatewayControlAvailable
+    delivery.gatewayControlAvailable === input.gatewayControlAvailable &&
+    (delivery.enableComputerControl === true) === (input.enableComputerControl === true)
   );
 }
 
@@ -979,6 +985,7 @@ function buildOpenCodeResumeCursor(input: {
   readonly cwd: string;
   readonly harnessPolicyDelivered?: boolean;
   readonly gatewayControlAvailable: boolean;
+  readonly enableComputerControl?: boolean;
 }): OpenCodeResumeCursor {
   return {
     openCodeSessionId: input.openCodeSessionId,
@@ -989,6 +996,7 @@ function buildOpenCodeResumeCursor(input: {
             sessionId: input.openCodeSessionId,
             policyVersion: SYNARA_HARNESS_POLICY_VERSION,
             gatewayControlAvailable: input.gatewayControlAvailable,
+            enableComputerControl: input.enableComputerControl === true,
           },
         }
       : {}),
@@ -1007,6 +1015,7 @@ function markOpenCodeHarnessPolicyDelivered(context: OpenCodeSessionContext, tur
       cwd: context.directory,
       harnessPolicyDelivered: true,
       gatewayControlAvailable: context.gatewayControlAvailable,
+      enableComputerControl: context.enableComputerControl === true,
     }),
   });
 }
@@ -3537,6 +3546,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   isMatchingHarnessPolicyDelivery(persistedHarnessPolicyDelivery, {
                     sessionId: started.openCodeSessionId,
                     gatewayControlAvailable: started.gatewayControlAvailable,
+                    enableComputerControl: input.enableComputerControl === true,
                   });
                 if (options?.beforeSessionInstall) {
                   yield* options.beforeSessionInstall;
@@ -3568,6 +3578,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                     cwd: directory,
                     harnessPolicyDelivered,
                     gatewayControlAvailable: started.gatewayControlAvailable,
+                    enableComputerControl: input.enableComputerControl === true,
                   }),
                   createdAt,
                   updatedAt: createdAt,
@@ -3578,6 +3589,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   pendingHarnessPolicyTurnId: undefined,
                   session,
                   gatewayControlAvailable: started.gatewayControlAvailable,
+                  enableComputerControl: input.enableComputerControl === true,
                   ...(started.gatewayControlAvailable && agentGatewaySessionLease
                     ? {
                         gatewaySessionLease: agentGatewaySessionLease,
@@ -3716,6 +3728,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         const harnessPolicy = takeSynaraHarnessPolicyForProviderSession(
           {
             ...(context.harnessPolicyDelivered ? { harnessPolicyDelivered: true } : {}),
+            enableComputerControl: context.enableComputerControl === true,
           },
           {
             provider,
@@ -3768,6 +3781,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               cwd: context.directory,
               ...(context.harnessPolicyDelivered ? { harnessPolicyDelivered: true } : {}),
               gatewayControlAvailable: context.gatewayControlAvailable,
+              enableComputerControl: context.enableComputerControl === true,
             }),
           },
           { clearLastError: true },
@@ -3812,6 +3826,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             cwd: context.directory,
             ...(context.harnessPolicyDelivered ? { harnessPolicyDelivered: true } : {}),
             gatewayControlAvailable: context.gatewayControlAvailable,
+            enableComputerControl: context.enableComputerControl === true,
           }),
         };
       });

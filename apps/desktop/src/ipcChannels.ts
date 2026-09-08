@@ -40,6 +40,8 @@ export const DESKTOP_IPC_CHANNELS = {
     acknowledge: "desktop:storage-migration-acknowledge",
   },
   appSnap: {
+    captureCurrentApp: "desktop:appsnap-capture-current-app",
+    cancelCapture: "desktop:appsnap-cancel-capture",
     getState: "desktop:appsnap-get-state",
     setEnabled: "desktop:appsnap-set-enabled",
     checkShortcut: "desktop:appsnap-check-shortcut",

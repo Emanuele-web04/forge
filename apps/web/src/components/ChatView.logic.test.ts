@@ -39,6 +39,7 @@ import {
   deriveComposerSendState,
   deriveComposerVoiceState,
   editAndResendDispatchFields,
+  planImplementationDispatchSettings,
   queuedChatTurnDispatchFields,
   queuedPlanFollowUpDispatchFields,
   resolveEffectiveComputerControl,
@@ -3008,6 +3009,8 @@ describe("turn dispatch settings", () => {
       "modelSelection",
       "providerOptions",
       "enableComputerControl",
+      "computerControlGeneration",
+      "computerControlMode",
       "assistantDeliveryMode",
       "dispatchMode",
       "runtimeMode",
@@ -3017,6 +3020,8 @@ describe("turn dispatch settings", () => {
       modelSelection: LIVE_SETTINGS.modelSelection,
       providerOptions: LIVE_SETTINGS.providerOptions,
       enableComputerControl: true,
+      computerControlGeneration: 0,
+      computerControlMode: "chat",
       assistantDeliveryMode: "streaming",
       dispatchMode: "steer",
       runtimeMode: "auto",
@@ -3030,6 +3035,8 @@ describe("turn dispatch settings", () => {
       "modelSelection",
       "providerOptions",
       "enableComputerControl",
+      "computerControlGeneration",
+      "computerControlMode",
       "assistantDeliveryMode",
       "runtimeMode",
       "interactionMode",
@@ -3045,6 +3052,8 @@ describe("turn dispatch settings", () => {
       "modelSelection",
       "providerOptionsForDispatch",
       "enableComputerControl",
+      "computerControlGeneration",
+      "computerControlMode",
       "sourceProposedPlan",
       "runtimeMode",
       "interactionMode",
@@ -3057,6 +3066,8 @@ describe("turn dispatch settings", () => {
       "modelSelection",
       "providerOptionsForDispatch",
       "enableComputerControl",
+      "computerControlGeneration",
+      "computerControlMode",
       "runtimeMode",
       "interactionMode",
       "envMode",
@@ -3069,6 +3080,8 @@ describe("turn dispatch settings", () => {
       "modelSelection",
       "providerOptionsForDispatch",
       "enableComputerControl",
+      "computerControlGeneration",
+      "computerControlMode",
       "runtimeMode",
     ]);
   });
@@ -3098,12 +3111,53 @@ describe("turn dispatch settings", () => {
       modelSelection: QUEUED_CHAT_TURN.modelSelection,
       providerOptions: QUEUED_CHAT_TURN.providerOptionsForDispatch,
       enableComputerControl: false,
+      computerControlGeneration: 0,
+      computerControlMode: "off",
       // Not carried by a queued turn: it follows the live app setting.
       assistantDeliveryMode: "streaming",
       runtimeMode: "approval-required",
       interactionMode: "default",
       envMode: "local",
     });
+  });
+
+  it.each(["off", "request", "chat"] as const)(
+    "preserves explicit %s intent across every dispatch projection",
+    (computerControlMode) => {
+      const settings = {
+        ...LIVE_SETTINGS,
+        computerControlMode,
+        enableComputerControl: computerControlMode !== "off",
+      };
+      const queued = { ...QUEUED_CHAT_TURN, ...queuedChatTurnDispatchFields(settings, undefined) };
+      expect(turnStartDispatchFields(settings, "queue").computerControlMode).toBe(
+        computerControlMode,
+      );
+      expect(editAndResendDispatchFields(settings).computerControlMode).toBe(computerControlMode);
+      expect(queuedPlanFollowUpDispatchFields(settings).computerControlMode).toBe(
+        computerControlMode,
+      );
+      const replay = resolveQueuedTurnDispatchSettings(
+        { ...LIVE_SETTINGS, computerControlMode: "chat", enableComputerControl: true },
+        queued,
+      );
+      expect(replay.computerControlMode).toBe(computerControlMode);
+      expect(replay.enableComputerControl).toBe(computerControlMode !== "off");
+    },
+  );
+
+  it("starts an implementation thread with its own generation while preserving explicit mode", () => {
+    const source = {
+      ...LIVE_SETTINGS,
+      computerControlGeneration: 12,
+      computerControlMode: "chat" as const,
+    };
+    const target = planImplementationDispatchSettings(source);
+    expect(target.computerControlGeneration).toBe(0);
+    expect(target.computerControlMode).toBe("chat");
+    expect(target.interactionMode).toBe("default");
+    expect(turnStartDispatchFields(target, "queue").computerControlGeneration).toBe(0);
+    expect(source.computerControlGeneration).toBe(12);
   });
 
   it("keeps the live settings when there is no queued turn", () => {
@@ -3119,7 +3173,8 @@ describe("turn dispatch settings", () => {
     } = QUEUED_CHAT_TURN;
     const resolved = resolveQueuedTurnDispatchSettings(LIVE_SETTINGS, legacyTurn);
     expect(resolved.providerOptions).toEqual(LIVE_SETTINGS.providerOptions);
-    expect(resolved.enableComputerControl).toBe(true);
+    expect(resolved.enableComputerControl).toBe(false);
+    expect(resolved.computerControlMode).toBe("off");
   });
 
   it("leaves the environment alone for a queued plan follow-up", () => {
@@ -3138,7 +3193,8 @@ describe("turn dispatch settings", () => {
     });
     expect(resolved.envMode).toBe("worktree");
     expect(resolved.runtimeMode).toBe("approval-required");
-    expect(resolved.enableComputerControl).toBe(true);
+    expect(resolved.enableComputerControl).toBe(false);
+    expect(resolved.computerControlMode).toBe("off");
   });
 });
 

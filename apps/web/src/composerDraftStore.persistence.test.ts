@@ -41,6 +41,73 @@ describe("composerDraftStore persisted-state hydration", () => {
     },
   );
 
+  it.each(["off", "request", "chat"] as const)(
+    "round-trips explicit %s intent without changing other draft content",
+    (mode) => {
+      resetComposerDraftStore();
+      const threadId = ThreadId.makeUnsafe("computer-mode-roundtrip");
+      const store = useComposerDraftStore.getState();
+      store.setPrompt(threadId, "Keep my unsent message");
+      store.setComputerControlMode(threadId, mode, { generation: 7 });
+      store.enqueueQueuedTurn(threadId, {
+        ...makeQueuedChatTurn("mode-queue"),
+        computerControlMode: mode,
+        computerControlGeneration: 7,
+        enableComputerControl: mode !== "off",
+      });
+      const persisted = normalizeCurrentPersistedComposerDraftStoreState(
+        JSON.parse(
+          JSON.stringify(partializeComposerDraftStoreState(useComposerDraftStore.getState())),
+        ),
+      );
+      const draft = toHydratedThreadDraft(threadId, persisted.draftsByThreadId[threadId]!);
+      expect(draft.prompt).toBe("Keep my unsent message");
+      expect(draft.computerControlMode).toBe(mode);
+      expect(draft.computerControlGeneration).toBe(7);
+      expect(draft.enableComputerControl).toBe(mode !== "off");
+      expect(draft.queuedTurns[0]?.computerControlMode).toBe(mode);
+      expect(draft.queuedTurns[0]?.computerControlGeneration).toBe(7);
+      store.setComputerControlMode(threadId, "off");
+      expect(
+        useComposerDraftStore.getState().draftsByThreadId[threadId]?.queuedTurns[0]
+          ?.computerControlMode,
+      ).toBe(mode);
+    },
+  );
+
+  it("explicit off revokes queued intent while preserving queued messages", () => {
+    resetComposerDraftStore();
+    const threadId = ThreadId.makeUnsafe("computer-revoke-queue");
+    const store = useComposerDraftStore.getState();
+    store.enqueueQueuedTurn(threadId, {
+      ...makeQueuedChatTurn("request"),
+      computerControlMode: "request",
+      enableComputerControl: true,
+    });
+    store.setComputerControlMode(threadId, "off", { revokeQueued: true });
+    const queued = useComposerDraftStore.getState().draftsByThreadId[threadId]?.queuedTurns[0];
+    expect(queued?.computerControlMode).toBe("off");
+    expect(queued?.enableComputerControl).toBe(false);
+    expect(queued?.previewText).toBe("queued chat request");
+  });
+
+  it("never copies another thread's revocation generation with its draft", () => {
+    resetComposerDraftStore();
+    const source = ThreadId.makeUnsafe("generation-source");
+    const target = ThreadId.makeUnsafe("generation-target");
+    const store = useComposerDraftStore.getState();
+    store.setComputerControlMode(source, "chat", { generation: 12 });
+    store.copyTransferableComposerState(source, target);
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[target]?.computerControlGeneration,
+    ).toBe(0);
+    store.setComputerControlMode(target, "off", { generation: 4 });
+    store.copyTransferableComposerState(source, target);
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[target]?.computerControlGeneration,
+    ).toBe(4);
+  });
+
   it("normalizes null and empty persisted states", () => {
     const emptyState = {
       draftsByThreadId: {},

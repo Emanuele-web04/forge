@@ -1,7 +1,7 @@
 // FILE: decider.computerControl.test.ts
 // Purpose: Covers the computer-control opt-in surviving the decider: the flag rides
 //          turn-start, queued-dispatch, and edit-resend payloads when the command sets
-//          it, and stays absent from those payloads when the command omits it.
+//          it, and defaults to off when the command omits it.
 
 import {
   CommandId,
@@ -153,6 +153,35 @@ function editAndResendCommand(enableComputerControl?: boolean) {
 }
 
 describe("decider computer-control pass-through", () => {
+  it.each([
+    { computerControlMode: "off" as const, enableComputerControl: true, expected: false },
+    { computerControlMode: "request" as const, enableComputerControl: false, expected: true },
+    { computerControlMode: "chat" as const, enableComputerControl: false, expected: true },
+  ])(
+    "freezes $computerControlMode mode and generation across every dispatch path",
+    async ({ computerControlMode, enableComputerControl, expected }) => {
+      for (const [command, state, eventType] of [
+        [turnStartCommand(), makeReadModel(), "thread.turn-start-requested"],
+        [turnStartCommand(), makeReadModel({ session: runningSession() }), "thread.turn-queued"],
+        [dispatchQueuedCommand(), makeReadModel(), "thread.turn-start-requested"],
+        [
+          editAndResendCommand(),
+          makeReadModel({ messages: [tailUserMessage()] }),
+          "thread.message-edit-resend-requested",
+        ],
+      ] as const) {
+        const events = await decide(
+          { ...command, computerControlMode, enableComputerControl, computerControlGeneration: 7 },
+          state,
+        );
+        expect(payloadOf(events, eventType)).toMatchObject({
+          computerControlMode,
+          enableComputerControl: expected,
+          computerControlGeneration: 7,
+        });
+      }
+    },
+  );
   it("carries the flag onto a turn-start request", async () => {
     const events = await decide(turnStartCommand(true), makeReadModel());
     expect(payloadOf(events, "thread.turn-start-requested").enableComputerControl).toBe(true);
@@ -171,11 +200,9 @@ describe("decider computer-control pass-through", () => {
     expect(payloadOf(events, "thread.turn-start-requested").enableComputerControl).toBe(false);
   });
 
-  it("omits the flag from a turn-start request when the command omits it", async () => {
+  it("defaults the flag to off from a turn-start request when the command omits it", async () => {
     const events = await decide(turnStartCommand(), makeReadModel());
-    expect(payloadOf(events, "thread.turn-start-requested")).not.toHaveProperty(
-      "enableComputerControl",
-    );
+    expect(payloadOf(events, "thread.turn-start-requested").enableComputerControl).toBe(false);
   });
 
   it("carries the flag when a queued turn is dispatched", async () => {
@@ -183,11 +210,9 @@ describe("decider computer-control pass-through", () => {
     expect(payloadOf(events, "thread.turn-start-requested").enableComputerControl).toBe(true);
   });
 
-  it("omits the flag when a queued dispatch omits it", async () => {
+  it("defaults the flag to off when a queued dispatch omits it", async () => {
     const events = await decide(dispatchQueuedCommand(), makeReadModel());
-    expect(payloadOf(events, "thread.turn-start-requested")).not.toHaveProperty(
-      "enableComputerControl",
-    );
+    expect(payloadOf(events, "thread.turn-start-requested").enableComputerControl).toBe(false);
   });
 
   it("carries the flag onto an edit-and-resend request", async () => {
@@ -200,13 +225,13 @@ describe("decider computer-control pass-through", () => {
     );
   });
 
-  it("omits the flag when an edit-and-resend omits it", async () => {
+  it("defaults the flag to off when an edit-and-resend omits it", async () => {
     const events = await decide(
       editAndResendCommand(),
       makeReadModel({ messages: [tailUserMessage()] }),
     );
-    expect(payloadOf(events, "thread.message-edit-resend-requested")).not.toHaveProperty(
-      "enableComputerControl",
+    expect(payloadOf(events, "thread.message-edit-resend-requested").enableComputerControl).toBe(
+      false,
     );
   });
 });

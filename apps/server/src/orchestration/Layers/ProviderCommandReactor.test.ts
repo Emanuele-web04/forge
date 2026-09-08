@@ -5017,6 +5017,403 @@ describe("ProviderCommandReactor", () => {
     expect(harness.stopSession.mock.calls.length).toBe(0);
   });
 
+  it.each([
+    { mode: "request" as const, after: "none", expected: false },
+    { mode: "chat" as const, after: "none", expected: true },
+    { mode: "chat" as const, after: "disable-reenable", expected: false },
+    { mode: "chat" as const, after: "ordinary-turn", expected: false },
+  ])(
+    "Computer $mode with $after gives goal continuation exposure=$expected",
+    async ({ mode, after, expected }) => {
+      const manager = new ComputerManager({ backend: new FakeComputerBackend() });
+      const harness = await createHarness({
+        computerService: {
+          supported: true,
+          availability: { kind: "available", backend: "fake" },
+          manager,
+        },
+      });
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const createdAt = new Date().toISOString();
+      try {
+        const sendUserTurn = async (index: number, computerControlMode?: "chat" | "request") => {
+          await Effect.runPromise(
+            harness.engine.dispatch({
+              type: "thread.turn.start",
+              commandId: CommandId.makeUnsafe(`computer-goal-user-${index}`),
+              threadId,
+              message: {
+                messageId: asMessageId(`computer-goal-message-${index}`),
+                role: "user",
+                text: "Continue",
+                attachments: [],
+              },
+              ...(computerControlMode ? { computerControlMode, computerControlGeneration: 0 } : {}),
+              runtimeMode: "approval-required",
+              interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+              createdAt,
+            }),
+          );
+          await waitFor(() => harness.sendTurn.mock.calls.length === index);
+          harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+          await Effect.runPromise(
+            harness.engine.dispatch({
+              type: "thread.session.set",
+              commandId: CommandId.makeUnsafe(`computer-goal-ready-${index}`),
+              threadId,
+              session: {
+                threadId,
+                status: "ready",
+                providerName: "codex",
+                runtimeMode: "approval-required",
+                activeTurnId: null,
+                lastError: null,
+                updatedAt: createdAt,
+              },
+              createdAt,
+            }),
+          );
+        };
+        await sendUserTurn(1, mode);
+        if (after === "ordinary-turn") await sendUserTurn(2);
+        if (after === "disable-reenable") {
+          await manager.setControlEnabled(threadId, false);
+          await manager.setControlEnabled(threadId, true);
+        }
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.meta.update",
+            commandId: CommandId.makeUnsafe("computer-goal-create"),
+            threadId,
+            goal: "Complete the desktop task",
+            goalStartBehavior: "defer",
+          }),
+        );
+        const goalStartedAt = (await readHarnessThread(harness))?.goalStartedAt ?? null;
+        const priorCalls = harness.sendTurn.mock.calls.length;
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.goal.continue",
+            commandId: CommandId.makeUnsafe("computer-goal-continue"),
+            threadId,
+            goalStartedAt,
+            trigger: "startup-recovery",
+            createdAt,
+          }),
+        );
+        await waitFor(() => harness.sendTurn.mock.calls.length > priorCalls);
+        expect(harness.startSession.mock.calls.at(-1)?.[1].enableComputerControl).toBe(expected);
+        expect(manager.canContinueChatControl(threadId)).toBe(expected);
+      } finally {
+        await manager.dispose();
+      }
+    },
+  );
+
+  it("delivers requested AppSnap source metadata without exposing Computer tools", async () => {
+    const harness = await createHarness();
+    const attachment = {
+      type: "image" as const,
+      id: "appsnap-context",
+      name: "AppSnap - Preview - report - 2026-09-08T12:00:00.000Z.png",
+      mimeType: "image/png",
+      sizeBytes: 42,
+    };
+    await harness.stageAttachment(attachment);
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("appsnap-context-turn"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("appsnap-context-message"),
+          role: "user",
+          text: "Explain this image",
+          attachments: [attachment],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[0]?.[1].enableComputerControl).toBe(false);
+    const sent = harness.sendTurn.mock.calls[0]?.[0];
+    expect(sent?.attachments).toHaveLength(1);
+    expect(sent?.input).toContain('"source":"Preview - report"');
+    expect(sent?.input).toContain('"capturedAt":"2026-09-08T12:00:00.000Z"');
+    expect(sent?.input?.match(/AppSnap image metadata/g)).toHaveLength(1);
+  });
+
+  it("removes Computer exposure on the next ordinary turn after request activation", async () => {
+    const harness = await createHarness();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const createdAt = new Date().toISOString();
+    for (const [index, activation] of [
+      { computerControlMode: "request" as const, computerControlGeneration: 0 },
+      {},
+    ].entries()) {
+      if (index > 0) {
+        harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.makeUnsafe(`computer-ready-${index}`),
+            threadId,
+            session: {
+              threadId,
+              status: "ready",
+              providerName: "codex",
+              runtimeMode: "approval-required",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: createdAt,
+            },
+            createdAt,
+          }),
+        );
+      }
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe(`computer-request-${index}`),
+          threadId,
+          message: {
+            messageId: asMessageId(`computer-message-${index}`),
+            role: "user",
+            text: "Continue",
+            attachments: [],
+          },
+          ...activation,
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt,
+        }),
+      );
+      await waitFor(() => harness.sendTurn.mock.calls.length === index + 1);
+    }
+    expect(harness.startSession.mock.calls.map(([, input]) => input.enableComputerControl)).toEqual(
+      [true, false],
+    );
+  });
+
+  it.each([false, true])(
+    "Computer activation during live coding steering respects stale generation=%s",
+    async (stale) => {
+      const manager = new ComputerManager({ backend: new FakeComputerBackend() });
+      const registry = makeAgentGatewaySessionRegistry();
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      registry.issue(threadId, "codex");
+      const harness = await createHarness({
+        gatewaySessions: registry,
+        computerService: {
+          supported: true,
+          availability: { kind: "available", backend: "fake" },
+          manager,
+        },
+      });
+      const createdAt = new Date().toISOString();
+      try {
+        if (stale) {
+          await manager.setControlEnabled(threadId, false);
+          await manager.setControlEnabled(threadId, true);
+        }
+        harness.setRuntimeSessionTurnState({
+          threadId,
+          status: "running",
+          activeTurnId: asTurnId("coding-live"),
+        });
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.makeUnsafe("coding-steer-session"),
+            threadId,
+            session: {
+              threadId,
+              status: "running",
+              providerName: "codex",
+              runtimeMode: "approval-required",
+              activeTurnId: asTurnId("coding-live"),
+              lastError: null,
+              updatedAt: createdAt,
+            },
+            createdAt,
+          }),
+        );
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe("coding-steer-activation"),
+            threadId,
+            message: {
+              messageId: asMessageId("coding-steer-message"),
+              role: "user",
+              text: "Use Computer for this",
+              attachments: [],
+            },
+            computerControlMode: "request",
+            computerControlGeneration: 0,
+            dispatchMode: "steer",
+            runtimeMode: "approval-required",
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            createdAt,
+          }),
+        );
+        if (stale) {
+          await waitFor(() => harness.steerTurn.mock.calls.length === 1);
+          expect(harness.startSession).not.toHaveBeenCalled();
+          expect(harness.interruptTurn).not.toHaveBeenCalled();
+        } else {
+          await waitFor(() => harness.interruptTurn.mock.calls.length === 1);
+          expect(harness.steerTurn).not.toHaveBeenCalled();
+          expect(harness.sendTurn).not.toHaveBeenCalled();
+          harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+          await harness.emitRuntimeEvent({
+            type: "turn.completed",
+            eventId: asEventId("coding-live-completed"),
+            provider: "codex",
+            threadId,
+            createdAt,
+            turnId: asTurnId("coding-live"),
+            payload: { state: "completed" },
+            providerRefs: {},
+          } as ProviderRuntimeEvent);
+          await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+          expect(harness.startSession.mock.calls.at(-1)?.[1].enableComputerControl).toBe(true);
+        }
+      } finally {
+        await manager.dispose();
+      }
+    },
+  );
+
+  it("preserves an active Computer profile during native steering after the request chip resets", async () => {
+    const registry = makeAgentGatewaySessionRegistry();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    registry.issue(threadId, "codex", { additionalCapabilities: ["computer:control"] });
+    const harness = await createHarness({ gatewaySessions: registry });
+    const createdAt = new Date().toISOString();
+    harness.setRuntimeSessionTurnState({
+      threadId,
+      status: "running",
+      activeTurnId: asTurnId("computer-live"),
+    });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("computer-steer-session"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("computer-live"),
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("computer-steer"),
+        threadId,
+        message: {
+          messageId: asMessageId("computer-steer-message"),
+          role: "user",
+          text: "Use the second window",
+          attachments: [],
+        },
+        computerControlMode: "off",
+        dispatchMode: "steer",
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt,
+      }),
+    );
+    await waitFor(() => harness.steerTurn.mock.calls.length === 1);
+    expect(harness.startSession).not.toHaveBeenCalled();
+  });
+
+  it("does not revive stale Computer consent when a durable queued turn is promoted after re-enable", async () => {
+    const manager = new ComputerManager({ backend: new FakeComputerBackend() });
+    const registry = makeAgentGatewaySessionRegistry();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    registry.issue(threadId, "codex", { additionalCapabilities: ["computer:control"] });
+    const harness = await createHarness({
+      gatewaySessions: registry,
+      computerService: {
+        supported: true,
+        availability: { kind: "available", backend: "fake" },
+        manager,
+      },
+    });
+    const createdAt = new Date().toISOString();
+    try {
+      harness.setRuntimeSessionTurnState({
+        threadId,
+        status: "running",
+        activeTurnId: asTurnId("computer-blocking"),
+      });
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("computer-queue-session"),
+          threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: asTurnId("computer-blocking"),
+            lastError: null,
+            updatedAt: createdAt,
+          },
+          createdAt,
+        }),
+      );
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("computer-queued-consent"),
+          threadId,
+          message: {
+            messageId: asMessageId("computer-queued-message"),
+            role: "user",
+            text: "Continue",
+            attachments: [],
+          },
+          computerControlMode: "request",
+          computerControlGeneration: 0,
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt,
+        }),
+      );
+      await harness.drain();
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      await manager.setControlEnabled(threadId, false);
+      await manager.setControlEnabled(threadId, true);
+      harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+      await harness.emitRuntimeEvent({
+        type: "turn.completed",
+        eventId: asEventId("computer-blocking-completed"),
+        provider: "codex",
+        threadId,
+        createdAt,
+        turnId: asTurnId("computer-blocking"),
+        payload: { state: "completed" },
+        providerRefs: {},
+      } as ProviderRuntimeEvent);
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      expect(harness.startSession.mock.calls.at(-1)?.[1].enableComputerControl).toBe(false);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
   it("checks computer capability against the live provider when the projection has no provider name", async () => {
     const threadId = ThreadId.makeUnsafe("thread-1");
     const registry = makeAgentGatewaySessionRegistry();

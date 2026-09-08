@@ -1,4 +1,6 @@
-import { Effect, Layer } from "effect";
+import { join } from "node:path";
+import { ServerConfig } from "../../config.ts";
+import { Effect, Layer, Option } from "effect";
 import type { ComputerAvailability } from "@synara/contracts";
 
 import { ComputerManager } from "../ComputerManager.ts";
@@ -41,7 +43,13 @@ export function makeComputerServiceLayer(options: ComputerServiceLiveOptions = {
           `No computer backend is configured for this server running on ${platform}.`,
           { availability: unavailableAvailability },
         );
-      const manager = new ComputerManager({ backend });
+      const config = yield* Effect.serviceOption(ServerConfig);
+      const manager = new ComputerManager({
+        backend,
+        ...(Option.isSome(config)
+          ? { controlStatePath: join(config.value.stateDir, "computer-control.json") }
+          : {}),
+      });
       yield* Effect.addFinalizer(() => Effect.promise(() => manager.dispose()));
       let availability: ComputerAvailability;
       if (options.supported === undefined) {

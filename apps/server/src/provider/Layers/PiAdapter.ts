@@ -41,7 +41,10 @@ import {
 } from "@synara/shared/processRuntime";
 import { Effect, FileSystem, Layer, Option, Queue, Stream } from "effect";
 
-import { takeSynaraHarnessPolicyForProviderSession } from "../../agentGateway/harnessPolicy.ts";
+import {
+  type SynaraHarnessPolicyDeliveryState,
+  takeSynaraHarnessPolicyForProviderSession,
+} from "../../agentGateway/harnessPolicy.ts";
 import {
   callAgentGatewayMcpTool,
   listAgentGatewayMcpTools,
@@ -96,6 +99,18 @@ import {
 } from "../supervisedProcessTeardown.ts";
 
 const PROVIDER = "pi" as const;
+
+export function buildPiTurnPrompt(
+  state: SynaraHarnessPolicyDeliveryState,
+  input: { readonly text: string; readonly gatewayControlAvailable: boolean },
+): string {
+  const harnessPolicy = takeSynaraHarnessPolicyForProviderSession(state, {
+    provider: PROVIDER,
+    scopedGatewayConnectionAvailable: input.gatewayControlAvailable,
+  });
+  return [harnessPolicy, input.text].filter(Boolean).join("\n\n");
+}
+
 const DEFAULT_PI_THINKING_LEVEL: ThinkingLevel = "medium";
 const PI_THINKING_OPTIONS: ReadonlyArray<{
   readonly value: ThinkingLevel;
@@ -353,6 +368,7 @@ const loadPiCodingAgentModule: () => Promise<PiCodingAgentModule> = lazyModule(
 
 interface PiSessionContext {
   harnessPolicyDelivered?: boolean;
+  readonly enableComputerControl?: boolean;
   readonly gatewayControlAvailable: boolean;
   /**
    * Pi rotates its gateway credential when a turn completes, long after the
@@ -2336,6 +2352,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           ...(resumeCursor ? { resumeCursor } : {}),
         };
         const context: PiSessionContext = {
+          enableComputerControl: input.enableComputerControl === true,
           gatewayCapabilityInput: captureAgentGatewayCapabilityInput(input),
           ...(input.lifecycleGeneration !== undefined
             ? { lifecycleGeneration: input.lifecycleGeneration }
@@ -2595,11 +2612,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             resumeCursor: getSessionFile(context.runtime.session),
           };
         }
-        const harnessPolicy = takeSynaraHarnessPolicyForProviderSession(context, {
-          provider: PROVIDER,
-          scopedGatewayConnectionAvailable: context.gatewayControlAvailable,
+        const providerText = buildPiTurnPrompt(context, {
+          text: payload.text,
+          gatewayControlAvailable: context.gatewayControlAvailable,
         });
-        const providerText = [harnessPolicy, payload.text].filter(Boolean).join("\n\n");
         void context.runtime.session
           .prompt(providerText, payload.images.length > 0 ? { images: payload.images } : undefined)
           .catch((cause) => {
@@ -2616,11 +2632,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       Effect.gen(function* () {
         const context = yield* requireSession(input.threadId);
         const payload = yield* buildPromptPayload(input);
-        const harnessPolicy = takeSynaraHarnessPolicyForProviderSession(context, {
-          provider: PROVIDER,
-          scopedGatewayConnectionAvailable: context.gatewayControlAvailable,
+        const providerText = buildPiTurnPrompt(context, {
+          text: payload.text,
+          gatewayControlAvailable: context.gatewayControlAvailable,
         });
-        const providerText = [harnessPolicy, payload.text].filter(Boolean).join("\n\n");
         const turnId = context.activeTurnId ?? TurnId.makeUnsafe(crypto.randomUUID());
         if (!context.activeTurnId) {
           context.activeTurnId = turnId;

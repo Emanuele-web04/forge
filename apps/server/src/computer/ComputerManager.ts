@@ -1,3 +1,4 @@
+import { ComputerControlState } from "./ComputerControlState.ts";
 import { CursorActivity } from "./cursorActivity.ts";
 import { waitForWindow } from "./waitForWindow.ts";
 import {
@@ -8,6 +9,7 @@ import {
   COMPUTER_TEXT_MAX_LENGTH,
   ThreadId,
   type ComputerActionResult,
+  type ComputerControlMode,
   type ComputerAvailability,
   type ComputerBuildSignature,
   type ComputerCapabilities,
@@ -162,6 +164,7 @@ interface DesktopLease {
 
 export interface ComputerManagerOptions {
   readonly backend: ComputerBackend;
+  readonly controlStatePath?: string;
   readonly transport?: FrameTransport<string, ComputerStreamFrame>;
   /** Injected for tests; the lease is the only clock-dependent state here. */
   readonly now?: () => number;
@@ -328,6 +331,8 @@ export class ComputerManager {
   private streamTransition: Promise<void> = Promise.resolve();
   private disposed = false;
   private readonly disabledThreads = new Set<string>();
+  private readonly controlState: ComputerControlState;
+  private readonly pendingControlWrites = new Map<string, Promise<void>>();
   private readonly suspendedThreads = new Set<string>();
   private readonly authorityRevocations = new Map<string, AbortController>();
   private readonly controlRequests = new Map<string, symbol>();
@@ -368,24 +373,80 @@ export class ComputerManager {
   private readonly activeAuthorities = new Map<string, AbortController>();
   private readonly authorityTurns = new Map<string, string>();
 
-  async setControlEnabled(threadId: string, enabled: boolean): Promise<{ enabled: boolean }> {
+  private controlDisabled(threadId: string): boolean {
+    return this.disabledThreads.has(threadId) || this.controlState.get(threadId).disabled;
+  }
+
+  canActivateControl(threadId: string, generation = 0): boolean {
+    return (
+      !this.controlDisabled(threadId) &&
+      !this.suspendedThreads.has(threadId) &&
+      this.controlState.allows(threadId, generation)
+    );
+  }
+
+  async admitControl(
+    threadId: string,
+    mode: ComputerControlMode,
+    generation = 0,
+  ): Promise<boolean> {
+    const enabled = mode !== "off" && this.canActivateControl(threadId, generation);
+    try {
+      await this.controlState.recordChatIntent(threadId, enabled && mode === "chat", generation);
+    } catch (error) {
+      this.disabledThreads.add(threadId);
+      throw error;
+    }
+    return enabled && this.canActivateControl(threadId, generation);
+  }
+
+  canContinueChatControl(threadId: string): boolean {
+    const state = this.controlState.get(threadId);
+    return (
+      state.chatGeneration === state.generation &&
+      this.canActivateControl(threadId, state.generation)
+    );
+  }
+
+  async setControlEnabled(
+    threadId: string,
+    enabled: boolean,
+  ): Promise<{ enabled: boolean; generation: number }> {
     const request = Symbol();
     this.controlRequests.set(threadId, request);
     if (enabled) {
+      await this.pendingControlWrites.get(threadId);
       await this.pendingStops.get(threadId);
       if (this.controlRequests.get(threadId) === request) {
-        this.disabledThreads.delete(threadId);
-        // Only calls submitted after re-enabling receive a new generation.
-        if (this.authorityRevocations.get(threadId)?.signal.aborted) {
-          this.authorityRevocations.delete(threadId);
+        // Hold the in-memory gate closed until the new preference is durable.
+        this.disabledThreads.add(threadId);
+        const write = this.controlState.set(threadId, false);
+        this.pendingControlWrites.set(threadId, write);
+        await write;
+        if (this.controlRequests.get(threadId) === request) {
+          this.disabledThreads.delete(threadId);
+          if (this.authorityRevocations.get(threadId)?.signal.aborted)
+            this.authorityRevocations.delete(threadId);
         }
       }
     } else {
       this.disabledThreads.add(threadId);
-      await this.revokeControl(threadId);
+      // Increment immediately, before cleanup or persistence can yield. Old
+      // queued requests never regain authority when this thread is re-enabled.
+      const write = this.controlState.set(threadId, true);
+      this.pendingControlWrites.set(threadId, write);
+      const outcomes = await Promise.allSettled([write, this.revokeControl(threadId)]);
+      const failed = outcomes.find((outcome) => outcome.status === "rejected");
+      if (failed?.status === "rejected") throw failed.reason;
     }
-    if (this.controlRequests.get(threadId) === request) this.controlRequests.delete(threadId);
-    return { enabled: !this.disabledThreads.has(threadId) && !this.suspendedThreads.has(threadId) };
+    if (this.controlRequests.get(threadId) === request) {
+      this.controlRequests.delete(threadId);
+      this.pendingControlWrites.delete(threadId);
+    }
+    return {
+      enabled: !this.controlDisabled(threadId) && !this.suspendedThreads.has(threadId),
+      generation: this.controlState.get(threadId).generation,
+    };
   }
 
   private revokeControl(threadId: string): Promise<void> {
@@ -412,6 +473,7 @@ export class ComputerManager {
 
   constructor(options: ComputerManagerOptions) {
     this.backend = options.backend;
+    this.controlState = new ComputerControlState(options.controlStatePath);
     this.cursorActivity = new CursorActivity((text) => {
       this.activity = text;
       for (const threadId of this.threads.keys()) this.publishCached(threadId);
@@ -1650,7 +1712,7 @@ export class ComputerManager {
     }
     const admissionSignal = signal ? AbortSignal.any([signal, authority.signal]) : authority.signal;
     return this.operations.run(async () => {
-      if (this.disabledThreads.has(threadId) || this.suspendedThreads.has(threadId))
+      if (this.controlDisabled(threadId) || this.suspendedThreads.has(threadId))
         throw new ComputerBackendError(
           "Computer control was revoked for this conversation; no input was dispatched.",
         );
@@ -1717,7 +1779,7 @@ export class ComputerManager {
       return Promise.reject(new ComputerLeaseError());
     }
     return this.operations.run(async () => {
-      if (owner && (this.disabledThreads.has(owner) || this.suspendedThreads.has(owner))) {
+      if (owner && (this.controlDisabled(owner) || this.suspendedThreads.has(owner))) {
         throw new ComputerBackendError(
           "Computer control was revoked for this conversation; no input was dispatched.",
         );

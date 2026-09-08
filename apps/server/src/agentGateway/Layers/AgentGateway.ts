@@ -80,11 +80,7 @@ import { makeAgentGatewayAutomationTools } from "../automationTools.ts";
 import { makeAgentGatewayBrowserTools } from "../browserTools.ts";
 import { makeAgentGatewayDeviceTools } from "../deviceTools.ts";
 import { DeviceService } from "../../device/Services/DeviceService.ts";
-import {
-  COMPUTER_CONTROL_CAPABILITY,
-  computerToolInstructions,
-  makeAgentGatewayComputerTools,
-} from "../computerTools.ts";
+import { COMPUTER_CONTROL_CAPABILITY, makeAgentGatewayComputerTools } from "../computerTools.ts";
 import { ComputerService } from "../../computer/Services/ComputerService.ts";
 import { computerApprovalGate } from "../../computer/ComputerApprovalGate.ts";
 import { BrowserAutomationHost } from "../../browserAutomation/Services/BrowserAutomationHost.ts";
@@ -100,23 +96,6 @@ import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 // context characters per round without adding authority or safety.
 const AGENT_GATEWAY_INSTRUCTIONS =
   "Synara tools are thread-scoped. Use browser_* only for Synara's shared in-app browser runtime; follow the provider-delivered <synara_host_context> for full policy.";
-
-/**
- * The instructions this server announces, plus the computer family's shared
- * notes when that family is actually registered.
- *
- * Eleven computer tools carried the same three paragraphs each — how a
- * coordinate is read, what the post-action screenshot is, what a delivery
- * verdict means — because MCP has no other place to say something once. It
- * does: `initialize.instructions`. Appended rather than made unconditional so a
- * host with no desktop backend, which never sees a computer tool, pays nothing
- * for the notes describing them.
- */
-function agentGatewayInstructions(computerNotes: string | undefined): string {
-  return computerNotes === undefined
-    ? AGENT_GATEWAY_INSTRUCTIONS
-    : `${AGENT_GATEWAY_INSTRUCTIONS}\n\n${computerNotes}`;
-}
 
 function readThreadGoalArg(args: Record<string, unknown>): string {
   if (!("goal" in args)) {
@@ -1017,16 +996,13 @@ export const makeAgentGateway = Effect.gen(function* () {
       : []),
   ];
 
-  const computerNotes =
-    computerService?.supported === true ? computerToolInstructions() : undefined;
-
   return {
     handleMcpPost: makeAgentGatewayMcpTransport({
       credentials,
       snapshotQuery,
       tools,
       onCapabilityDenied: surfaceCapabilityDenial,
-      instructions: agentGatewayInstructions(computerNotes),
+      instructions: AGENT_GATEWAY_INSTRUCTIONS,
       requireThreadShell,
     }),
   } satisfies AgentGatewayShape;

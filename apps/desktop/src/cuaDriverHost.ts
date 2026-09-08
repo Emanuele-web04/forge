@@ -37,6 +37,9 @@ export class CuaDriverHost {
   private retiring: Promise<void> = Promise.resolve();
   private closed = false;
   private suspended = false;
+  private readonly desktopPauses = new Set<string>();
+  private desktopObservationRequired = false;
+  private desktopEpoch = 0;
   private operations: Promise<void> = Promise.resolve();
   private stopping: Promise<void> = Promise.resolve();
   private epoch = 0;
@@ -91,10 +94,16 @@ export class CuaDriverHost {
         return;
       }
       void this.handle(request, socket).then(
-        (result) => socket.end(JSON.stringify(result) + "\n"),
+        (result) =>
+          socket.end(JSON.stringify({ ...result, desktopEpoch: this.desktopEpoch }) + "\n"),
         (error) =>
           socket.end(
-            JSON.stringify({ ok: false, error: String(error), effect: "not-dispatched" }) + "\n",
+            JSON.stringify({
+              ok: false,
+              error: String(error),
+              effect: "not-dispatched",
+              desktopEpoch: this.desktopEpoch,
+            }) + "\n",
           ),
       );
     });
@@ -142,6 +151,7 @@ export class CuaDriverHost {
       (!CUA_READ_TOOLS.has(name) && !CUA_ACTION_TOOLS.has(name))
     )
       throw new Error("Unsupported computer host request.");
+    if (this.desktopPauses.size > 0) return this.desktopPauseReply();
     // Observations and input share one native session. A pane capture must not
     // race input or turn a harmless concurrent read into a driver restart.
     const previous = this.operations;
@@ -156,7 +166,13 @@ export class CuaDriverHost {
           error: "Cancelled before dispatch.",
           effect: "not-dispatched",
         } as const;
-      return this.call(name, request.args, connection);
+      if (this.desktopPauses.size > 0) return this.desktopPauseReply();
+      if (
+        this.desktopObservationRequired &&
+        (CUA_ACTION_TOOLS.has(name) || name === "check_input_ready")
+      )
+        return this.desktopPauseReply();
+      return this.call(name, request.args, connection, request.modelObservation === true);
     })();
     this.operations = operation.then(
       () => undefined,
@@ -165,9 +181,16 @@ export class CuaDriverHost {
     return operation;
   }
 
-  private async call(name: string, input: unknown, connection: Socket): Promise<CuaReply> {
+  private async call(
+    name: string,
+    input: unknown,
+    connection: Socket,
+    modelObservation: boolean,
+  ): Promise<CuaReply> {
     let generation: Generation | undefined;
     let dispatched = false;
+    const admittedEpoch = this.epoch;
+    const admittedDesktopEpoch = this.desktopEpoch;
     // A failed cleanup remains the admission barrier. Consume this detached
     // rejection here; the next call/stop reports the retained failure.
     const abort = () => {
@@ -176,7 +199,13 @@ export class CuaDriverHost {
     connection.once("close", abort);
     try {
       generation = await this.ensureStarted();
-      if (connection.destroyed || generation.retired) throw new Error("Cancelled before dispatch.");
+      if (
+        connection.destroyed ||
+        generation.retired ||
+        admittedEpoch !== this.epoch ||
+        this.desktopPauses.size > 0
+      )
+        throw new Error("Cancelled before dispatch.");
       const args = input && typeof input === "object" && !Array.isArray(input) ? input : {};
       dispatched = true;
       generation.inputInFlight = CUA_ACTION_TOOLS.has(name);
@@ -190,6 +219,24 @@ export class CuaDriverHost {
         { timeoutMs: 30_000, mutation: CUA_ACTION_TOOLS.has(name) },
       );
       generation.inputInFlight = false;
+      if (admittedDesktopEpoch !== this.desktopEpoch && CUA_READ_TOOLS.has(name))
+        return this.desktopPauseReply();
+      if (
+        modelObservation &&
+        !connection.destroyed &&
+        !generation.retired &&
+        !generation.didExit &&
+        admittedEpoch === this.epoch &&
+        this.desktopPauses.size === 0 &&
+        (name === "get_window_state" || name === "get_desktop_state") &&
+        reply.ok &&
+        !reply.result?.isError &&
+        reply.result !== undefined &&
+        reply.result.structuredContent?.screenshot_frame_valid !== false &&
+        (reply.result.content?.some((part) => part.type === "image" && !!part.data) ||
+          Array.isArray(reply.result.structuredContent?.elements))
+      )
+        this.desktopObservationRequired = false;
       if (name === "get_desktop_state" && reply.result && this.options.normalizeOverview)
         this.options.normalizeOverview(reply.result);
       return reply;
@@ -380,6 +427,34 @@ export class CuaDriverHost {
 
   resume(): void {
     if (!this.closed) this.suspended = false;
+  }
+
+  /** OS desktop state is independent of backend restarts. A backend resume
+   * cannot reopen input while the screen is locked or another user is active. */
+  pauseDesktop(reason: string): Promise<void> {
+    this.desktopEpoch += 1;
+    this.desktopPauses.add(reason);
+    this.desktopObservationRequired = true;
+    return this.stop();
+  }
+
+  resumeDesktop(reason: string): void {
+    this.desktopPauses.delete(reason);
+  }
+
+  private desktopPauseReply(): CuaReply {
+    const message =
+      this.desktopPauses.size > 0
+        ? "Computer input is paused because the desktop is locked, asleep or inactive. Return to the desktop, then read fresh state before continuing."
+        : "Computer input remains paused after the desktop resumed. Read fresh window or desktop state before continuing; do not replay an uncertain action.";
+    return {
+      ok: true,
+      result: {
+        isError: true,
+        content: [{ type: "text", text: message }],
+        structuredContent: { effect: "refused", code: "desktop_input_paused", message },
+      },
+    };
   }
 
   async dispose(): Promise<void> {
