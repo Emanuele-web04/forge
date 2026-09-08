@@ -6,6 +6,7 @@ export type AgentGatewayCapability =
   | "thread:write"
   | "automation:write"
   | "diagnostics:read"
+  | "usage:read"
   | "browser:control"
   | "device:control";
 

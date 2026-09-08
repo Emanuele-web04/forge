@@ -351,6 +351,7 @@ function makeHarnessLayer(
                     "thread:write",
                     "automation:write",
                     "diagnostics:read",
+                    "usage:read",
                   ] as const),
           }
         : null;
@@ -1716,6 +1717,72 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect("requires the explicit usage capability for quota tools", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent-readonly",
+        name: "synara_get_usage",
+        args: {},
+      });
+      const error = toolResultJson(response.result).error as {
+        code: string;
+        details: { requiredCapability: string };
+      };
+      assert.equal(error.code, "capability_denied");
+      assert.equal(error.details.requiredCapability, "usage:read");
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("scopes usage reads and context summaries to caller authority", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const usageResponse = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_get_usage",
+        args: {},
+      });
+      const usage = toolResultJson(usageResponse.result).usage as {
+        provider: string;
+        availability: string;
+        unavailableReason?: string;
+        snapshot: unknown;
+        quotaWindows: unknown[];
+      };
+      assert.equal(usage.provider, "codex");
+      assert.include(["available", "partial", "unavailable"], usage.availability);
+      assert.isArray(usage.quotaWindows);
+      assert.notProperty(usage, "credential");
+      assert.notProperty(usage, "token");
+
+      const contextResponse = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_context",
+        args: {},
+      });
+      const context = toolResultJson(contextResponse.result) as {
+        capabilities: { usageRead: boolean };
+        usage: { provider: string; availability: string };
+      };
+      assert.isTrue(context.capabilities.usageRead);
+      assert.equal(context.usage.provider, "codex");
+
+      const readonlyContextResponse = yield* harness.callTool({
+        token: "token-parent-readonly",
+        name: "synara_context",
+        args: {},
+      });
+      const readonlyContext = toolResultJson(readonlyContextResponse.result) as {
+        capabilities: { usageRead: boolean };
+        usage: { unavailableReason: string };
+      };
+      assert.isFalse(readonlyContext.capabilities.usageRead);
+      assert.equal(readonlyContext.usage.unavailableReason, "not-authorized");
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("rejects oversized and duplicate-id JSON-RPC batches before dispatch", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {
@@ -1802,6 +1869,8 @@ describe("AgentGateway", () => {
         "synara_read_thread_runtime_events",
         "synara_diagnose_thread",
         "synara_wait_for_threads",
+        "synara_get_usage",
+        "synara_list_provider_usage",
         "synara_create_threads",
         "synara_create_thread",
         "synara_send_message",
