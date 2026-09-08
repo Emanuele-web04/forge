@@ -6136,6 +6136,38 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it("keeps the selected Activity grouping after switching back from classic view", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withActiveHomeChatThread(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-activity-grouping" as MessageId,
+          targetText: "activity grouping",
+        }),
+      ),
+    });
+
+    try {
+      await page.getByRole("button", { name: "Switch to activity view" }).click();
+      await page.getByRole("button", { name: "Activity options", exact: true }).click();
+      await page.getByRole("menuitemradio", { name: "Project" }).click();
+      await userEvent.keyboard("{Escape}");
+      await vi.waitFor(() => {
+        expect(document.querySelector('[role="menu"]')).toBeNull();
+      });
+
+      await page.getByRole("button", { name: "Switch to classic view" }).click();
+      await page.getByRole("button", { name: "Switch to activity view" }).click();
+      await page.getByRole("button", { name: "Activity options", exact: true }).click();
+
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "Project" }))
+        .toHaveAttribute("aria-checked", "true");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("uses the latest ordinary project from Home for the command-palette New thread action", async () => {
     useLatestProjectStore.setState({ latestProjectId: PROJECT_ID });
     const mounted = await mountChatView({

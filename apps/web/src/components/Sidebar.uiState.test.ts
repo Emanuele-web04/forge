@@ -42,6 +42,7 @@ describe("Sidebar.uiState", () => {
       dismissedThreadStatusKeyByThreadId: {},
       lastThreadRoute: null,
       activityViewEnabled: false,
+      activityGroupMode: "time",
     });
   });
 
@@ -62,6 +63,7 @@ describe("Sidebar.uiState", () => {
         splitViewId: "split-456",
       },
       activityViewEnabled: true,
+      activityGroupMode: "project",
     });
 
     expect(readSidebarUiState()).toEqual({
@@ -80,6 +82,7 @@ describe("Sidebar.uiState", () => {
         splitViewId: "split-456",
       },
       activityViewEnabled: true,
+      activityGroupMode: "project",
     });
   });
 
@@ -105,6 +108,7 @@ describe("Sidebar.uiState", () => {
           threadId: "thread-123",
           splitViewId: 42,
         },
+        activityGroupMode: "invalid",
       }),
     );
 
@@ -121,6 +125,7 @@ describe("Sidebar.uiState", () => {
         threadId: "thread-123",
       },
       activityViewEnabled: false,
+      activityGroupMode: "time",
     });
   });
 
@@ -161,6 +166,7 @@ describe("Sidebar.uiState", () => {
       dismissedThreadStatusKeyByThreadId: {},
       lastThreadRoute: null,
       activityViewEnabled: false,
+      activityGroupMode: "time",
     });
   });
 });
