@@ -124,14 +124,7 @@ export function resolveConfiguredBrowserHostPipePath(
   return configured || resolveDefaultBrowserHostPipePath(platform);
 }
 
-/** @deprecated Compatibility export for callers using the former IAB name. */
-export const resolveDefaultBrowserUsePipePath = resolveDefaultBrowserHostPipePath;
-/** @deprecated Compatibility export for callers using the former IAB name. */
-export const resolveConfiguredBrowserUsePipePath = resolveConfiguredBrowserHostPipePath;
-
 export const SYNARA_BROWSER_HOST_PIPE_PATH = resolveConfiguredBrowserHostPipePath();
-/** @deprecated Compatibility alias for old packaged backend builds. */
-export const SYNARA_BROWSER_USE_PIPE_PATH = SYNARA_BROWSER_HOST_PIPE_PATH;
 
 export function resolveBrowserHostPipeBackendEnv(
   inheritedEnv: NodeJS.ProcessEnv,
@@ -151,9 +144,6 @@ export function resolveBrowserHostPipeBackendEnv(
   }
   return backendEnv;
 }
-
-/** @deprecated Compatibility export for the former function name. */
-export const resolveBrowserUsePipeBackendEnv = resolveBrowserHostPipeBackendEnv;
 
 function encodeFrame(message: unknown): Buffer {
   const payload = Buffer.from(JSON.stringify(message), "utf8");

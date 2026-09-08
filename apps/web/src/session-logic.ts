@@ -196,11 +196,6 @@ export function isSessionRunningTurn<T extends RunningTurnSessionView>(
   return session != null && session.status === "running" && session.activeTurnId != null;
 }
 
-/** Thread-level form of {@link isSessionRunningTurn}: true while the thread's session has an in-flight turn. */
-export function isThreadRunningTurn(thread: Pick<Thread, "session">): boolean {
-  return isSessionRunningTurn(thread.session);
-}
-
 export function deriveActiveWorkStartedAt(
   latestTurn: LatestTurnTiming | null,
   session: SessionActivityState | null,

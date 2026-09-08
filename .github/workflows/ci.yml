@@ -1,3 +1,8 @@
+# Lane rule: static-fast is fast checks with no special runtime, static-typecheck is tsc,
+# unit is bun test per package, browser owns Playwright (stable only, sharded) and is the long pole,
+# build owns Electron and desktop output. Geometry quarantine lives in ci-nightly.yml.
+# Gate (quality) aggregates only: add no run steps there. A new fast check with no runtime goes to static-fast.
+# Setup-workspace runs once per lane, not once for all: never put checks in the shared action.
 name: CI
 
 on:
@@ -6,72 +11,71 @@ on:
     branches:
       - main
 
+# Stale runs cancelled by a newer push show the gate red, not grey. Main never cancels.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+# Single heap ceiling for every Node lane (typecheck OOM fix): set once here
+# instead of per job so a future bump cannot miss a lane.
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+
 jobs:
-  quality:
-    name: Format, Lint, Typecheck, Test, Browser Test, Build
+  # Docs-only filter: PRs touching only prose, doc images, or marketing content
+  # run static-fast + gate only. outputs.code is 'true' when any code file changed.
+  changes:
+    name: Detect code changes
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    # dorny/paths-filter lists PR files via the API: it needs pull-requests
+    # scope on top of the checkout's contents scope (repo default is tighter).
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Filter docs-only changes
+        id: filter
+        uses: dorny/paths-filter@v3
         with:
-          bun-version-file: package.json
+          # Default quantifier is 'some': any matching pattern includes the file,
+          # so '!**/*.md' style exclusions never exclude anything and every PR
+          # classifies as code. 'every' requires all patterns to match, which is
+          # what makes the include-all + exclude-docs combination work.
+          predicate-quantifier: "every"
+          filters: |
+            code:
+              # Directory exclusions stay scoped to code-free trees: marketing
+              # src ships .tsx under docs/ dirs and web ships a .ts module
+              # under assets/, so '**/docs/**' / '**/assets/**' would let real
+              # code skip the gate. Every image under .github/ is code-free
+              # (PR evidence screenshots, docs assets). Runtime images stay on
+              # the code path: browser tests validate app icon transparency
+              # and layout.
+              - '**'
+              - '!**/*.md'
+              - '!docs/**'
+              - '!**/*.mdx'
+              - '!apps/marketing/content/**'
+              - '!.github/**/*.{png,jpg,jpeg,gif,svg,webp,ico}'
 
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version-file: package.json
+  # Phase 1b: the old static lane split. Fast checks (no special runtime) stay
+  # unblocked so docs-only PRs get a signal in ~1min.
+  static-fast:
+    name: Static Checks (fast)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
 
-      - name: Cache Bun and Turbo
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.bun/install/cache
-            .turbo
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}-${{ hashFiles('turbo.json') }}
-          restore-keys: |
-            ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}-
-
-      - name: Cache Playwright browsers
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-playwright-
-
-      - name: Cache Electron runtime
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/electron
-          key: ${{ runner.os }}-electron-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-electron-
-
-      - name: Install dependencies
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
-        run: bun install --frozen-lockfile
-
-      - name: Install Electron test runtime
-        shell: bash
-        run: |
-          for attempt in 1 2 3; do
-            if node apps/desktop/node_modules/electron/install.js; then
-              exit 0
-            fi
-            if [ "$attempt" -eq 3 ]; then
-              exit 1
-            fi
-            sleep $((attempt * 5))
-          done
-
-      - name: Verify Linux terminal PTY native dependency
-        if: runner.os == 'Linux'
-        run: node scripts/node-pty-smoke.mjs
+      - name: Setup workspace
+        uses: ./.github/actions/setup-workspace
 
       - name: Verify Synara identity
         run: bun run brand:check
@@ -85,11 +89,95 @@ jobs:
       - name: Lint
         run: bun run lint
 
+  static-typecheck:
+    name: Static Checks (typecheck)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup workspace
+        uses: ./.github/actions/setup-workspace
+
       - name: Typecheck
         run: bun run typecheck
 
-      - name: Test
-        run: bun run test
+  # Phase 2f: one shard per workspace package via --filter. Going through turbo
+  # keeps the ^build contract (test dependsOn ^build) working per shard. The
+  # server package script keeps its serial flags (--maxWorkers=1
+  # --no-file-parallelism) inside its own shard.
+  unit:
+    name: Unit Tests (${{ matrix.pkg }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    strategy:
+      # Deliberate non-default: one shard's failure must not cancel the other
+      # shards, so every lane reports complete signal for the gate.
+      fail-fast: false
+      matrix:
+        include:
+          - pkg: contracts
+            filter: "@synara/contracts"
+          - pkg: shared
+            filter: "@synara/shared"
+          - pkg: scripts
+            filter: "@synara/scripts"
+          - pkg: desktop
+            filter: "@synara/desktop"
+          - pkg: web
+            filter: "@synara/web"
+          # Server lane tests the CLI package (package name @synara/cli).
+          - pkg: server
+            filter: "@synara/cli"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup workspace
+        uses: ./.github/actions/setup-workspace
+
+      - name: Verify Linux terminal PTY native dependency
+        if: matrix.pkg == 'server'
+        run: node scripts/node-pty-smoke.mjs
+
+      - name: Test (${{ matrix.pkg }})
+        run: bunx turbo run test --filter=${{ matrix.filter }}
+
+  # Phase 2e: stable browser suite split 3 ways. fileParallelism:false stays in
+  # vitest.browser.stable.config.ts (untouched); --shard splits test FILES
+  # across shards, never parallelizes within a file. Each shard provisions its
+  # own chromium on its own runner.
+  browser:
+    name: Browser Tests (stable ${{ matrix.shard }}/3)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    strategy:
+      # Deliberate non-default: one shard's failure must not cancel the other
+      # shards, so every lane reports complete signal for the gate.
+      fail-fast: false
+      matrix:
+        # Single source of the shard count: resharding must also update the /3
+        # in the job name above and the --shard arg in the run step below.
+        shard: [1, 2, 3]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup workspace
+        uses: ./.github/actions/setup-workspace
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('bun.lock') }}
 
       # Run the workspace-local playwright binary directly: bunx stalled after
       # the chromium download on hosted runners. The step timeout stops any
@@ -102,17 +190,24 @@ jobs:
           cd apps/web
           ./node_modules/.bin/playwright install --with-deps chromium
 
-      - name: Browser test (stable)
+      - name: Browser test (stable shard ${{ matrix.shard }}/3)
         timeout-minutes: 20
-        run: bun run --cwd apps/web test:browser:stable
+        run: bun run --cwd apps/web test:browser:stable -- --shard=${{ matrix.shard }}/3
 
-      # Pixel/font/layout comparisons are tracked explicitly in
-      # apps/web/BROWSER_TEST_QUARANTINE.md while their Linux rendering is fixed.
-      # All untagged browser tests run in the blocking stable step above.
-      - name: Browser test (Linux geometry quarantine)
-        continue-on-error: true
-        timeout-minutes: 10
-        run: bun run --cwd apps/web test:browser:geometry
+  build:
+    name: Desktop Build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup workspace
+        uses: ./.github/actions/setup-workspace
+        with:
+          electron: "true"
 
       - name: Build desktop pipeline
         run: bun run build:desktop
@@ -122,10 +217,79 @@ jobs:
           test -f apps/desktop/dist-electron/preload.js
           grep -nE "desktopBridge|getWsUrl|PICK_FOLDER_CHANNEL|wsUrl" apps/desktop/dist-electron/preload.js
 
+  # Aggregate only: no checkout, no run steps. Keep the old display name for branch protection. if: always() is intended, do not remove.
+  # Phase 2g: needs every required lane. Matrix jobs report one result covering
+  # all shards, so ANY failed shard fails the gate. Docs-only runs pass with
+  # heavy lanes skipped (static-fast must still succeed).
+  quality:
+    name: Format, Lint, Typecheck, Test, Browser Test, Build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    needs:
+      - changes
+      - static-fast
+      - static-typecheck
+      - unit
+      - browser
+      - build
+      - windows_process
+      - migration_lineage
+      - release_smoke
+    if: always()
+    steps:
+      - name: Aggregate lane results
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          CODE: ${{ needs.changes.outputs.code }}
+          STATIC_FAST: ${{ needs.static-fast.result }}
+          TYPECHECK: ${{ needs.static-typecheck.result }}
+          UNIT: ${{ needs.unit.result }}
+          BROWSER: ${{ needs.browser.result }}
+          BUILD: ${{ needs.build.result }}
+          WINDOWS_PROCESS: ${{ needs.windows_process.result }}
+          MIGRATION_LINEAGE: ${{ needs.migration_lineage.result }}
+          RELEASE_SMOKE: ${{ needs.release_smoke.result }}
+        run: |
+          fail=0
+          # The docs-only filter itself must have run: without it a skip proves nothing.
+          if [ "$CHANGES" != "success" ]; then
+            echo "changes=$CHANGES (filter must succeed)"
+            fail=1
+          fi
+          if [ "$CODE" != "true" ] && [ "$CODE" != "false" ]; then
+            echo "code=$CODE (filter must return true or false)"
+            fail=1
+          fi
+          # Fast static always runs, docs-only or not.
+          if [ "$STATIC_FAST" != "success" ]; then
+            echo "static-fast=$STATIC_FAST"
+            fail=1
+          fi
+          for lane in "typecheck=$TYPECHECK" "unit=$UNIT" "browser=$BROWSER" "build=$BUILD" "windows-process=$WINDOWS_PROCESS" "migration-lineage=$MIGRATION_LINEAGE" "release-smoke=$RELEASE_SMOKE"; do
+            name="${lane%%=*}"
+            result="${lane#*=}"
+            if [ "$CODE" != "true" ]; then
+              # Docs-only run: heavy lanes must be skipped, never failed.
+              if [ "$result" != "skipped" ]; then
+                echo "$name=$result (docs-only run: expected skipped)"
+                fail=1
+              fi
+            elif [ "$result" != "success" ]; then
+              echo "$name=$result"
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "Open the red lane above, not this gate."
+            exit 1
+          fi
+
   windows_process:
     name: Windows Process Regression
     runs-on: windows-2022
     timeout-minutes: 15
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -168,6 +332,12 @@ jobs:
           src/provider/providerStartupLifecycle.test.ts
           src/processRunner.test.ts
 
+      - name: Verify Windows credential reader compilation without credentials
+        run: >-
+          bun run --cwd apps/server test
+          src/providerUsage/providers/droidSecureStorage.test.ts
+          -t "compiles the Windows bridge"
+
       - name: Test Effect Windows process spawn
         run: bun run --cwd apps/server test src/windowsProcessEffect.test.ts
 
@@ -198,6 +368,8 @@ jobs:
     name: Migration Lineage
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -215,6 +387,9 @@ jobs:
   release_smoke:
     name: Release Smoke
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v6

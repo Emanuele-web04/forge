@@ -136,12 +136,3 @@ export const decodeDeviceFrame = (bytes: Uint8Array): DeviceFrameDecodeResult =>
     },
   };
 };
-
-/**
- * Reads only the routing fields. Used by fan-out paths that need to decide
- * which pane (if any) wants a frame before touching the payload.
- */
-export const peekDeviceFrameHeader = (bytes: Uint8Array): DeviceFrameHeader | null => {
-  const result = decodeDeviceFrame(bytes);
-  return result.ok ? result.frame.header : null;
-};

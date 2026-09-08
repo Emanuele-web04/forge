@@ -137,6 +137,33 @@ describe("local preview resource generations", () => {
     expect(firstA.destroy).toHaveBeenCalledOnce();
   });
 
+  it("offers a PDF reload after a read failure and requests a fresh resource", async () => {
+    function PdfReloadHarness() {
+      const [revision, setRevision] = useState(0);
+      return (
+        <PdfFilePreview
+          filePath="document.pdf"
+          cwd="/repo"
+          openInTarget={null}
+          cacheKey={revision}
+          onReload={() => setRevision((value) => value + 1)}
+        />
+      );
+    }
+    await render(<PdfReloadHarness />);
+    await vi.waitFor(() => expect(fetchRequests.size).toBe(1));
+    const initialUrl = [...fetchRequests.keys()][0]!;
+    fetchRequests.get(initialUrl)?.[0]?.resolve(new Response(null, { status: 404 }));
+    await browserPage.getByRole("button", { name: "Reload file from disk" }).click();
+    await vi.waitFor(() => expect(fetchRequests.size).toBe(2));
+    const urls = [...fetchRequests.keys()].map((url) => new URL(url, window.location.href));
+    expect(urls.map((url) => url.searchParams.get("v"))).toEqual(["0", "1"]);
+    expect(urls.map((url) => url.searchParams.get("path"))).toEqual([
+      "document.pdf",
+      "document.pdf",
+    ]);
+  });
+
   it("renders a fresh image after an errored A -> B -> A transition", async () => {
     function ImageHarness() {
       const [src, setSrc] = useState("a.png");

@@ -2492,8 +2492,6 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
     } satisfies AntigravityAdapterShape;
   });
 
-export const AntigravityAdapterLive = Layer.effect(AntigravityAdapter, makeAntigravityAdapter());
-
 export function makeAntigravityAdapterLive(dependencies: AntigravityAdapterDependencies = {}) {
   return Layer.effect(AntigravityAdapter, makeAntigravityAdapter(dependencies));
 }

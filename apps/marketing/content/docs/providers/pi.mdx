@@ -129,6 +129,12 @@ pi update --self
 
 You can also update the global npm package through the package manager that installed it. Restart Synara after changing the runtime.
 
+## Model catalog refresh
+
+Pi discovery uses its native OpenRouter authentication to expose models it can execute. OpenCode Zen entries are refreshed with their protocol and capability metadata, and the bundled Pi SDK recognizes GLM 5.3 Flash and GPT-6 Astra. Availability still depends on the configured provider and account.
+
+Discovery shares cached results and bounds retries. The currently selected provider takes priority over background prefetch; a discovery failure remains visible rather than being treated as proof that a static fallback is current.
+
 ## Troubleshooting
 
 ### Pi is not detected

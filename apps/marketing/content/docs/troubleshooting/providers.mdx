@@ -5,6 +5,12 @@ description: Diagnose provider detection, authentication, model discovery, execu
 
 Verify the provider outside Synara first. Synara can discover and operate a provider runtime, but it cannot repair a missing executable, expired provider session, unavailable model, or account restriction inside that provider.
 
+## Missing zod after updating to 0.8.2
+
+If a provider fails with `Cannot find package 'zod'` and the path points inside Synara's `app.asar`, update Synara to **0.8.3 or later** and relaunch it. Version 0.8.2 omitted this dependency from the packaged app. Installing zod in your project or changing provider credentials does not repair the app bundle.
+
+See [Desktop and updates](/docs/troubleshooting/desktop-and-updates) for update troubleshooting.
+
 ## Provider is not detected
 
 <Steps>

@@ -11,7 +11,6 @@ const TRAILING_ASSISTANT_SELECTIONS_PATTERN =
   /\n*<assistant_selection>\n([\s\S]*?)\n<\/assistant_selection>\s*$/;
 const EMBEDDED_ASSISTANT_SELECTIONS_PATTERN =
   /\n*<assistant_selection>\n[\s\S]*?\n<\/assistant_selection>(?=\n*(<terminal_context>\n[\s\S]*?\n<\/terminal_context>\s*)?(<file_comments>\n[\s\S]*?\n<\/file_comments>\s*)?(<pasted_text>\n[\s\S]*?\n<\/pasted_text>\s*)?$)/;
-const ASSISTANT_SELECTION_PREVIEW_MAX_CHARS = 44;
 
 export interface ExtractedAssistantSelections {
   promptText: string;
@@ -78,17 +77,6 @@ export function createAssistantSelectionAttachment(input: {
   };
 }
 
-export function formatAssistantSelectionPreview(text: string): string {
-  const normalized = normalizeAssistantSelectionText(text);
-  if (normalized.length === 0) {
-    return "Selection";
-  }
-  const firstLine = normalized.split("\n")[0] ?? normalized;
-  return firstLine.length > ASSISTANT_SELECTION_PREVIEW_MAX_CHARS
-    ? `${firstLine.slice(0, ASSISTANT_SELECTION_PREVIEW_MAX_CHARS - 1)}…`
-    : firstLine;
-}
-
 export function formatAssistantSelectionQueuePreview(selectionCount: number): string {
   return selectionCount === 1 ? "1 referenced selection" : "Referenced selections";
 }
@@ -149,10 +137,6 @@ export function extractTrailingAssistantSelections(prompt: string): ExtractedAss
     promptText: prompt.slice(0, match.index).replace(/\n+$/, ""),
     selections: parseAssistantSelectionEntries(match[1] ?? ""),
   };
-}
-
-export function stripTrailingAssistantSelections(prompt: string): string {
-  return extractTrailingAssistantSelections(prompt).promptText;
 }
 
 export function stripEmbeddedAssistantSelections(prompt: string): string {

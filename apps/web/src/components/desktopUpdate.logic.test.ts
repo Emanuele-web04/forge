@@ -5,15 +5,12 @@ import {
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
   getDesktopUpdateAlreadyCurrentNotice,
-  getDesktopUpdateButtonLabel,
-  getDesktopUpdateButtonVariant,
   getDesktopUpdateButtonPresentation,
   getDesktopUpdateButtonTooltip,
   getDesktopUpdateDownloadPercent,
   getDesktopUpdateErrorSignature,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
-  shouldHighlightDesktopUpdateError,
   shouldRecommendManualDesktopDownload,
   shouldShowArm64IntelBuildWarning,
   shouldShowDesktopUpdateButton,
@@ -100,7 +97,7 @@ describe("desktop update button state", () => {
 
     expect(resolveDesktopUpdateButtonAction(state)).toBe("download");
     expect(isDesktopUpdateButtonDisabled(state)).toBe(false);
-    expect(getDesktopUpdateButtonLabel(state)).toBe("Retry");
+    expect(getDesktopUpdateButtonPresentation(state).label).toBe("Retry");
     expect(getDesktopUpdateButtonTooltip(state)).toBe(
       "Synara restarted, but update 1.1.0 was not installed. Click to try again.",
     );
@@ -167,7 +164,6 @@ describe("desktop update button state", () => {
     expect(shouldShowDesktopUpdateButton(state)).toBe(true);
     expect(isDesktopUpdateButtonDisabled(state)).toBe(true);
     expect(getDesktopUpdateButtonTooltip(state)).toContain("42%");
-    expect(getDesktopUpdateButtonLabel(state)).toBe("Preparing");
     expect(getDesktopUpdateButtonPresentation(state)).toEqual({
       label: "Preparing",
       secondaryLabel: null,
@@ -217,29 +213,29 @@ describe("desktop update button state", () => {
     expect(resolveDesktopUpdateButtonAction(state)).toBe("check");
     expect(isDesktopUpdateButtonDisabled(state)).toBe(true);
     expect(getDesktopUpdateButtonTooltip(state)).toContain("Checking for updates");
-    expect(getDesktopUpdateButtonLabel(state)).toBe("Checking...");
+    expect(getDesktopUpdateButtonPresentation(state).label).toBe("Checking...");
   });
 
   it("shows retry labels for actionable update errors", () => {
     expect(
-      getDesktopUpdateButtonLabel({
+      getDesktopUpdateButtonPresentation({
         ...baseState,
         status: "error",
         availableVersion: "1.1.0",
         errorContext: "download",
         canRetry: true,
-      }),
+      }).label,
     ).toBe("Retry");
 
     expect(
-      getDesktopUpdateButtonLabel({
+      getDesktopUpdateButtonPresentation({
         ...baseState,
         status: "error",
         downloadedVersion: "1.1.0",
         availableVersion: "1.1.0",
         errorContext: "install",
         canRetry: true,
-      }),
+      }).label,
     ).toBe("Retry");
   });
 
@@ -253,7 +249,7 @@ describe("desktop update button state", () => {
       canRetry: true,
     };
     expect(resolveDesktopUpdateButtonAction(downloadFailure)).toBe("download");
-    expect(getDesktopUpdateButtonLabel(downloadFailure)).toBe("Retry");
+    expect(getDesktopUpdateButtonPresentation(downloadFailure).label).toBe("Retry");
     expect(getDesktopUpdateButtonTooltip(downloadFailure)).toContain("Click to retry");
 
     const installFailure: DesktopUpdateState = {
@@ -266,7 +262,7 @@ describe("desktop update button state", () => {
       canRetry: true,
     };
     expect(resolveDesktopUpdateButtonAction(installFailure)).toBe("install");
-    expect(getDesktopUpdateButtonLabel(installFailure)).toBe("Retry");
+    expect(getDesktopUpdateButtonPresentation(installFailure).label).toBe("Retry");
     expect(getDesktopUpdateButtonTooltip(installFailure)).toContain("Click to retry");
   });
 
@@ -376,70 +372,6 @@ describe("getDesktopUpdateAlreadyCurrentNotice", () => {
   });
 });
 
-describe("getDesktopUpdateButtonVariant", () => {
-  it("uses the installing variant while an install is in progress", () => {
-    expect(
-      getDesktopUpdateButtonVariant(
-        { ...baseState, status: "downloaded", downloadedVersion: "1.1.0" },
-        { installing: true },
-      ),
-    ).toBe("installing");
-  });
-
-  it("renders a failed install as error even though status stays downloaded", () => {
-    expect(
-      getDesktopUpdateButtonVariant({
-        ...baseState,
-        status: "downloaded",
-        downloadedVersion: "1.1.0",
-        availableVersion: "1.1.0",
-        message: "shutdown timeout",
-        errorContext: "install",
-        canRetry: true,
-      }),
-    ).toBe("error");
-  });
-
-  it("renders a failed download as error", () => {
-    expect(
-      getDesktopUpdateButtonVariant({
-        ...baseState,
-        status: "available",
-        availableVersion: "1.1.0",
-        message: "checksum mismatch",
-        errorContext: "download",
-        canRetry: true,
-      }),
-    ).toBe("error");
-  });
-
-  it("maps healthy updater states to their own variants", () => {
-    expect(
-      getDesktopUpdateButtonVariant({
-        ...baseState,
-        status: "downloaded",
-        downloadedVersion: "1.1.0",
-      }),
-    ).toBe("ready");
-    expect(
-      getDesktopUpdateButtonVariant({
-        ...baseState,
-        status: "downloading",
-        availableVersion: "1.1.0",
-        downloadPercent: 40,
-      }),
-    ).toBe("progress");
-    expect(
-      getDesktopUpdateButtonVariant({
-        ...baseState,
-        status: "available",
-        availableVersion: "1.1.0",
-      }),
-    ).toBe("info");
-    expect(getDesktopUpdateButtonVariant(null)).toBe("info");
-  });
-});
-
 describe("desktop update UI helpers", () => {
   it("toasts only for accepted incomplete actions", () => {
     expect(
@@ -454,25 +386,6 @@ describe("desktop update UI helpers", () => {
         accepted: true,
         completed: true,
         state: baseState,
-      }),
-    ).toBe(false);
-  });
-
-  it("highlights only actionable updater errors", () => {
-    expect(
-      shouldHighlightDesktopUpdateError({
-        ...baseState,
-        status: "available",
-        errorContext: "download",
-        canRetry: true,
-      }),
-    ).toBe(true);
-    expect(
-      shouldHighlightDesktopUpdateError({
-        ...baseState,
-        status: "error",
-        errorContext: "check",
-        canRetry: true,
       }),
     ).toBe(false);
   });

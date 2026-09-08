@@ -69,8 +69,12 @@ import {
 } from "../projectMetadataProjection.ts";
 import { applySpaceMetadataProjection } from "../spaceMetadataProjection.ts";
 import { resolveStableMessageTurnId } from "../messageTurnId.ts";
-import { settleTurnStateFromSession } from "../turnLifecycle.ts";
-import { deriveTurnStartModelSelection, deriveTurnStartSession } from "../turnStartSession.ts";
+import { maxIso, settleTurnStateFromSession } from "../turnLifecycle.ts";
+import {
+  canAdoptFirstTurnProvider,
+  deriveTurnStartModelSelection,
+  deriveTurnStartSession,
+} from "../turnStartSession.ts";
 import {
   attachmentRelativePath,
   parseAttachmentIdFromRelativePath,
@@ -217,10 +221,6 @@ function shouldApplyPendingInteractionsProjection(event: OrchestrationEvent): bo
     (event.type === "thread.activity-appended" &&
       PENDING_INTERACTION_ACTIVITY_KINDS.has(event.payload.activity.kind))
   );
-}
-
-function maxIso(left: string | null, right: string): string {
-  return left === null || right > left ? right : left;
 }
 
 // Destructive history edits are rare and rebuild from bounded/indexed summary queries.
@@ -829,14 +829,14 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               threadId: event.payload.threadId,
             }),
           ]);
-          const canAdoptFirstTurnProvider =
-            existingRow.value.latestTurnId === null &&
-            Option.isNone(session) &&
-            messages.length <= 1;
           const projectedModelSelection = deriveTurnStartModelSelection({
             currentModelSelection: existingRow.value.modelSelection,
             requestedModelSelection: event.payload.modelSelection,
-            canAdoptRequestedProvider: canAdoptFirstTurnProvider,
+            canAdoptRequestedProvider: canAdoptFirstTurnProvider({
+              hasLatestTurn: existingRow.value.latestTurnId !== null,
+              hasSession: Option.isSome(session),
+              messages,
+            }),
           });
           // Automation-dispatched turns run with the automation's modes but must not
           // repaint the thread's persisted modes: on a heartbeat target thread the
@@ -860,6 +860,16 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           });
           return;
         }
+
+        // Turn completion must advance updated_at here too, or projection repair
+        // replay regresses it to the turn start (re-marks read chats unread).
+        // Monotonic: stale events (retries, imports) carry earlier occurredAt.
+        case "thread.session-set":
+        case "thread.turn-diff-completed":
+          return yield* updateThreadProjection(event.payload.threadId, (thread) => ({
+            ...thread,
+            updatedAt: maxIso(thread.updatedAt, event.occurredAt),
+          }));
 
         case "thread.deleted": {
           attachmentSideEffects.deletedThreadIds.add(event.payload.threadId);
@@ -969,7 +979,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                   : event.payload.preserveLatestTurn
                     ? existingRow.value.latestTurnId
                     : event.payload.turnId,
-              updatedAt: event.occurredAt,
+              updatedAt: maxIso(existingRow.value.updatedAt, event.occurredAt),
             },
             projectionThreadProposedPlanRepository,
           });

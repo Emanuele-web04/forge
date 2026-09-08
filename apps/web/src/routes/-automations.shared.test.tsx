@@ -20,7 +20,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   applyScheduleToForm,
-  allVisibleTriageRuns,
   applyAutomationEvent,
   automationDefinitionUpdateMutationOptions,
   automationAttentionCount,
@@ -366,11 +365,6 @@ describe("automation shared route helpers", () => {
       "run-failed-no-result",
     ]);
     expect(automationAttentionCount(runs)).toBe(2);
-    expect(allVisibleTriageRuns(runs).map((run) => run.id)).toEqual([
-      "run-unresolved",
-      "run-read",
-      "run-failed-no-result",
-    ]);
   });
 
   it("keeps silent successful runs in history without counting them for attention", () => {
@@ -385,7 +379,6 @@ describe("automation shared route helpers", () => {
 
     expect(unresolvedTriageRuns([silent])).toEqual([]);
     expect(automationAttentionCount([silent])).toBe(0);
-    expect(allVisibleTriageRuns([silent])).toEqual([silent]);
   });
 
   it("does not surface a reported result before its run finishes", () => {
@@ -401,7 +394,6 @@ describe("automation shared route helpers", () => {
 
     expect(isTriageRun(running)).toBe(false);
     expect(unresolvedTriageRuns([running])).toEqual([]);
-    expect(allVisibleTriageRuns([running])).toEqual([]);
   });
 
   it("allows cancelling active and waiting runs only", () => {

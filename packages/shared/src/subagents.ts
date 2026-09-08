@@ -657,11 +657,3 @@ export function resolveSubagentIdentityFromDirectory(
     agentId: threadEntry?.agentId ?? agentEntry?.agentId ?? normalizedAgentId,
   });
 }
-
-export function resolveSubagentIdentityHint(input: {
-  hints: ReadonlyArray<ParsedSubagentIdentityHint>;
-  providerThreadId?: string | null | undefined;
-  agentId?: string | null | undefined;
-}): ParsedSubagentIdentityHint | undefined {
-  return resolveSubagentIdentityFromDirectory(buildSubagentIdentityDirectory(input.hints), input);
-}

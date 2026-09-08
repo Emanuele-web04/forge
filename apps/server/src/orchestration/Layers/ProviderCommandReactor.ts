@@ -10,6 +10,7 @@ import {
   type ModelSelection,
   MessageId,
   type OrchestrationEvent,
+  type OrchestrationRegenerateThreadTitleResult,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   type ProviderMentionReference,
   type ProviderInteractionMode,
@@ -31,6 +32,7 @@ import {
   Cache,
   Cause,
   Duration,
+  Deferred,
   Effect,
   Equal,
   Exit,
@@ -44,7 +46,9 @@ import {
 } from "effect";
 import {
   buildPromptThreadTitleFallback,
+  buildThreadTitleConversationContext,
   isGenericChatThreadTitle,
+  isUsableGeneratedThreadTitle,
 } from "@synara/shared/chatThreads";
 import {
   collectTailTurnIds,
@@ -94,6 +98,7 @@ import {
   type BranchNameGenerationInput,
   type ThreadTitleGenerationInput,
 } from "../../git/Services/TextGeneration.ts";
+import { TextGenerationError } from "../../git/Errors.ts";
 import { resolveTextGenerationInputForSelection } from "../../git/textGenerationSelection.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
@@ -365,6 +370,54 @@ const turnStartKeyForEvent = (event: ProviderIntentEvent): string =>
 const HANDLED_TURN_START_KEY_MAX = 10_000;
 const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
 const PROVIDER_COMMAND_CLAIM_LEASE_MS = 30_000;
+// Poll granularity while waiting out another worker's claim (see
+// processClaimedProviderIntent): re-checking lets a turn proceed the moment
+// the prior attempt settles instead of sleeping blindly to lease expiry.
+const PROVIDER_COMMAND_CLAIM_SETTLEMENT_POLL_MS = 1_000;
+
+export interface ProviderCommandClaimSnapshot {
+  readonly state: string;
+  readonly claimOwner?: string | null;
+  readonly claimExpiresAt?: string | null;
+}
+
+/**
+ * Waits out another worker's claim on the same delivery, waking early when the
+ * record settles instead of sleeping to lease expiry. The wait never exceeds
+ * the caller's deadline and never steals work: it only observes, returning the
+ * latest snapshot for the caller to handle through the existing settled/
+ * expired paths. Failed reads keep waiting on the last known snapshot so a
+ * transient store error degrades to today's full-lease wait, not a wrong turn.
+ */
+export function awaitInflightClaimSettlement<TClaim extends ProviderCommandClaimSnapshot>(input: {
+  readonly readClaim: () => Effect.Effect<TClaim | undefined, never>;
+  readonly deadlineMs: number;
+  readonly pollIntervalMs?: number;
+}): Effect.Effect<TClaim | undefined> {
+  const pollIntervalMs = Math.max(
+    0,
+    input.pollIntervalMs ?? PROVIDER_COMMAND_CLAIM_SETTLEMENT_POLL_MS,
+  );
+  const startedAt = Date.now();
+  const check = (): Effect.Effect<TClaim | undefined> =>
+    Effect.flatMap(input.readClaim(), (snapshot) => {
+      if (!snapshot || snapshot.state !== "inflight") {
+        return Effect.succeed(snapshot);
+      }
+      const expiresAt = Date.parse(snapshot.claimExpiresAt ?? "");
+      const recordRemainingMs = Number.isFinite(expiresAt) ? expiresAt - Date.now() : 0;
+      const budgetRemainingMs = input.deadlineMs - (Date.now() - startedAt);
+      const remainingMs = Math.min(Math.max(0, recordRemainingMs), Math.max(0, budgetRemainingMs));
+      if (remainingMs <= 0) {
+        return Effect.succeed(snapshot);
+      }
+      return Effect.flatMap(
+        Effect.sleep(Duration.millis(Math.min(remainingMs, pollIntervalMs))),
+        () => check(),
+      );
+    });
+  return check();
+}
 const PROVIDER_COMMAND_SAFE_RETRY_LIMIT = 3;
 const PROVIDER_COMMAND_SAFE_RETRY_DELAY = Duration.millis(50);
 /**
@@ -1846,7 +1899,7 @@ const make = Effect.gen(function* () {
       if (shouldRegisterContextBootstrap) {
         freshSessionContextBootstrapThreadIds.add(threadId);
       } else if (
-        preferredProvider === "opencode" &&
+        (preferredProvider === "opencode" || preferredProvider === "devin") &&
         providerService.completePriorTranscriptBootstrap
       ) {
         // An explicit stop intentionally discards pending synthetic context.
@@ -2343,28 +2396,25 @@ const make = Effect.gen(function* () {
       const tracksDroidContextAcceptance =
         activeSession?.provider === "droid" &&
         (sidechatBootstrapText !== null || priorTranscriptBootstrapText !== null);
-      const tracksOpenCodeCompatibleContextAcceptance =
-        selectedProvider === "opencode" &&
+      const tracksDurableContextAcceptance =
+        (selectedProvider === "opencode" || selectedProvider === "devin") &&
         ((hasPendingFreshSessionTranscriptBootstrap &&
           (priorTranscriptBootstrapRetiresOnAcceptedTurn ||
             specializedBootstrapCompletesFreshSessionContext)) ||
           (hasPendingRollbackTranscriptBootstrap && priorTranscriptBootstrapRetiresOnAcceptedTurn));
       pendingContextBootstrapAttempt =
-        tracksDroidContextAcceptance || tracksOpenCodeCompatibleContextAcceptance
+        tracksDroidContextAcceptance || tracksDurableContextAcceptance
           ? {
               clearSidechat:
                 sidechatBootstrapText !== null || priorTranscriptBootstrapText !== null,
               clearFreshSessionTranscript:
                 priorTranscriptBootstrapText !== null ||
-                (tracksOpenCodeCompatibleContextAcceptance &&
-                  hasPendingFreshSessionTranscriptBootstrap),
+                (tracksDurableContextAcceptance && hasPendingFreshSessionTranscriptBootstrap),
               clearRollbackTranscript:
                 priorTranscriptBootstrapText !== null ||
-                (tracksOpenCodeCompatibleContextAcceptance &&
-                  priorTranscriptBootstrapRetiresOnAcceptedTurn),
+                (tracksDurableContextAcceptance && priorTranscriptBootstrapRetiresOnAcceptedTurn),
               completeDurablePriorTranscript:
-                tracksOpenCodeCompatibleContextAcceptance &&
-                hasPendingFreshSessionTranscriptBootstrap,
+                tracksDurableContextAcceptance && hasPendingFreshSessionTranscriptBootstrap,
               lifecycleEvidence: providerContextLifecycleEvidence,
               lifecycleEvidenceCreatedAt: input.createdAt,
             }
@@ -2555,7 +2605,7 @@ const make = Effect.gen(function* () {
       let durableCompletionSucceeded = true;
       if (
         hasPendingFreshSessionTranscriptBootstrap &&
-        selectedProvider === "opencode" &&
+        (selectedProvider === "opencode" || selectedProvider === "devin") &&
         providerService.completePriorTranscriptBootstrap
       ) {
         durableCompletionSucceeded = yield* persistPriorTranscriptBootstrapCompletion(
@@ -2728,6 +2778,9 @@ const make = Effect.gen(function* () {
     readonly modelSelection?: ModelSelection;
     readonly providerOptions?: ProviderStartOptions;
   }) {
+    const expectedTitleSequence = yield* orchestrationEngine.getThreadTitleHighWaterSequence(
+      input.threadId,
+    );
     const thread = yield* resolveFirstTurnThread(input.threadId, input.messageId);
     if (!thread) return;
 
@@ -2747,12 +2800,15 @@ const make = Effect.gen(function* () {
     });
     if (!textGenerationInput) {
       if (fallbackTitle !== currentTitle) {
-        yield* orchestrationEngine.dispatch({
-          type: "thread.meta.update",
-          commandId: serverCommandId("thread-title-fallback-rename"),
-          threadId: input.threadId,
-          title: fallbackTitle,
-        });
+        yield* orchestrationEngine
+          .dispatch({
+            type: "thread.meta.update",
+            commandId: serverCommandId("thread-title-fallback-rename"),
+            threadId: input.threadId,
+            title: fallbackTitle,
+            expectedTitleSequence,
+          })
+          .pipe(Effect.catchTag("OrchestrationCommandInvariantError", () => Effect.void));
       }
       return;
     }
@@ -2795,12 +2851,15 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    yield* orchestrationEngine.dispatch({
-      type: "thread.meta.update",
-      commandId: serverCommandId("thread-title-rename"),
-      threadId: input.threadId,
-      title: nextTitle,
-    });
+    yield* orchestrationEngine
+      .dispatch({
+        type: "thread.meta.update",
+        commandId: serverCommandId("thread-title-rename"),
+        threadId: input.threadId,
+        title: nextTitle,
+        expectedTitleSequence,
+      })
+      .pipe(Effect.catchTag("OrchestrationCommandInvariantError", () => Effect.void));
   });
 
   const processTurnStartRequestedWithoutLease = Effect.fnUntraced(function* (
@@ -4190,7 +4249,10 @@ const make = Effect.gen(function* () {
     const stoppedProvider = Schema.is(ProviderKind)(thread.session?.providerName)
       ? thread.session.providerName
       : thread.modelSelection.provider;
-    if (stoppedProvider === "opencode" && providerService.completePriorTranscriptBootstrap) {
+    if (
+      (stoppedProvider === "opencode" || stoppedProvider === "devin") &&
+      providerService.completePriorTranscriptBootstrap
+    ) {
       yield* providerService.completePriorTranscriptBootstrap({ threadId: thread.id }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning(
@@ -4325,9 +4387,20 @@ const make = Effect.gen(function* () {
   const processSessionStopRequested = (
     event: Extract<ProviderIntentEvent, { type: "thread.session-stop-requested" }>,
   ) =>
-    processThreadSessionStop({
-      threadId: event.payload.threadId,
-      createdAt: event.payload.createdAt,
+    Effect.gen(function* () {
+      // Explicit stop must pause even in a recovery gap with no live turn left
+      // to emit a cancellation. Internal session exits do not use this path.
+      const thread = yield* resolveThread(event.payload.threadId);
+      if (thread) {
+        yield* pauseActiveThreadGoal({
+          threadId: thread.id,
+          expectedGoalStartedAt: thread.goalStartedAt ?? null,
+        });
+      }
+      yield* processThreadSessionStop({
+        threadId: event.payload.threadId,
+        createdAt: event.payload.createdAt,
+      });
     });
 
   const surfaceTimedOutTurnStart = Effect.fnUntraced(function* (
@@ -4796,11 +4869,11 @@ const make = Effect.gen(function* () {
       const threadId = event.payload.threadId;
       if (yield* skipQuarantinedSideEffect(event)) return;
 
-      const existing = yield* deliveryRepository.getDelivery({
+      let existing = yield* deliveryRepository.getDelivery({
         consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
         eventSequence: event.sequence,
       });
-      if (Option.isSome(existing)) {
+      while (Option.isSome(existing)) {
         if (existing.value.state === "succeeded") {
           yield* requireCursorAdvance(event);
           return;
@@ -4814,7 +4887,44 @@ const make = Effect.gen(function* () {
           const expiresAt = Date.parse(existing.value.claimExpiresAt ?? "");
           const remainingMs = Number.isFinite(expiresAt) ? Math.max(0, expiresAt - Date.now()) : 0;
           if (remainingMs > 0) {
-            yield* Effect.sleep(Duration.millis(remainingMs));
+            const waitStartedAt = Date.now();
+            let lastKnown = Option.getOrUndefined(existing);
+            const latest = yield* awaitInflightClaimSettlement({
+              readClaim: () =>
+                deliveryRepository
+                  .getDelivery({
+                    consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+                    eventSequence: event.sequence,
+                  })
+                  .pipe(
+                    Effect.map((record) => {
+                      lastKnown = Option.getOrUndefined(record);
+                      return Option.getOrUndefined(record);
+                    }),
+                    Effect.orElseSucceed(() => lastKnown),
+                  ),
+              deadlineMs: remainingMs,
+            });
+            if (latest?.state === "succeeded") {
+              const waitedMs = Date.now() - waitStartedAt;
+              yield* Effect.logDebug(
+                "provider command delivery settled while waiting out a prior claim",
+                {
+                  eventSequence: event.sequence,
+                  threadId,
+                  waitedMs,
+                  savedMs: Math.max(0, remainingMs - waitedMs),
+                },
+              );
+            }
+            // The wait budget is not a lease expiry. Re-read before classifying
+            // retry/missing records or another owner's renewed inflight claim.
+            // In particular, never settle from a cached snapshot after a failed read.
+            existing = yield* deliveryRepository.getDelivery({
+              consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+              eventSequence: event.sequence,
+            });
+            continue;
           }
           const expiredOwner = existing.value.claimOwner ?? "";
           if (!isReplaySafeClaimedProviderIntent(event)) {
@@ -4842,6 +4952,7 @@ const make = Effect.gen(function* () {
             );
           }
         }
+        break;
       }
 
       while (true) {
@@ -5297,11 +5408,114 @@ const make = Effect.gen(function* () {
         : reconcileDeliveryRuntime(input),
     );
 
+  const generateConversationTitle: ProviderCommandReactorShape["regenerateThreadTitle"] = (input) =>
+    Effect.gen(function* () {
+      const expectedTitleSequence = yield* orchestrationEngine.getThreadTitleHighWaterSequence(
+        input.threadId,
+      );
+      const thread = yield* resolveThread(input.threadId);
+      if (!thread || thread.deletedAt != null || thread.archivedAt != null) {
+        return yield* Effect.fail(new Error("Thread is unavailable."));
+      }
+      const context = buildThreadTitleConversationContext(thread.messages);
+      if (!context) {
+        return { status: "no-context", title: null };
+      }
+
+      const expectedTitle =
+        (yield* orchestrationEngine.getReadModel()).threads.find(
+          (candidate) => candidate.id === input.threadId,
+        )?.title ?? thread.title;
+      const cwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
+      const settings = yield* serverSettings.getSettings;
+      const textGenerationInput = yield* resolveThreadTextGenerationInput({
+        threadId: input.threadId,
+        providerOptions: providerStartOptionsFromServerSettings(settings),
+        useConfiguredFallback: true,
+      });
+      if (!textGenerationInput) {
+        return yield* new TextGenerationError({
+          operation: "generateThreadTitle",
+          detail: "No enabled text-generation provider is available for this thread.",
+        });
+      }
+
+      const generated = yield* textGeneration.generateThreadTitle({
+        cwd: cwd ?? process.cwd(),
+        message: context,
+        context: "conversation",
+        modelSelection: textGenerationInput.modelSelection,
+        ...(textGenerationInput.providerOptions
+          ? { providerOptions: textGenerationInput.providerOptions }
+          : {}),
+      });
+      if (!isUsableGeneratedThreadTitle(generated.title)) {
+        return yield* new TextGenerationError({
+          operation: "generateThreadTitle",
+          detail: "The generated thread title was empty or generic.",
+        });
+      }
+      if (generated.title === expectedTitle) {
+        const currentTitleSequence = yield* orchestrationEngine.getThreadTitleHighWaterSequence(
+          input.threadId,
+        );
+        const currentThread = (yield* orchestrationEngine.getReadModel()).threads.find(
+          (candidate) => candidate.id === input.threadId,
+        );
+        const titleIsCurrent =
+          currentTitleSequence === expectedTitleSequence && currentThread?.title === expectedTitle;
+        return titleIsCurrent
+          ? { status: "unchanged", title: expectedTitle }
+          : { status: "stale", title: null };
+      }
+
+      const updated = yield* orchestrationEngine
+        .dispatch({
+          type: "thread.meta.update",
+          commandId: serverCommandId("thread-title-regenerate"),
+          threadId: input.threadId,
+          title: generated.title,
+          expectedTitleSequence,
+        })
+        .pipe(
+          Effect.as(true),
+          Effect.catch((error) => {
+            if (
+              error._tag === "OrchestrationCommandInvariantError" &&
+              error.commandType === "thread.meta.update"
+            ) {
+              return Effect.succeed(false);
+            }
+            return Effect.fail(error);
+          }),
+        );
+      return updated
+        ? { status: "renamed", title: generated.title }
+        : { status: "stale", title: null };
+    });
+
+  const pendingTitleGenerations = new Map<
+    ThreadId,
+    Deferred.Deferred<OrchestrationRegenerateThreadTitleResult, unknown>
+  >();
+  const regenerateThreadTitle: ProviderCommandReactorShape["regenerateThreadTitle"] = (input) =>
+    Effect.suspend(() => {
+      const pending = pendingTitleGenerations.get(input.threadId);
+      if (pending) return Deferred.await(pending);
+      const result = Deferred.makeUnsafe<OrchestrationRegenerateThreadTitleResult, unknown>();
+      pendingTitleGenerations.set(input.threadId, result);
+      return generateConversationTitle(input).pipe(
+        Effect.onExit((exit) => Deferred.done(result, exit)),
+        Effect.ensuring(Effect.sync(() => pendingTitleGenerations.delete(input.threadId))),
+      );
+    });
+
   return {
     start,
     drain,
     listBlockingDeliveries,
     reconcileDelivery,
+    regenerateThreadTitle,
   } satisfies ProviderCommandReactorShape;
 });
 

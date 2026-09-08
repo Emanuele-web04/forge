@@ -507,6 +507,22 @@ describe("wsNativeApi", () => {
     });
   });
 
+  it("runs thread-title regeneration without a client timeout", async () => {
+    requestMock.mockResolvedValue({ status: "renamed", title: "Backend auth" });
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    await api.orchestration.regenerateThreadTitle({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+    });
+
+    expect(requestMock).toHaveBeenCalledWith(
+      ORCHESTRATION_WS_METHODS.regenerateThreadTitle,
+      { threadId: "thread-1" },
+      { timeoutMs: null },
+    );
+  });
+
   it("forwards terminal output ACKs to the websocket transport", async () => {
     requestMock.mockResolvedValue(undefined);
     const { createWsNativeApi } = await import("./wsNativeApi");

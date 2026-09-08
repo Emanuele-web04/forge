@@ -96,9 +96,3 @@ export const ServerLifecycleEventsLive = Layer.effect(
     } satisfies ServerLifecycleEventsShape;
   }),
 );
-
-export function getWelcomeEvent(
-  snapshot: ServerLifecycleSnapshot,
-): Extract<ServerLifecycleEvent, { type: "welcome" }> | null {
-  return snapshot.events.find((event) => event.type === "welcome") ?? null;
-}

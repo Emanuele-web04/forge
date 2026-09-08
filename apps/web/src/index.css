@@ -152,11 +152,11 @@
     /* The outer seam reads stronger than --color-border (and NOT the more-transparent
        --app-surface-divider used by the internal hairlines/splits): the route's outer
        edge against the sidebar should read as solid. Do not re-unify these. */
-    --seam-line: --alpha(var(--color-black) / 12%);
+    --seam-line: --alpha(var(--color-black) / 4%);
   }
 
   .dark .chat-content-card {
-    --seam-line: --alpha(var(--color-white) / 8%);
+    --seam-line: --alpha(var(--color-white) / 3%);
   }
 
   [data-sidebar-side="left"] .chat-content-card {
@@ -178,7 +178,7 @@
   /* A single inset stroke produces the straight content edge without adding
      layout width or painting top/bottom borders. */
   [data-sidebar-side="left"] .chat-content-card::before {
-    box-shadow: inset 0.6px 0 0 var(--seam-line);
+    box-shadow: inset 0.5px 0 0 var(--seam-line);
   }
 
   [data-sidebar-side="left"]:has([data-placement="content-seam"]:hover) .chat-content-card {

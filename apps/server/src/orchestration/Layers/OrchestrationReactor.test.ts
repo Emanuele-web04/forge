@@ -64,6 +64,7 @@ describe("OrchestrationReactor", () => {
             drain: Effect.void,
             listBlockingDeliveries: () => Effect.succeed([]),
             reconcileDelivery: () => Effect.succeed(null),
+            regenerateThreadTitle: () => Effect.succeed({ status: "no-context", title: null }),
           }),
         ),
         Layer.provideMerge(

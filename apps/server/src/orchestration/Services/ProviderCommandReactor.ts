@@ -9,7 +9,7 @@
 import { ServiceMap } from "effect";
 import type { Effect, Scope } from "effect";
 
-import type { ThreadId } from "@synara/contracts";
+import type { OrchestrationRegenerateThreadTitleResult, ThreadId } from "@synara/contracts";
 import type {
   ProviderBlockingDeliveryEvidence,
   ProviderDeliveryReconciliationOutcome,
@@ -57,6 +57,10 @@ export interface ProviderCommandReactorShape {
     readonly reconciledBy: string;
     readonly note?: string | undefined;
   }) => Effect.Effect<ProviderDeliveryReconciliationResult | null, unknown>;
+
+  readonly regenerateThreadTitle: (input: {
+    readonly threadId: ThreadId;
+  }) => Effect.Effect<OrchestrationRegenerateThreadTitleResult, unknown>;
 }
 
 /**

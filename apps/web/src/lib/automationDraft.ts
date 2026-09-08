@@ -284,16 +284,6 @@ export function acknowledgedRiskIdsForDraft(
   return risks;
 }
 
-export function warningIdsForAcknowledgedRisks(
-  risks: readonly AutomationAcknowledgedRiskId[],
-): ReadonlySet<AutomationDraftWarningId> {
-  const ids = new Set<AutomationDraftWarningId>();
-  for (const risk of risks) {
-    ids.add(risk === "fast-interval" ? "fast-recurring-interval" : risk);
-  }
-  return ids;
-}
-
 export function updateAutomationDraftWarningAcknowledgement(
   current: ReadonlySet<AutomationDraftWarningId>,
   warningId: AutomationDraftWarningId,

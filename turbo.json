@@ -40,6 +40,16 @@
       "outputs": [],
       "cache": false
     },
+    "typecheck:native": {
+      "dependsOn": ["^typecheck:native"],
+      "outputs": [],
+      "cache": false
+    },
+    "typecheck:legacy": {
+      "dependsOn": ["^typecheck:legacy"],
+      "outputs": [],
+      "cache": false
+    },
     "test": {
       "dependsOn": ["^build"],
       "cache": false,

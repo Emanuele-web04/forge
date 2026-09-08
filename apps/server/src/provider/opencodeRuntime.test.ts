@@ -3,7 +3,6 @@
 // Layer: Provider runtime tests
 // Exports: Vitest suites for opencodeRuntime.ts
 
-import os from "node:os";
 import { pathToFileURL } from "node:url";
 
 import { Duration, Effect, Exit, Fiber, Layer, Scope, Sink, Stream } from "effect";
@@ -22,10 +21,8 @@ import {
   OPENCODE_LOCAL_SERVER_IDLE_TTL_MS,
   parseOpenCodeCliModelsOutput,
   parseOpenCodeCredentialProviderIDs,
-  resolveOpenCodeAuthFilePath,
   toOpenCodeFileParts,
 } from "./opencodeRuntime.ts";
-import { resolveOpenCodeCompatibleAuthPaths } from "./openCodeAuthPaths.ts";
 
 const encoder = new TextEncoder();
 
@@ -947,19 +944,5 @@ describe("parseOpenCodeCredentialProviderIDs", () => {
 }`);
 
     expect(providerIDs).toEqual(["openai"]);
-  });
-});
-
-describe("resolveOpenCodeAuthFilePath", () => {
-  it("uses the shared OpenCode-compatible candidate list for the current process", () => {
-    const home = os.homedir();
-    expect(resolveOpenCodeAuthFilePath({ home })).toBe(
-      resolveOpenCodeCompatibleAuthPaths({
-        homeDir: home,
-        env: process.env,
-        platform: process.platform,
-        dataDirectoryName: "opencode",
-      })[0],
-    );
   });
 });

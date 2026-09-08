@@ -8,16 +8,15 @@ import {
   WsFeatureRpcGroup,
   WsProjectsDiscoverScriptsRpc,
   WsProjectsProvisionFromGitHubRpc,
+  WsProjectsSubscribeFileChangeRpc,
   WsPullRequestsReviewRequestCountRpc,
   WsRpcError,
-  WsRpcGroup,
 } from "./rpc";
 import { ORCHESTRATION_WS_METHODS } from "./orchestration";
 import { WS_METHODS } from "./ws";
 
 describe("WS RPC contracts", () => {
-  it("exports the additive Effect RPC group", () => {
-    expect(WsRpcGroup).toBeDefined();
+  it("keeps bootstrap and feature RPCs in separate groups", () => {
     expect(WsBootstrapRpcGroup.requests.has("bootstrap.negotiate")).toBe(true);
     expect(WsFeatureRpcGroup.requests.has("bootstrap.negotiate")).toBe(false);
     expect(
@@ -35,7 +34,9 @@ describe("WS RPC contracts", () => {
   it("exports the project script discovery RPC", () => {
     expect(WsProjectsDiscoverScriptsRpc).toBeDefined();
     expect(WsProjectsProvisionFromGitHubRpc).toBeDefined();
+    expect(WsProjectsSubscribeFileChangeRpc).toBeDefined();
     expect(WsFeatureRpcGroup.requests.has("projects.provisionFromGitHub")).toBe(true);
+    expect(WsFeatureRpcGroup.requests.has("projects.subscribeFileChange")).toBe(true);
   });
 
   it("exports the automation create RPC", () => {

@@ -22,6 +22,120 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.8.3",
+    date: "Sep 6",
+    features: [
+      {
+        id: "packaged-provider-fix",
+        title: "Fix provider startup after the 0.8.2 update",
+        description:
+          "The desktop app now includes the missing dependency that could prevent ACP providers from starting.",
+        details:
+          "Fixes the Cannot find package 'zod' error in the packaged app. Release verification now loads provider SDKs and other lazy runtime dependencies from the packaged application before publication.",
+      },
+      {
+        id: "remember-diff-layout",
+        title: "Remember your preferred diff layout",
+        description:
+          "Your Split or Stacked diff choice stays selected when you close and reopen the panel.",
+        details:
+          "The diff layout is saved locally and restored across panel remounts and app restarts. Split remains the default when no preference has been saved.",
+      },
+    ],
+  },
+  {
+    version: "0.8.2",
+    date: "Sep 6",
+    features: [
+      {
+        id: "concurrent-streaming",
+        title: "Smoother conversations while other tasks run",
+        description:
+          "Streaming code blocks keep their state, and background conversations trigger less rendering work.",
+        details:
+          "In the checked-in production component benchmark with five concurrent streams and one visible code message, total Chromium CPU time fell from 3.597 to 2.858 seconds (20.5%), renderer CPU from 3.196 to 2.187 seconds (31.6%), and frame-interval p95 from 25.0 to 9.6 ms. With ten streams, renderer CPU fell 20.7% and frame-interval p95 reached 9.7 ms. Unchanged code blocks remounted zero times instead of 60; the closed automation hook rendered zero times instead of 120. These short synthetic component samples exclude the complete Electron app and real providers.",
+      },
+      {
+        id: "faster-diffs-and-tool-output",
+        title: "Less waiting for large diffs and tool output",
+        description:
+          "Natural file sorting, read summaries, and tool-output parsing do less repeated work.",
+        details:
+          "Isolated production-function benchmarks reduced sorting 2,048 file paths from 36.45 to 2.59 ms (92.9%) and tree construction from 18.89 to 1.91 ms (89.9%). A normal 24 KB multiline work log improved 38%; a deliberately adverse whitespace-heavy case dropped from 2,287 ms to 0.053 ms. Counting a 2,000-line read summary improved 57.9%. Ordering, raw content, indentation, and exit codes are preserved. These are operation timings, not whole-app speedup percentages.",
+      },
+      {
+        id: "diagnostics-and-turn-start",
+        title: "Cheaper diagnostics and conversation preparation",
+        description:
+          "Large browser-log reads and selecting previous messages avoid repeated serialization and text normalization.",
+        details:
+          "Reading 200 large browser-log entries fell from 80.06 to 0.964 ms (98.8%), returning the same bounded result. Selecting prior messages from 2,000 messages of 2 KiB each fell from 1.833 to 0.0195 ms (98.9%). Turn scheduling also wakes when a blocking claim settles, and startup diagnostics expose phase durations. The percentages describe isolated measured operations.",
+      },
+      {
+        id: "scroll-and-status",
+        title: "Keep your place during live output",
+        description:
+          "Scrolling up stays under your control, and provider status better reflects what is actually happening.",
+        details:
+          "Tool activity, buffering, and reconnects no longer masquerade as live assistant text for scroll following. First-send transitions avoid an empty-home flash, elapsed durations remain stable, read conversations stay read after restart, and orchestrator approval cards are restored. Routine Codex startup messages no longer clutter the transcript; actual errors stay visible.",
+      },
+      {
+        id: "live-file-previews",
+        title: "See file changes without reopening the viewer",
+        description: "Open file previews and diffs revalidate when workspace files change.",
+        details:
+          "Text, image, and PDF previews refresh through project file-change subscriptions, while dirty text edits remain protected. Rendered Markdown selections now offer Add to chat, and compaction tool rows have a dedicated icon. Chat card seams are softer.",
+      },
+      {
+        id: "rename-and-preferences",
+        title: "Rename tasks directly from the composer",
+        description:
+          "Use /rename with a title, or let Synara generate a title from the conversation.",
+        details:
+          "/rename My task sets the title directly. Bare /rename generates a title once the task has conversation context, preserving a newer title if another rename wins the race. New chats restore the last-used model and options, and expanded or collapsed sidebar projects stay that way across restarts.",
+      },
+      {
+        id: "simulator-focus",
+        title: "Keep simulator activity with its task",
+        description:
+          "Background simulator work no longer takes focus from the conversation you are using.",
+        details:
+          "The Automatically open simulator setting lets you disable mirrored-pane auto-opening while continuing to use Simulator.app. Manual opening remains available, and manually closing the pane is respected. Deferred open requests remain associated with their owning task.",
+      },
+      {
+        id: "model-discovery",
+        title: "More reliable model lists across providers",
+        description:
+          "Model discovery shares cached results, bounds retries, and makes failures visible instead of silently falling back.",
+        details:
+          "Active model selection takes priority over background prefetch. Server discovery deduplicates concurrent requests and isolates catalogs by project and runtime. Pi discovers executable OpenRouter models using native authentication, refreshes OpenCode Zen models with the right protocols and capabilities, and updates its SDK for GLM 5.3 Flash and GPT-6 Astra. Factory Droid usage can read Factory credentials, including supported secure storage.",
+      },
+      {
+        id: "claude-context-and-gateway",
+        title: "Let Claude Code choose automatic compaction",
+        description: "Auto (Claude Code) is distinct from explicit 200k and 1M overrides.",
+        details:
+          "Automatic mode leaves compaction resolution to Claude Code; choosing 200k or 1M pins the requested window. Model switches and gateway metadata report the effective context. Claude context usage uses SDK summary mode, avoiding per-turn token-count requests. Shared harness instructions and browser tool schemas are slimmer, and Pi/OpenCode gateway calls accept the corrected schemas.",
+      },
+      {
+        id: "provider-and-git-recovery",
+        title: "Recover stalled providers and noisy Git refreshes",
+        description:
+          "Devin recovery, Windows launches, and checkpoint capture handle more failure cases.",
+        details:
+          "Stale Devin sessions recover before dispatch, and wedged children can be restarted instead of leaving turns waiting for the full idle budget. Windows Cursor and Devin detection accepts their launch shims; Effect child processes stay hidden and process snapshots accept PID zero. Failed Git remote refreshes back off. A task that initializes a Git repository no longer reports the absent pre-initialization baseline as a capture failure.",
+      },
+      {
+        id: "development-and-site",
+        title: "Faster development checks and less idle website work",
+        description:
+          "Bun 1.4.2 and TypeScript 7 are now the default toolchain, with more parallel CI checks.",
+        details:
+          "On the recorded seven-workspace comparison using Bun 1.4.2, median typechecking fell from 56.339 to 12.528 seconds cold (77.8%) and from 12.451 to 3.170 seconds incrementally (74.5%). The legacy checker remains available because one Effect barrel-import diagnostic is not covered by the native checker. The website now lives in the monorepo, and its theme synchronization stops an idle observer loop: 427\u2013430 callbacks per 1.1 seconds fell to zero in the isolated browser probe. CI shards unit and browser tests and caches dependency installation; no CI speedup percentage is claimed.",
+      },
+    ],
+  },
+  {
     version: "0.8.1",
     date: "Sep 2",
     features: [

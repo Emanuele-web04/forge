@@ -105,8 +105,3 @@ export async function consumeFeedbackRateLimit(
 
   return consumeInProcess(key, now);
 }
-
-/** Test seam: drops in-process state between cases. */
-export function resetFeedbackRateLimitForTests(): void {
-  rateLimits.clear();
-}

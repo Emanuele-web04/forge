@@ -16,6 +16,12 @@ Type `/` in the composer to open the command menu. Provider-native commands (lik
 | `/fast`                     | Toggle fast mode for this thread                                        |
 | `/export`                   | Download the thread as a ZIP (`thread.json` + readable `transcript.md`) |
 
+## Rename the current task
+
+Use `/rename <title>` to set a title directly, including for a local draft. Use bare `/rename` to generate a title from a saved conversation; send a message first if there is no context. This is an app-owned command, so it does not send `/rename` as a normal provider prompt. If the title changes while generation runs, Synara keeps the newer title.
+
+See [Organize and navigate](/docs/features/organize) for sidebar and conversation controls.
+
 ## Modes
 
 | Command    | What it does                                                                                                                 |

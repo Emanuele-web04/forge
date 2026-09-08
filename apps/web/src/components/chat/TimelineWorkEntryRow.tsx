@@ -26,6 +26,7 @@ import {
   CheckIcon,
   CircleAlertIcon,
   CircleQuestionIcon,
+  ContextCompactionIcon,
   EyeIcon,
   GitHubIcon,
   GlobeIcon,
@@ -235,6 +236,7 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   // (answer submitted) rather than the generic "info" checkmark.
   if (workEntry.activityKind === "user-input.requested") return CircleQuestionIcon;
   if (workEntry.activityKind === "user-input.resolved") return ArrowUpCircleIcon;
+  if (workEntry.activityKind === "context-compaction") return ContextCompactionIcon;
   // "Moved to background" notices read as a tray drop, not a warning check.
   if (workEntry.nativeEventType === "background_tasks_changed") return BackgroundTrayIcon;
   if (workEntry.providerContextLifecycle) {

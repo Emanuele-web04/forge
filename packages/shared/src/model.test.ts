@@ -8,18 +8,15 @@ import {
   DEFAULT_GIT_TEXT_GENERATION_REASONING_EFFORT,
   DEFAULT_MODEL,
   DEFAULT_MODEL_BY_PROVIDER,
-  MODEL_OPTIONS,
   MODEL_OPTIONS_BY_PROVIDER,
   CODEX_REASONING_EFFORT_OPTIONS,
-  GROK_4_5_REASONING_EFFORTS,
-  GROK_4_6_REASONING_EFFORTS,
-  GROK_BUILD_REASONING_EFFORTS,
 } from "@synara/contracts";
 
 import {
   applyClaudePromptEffortPrefix,
   claudeSelectionRequiresRestart,
   formatModelDisplayName,
+  getClaudeContextWindowSuffix,
   getDefaultAutoCompactWindow,
   getDefaultContextWindow,
   getDefaultModel,
@@ -30,7 +27,6 @@ import {
   isClaudeUltrathinkPrompt,
   normalizeAntigravityModelOptions,
   normalizeClaudeModelOptions,
-  normalizeCodexModelOptions,
   normalizeCursorModelOptions,
   normalizeGrokModelOptions,
   normalizeModelSlug,
@@ -42,9 +38,7 @@ import {
   resolveModelSlug,
   resolveModelSlugForProvider,
   getDefaultEffort,
-  getProviderOptionCurrentLabel,
   getProviderOptionDescriptors,
-  buildProviderOptionSelectionsFromDescriptors,
   hasEffortLevel,
   resolveGrokEffortFamily,
 } from "./model";
@@ -195,7 +189,7 @@ describe("resolveModelSlug", () => {
   });
 
   it("resolves only supported model options", () => {
-    for (const model of MODEL_OPTIONS) {
+    for (const model of MODEL_OPTIONS_BY_PROVIDER.codex) {
       expect(resolveModelSlug(model.slug)).toBe(model.slug);
     }
   });
@@ -210,6 +204,9 @@ describe("resolveModelSlug", () => {
     expect(resolveModelSlugForProvider("claudeAgent", "claude-fable-5-1[1m]")).toBe(
       "claude-fable-5-1",
     );
+    expect(resolveModelSlugForProvider("claudeAgent", "claude-fable-5-1[1M]")).toBe(
+      "claude-fable-5-1",
+    );
     expect(resolveModelSlugForProvider("claudeAgent", "fable-5")).toBe("claude-fable-5");
     expect(resolveModelSlugForProvider("claudeAgent", "gpt-5.3-codex")).toBe(
       DEFAULT_MODEL_BY_PROVIDER.claudeAgent,
@@ -218,7 +215,7 @@ describe("resolveModelSlug", () => {
 
   it("keeps codex defaults for backward compatibility", () => {
     expect(getDefaultModel()).toBe(DEFAULT_MODEL);
-    expect(getModelOptions()).toEqual(MODEL_OPTIONS);
+    expect(getModelOptions()).toEqual(MODEL_OPTIONS_BY_PROVIDER.codex);
     expect(getModelOptions("claudeAgent")).toEqual(MODEL_OPTIONS_BY_PROVIDER.claudeAgent);
   });
 });
@@ -433,14 +430,14 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
   });
 
   it("returns Grok Build effort options for grok-build models", () => {
-    expect(values("grok", "grok-build-0.1")).toEqual([...GROK_BUILD_REASONING_EFFORTS]);
-    expect(values("grok", "grok-build")).toEqual([...GROK_BUILD_REASONING_EFFORTS]);
+    expect(values("grok", "grok-build-0.1")).toEqual(["none", "low", "medium", "high"]);
+    expect(values("grok", "grok-build")).toEqual(["none", "low", "medium", "high"]);
   });
 
   it("returns Grok 4.5 and 4.6 CLI effort ladders", () => {
-    expect(values("grok", "grok-4.5")).toEqual([...GROK_4_5_REASONING_EFFORTS]);
-    expect(values("grok", "grok-4.6")).toEqual([...GROK_4_6_REASONING_EFFORTS]);
-    expect(values("grok", "grok-4.7")).toEqual([...GROK_4_6_REASONING_EFFORTS]);
+    expect(values("grok", "grok-4.5")).toEqual(["low", "medium", "high"]);
+    expect(values("grok", "grok-4.6")).toEqual(["low", "medium", "high", "xhigh"]);
+    expect(values("grok", "grok-4.7")).toEqual(["low", "medium", "high", "xhigh"]);
   });
 
   it("co-locates labels with effort values", () => {
@@ -539,7 +536,6 @@ describe("provider option descriptor helpers", () => {
       type: "select",
       currentValue: "xhigh",
     });
-    expect(getProviderOptionCurrentLabel(reasoning)).toBe("Extra High");
     expect(fastMode).toMatchObject({
       type: "boolean",
       currentValue: true,
@@ -567,11 +563,6 @@ describe("provider option descriptor helpers", () => {
       type: "select",
       currentValue: "xhigh",
     });
-    expect(
-      getProviderOptionCurrentLabel(
-        grok46.find((descriptor) => descriptor.id === "reasoningEffort"),
-      ),
-    ).toBe("Extra High");
   });
 
   it("maps Pi reasoning controls onto the thinkingLevel option", () => {
@@ -632,7 +623,7 @@ describe("provider option descriptor helpers", () => {
       currentValue: true,
     });
   });
-  it("honors explicit descriptors and serializes their current values", () => {
+  it("honors explicit descriptors and applies their selected values", () => {
     const descriptors = getProviderOptionDescriptors({
       provider: "codex",
       caps: {
@@ -654,9 +645,48 @@ describe("provider option descriptor helpers", () => {
 
     expect(descriptors).toHaveLength(1);
     expect(descriptors[0]).toMatchObject({ id: "reasoningDepth", currentValue: "deep" });
-    expect(buildProviderOptionSelectionsFromDescriptors(descriptors)).toEqual([
-      { id: "reasoningDepth", value: "deep" },
-    ]);
+  });
+
+  it("marks Auto as the default auto-compact option for a 1M Claude variant", () => {
+    const caps = getModelCapabilities("claudeAgent", "claude-fable-5-1[1m]");
+    const defaultDescriptor = getProviderOptionDescriptors({
+      provider: "claudeAgent",
+      caps,
+    }).find((descriptor) => descriptor.id === "autoCompactWindow");
+    const explicitDescriptor = getProviderOptionDescriptors({
+      provider: "claudeAgent",
+      caps,
+      selections: { autoCompactWindow: "200k" },
+    }).find((descriptor) => descriptor.id === "autoCompactWindow");
+
+    expect(defaultDescriptor).toMatchObject({
+      type: "select",
+      currentValue: "auto",
+      options: [
+        { id: "auto", label: "Auto (Claude Code)", isDefault: true },
+        { id: "200k", label: "200k" },
+        { id: "1m", label: "1M" },
+      ],
+    });
+    expect(explicitDescriptor).toMatchObject({ type: "select", currentValue: "200k" });
+  });
+
+  it("marks Auto as the default auto-compact option for native 1M Claude models", () => {
+    const model = "claude-fable-5-1";
+    const descriptor = getProviderOptionDescriptors({
+      provider: "claudeAgent",
+      caps: getModelCapabilities("claudeAgent", model),
+    }).find((candidate) => candidate.id === "autoCompactWindow");
+
+    expect(descriptor).toMatchObject({
+      type: "select",
+      currentValue: "auto",
+      options: [
+        { id: "auto", label: "Auto (Claude Code)", isDefault: true },
+        { id: "200k", label: "200k" },
+        { id: "1m", label: "1M" },
+      ],
+    });
   });
 });
 
@@ -664,15 +694,24 @@ describe("context window helpers", () => {
   it("separates Claude's real context capacity from its auto-compact budget", () => {
     const opusCaps = getModelCapabilities("claudeAgent", "claude-opus-4-6");
     expect(getDefaultContextWindow(opusCaps)).toBeNull();
-    expect(getDefaultAutoCompactWindow(opusCaps)).toBe("200k");
+    expect(getDefaultAutoCompactWindow(opusCaps)).toBe("auto");
     expect(opusCaps.contextWindowTokens).toBe(1_000_000);
     expect(getModelCapabilities("claudeAgent", "claude-opus-4-5").contextWindowTokens).toBe(
       200_000,
     );
     const opus5Caps = getModelCapabilities("claudeAgent", "claude-opus-5");
     expect(opus5Caps.contextWindowTokens).toBe(1_000_000);
-    expect(getDefaultAutoCompactWindow(opus5Caps)).toBe("200k");
+    expect(getDefaultAutoCompactWindow(opus5Caps)).toBe("auto");
+    const sonnet5Caps = getModelCapabilities("claudeAgent", "claude-sonnet-5");
+    expect(sonnet5Caps.contextWindowTokens).toBe(1_000_000);
+    expect(getDefaultAutoCompactWindow(sonnet5Caps)).toBe("auto");
     expect(getDefaultContextWindow(getModelCapabilities("codex", "gpt-5.4"))).toBeNull();
+  });
+
+  it("reads Claude context-window suffixes case-insensitively", () => {
+    expect(getClaudeContextWindowSuffix("claude-fable-5-1[1m]")).toBe("1m");
+    expect(getClaudeContextWindowSuffix("claude-fable-5-1[1M]")).toBe("1m");
+    expect(getClaudeContextWindowSuffix("claude-fable-5-1")).toBeNull();
   });
 
   it("validates auto-compact budgets against model capabilities", () => {
@@ -704,6 +743,7 @@ describe("formatModelDisplayName", () => {
     expect(formatModelDisplayName("gpt-5.3-codex")).toBe("GPT-5.3 Codex");
     expect(formatModelDisplayName("claude-sonnet-5")).toBe("Claude Sonnet 5");
     expect(formatModelDisplayName("claude-opus-5")).toBe("Claude Opus 5");
+    expect(formatModelDisplayName("glm-5.2")).toBe("GLM 5.2");
   });
 
   it("humanizes unknown GPT model slugs", () => {
@@ -711,25 +751,18 @@ describe("formatModelDisplayName", () => {
     expect(formatModelDisplayName("gpt-5.1-codex-mini")).toBe("GPT-5.1 Codex Mini");
   });
 
+  it("restores known model-family casing while humanizing non-GPT slugs", () => {
+    expect(formatModelDisplayName("glm-5.3-flash")).toBe("GLM 5.3 Flash");
+    expect(formatModelDisplayName("deepseek-v4-flash")).toBe("DeepSeek V4 Flash");
+  });
+
+  it("humanizes model tokens that match inherited object properties", () => {
+    expect(formatModelDisplayName("constructor-v1")).toBe("Constructor V1");
+    expect(formatModelDisplayName("gpt-5-constructor")).toBe("GPT-5 Constructor");
+  });
+
   it("leaves non-GPT custom slugs unchanged", () => {
     expect(formatModelDisplayName("custom/internal-model")).toBe("custom/internal-model");
-  });
-});
-
-describe("normalizeCodexModelOptions", () => {
-  it("drops default-only codex options", () => {
-    expect(
-      normalizeCodexModelOptions("gpt-5.4", { reasoningEffort: "high", fastMode: false }),
-    ).toBeUndefined();
-  });
-
-  it("preserves non-default codex options", () => {
-    expect(
-      normalizeCodexModelOptions("gpt-5.4", { reasoningEffort: "xhigh", fastMode: true }),
-    ).toEqual({
-      reasoningEffort: "xhigh",
-      fastMode: true,
-    });
   });
 });
 
@@ -739,7 +772,7 @@ describe("normalizeClaudeModelOptions", () => {
       normalizeClaudeModelOptions("claude-opus-4-6", {
         effort: "high",
         fastMode: false,
-        autoCompactWindow: "200k",
+        autoCompactWindow: "auto",
       }),
     ).toBeUndefined();
   });
@@ -752,6 +785,29 @@ describe("normalizeClaudeModelOptions", () => {
     ).toEqual({
       autoCompactWindow: "1m",
     });
+  });
+
+  it("preserves explicit Claude budgets even on native 1M models", () => {
+    expect(
+      normalizeClaudeModelOptions("claude-fable-5-1[1m]", {
+        autoCompactWindow: "1m",
+      }),
+    ).toEqual({ autoCompactWindow: "1m" });
+    expect(
+      normalizeClaudeModelOptions("claude-fable-5-1[1M]", {
+        autoCompactWindow: "200k",
+      }),
+    ).toEqual({ autoCompactWindow: "200k" });
+    expect(
+      normalizeClaudeModelOptions("claude-fable-5-1", {
+        autoCompactWindow: "1m",
+      }),
+    ).toEqual({ autoCompactWindow: "1m" });
+    expect(
+      normalizeClaudeModelOptions("claude-fable-5-1", {
+        autoCompactWindow: "200k",
+      }),
+    ).toEqual({ autoCompactWindow: "200k" });
   });
 
   it("migrates the legacy context-window field to the auto-compact budget", () => {
@@ -817,21 +873,21 @@ describe("normalizeClaudeModelOptions", () => {
 });
 
 describe("resolveApiModelId", () => {
-  it("keeps native-1M Claude model ids unchanged", () => {
+  it("selects extended context for explicit 1M budgets", () => {
     expect(
       resolveApiModelId({
         provider: "claudeAgent",
         model: "claude-opus-4-6",
         options: { autoCompactWindow: "1m" },
       }),
-    ).toBe("claude-opus-4-6");
+    ).toBe("claude-opus-4-6[1m]");
     expect(
       resolveApiModelId({
         provider: "claudeAgent",
         model: "claude-sonnet-5",
         options: { autoCompactWindow: "1m" },
       }),
-    ).toBe("claude-sonnet-5");
+    ).toBe("claude-sonnet-5[1m]");
   });
 
   it("leaves Claude models unchanged for the default context window", () => {

@@ -328,6 +328,37 @@ describe("threadBootstrap", () => {
     ).toBe("default");
   });
 
+  it.each([null, undefined])(
+    "inherits an active draft PR when the active PR is %s",
+    (lastKnownPr) => {
+      const pullRequest = {
+        number: 42,
+        title: "Keep PR context",
+        url: "https://github.com/example/repo/pull/42",
+        baseBranch: "main",
+        headBranch: "feature/context",
+        state: "open" as const,
+      };
+      expect(
+        resolveTerminalThreadCreationState({
+          activeDraftThread: makeDraftThread({ lastKnownPr: pullRequest }),
+          activeThread: {
+            projectId: PROJECT_ID,
+            modelSelection: modelSelection("codex", "gpt-5"),
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            ...(lastKnownPr === undefined ? {} : { lastKnownPr }),
+          },
+          draftComposerState: null,
+          draftThread: null,
+          options: undefined,
+          projectDefaultModelSelection: null,
+          projectId: PROJECT_ID,
+        }).lastKnownPr,
+      ).toEqual(pullRequest);
+    },
+  );
+
   it("preserves explicit draft plan mode when resolving terminal creation payloads", () => {
     expect(
       resolveTerminalThreadCreationState({
@@ -373,24 +404,22 @@ describe("threadBootstrap", () => {
     });
   });
 
-  it("prefers the persisted default provider over a stale sticky draft on a fresh bootstrap", () => {
+  it("restores the last-used model and options for a fresh bootstrap ahead of project and global defaults", () => {
+    const lastUsed = modelSelection("claudeAgent", "claude-opus-4-6", { effort: "max" });
     expect(
       resolveTerminalThreadCreationState({
         activeDraftThread: null,
         activeThread: null,
-        defaultProvider: "devin",
+        defaultProvider: "codex",
         draftComposerState: makeComposerDraftState({
-          modelSelectionByProvider: {
-            pi: modelSelection("pi", "pi-auto"),
-          },
-          activeProvider: "pi",
+          modelSelectionByProvider: { claudeAgent: lastUsed },
+          activeProvider: "claudeAgent",
         }),
         draftThread: makeDraftThread(),
         options: undefined,
-        fresh: true,
-        projectDefaultModelSelection: null,
+        projectDefaultModelSelection: modelSelection("codex", "gpt-5.5"),
         projectId: PROJECT_ID,
       }).modelSelection,
-    ).toEqual(modelSelection("devin", "adaptive"));
+    ).toEqual(lastUsed);
   });
 });

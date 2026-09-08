@@ -16,7 +16,6 @@ import {
   removePinnedMessage,
   setPinnedMessageDone,
   setPinnedMessageLabel,
-  togglePinnedMessage,
   togglePinnedMessageDone,
 } from "@synara/shared/pinnedMessages";
 
@@ -96,14 +95,6 @@ export function restorePinAtIndex(
   const nextPins = [...existingPins];
   nextPins.splice(Math.max(0, Math.min(index, nextPins.length)), 0, pin);
   return nextPins;
-}
-
-export function togglePin(
-  pins: readonly PinnedMessage[] | undefined,
-  messageId: MessageId,
-  pinnedAt: string,
-): PinnedMessage[] {
-  return togglePinnedMessage(pins, { messageId, label: null, done: false, pinnedAt });
 }
 
 export function togglePinDone(

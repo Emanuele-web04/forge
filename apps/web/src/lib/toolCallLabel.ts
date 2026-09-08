@@ -15,7 +15,8 @@ import { extractToolArgumentField } from "./toolArgumentSummary";
 
 export function normalizeCompactToolLabel(value: string): string {
   return value
-    .replace(/\s+(?:complete|completed|done|finished|success|succeeded|started|running)\s*$/i, "")
+    .trimEnd()
+    .replace(/\s(?:complete|completed|done|finished|success|succeeded|started|running)$/i, "")
     .trim();
 }
 
@@ -842,13 +843,6 @@ export function deriveFriendlyCommandTarget(rawCommand: string): string {
   return target.length <= 72 ? target : `${target.slice(0, 69).trimEnd()}…`;
 }
 
-// Whether a shell command is a read-only inspection (read/search/find/list).
-// Reuses the same command unwrapping as deriveReadableCommandDisplay so the
-// timeline search icon stays in sync with the derived command label.
-export function isInspectCommand(rawCommand: string): boolean {
-  return resolveCommandVisualKind(rawCommand) === "inspect";
-}
-
 // Classifies command rows for transcript glyphs after peeling away shell/env wrappers.
 // This keeps `git -C`, `env ... gh`, and `/bin/zsh -lc "cd ... && git ..."` visually branded.
 export function resolveCommandVisualKind(rawCommand: string): CommandVisualKind {
@@ -1245,7 +1239,7 @@ function unwrapShellCommandIfPresent(rawCommand: string): string {
     break;
   }
 
-  const pipeIndex = value.search(/\s*\|\s*/);
+  const pipeIndex = value.indexOf("|");
   if (pipeIndex > 0) {
     value = value.slice(0, pipeIndex).trim();
   }

@@ -116,6 +116,12 @@ interface LaunchCommand {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
   readonly cwd: string;
+  readonly runtime: PackagedRuntime;
+}
+
+interface PackagedRuntime {
+  readonly executable: string;
+  readonly resourcesDirectory: string;
 }
 
 function prepareMacLaunch(assetsDirectory: string, extractionRoot: string): LaunchCommand {
@@ -132,7 +138,15 @@ function prepareMacLaunch(assetsDirectory: string, extractionRoot: string): Laun
   if (executables.length !== 1) {
     throw new Error(`Expected one macOS main executable, found ${executables.length}.`);
   }
-  return { command: executables[0]!, args: [], cwd: appBundle };
+  return {
+    command: executables[0]!,
+    args: [],
+    cwd: appBundle,
+    runtime: {
+      executable: executables[0]!,
+      resourcesDirectory: join(appBundle, "Contents", "Resources"),
+    },
+  };
 }
 
 function prepareLinuxLaunch(assetsDirectory: string, extractionRoot: string): LaunchCommand {
@@ -150,6 +164,10 @@ function prepareLinuxLaunch(assetsDirectory: string, extractionRoot: string): La
     command: "xvfb-run",
     args: ["-a", appRun, "--no-sandbox", "--disable-gpu"],
     cwd: join(extractionRoot, "squashfs-root"),
+    runtime: {
+      executable: join(extractionRoot, "squashfs-root", "synara"),
+      resourcesDirectory: join(extractionRoot, "squashfs-root", "resources"),
+    },
   };
 }
 
@@ -175,7 +193,47 @@ function prepareWindowsLaunch(assetsDirectory: string, extractionRoot: string): 
   if (executables.length !== 1) {
     throw new Error(`Expected one extracted Synara.exe, found ${executables.length}.`);
   }
-  return { command: executables[0]!, args: [], cwd: dirname(executables[0]!) };
+  return {
+    command: executables[0]!,
+    args: [],
+    cwd: dirname(executables[0]!),
+    runtime: {
+      executable: executables[0]!,
+      resourcesDirectory: join(dirname(executables[0]!), "resources"),
+    },
+  };
+}
+
+export function verifyPackagedRuntimeDependencies(
+  runtime: PackagedRuntime,
+  isolatedEnvironment: NodeJS.ProcessEnv,
+  timeoutMs: number,
+): void {
+  const entry = join(
+    runtime.resourcesDirectory,
+    "app.asar",
+    "apps/server/dist/runtimeDependencySmoke.mjs",
+  );
+  const env: NodeJS.ProcessEnv = { ...isolatedEnvironment, ELECTRON_RUN_AS_NODE: "1" };
+  // A workspace loader or NODE_PATH could conceal a missing packaged dependency.
+  delete env.NODE_OPTIONS;
+  delete env.NODE_PATH;
+  const result = spawnSync(runtime.executable, [entry], {
+    cwd: runtime.resourcesDirectory,
+    env,
+    encoding: "utf8",
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
+    windowsHide: true,
+    maxBuffer: 1024 * 1024,
+  });
+  if (result.error || result.status !== 0) {
+    const detail = result.error?.message ?? (result.stderr || result.stdout)?.trim();
+    throw new Error(
+      `Packaged runtime dependency smoke failed (exit=${result.status ?? "unknown"}): ${detail}`,
+    );
+  }
+  console.log("Packaged runtime dependency smoke passed from isolated state.");
 }
 
 function prepareLaunch(
@@ -309,6 +367,7 @@ export async function verifyPackagedDesktopStartup(
   try {
     const launch = prepareLaunch(options, extractionRoot);
     const env = createPackagedDesktopSmokeEnvironment(join(temporaryRoot, "state"), options);
+    verifyPackagedRuntimeDependencies(launch.runtime, env, options.timeoutMs);
     const logPath = join(env.SYNARA_HOME!, "userdata", "logs", "desktop-main.log");
     child = spawn(launch.command, [...launch.args], {
       cwd: launch.cwd,

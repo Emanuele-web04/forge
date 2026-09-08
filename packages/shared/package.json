@@ -296,10 +296,6 @@
       "types": "./src/browserAutomationMcpError.ts",
       "import": "./src/browserAutomationMcpError.ts"
     },
-    "./unifiedPatchStats": {
-      "types": "./src/unifiedPatchStats.ts",
-      "import": "./src/unifiedPatchStats.ts"
-    },
     "./providerDeliveryBlock": {
       "types": "./src/providerDeliveryBlock.ts",
       "import": "./src/providerDeliveryBlock.ts"
@@ -335,7 +331,9 @@
   },
   "scripts": {
     "prepare": "effect-language-service patch",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "node ../../node_modules/@typescript/native/bin/tsc --noEmit",
+    "typecheck:native": "bun run typecheck",
+    "typecheck:legacy": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {

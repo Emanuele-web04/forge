@@ -1010,6 +1010,13 @@ function mapCodexHookEvent(
   };
 }
 
+// Configuration/lifecycle bookkeeping belongs in native diagnostics, not the transcript.
+const DIAGNOSTIC_ONLY_CODEX_METHODS = new Set([
+  "remoteControl/status/changed",
+  "skills/changed",
+  "session/threadOpenRequested",
+]);
+
 function mapUnmappedCodexEvent(
   event: ProviderEvent,
   canonicalThreadId: ThreadId,
@@ -2386,7 +2393,9 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           const sizedRuntimeEvents = mappedRuntimeEvents
             .filter(
               (runtimeEvent) =>
-                runtimeEvent.type !== "event.unmapped" || shouldSurfaceUnmappedEvent(event),
+                runtimeEvent.type !== "event.unmapped" ||
+                (!DIAGNOSTIC_ONLY_CODEX_METHODS.has(event.method) &&
+                  shouldSurfaceUnmappedEvent(event)),
             )
             .map(compactProviderRuntimeEventForIngress);
           const runtimeEvents = sizedRuntimeEvents.map((item) => item.event);

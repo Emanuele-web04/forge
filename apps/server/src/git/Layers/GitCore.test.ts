@@ -8,9 +8,9 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { summarizeUnifiedPatchTotals } from "@synara/shared/unifiedPatchStats";
 import { Effect, Exit, FileSystem, Layer, PlatformError, Schema, Scope, Stream } from "effect";
 import { describe, expect, vi } from "vitest";
+import { TestClock } from "effect/testing";
 
 import { collectGitOutput, GitCoreLive, makeGitCore } from "./GitCore.ts";
 import { GitCore, type GitCoreShape } from "../Services/GitCore.ts";
@@ -2161,20 +2161,22 @@ it.layer(TestLayer)("git integration", (it) => {
         expect(unstagedPatch).toContain("diff --git a/untracked.txt b/untracked.txt");
         expect(unstagedPatch).not.toContain("staged.txt");
 
-        const scopePatches = [
-          ["branch", branchPatch],
-          ["staged", stagedPatch],
-          ["unstaged", unstagedPatch],
-          ["workingTree", (yield* core.readWorkingTreePatch(tmp)).patch],
+        const workingTreePatch = (yield* core.readWorkingTreePatch(tmp)).patch;
+        expect(workingTreePatch).toContain("diff --git a/staged.txt b/staged.txt");
+        expect(workingTreePatch).toContain("+staged change");
+        expect(workingTreePatch).toContain("+unstaged change");
+        expect(workingTreePatch).toContain("+untracked change");
+        expect(workingTreePatch).toContain("diff --git a/untracked.bin b/untracked.bin");
+        expect(workingTreePatch).not.toContain("branch.txt");
+
+        const scopeTotals = [
+          ["branch", { additions: 4, deletions: 0, fileCount: 5 }],
+          ["staged", { additions: 1, deletions: 0, fileCount: 1 }],
+          ["unstaged", { additions: 2, deletions: 0, fileCount: 3 }],
+          ["workingTree", { additions: 3, deletions: 0, fileCount: 4 }],
         ] as const;
-        for (const [scope, patch] of scopePatches) {
-          expect(yield* core.readDiffStats(tmp, scope)).toEqual(
-            summarizeUnifiedPatchTotals(patch) ?? {
-              additions: 0,
-              deletions: 0,
-              fileCount: 0,
-            },
-          );
+        for (const [scope, expected] of scopeTotals) {
+          expect(yield* core.readDiffStats(tmp, scope)).toEqual(expected);
         }
       }),
     );
@@ -2565,6 +2567,60 @@ it.layer(TestLayer)("git integration", (it) => {
           expect(details.branch).toBe(initialBranch);
           expect(details.aheadCount).toBe(0);
           expect(details.behindCount).toBe(1);
+        }),
+    );
+
+    it.effect(
+      "backs off failed upstream fetches and resumes the normal interval after recovery",
+      () =>
+        Effect.gen(function* () {
+          const remote = yield* makeTmpDir();
+          const source = yield* makeTmpDir();
+          yield* git(remote, ["init", "--bare"]);
+          yield* initRepoWithCommit(source);
+          const realCore = yield* GitCore;
+          const branch = (yield* realCore.listBranches({ cwd: source })).branches.find(
+            (entry) => entry.current,
+          )!.name;
+          yield* git(source, ["remote", "add", "origin", remote]);
+          yield* git(source, ["push", "-u", "origin", branch]);
+          let fetches = 0;
+          let recovered = false;
+          const core = yield* makeIsolatedGitCore((input) => {
+            if (input.args[0] !== "fetch") return realCore.execute(input);
+            fetches += 1;
+            return Effect.succeed({
+              code: recovered ? 0 : 1,
+              stdout: "",
+              stderr: recovered ? "" : "unreachable",
+            });
+          });
+          yield* core.statusDetails(source);
+          yield* core.statusDetails(source);
+          expect(fetches).toBe(1);
+          yield* TestClock.adjust("29 seconds");
+          yield* core.statusDetails(source);
+          expect(fetches).toBe(1);
+          yield* TestClock.adjust("1 second");
+          yield* core.statusDetails(source);
+          expect(fetches).toBe(2);
+          yield* TestClock.adjust("59 seconds");
+          yield* core.statusDetails(source);
+          expect(fetches).toBe(2);
+          recovered = true;
+          yield* TestClock.adjust("1 second");
+          yield* core.statusDetails(source);
+          expect(fetches).toBe(3);
+          yield* TestClock.adjust("15 seconds");
+          yield* core.statusDetails(source);
+          expect(fetches).toBe(4);
+          recovered = false;
+          yield* TestClock.adjust("15 seconds");
+          yield* core.statusDetails(source);
+          expect(fetches).toBe(5);
+          yield* TestClock.adjust("30 seconds");
+          yield* core.statusDetails(source);
+          expect(fetches).toBe(6);
         }),
     );
 

@@ -4,6 +4,7 @@ import { THREAD_GOAL_MAX_CHARS } from "@synara/contracts";
 import {
   buildReviewPrompt,
   buildSubagentsPrompt,
+  canExecuteSideSlashCommand,
   canOfferForkSlashCommand,
   canOfferReviewSlashCommand,
   canOfferSideSlashCommand,
@@ -30,6 +31,7 @@ describe("composerSlashCommands", () => {
     expect(isBuiltInComposerSlashCommand("feedback")).toBe(true);
     expect(isBuiltInComposerSlashCommand("debug")).toBe(true);
     expect(isBuiltInComposerSlashCommand("goal")).toBe(true);
+    expect(isBuiltInComposerSlashCommand("rename")).toBe(true);
     expect(isBuiltInComposerSlashCommand("unknown")).toBe(false);
   });
 
@@ -79,6 +81,10 @@ describe("composerSlashCommands", () => {
     expect(parseComposerSlashInvocation("/goal first line\nsecond line")).toEqual({
       command: "goal",
       args: "first line\nsecond line",
+    });
+    expect(parseComposerSlashInvocation("/rename Backend auth")).toEqual({
+      command: "rename",
+      args: "Backend auth",
     });
     expect(parseComposerSlashInvocation("review")).toBeNull();
   });
@@ -236,6 +242,42 @@ describe("composerSlashCommands", () => {
     ).toBe(false);
   });
 
+  it("still executes /side when the composer holds provider args", () => {
+    expect(
+      canExecuteSideSlashCommand({
+        imageCount: 0,
+        terminalContextCount: 0,
+        selectedSkillCount: 0,
+        selectedMentionCount: 0,
+        interactionMode: "default",
+        isSidechat: false,
+      }),
+    ).toBe(true);
+
+    expect(
+      canOfferSideSlashCommand({
+        prompt: "Codex",
+        imageCount: 0,
+        terminalContextCount: 0,
+        selectedSkillCount: 0,
+        selectedMentionCount: 0,
+        interactionMode: "default",
+        isSidechat: false,
+      }),
+    ).toBe(false);
+
+    expect(
+      canExecuteSideSlashCommand({
+        imageCount: 1,
+        terminalContextCount: 0,
+        selectedSkillCount: 0,
+        selectedMentionCount: 0,
+        interactionMode: "default",
+        isSidechat: false,
+      }),
+    ).toBe(false);
+  });
+
   it("only offers /review for an otherwise empty composer", () => {
     expect(
       canOfferReviewSlashCommand({
@@ -338,6 +380,24 @@ describe("composerSlashCommands", () => {
     expect(shouldHideProviderNativeCommandFromComposerMenu("antigravity", "automation")).toBe(true);
   });
 
+  it("keeps app-owned /rename available despite provider-native collisions", () => {
+    for (const provider of ["codex", "claudeAgent"] as const) {
+      const availableCommands = getAvailableComposerSlashCommands({
+        provider,
+        supportsFastSlashCommand: true,
+        canOfferCompactCommand: true,
+        canOfferReviewCommand: true,
+        canOfferForkCommand: true,
+        canOfferSideCommand: true,
+        canOfferExportCommand: true,
+        providerNativeCommandNames: ["rename"],
+      });
+
+      expect(availableCommands).toContain("rename");
+      expect(shouldHideProviderNativeCommandFromComposerMenu(provider, "rename")).toBe(true);
+    }
+  });
+
   it("keeps Feedback Synara ahead of provider-native /feedback", () => {
     const availableCommands = getAvailableComposerSlashCommands({
       provider: "claudeAgent",
@@ -370,6 +430,7 @@ describe("composerSlashCommands", () => {
       "side",
       "export",
       "goal",
+      "rename",
       "debug",
       "default",
       "feedback",
@@ -501,6 +562,7 @@ describe("composerSlashCommands", () => {
       "subagents",
       "export",
       "goal",
+      "rename",
       "feedback",
       "automation",
     ]);

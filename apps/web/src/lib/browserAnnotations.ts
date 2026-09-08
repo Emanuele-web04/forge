@@ -280,10 +280,3 @@ export function extractTrailingBrowserAnnotations(
     return { promptText: prompt, annotations: [] };
   }
 }
-
-export function stripTrailingBrowserAnnotations(
-  prompt: string,
-  expectedMessageId: MessageId,
-): string {
-  return extractTrailingBrowserAnnotations(prompt, expectedMessageId).promptText;
-}

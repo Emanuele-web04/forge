@@ -5,25 +5,18 @@ interface SingleDevicePaneOpenRequestInput {
   readonly requestedThreadId: ThreadId;
   readonly requestImmediateDeviceHydration: () => void;
   readonly openDevicePane: (threadId: ThreadId) => void;
-  readonly navigateToThread: (threadId: ThreadId) => void;
 }
 
 /**
- * Mirrors routeSingleBrowserPanelOpenRequest. The event carries its own thread
- * so an agent launching an app on a background thread cannot yank the pane away
- * from whatever the user is currently reading — the dock is seeded there and the
- * route follows.
+ * Remember the pane on its owning thread so background simulator activity never
+ * changes the user's current chat. The device runtime stays attached server-side.
  */
 export function routeSingleDevicePaneOpenRequest(input: SingleDevicePaneOpenRequestInput): void {
-  // Agent-triggered opens must not wait for rAF, which Chromium suspends for
-  // backgrounded windows.
-  input.requestImmediateDeviceHydration();
-
   if (input.requestedThreadId === input.currentThreadId) {
-    input.openDevicePane(input.currentThreadId);
-    return;
+    // Only hydrate the visible thread. Same-thread requests must not wait for
+    // rAF, which Chromium suspends for backgrounded windows.
+    input.requestImmediateDeviceHydration();
   }
 
   input.openDevicePane(input.requestedThreadId);
-  input.navigateToThread(input.requestedThreadId);
 }

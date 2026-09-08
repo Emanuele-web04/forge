@@ -123,7 +123,7 @@ Synara uses the provider installations and subscriptions already configured on t
 
 ### Run from source
 
-The development checkout uses [Bun 1.3.12](https://bun.sh/) and [Node.js 24.13.1](https://nodejs.org/).
+The development checkout uses [Bun 1.4.2](https://bun.sh/) and [Node.js 24.13.1](https://nodejs.org/).
 
 ```console
 git clone https://github.com/Emanuele-web04/synara.git
@@ -131,6 +131,20 @@ cd synara
 bun install
 bun run dev
 ```
+
+`bun run typecheck` checks all seven workspaces with TypeScript 7 and the native
+Effect checker. CI and each workspace's `typecheck` script use the same compiler.
+`bun run typecheck:native` remains an alias for the default check.
+
+The native Effect checker does not enforce every legacy rule: in particular,
+`importFromBarrel` errors are currently missed. `bun run typecheck:legacy` keeps
+the TypeScript 5 check available for explicit comparisons; it is not run by CI.
+The existing compiler also remains installed for build and declaration tools
+that require its JavaScript API. Native and legacy checks use separate caches.
+
+Use these named scripts rather than a bare `tsc`, whose version depends on the
+current directory. Normal installation patches the native compiler for Effect;
+the root `typecheck` command also ensures that patch is applied before checking.
 
 ## Contributing
 

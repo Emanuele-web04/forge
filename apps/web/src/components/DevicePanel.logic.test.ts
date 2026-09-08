@@ -14,11 +14,9 @@ import {
   deviceHidUsageForKey,
   deviceKeyModifiers,
   deviceRecordingClickIntent,
-  deviceSetupProgress,
   describeDegradedCapabilities,
   inferDeviceScaleFactor,
   isDeviceRecordingActive,
-  isNextDeviceFrameSequence,
   resolveDeviceAvailabilityView,
   resolveDeviceHardwareButtonShortcut,
   resolveDevicePointerGesture,
@@ -178,9 +176,6 @@ describe("device frame gate", () => {
 
   it("treats a wrapped u32 sequence as consecutive", () => {
     const last = 2 ** 32 - 1;
-    expect(isNextDeviceFrameSequence(last, 0)).toBe(true);
-    expect(isNextDeviceFrameSequence(5, 6)).toBe(true);
-    expect(isNextDeviceFrameSequence(5, 7)).toBe(false);
 
     let state: DeviceFrameGateState = stepDeviceFrameGate(
       createDeviceFrameGateState(),
@@ -631,7 +626,6 @@ describe("availability", () => {
     if (view.kind !== "blocked") return;
     expect(view.steps).toHaveLength(2);
     expect(view.retryable).toBe(true);
-    expect(deviceSetupProgress(view.steps)).toEqual({ done: 1, total: 2 });
   });
 
   it("surfaces the helper failure message verbatim", () => {

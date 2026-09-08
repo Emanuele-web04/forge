@@ -381,7 +381,7 @@ function devScriptNameFromArgs(args: string): string | null {
   return match?.[1] ?? null;
 }
 
-function detectDevServerKindFromText(input: DevServerCandidateInput): string | null {
+export function detectDevServerKindFromText(input: DevServerCandidateInput): string | null {
   const commandName = normalizeCommandName(input.command, input.args);
   const text = normalizeProcessText(input.command, input.args);
   if (isExpoDevServerCommand(input.command, input.args)) return "Expo";
@@ -420,10 +420,6 @@ function detectDevServerKindFromText(input: DevServerCandidateInput): string | n
 
   if (DEV_ARGS_PATTERN.test(text)) return "Dev Server";
   return null;
-}
-
-export function isLikelyDevServerProcess(input: DevServerCandidateInput): boolean {
-  return !isIgnoredLocalServerProcess(input) && detectDevServerKindFromText(input) !== null;
 }
 
 function addressUrl(address: Omit<ServerLocalServerAddress, "url">): string | null {

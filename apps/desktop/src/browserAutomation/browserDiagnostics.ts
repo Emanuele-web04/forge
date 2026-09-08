@@ -351,7 +351,7 @@ export class BrowserDiagnosticsStore {
       capturedAt: nowIso(),
       droppedCount: state.droppedCount,
     };
-    while (
+    if (
       entries.length > 0 &&
       Buffer.byteLength(
         JSON.stringify({
@@ -362,8 +362,22 @@ export class BrowserDiagnosticsStore {
         "utf8",
       ) > MAX_LOG_OUTPUT_BYTES
     ) {
-      entries = entries.slice(1);
       truncated = true;
+      let bytes = Buffer.byteLength(JSON.stringify({ ...base, entries: [], truncated }), "utf8");
+      let firstEntry = entries.length;
+      // JSON arrays add only commas between their independently serialized
+      // entries. Count the newest suffix once instead of repeatedly encoding
+      // the shrinking response on the Electron main thread. An oversized
+      // response always dropped at least one entry, even when changing
+      // truncated from false to true would save the one byte needed to fit.
+      for (let index = entries.length - 1; index > 0; index -= 1) {
+        const entryBytes = Buffer.byteLength(JSON.stringify(entries[index]), "utf8");
+        const nextBytes = bytes + entryBytes + (firstEntry < entries.length ? 1 : 0);
+        if (nextBytes > MAX_LOG_OUTPUT_BYTES) break;
+        bytes = nextBytes;
+        firstEntry = index;
+      }
+      entries = entries.slice(firstEntry);
     }
     return { ...base, entries, truncated };
   }

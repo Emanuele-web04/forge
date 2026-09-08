@@ -56,13 +56,14 @@ test("performance gate uses the pinned browser stack without Socket-warning depe
   assert.doesNotMatch(performance, /chrome-launcher/);
 
   for (const removedPackage of [
-    "node_modules/lighthouse",
-    "node_modules/@sentry/node-core",
-    "node_modules/csp_evaluator",
-    "node_modules/chrome-launcher",
+    "lighthouse",
+    "@sentry/node-core",
+    "csp_evaluator",
+    "chrome-launcher",
   ]) {
+    // Bun stores package identities in the first tuple field, including nested resolutions.
     assert.ok(
-      !packageLock.includes(`"${removedPackage}"`),
+      !packageLock.includes(`["${removedPackage}@`),
       `removed Socket-warning dependency remains in lockfile: ${removedPackage}`,
     );
   }
