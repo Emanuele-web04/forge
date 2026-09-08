@@ -547,7 +547,7 @@ export function projectProviderRuntimeActivities(
         summary: "Reasoning trace",
         payload: toActivityPayload({
           ...(event.payload.status ? { status: event.payload.status } : {}),
-          detail: truncateDetail(reasoningDetail, MAX_ACTIVITY_DATA_STRING_CHARS),
+          detail: reasoningDetail,
           data: { toolCallId: reasoningItemId },
         }),
         turnId: toTurnId(event.turnId) ?? null,

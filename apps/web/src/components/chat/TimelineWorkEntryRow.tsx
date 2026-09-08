@@ -1,3 +1,4 @@
+import { ReasoningContent } from "./ReasoningContent";
 // FILE: TimelineWorkEntryRow.tsx
 // Purpose: Renders transcript work/tool rows and their inline details.
 // Layer: Web chat presentation component
@@ -611,10 +612,9 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
           compact={compact}
           timestampFormat={timestampFormat}
           detailContent={
-            <ChatMarkdown
-              text={preview ?? workEntry.detail ?? ""}
+            <ReasoningContent
+              text={workEntry.detail ?? preview ?? ""}
               cwd={markdownCwd}
-              isStreaming={false}
               onImageExpand={onImageExpand}
             />
           }
