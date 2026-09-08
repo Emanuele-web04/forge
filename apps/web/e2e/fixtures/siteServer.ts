@@ -54,6 +54,7 @@ const APP_HTML = `<!doctype html>
       <label>Shared input <input aria-label="Shared input" /></label>
       <button id="agent" type="button">Commit agent action</button>
       <button id="point" type="button">Commit point action</button>
+      <button id="copy" type="button" onclick="navigator.clipboard.writeText('synthetic-browser-copy').then(() => this.dataset.copied = 'true', error => this.dataset.copied = error.name + ': ' + error.message)">Copy synthetic text</button>
       <input id="manual" type="button" value="Manual Playwright action" />
       <section id="private-editor-wrap">
         <div id="private-editor" contenteditable="true">Private draft must not be captured</div>

@@ -3385,8 +3385,11 @@ export class DesktopBrowserManager {
   ): () => void {
     const key = buildRuntimeKey(threadId, tabId);
     const now = Date.now();
+    // CDP dispatches CSS pixels; Electron reports zoomed widget coordinates.
+    const zoom = this.runtimes.get(key)?.webContents.getZoomFactor() ?? 1;
     const pending: PendingBrowserAutomationInput = {
-      signal,
+      signal:
+        signal.kind === "mouse" ? { ...signal, x: signal.x * zoom, y: signal.y * zoom } : signal,
       expiresAt: now + 1_000,
     };
     const current = (this.expectedAutomationInputsByRuntimeKey.get(key) ?? [])

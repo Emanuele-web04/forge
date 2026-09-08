@@ -1,6 +1,7 @@
 import * as path from "node:path";
 
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, session } from "electron";
+import { isClipboardWritePermission } from "../../../desktop/src/clipboardPermissions";
 import type { BrowserAnnotationEvent, ThreadBrowserState, ThreadId } from "@synara/contracts";
 
 import {
@@ -31,6 +32,7 @@ let latestState: ThreadBrowserState | null = null;
 let shellReady = false;
 let panelRevealEnabled = true;
 let previewEnabled = false;
+let pageZoomFactor = 1;
 let surface: "native" | "renderer" = "native";
 const annotationEvents: BrowserAnnotationEvent[] = [];
 const rendererLifecycleHide = createBrowserPanelHideScheduler();
@@ -39,6 +41,7 @@ function setPanelVisible(visible: boolean): void {
     threadId,
     surface,
     preview: previewEnabled,
+    pageZoomFactor,
     bounds: visible ? { x: 0, y: 34, width: 1_000, height: 726 } : null,
   });
   if (!visible) {
@@ -109,6 +112,10 @@ Object.assign(globalThis, {
       previewEnabled = enabled;
       setPanelVisible(true);
     },
+    setPageZoomFactor(value: number) {
+      pageZoomFactor = value;
+      setPanelVisible(true);
+    },
     setSurface(value: "native" | "renderer") {
       surface = value;
       setPanelVisible(true);
@@ -117,6 +124,13 @@ Object.assign(globalThis, {
 });
 
 app.whenReady().then(async () => {
+  const browserSession = session.fromPartition(BROWSER_SESSION_PARTITION);
+  browserSession.setPermissionCheckHandler((contents, permission, origin, details) =>
+    isClipboardWritePermission(contents, permission, details, origin),
+  );
+  browserSession.setPermissionRequestHandler((contents, permission, callback, details) =>
+    callback(isClipboardWritePermission(contents, permission, details)),
+  );
   mainWindow = new BrowserWindow({
     width: 1_000,
     height: 760,

@@ -148,6 +148,7 @@ import {
 import { collectMacUpdateDiagnostics } from "./macUpdateDiagnostics";
 import { openInitialBackendWindow } from "./initialBackendWindowOpen";
 import { isTrustedMediaPermissionRequest } from "./mediaPermissions";
+import { isClipboardWritePermission } from "./clipboardPermissions";
 import {
   installResumableUpdateDownloader,
   type ResumableDownloaderTarget,
@@ -5140,6 +5141,7 @@ function configureMediaPermissions(): void {
     if (!targetSession) continue;
 
     targetSession.setPermissionCheckHandler((webContents, permission, origin, details) => {
+      if (isClipboardWritePermission(webContents, permission, details, origin)) return true;
       if (
         permission !== "media" ||
         !isTrustedMediaPermissionRequest(webContents, trustedRequester(), details, origin)
@@ -5153,6 +5155,10 @@ function configureMediaPermissions(): void {
     });
 
     targetSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+      if (isClipboardWritePermission(webContents, permission, details)) {
+        callback(true);
+        return;
+      }
       if (
         permission !== "media" ||
         !isTrustedMediaPermissionRequest(webContents, trustedRequester(), details)

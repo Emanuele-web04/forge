@@ -221,7 +221,7 @@ describe("Betterwright target boundary", () => {
       await f.target.dispose(false);
     },
   );
-  it("blocks clipboard commands before provenance or dispatch across session aliases", async () => {
+  it("blocks app shortcuts before provenance or dispatch across session aliases", async () => {
     const expected = vi.fn();
     const f = fixture([], undefined, false, expected);
     const sessions: string[] = [];
@@ -242,8 +242,8 @@ describe("Betterwright target boundary", () => {
     f.debuggerApi.sendCommand.mockClear();
     expected.mockClear();
     for (const params of [
-      { type: "rawKeyDown", key: "v", modifiers: 0 },
-      { type: "char", key: "a", commands: ["selectAll", "paste"] },
+      { type: "rawKeyDown", key: "w", modifiers: 0 },
+      { type: "char", key: "a", commands: ["selectAll", "unknown"] },
     ]) {
       await f.target.receive({
         id: 4,

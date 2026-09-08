@@ -459,9 +459,20 @@ index a0918cb207235ed2a36ab600518017583c20b3e3..71dcd4df2bdf2cfc7ca8a287bb4ec75b
                      const index = snapshot.records.findIndex((candidate) => candidate.id === wanted);
                      const pendingIndex = index === -1
 diff --git a/dist/src/worker.js b/dist/src/worker.js
-index c53eda622f60b7f5084698e850ef6a00f66e60f3..78a248c4cfcb0ae495ecd4ab0b5ec89512ecafbd 100755
+index c53eda622f60b7f5084698e850ef6a00f66e60f3..17a70911b9fe57357660a4c60486dac50a8e12aa 100755
 --- a/dist/src/worker.js
 +++ b/dist/src/worker.js
+@@ -463,8 +463,8 @@ function sendResult(message) {
+         message.events = [];
+         message.pages = (message.pages || []).slice(0, 4);
+     }
+-    // Empty collections carry no information; both clients default them.
+-    for (const key of Object.keys(message)) {
++    // Only optional diagnostics can be omitted. An empty result is meaningful.
++    for (const key of ["console", "events", "pages", "artifacts", "warnings", "challenges"]) {
+         if (Array.isArray(message[key]) && message[key].length === 0)
+             delete message[key];
+     }
 @@ -580,6 +580,8 @@ const guardProxy = createGuardProxy({
  });
  async function installDownloadGuard(context) {

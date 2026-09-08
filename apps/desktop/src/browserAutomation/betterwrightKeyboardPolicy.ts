@@ -21,6 +21,10 @@ const VIRTUAL_KEYS: Readonly<Record<number, string>> = {
   165: "alt",
 };
 const SAFE_COMMANDS = new Set([
+  "copy",
+  "cut",
+  "paste",
+  "pasteAndMatchStyle",
   "selectAll",
   "undo",
   "redo",
@@ -72,28 +76,23 @@ function normalizeKey(key: string): string {
     .replace(/^(alt|control|meta|shift)(left|right)$/, "$1");
 }
 
-function deniedKey(key: string, modifiers: number, platform: NodeJS.Platform): boolean {
+function deniedKey(key: string, modifiers: number): boolean {
   const control = (modifiers & 2) !== 0;
   const meta = (modifiers & 4) !== 0;
   const alt = (modifiers & 1) !== 0;
   const shift = (modifiers & 8) !== 0;
   return (
-    ["copy", "cut", "paste"].includes(key) ||
-    ((control || meta) && ["c", "v", "x", "l", "n", "p", "r", "t", "w"].includes(key)) ||
+    ((control || meta) && ["l", "n", "p", "r", "t", "w"].includes(key)) ||
     (meta && ["q", "h", "m", "space", "tab"].includes(key)) ||
     ((control || meta) && shift && ["i", "j"].includes(key)) ||
     (alt && ["f4", "arrowleft", "arrowright", "escape", "tab"].includes(key)) ||
-    (control && alt && key === "delete") ||
-    ((control || shift) && key === "insert") ||
-    (platform !== "darwin" && shift && key === "delete")
+    (control && alt && key === "delete")
   );
 }
 
-/** Native editing commands bypass JavaScript clipboard permission checks. */
+/** Allow native editing, including OS copy/paste, but not application shortcuts. */
 export class BetterwrightKeyboardPolicy {
   private readonly heldModifiers = new Map<string, number>();
-
-  constructor(private readonly platform: NodeJS.Platform = process.platform) {}
 
   check(params: Record<string, unknown>): void {
     const reject = (): never => {
@@ -143,8 +142,7 @@ export class BetterwrightKeyboardPolicy {
       reject();
     let effectiveModifiers = modifiers as number;
     for (const held of this.heldModifiers.values()) effectiveModifiers |= held;
-    if (type !== "keyUp" && keys.some((key) => deniedKey(key, effectiveModifiers, this.platform)))
-      reject();
+    if (type !== "keyUp" && keys.some((key) => deniedKey(key, effectiveModifiers))) reject();
     const identity = String(params.code || params.key || virtual || "");
     if (type === "keyUp") this.heldModifiers.delete(identity);
     else if (type !== "char") {

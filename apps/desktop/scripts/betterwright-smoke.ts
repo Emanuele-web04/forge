@@ -41,13 +41,13 @@ async function smoke() {
   await writeFile(path.join(home, "browser.png"), (await window.webContents.capturePage()).toPNG());
 
   clipboard.writeText("synthetic-native-clipboard-smoke");
-  const keyboard = await runBetterwright<{ blocked: boolean; value: string }>({
+  const keyboard = await runBetterwright<{ value: string }>({
     ...options,
     signal: new AbortController().signal,
-    code: `await page.getByRole('textbox').fill('safe-control'); let blocked = false; try { await page.keyboard.press('${process.platform === "darwin" ? "Meta" : "Control"}+V'); } catch { blocked = true; } await page.keyboard.press('a'); return { blocked, value: await page.getByRole('textbox').inputValue() };`,
+    code: `await page.getByRole('textbox').fill(''); await page.keyboard.press('ControlOrMeta+V'); await page.keyboard.press('a'); return { value: await page.getByRole('textbox').inputValue() };`,
   });
-  if (!keyboard.blocked || keyboard.value !== "safe-controla")
-    throw new Error("Clipboard boundary or modifier cleanup failed.");
+  if (keyboard.value !== "synthetic-native-clipboard-smokea")
+    throw new Error("Shared clipboard or modifier cleanup failed.");
   await contents.executeJavaScript("document.querySelector('input').focus()");
   window.webContents.focus();
   await window.webContents.executeJavaScript("document.querySelector('input').focus()");

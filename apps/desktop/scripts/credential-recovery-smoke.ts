@@ -117,6 +117,10 @@ async function smoke() {
     await assert.rejects(run("return credentials.list()"));
     await vault.remove(id);
     assert.equal((await vault.snapshot()).logins.length, 0);
+    stage = "empty metadata discovery";
+    await vault.configure({ agentUse: true, offerSave: true, autosave: false });
+    assert.deepEqual(await run("return await credentials.list()"), []);
+    assert.deepEqual(await run("return await credentials.listPending()"), []);
     console.log(
       "PASS: metadata discovery, fill/generate denial, encoded reads, preinstalled listener, ordinary input, owner reveal/delete; synthetic credentials only",
     );

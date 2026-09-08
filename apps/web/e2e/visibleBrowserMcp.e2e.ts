@@ -433,6 +433,46 @@ test("production MCP controls one persistent Electron page across visibility cha
       await expect.poll(() => read("scrollY")).toBeGreaterThan(0);
     });
 
+    await test.step("shares the system clipboard without granting website reads", async () => {
+      await run('await page.getByRole("button",{name:"Copy synthetic text",exact:true}).click();');
+      await expect.poll(() => read('document.querySelector("#copy").dataset.copied')).toBe("true");
+      expect(
+        await electronApp.evaluate(
+          ({ clipboard }) => clipboard.readText() === "synthetic-browser-copy",
+        ),
+      ).toBe(true);
+      await electronApp.evaluate(({ clipboard }) => clipboard.writeText("synthetic-shell-copy"));
+      await run('await page.getByLabel("Shared input",{exact:true}).fill("");');
+      await run('await page.keyboard.press("ControlOrMeta+V");');
+      expect(await read('document.querySelector("input").value')).toBe("synthetic-shell-copy");
+      await run('await page.keyboard.press("ControlOrMeta+A");');
+      await run('await page.keyboard.press("ControlOrMeta+X");');
+      expect(await read('document.querySelector("input").value')).toBe("");
+      expect(
+        await electronApp.evaluate(
+          ({ clipboard }) => clipboard.readText() === "synthetic-shell-copy",
+        ),
+      ).toBe(true);
+      expect(await read("navigator.clipboard.readText().then(() => false, () => true)")).toBe(true);
+      await electronApp.evaluate(({ clipboard }) => clipboard.clear());
+      await run('await page.getByLabel("Shared input",{exact:true}).fill("shared-through-mcp");');
+    });
+
+    await test.step("does not mistake zoomed automated clicks for human input", async () => {
+      for (const factor of [0.5, 1.25, 1]) {
+        await electronApp.evaluate((_, value) => {
+          (
+            globalThis as typeof globalThis & {
+              __synaraVisibleBrowserE2E: { setPageZoomFactor(value: number): void };
+            }
+          ).__synaraVisibleBrowserE2E.setPageZoomFactor(value);
+        }, factor);
+        await run(
+          'await human.click(page.getByRole("button",{name:"Commit point action",exact:true}));',
+        );
+      }
+    });
+
     await test.step("yields to human input and recovers after MCP cancellation", async () => {
       await sendNativeInput(tabId, { type: "mouseMove", x: 30, y: 30 });
       for (let step = 0; step < 32; step++)
@@ -468,7 +508,7 @@ test("production MCP controls one persistent Electron page across visibility cha
       ).toEqual({
         value: "shared-through-mcp",
         agentClicks: "1",
-        pointClicks: "1",
+        pointClicks: "4",
         manualClicks: "1",
         presses: "1",
         cookie: expect.stringContaining("shared_cookie=agent"),
@@ -682,6 +722,17 @@ test("production MCP controls one persistent Electron page across visibility cha
         (await run("return await page.evaluate(() => document.title);")).structuredContent.value,
       ).toBe("Sign-in fixture");
       await expect(page.getByLabel("Host composer")).toHaveValue("HOST_SENTINEL");
+    });
+
+    await test.step("preserves empty and falsy browser results", async () => {
+      for (const value of [[], {}, null, false, 0, "", { accounts: [], next: null }]) {
+        const result = await run(`return ${JSON.stringify(value)};`);
+        expect(result.structuredContent.value).toEqual(value);
+      }
+      const emptyLocators = await run(
+        'return await page.getByRole("link",{name:"No such fixture link"}).allTextContents();',
+      );
+      expect(emptyLocators.structuredContent.value).toEqual([]);
     });
   } finally {
     try {

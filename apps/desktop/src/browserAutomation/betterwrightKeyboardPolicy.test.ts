@@ -6,12 +6,8 @@ describe("Betterwright native keyboard policy", () => {
     "denies native command bypasses on %s",
     (type) => {
       for (const commands of [
-        ["paste"],
-        ["selectAll", "copy"],
-        ["cut"],
         ["yank"],
         ["yankAndSelect"],
-        ["pasteAndMatchStyle"],
         ["Paste"],
         ["paste:"],
         ["unknown"],
@@ -25,9 +21,9 @@ describe("Betterwright native keyboard policy", () => {
     },
   );
 
-  it("denies clipboard and application shortcuts across all representations", () => {
+  it("denies application shortcuts across all representations", () => {
     for (const modifiers of [2, 4, 6, 10, 12, 15]) {
-      for (const key of ["c", "v", "x", "l", "n", "p", "r", "t", "w"]) {
+      for (const key of ["l", "n", "p", "r", "t", "w"]) {
         for (const alias of [
           { key },
           { key: key.toUpperCase() },
@@ -43,27 +39,21 @@ describe("Betterwright native keyboard policy", () => {
       }
     }
     for (const [modifiers, key] of [
-      [8, "Delete"],
-      [8, "Insert"],
-      [2, "Insert"],
       [1, "F4"],
       [4, "Tab"],
       [12, "i"],
     ] as const) {
       expect(() =>
-        new BetterwrightKeyboardPolicy("win32").check({ type: "keyDown", modifiers, key }),
+        new BetterwrightKeyboardPolicy().check({ type: "keyDown", modifiers, key }),
       ).toThrow();
     }
-    expect(() =>
-      new BetterwrightKeyboardPolicy().check({ type: "keyDown", key: "Paste" }),
-    ).toThrow();
   });
 
   it("does not trust a safe key when its alternate native identity is unsafe", () => {
     const policy = new BetterwrightKeyboardPolicy();
     for (const params of [
-      { code: "KeyV" },
-      { windowsVirtualKeyCode: 86 },
+      { code: "KeyW" },
+      { windowsVirtualKeyCode: 87 },
       { keyIdentifier: "U+0056" },
       { nativeVirtualKeyCode: 9 },
       { isSystemKey: true },
@@ -81,15 +71,15 @@ describe("Betterwright native keyboard policy", () => {
     const policy = new BetterwrightKeyboardPolicy();
     for (const code of ["ControlLeft", "ControlRight"])
       policy.check({ type: "rawKeyDown", key: "Control", code });
-    expect(() => policy.check({ type: "keyDown", key: "v", modifiers: 0 })).toThrow();
+    expect(() => policy.check({ type: "keyDown", key: "w", modifiers: 0 })).toThrow();
     policy.check({ type: "keyUp", key: "Control", code: "ControlLeft" });
-    expect(() => policy.check({ type: "keyDown", key: "v" })).toThrow();
+    expect(() => policy.check({ type: "keyDown", key: "w" })).toThrow();
     expect(() =>
-      policy.check({ type: "keyUp", key: "Control", code: "ControlRight", commands: ["paste"] }),
+      policy.check({ type: "keyUp", key: "Control", code: "ControlRight", commands: ["unknown"] }),
     ).toThrow();
-    expect(() => policy.check({ type: "keyDown", key: "v" })).toThrow();
+    expect(() => policy.check({ type: "keyDown", key: "w" })).toThrow();
     policy.check({ type: "keyUp", key: "Control", code: "ControlRight" });
-    expect(() => policy.check({ type: "keyDown", key: "v" })).not.toThrow();
+    expect(() => policy.check({ type: "keyDown", key: "w" })).not.toThrow();
   });
 
   it("preserves normal typing, modifier release and native editing parameters", () => {
@@ -103,6 +93,10 @@ describe("Betterwright native keyboard policy", () => {
       "moveWordLeftAndModifySelection",
       "scrollPageDown",
       "cancelOperation",
+      "copy",
+      "cut",
+      "paste",
+      "pasteAndMatchStyle",
     ];
     for (const command of commands) {
       const params = {
@@ -128,17 +122,21 @@ describe("Betterwright native keyboard policy", () => {
     expect(() => policy.check({ type: "keyUp", key: "v", modifiers: 4 })).not.toThrow();
   });
 
-  it("preserves macOS forward deletion without allowing Windows clipboard cut", () => {
-    for (const modifiers of [8, 9]) {
-      const params = {
-        type: "rawKeyDown",
-        key: "Delete",
-        modifiers,
-        commands: [modifiers === 8 ? "deleteForward" : "deleteWordForward"],
-      };
-      expect(() => new BetterwrightKeyboardPolicy("darwin").check(params)).not.toThrow();
-      expect(() => new BetterwrightKeyboardPolicy("win32").check(params)).toThrow();
-      expect(() => new BetterwrightKeyboardPolicy("linux").check(params)).toThrow();
-    }
+  it("allows standard clipboard shortcuts on every desktop platform", () => {
+    for (const [modifiers, key] of [
+      [2, "c"],
+      [2, "v"],
+      [2, "x"],
+      [4, "c"],
+      [4, "v"],
+      [4, "x"],
+      [8, "Insert"],
+      [2, "Insert"],
+      [8, "Delete"],
+      [0, "Paste"],
+    ] as const)
+      expect(() =>
+        new BetterwrightKeyboardPolicy().check({ type: "rawKeyDown", modifiers, key }),
+      ).not.toThrow();
   });
 });
