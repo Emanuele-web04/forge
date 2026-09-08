@@ -52,6 +52,12 @@ describe("deriveComposerBackgroundTaskRows", () => {
     const rows = deriveComposerBackgroundTaskRows({
       activeBackgroundTasks: state([
         { taskId: "wf-1", taskType: "local_workflow", startedAt: "2026-09-07T14:00:00.000Z" },
+        {
+          taskId: "wf-earlier",
+          taskType: "local_workflow",
+          description: "Run the baseline workflow",
+          startedAt: "2026-09-07T13:00:00.000Z",
+        },
         { taskId: "wf-member", startedAt: "2026-09-07T14:00:01.000Z" },
         {
           taskId: "agent-strip",
@@ -78,6 +84,7 @@ describe("deriveComposerBackgroundTaskRows", () => {
     });
 
     expect(rows.map((row) => [row.taskId, row.kind, row.label])).toEqual([
+      ["wf-earlier", "task", "Run the baseline workflow"],
       ["agent-untracked", "agent", "researcher"],
       ["agent-plain", "agent", "Subagent"],
       ["bash-1", "command", "Run the baseline"],

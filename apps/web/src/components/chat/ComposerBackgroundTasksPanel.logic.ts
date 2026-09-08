@@ -46,7 +46,7 @@ export function deriveComposerBackgroundTaskRows(input: {
   const workflowTaskIds = new Set(input.workflowTaskIds ?? []);
   return tasks
     .filter((task) => {
-      if (task.taskType === "local_workflow" || workflowTaskIds.has(task.taskId)) {
+      if (workflowTaskIds.has(task.taskId)) {
         return false;
       }
       // Only hide a subagent when the strip actually represents it.
