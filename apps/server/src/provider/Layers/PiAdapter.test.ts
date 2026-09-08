@@ -12,6 +12,8 @@ import path from "node:path";
 
 import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
+import { ProviderRuntimeEvent, ThreadId } from "@synara/contracts";
+import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   createPiModelRuntime,
@@ -22,10 +24,50 @@ import {
   buildPiAgentGatewayCustomTools,
   makePiBashProcessSupervisor,
   makePiRuntimeEventBase,
+  makePiToolTitle,
   makePiUserInputOptions,
   PLAIN_PI_EXTENSION_THEME,
   toPiProviderModelDescriptor,
 } from "./PiAdapter";
+
+describe("Pi tool titles", () => {
+  const encodeEvent = Schema.encodeSync(Schema.fromJsonString(ProviderRuntimeEvent));
+
+  it.each([
+    {
+      toolName: "bash",
+      args: { command: "  printf 'hello  world' \t\n" },
+      title: "printf 'hello  world'",
+    },
+    { toolName: "bash", args: { cmd: "pwd " }, title: "pwd" },
+    { toolName: "read", args: { path: "src/my file.ts \n" }, title: "read src/my file.ts" },
+    { toolName: "grep", args: { pattern: "hello  world \t" }, title: "grep hello  world" },
+    { toolName: "find", args: { query: "*.ts\n" }, title: "find *.ts" },
+    { toolName: "bash", args: { command: " \t\n" }, title: "bash" },
+    { toolName: " custom_tool \n", args: {}, title: "custom_tool" },
+    { toolName: " \t", args: {}, title: "Tool" },
+  ])("encodes lifecycle titles for $toolName without changing arguments", ({ toolName, args, title }) => {
+    const originalArgs = structuredClone(args);
+    Object.freeze(args);
+    for (const type of ["item.started", "item.updated", "item.completed"] as const) {
+      const encoded = encodeEvent({
+        ...makePiRuntimeEventBase({
+          session: { threadId: ThreadId.makeUnsafe("thread-pi-title") },
+          activeTurnId: undefined,
+        }),
+        type,
+        payload: {
+          itemType: "dynamic_tool_call",
+          status: type === "item.completed" ? "completed" : "inProgress",
+          title: makePiToolTitle(toolName, args),
+          data: { args },
+        },
+      });
+      expect(JSON.parse(encoded).payload).toMatchObject({ title, data: { args: originalArgs } });
+    }
+    expect(args).toEqual(originalArgs);
+  });
+});
 
 describe("Pi native Synara gateway tools", () => {
   it("uses canonical MCP schemas and keeps same-cwd thread tokens distinct", async () => {
