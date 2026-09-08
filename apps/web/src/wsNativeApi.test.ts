@@ -142,6 +142,19 @@ afterEach(() => {
 });
 
 describe("wsNativeApi", () => {
+  it("checks paused computer readiness through a scoped read-only request", async () => {
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    requestMock.mockResolvedValue({ inputPause: { windowId: "1357", message: "Input paused" } });
+    await expect(
+      api.computer.getState({ windowId: "1357", includeScreenshot: false }),
+    ).resolves.toMatchObject({ inputPause: { windowId: "1357" } });
+    expect(requestMock).toHaveBeenCalledExactlyOnceWith("computer.getState", {
+      windowId: "1357",
+      includeScreenshot: false,
+    });
+  });
+
   it("delivers and caches valid server.welcome payloads", async () => {
     const { createWsNativeApi, onServerWelcome } = await import("./wsNativeApi");
 

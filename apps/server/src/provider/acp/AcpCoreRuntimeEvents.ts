@@ -37,7 +37,7 @@ export function stampAcpRuntimeEventLifecycleGeneration(
 
 type AcpCanonicalRequestType = Extract<
   CanonicalRequestType,
-  "exec_command_approval" | "file_read_approval" | "file_change_approval" | "unknown"
+  "exec_command_approval" | "file_read_approval" | "file_change_approval" | "tool_approval"
 >;
 
 function canonicalRequestTypeFromAcpKind(kind: string | "unknown"): AcpCanonicalRequestType {
@@ -51,7 +51,11 @@ function canonicalRequestTypeFromAcpKind(kind: string | "unknown"): AcpCanonical
     case "move":
       return "file_change_approval";
     default:
-      return "unknown";
+      // ACP tool kinds also include search/fetch/think/other, and permission
+      // requests for them still need an answer. "unknown" maps to no request
+      // kind, so the approval never renders and the turn hangs — treat the
+      // remainder as generic tool approvals.
+      return "tool_approval";
   }
 }
 

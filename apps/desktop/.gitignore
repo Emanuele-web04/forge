@@ -1,3 +1,4 @@
 dist-electron/
 .electron-runtime/
 native/appsnap/build/
+native/computer-use/build/

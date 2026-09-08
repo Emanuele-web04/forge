@@ -28,15 +28,10 @@ export const DEFAULT_SYNARA_HOME = Effect.map(Effect.service(Path.Path), (path) 
   path.join(homedir(), ".synara"),
 );
 const MODE_ARGS = {
-  dev: [
-    "run",
-    "dev",
-    "--ui=tui",
-    "--filter=@synara/contracts",
-    "--filter=@synara/web",
-    "--filter=@synara/cli",
-    "--parallel",
-  ],
+  // No @synara/contracts watcher: dev consumers (bun, vite) resolve the package's
+  // `import` condition straight to src, so the CJS dist build is never read in dev,
+  // and the tsdown watch process leaks until it OOMs (observed after ~1.5h).
+  dev: ["run", "dev", "--ui=tui", "--filter=@synara/web", "--filter=@synara/cli", "--parallel"],
   "dev:server": ["run", "dev", "--filter=@synara/cli"],
   "dev:web": ["run", "dev", "--filter=@synara/web"],
   "dev:desktop": ["run", "dev", "--filter=@synara/desktop", "--filter=@synara/web", "--parallel"],

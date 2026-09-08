@@ -422,6 +422,25 @@ it.effect("decodes thread.turn.start defaults for provider, runtime mode, and di
   }),
 );
 
+it.effect("preserves the per-thread computer-control opt-in", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeThreadTurnStartCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-computer-1",
+      threadId: "thread-1",
+      message: {
+        messageId: "msg-computer-1",
+        role: "user",
+        text: "use the desktop",
+        attachments: [],
+      },
+      enableComputerControl: true,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(parsed.enableComputerControl, true);
+  }),
+);
+
 it.effect("bounds initial turn text while preserving attachment-only turns", () =>
   Effect.gen(function* () {
     const command = (text: string, attachments: ReadonlyArray<unknown> = []) => ({

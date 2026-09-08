@@ -152,6 +152,14 @@ const buildCmd = Command.make(
       yield* fs.chmod(path.join(deviceHelperTarget, "build.sh"), 0o755);
       yield* Effect.log("[cli] Bundled iOS Simulator helper sources into dist/device-helper");
 
+      // CLI installations compile the helper from these staged sources; desktop
+      // releases use their prebuilt signed helper bundle.
+      const macComputerHelperSource = path.join(serverDir, "native/computer-use-macos");
+      const macComputerHelperTarget = path.join(serverDir, "dist/computer-use-macos");
+      yield* fs.copy(macComputerHelperSource, macComputerHelperTarget);
+      yield* fs.chmod(path.join(macComputerHelperTarget, "build.sh"), 0o755);
+      yield* Effect.log("[cli] Bundled macOS computer-use helper into dist/computer-use-macos");
+
       const webDist = path.join(repoRoot, "apps/web/dist");
       const clientTarget = path.join(serverDir, "dist/client");
 

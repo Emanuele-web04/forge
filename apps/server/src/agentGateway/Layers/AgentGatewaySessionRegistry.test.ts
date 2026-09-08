@@ -85,4 +85,15 @@ describe("AgentGatewaySessionRegistry", () => {
     assert.notProperty(verified, "token");
     assert.notInclude(JSON.stringify(verified), issued.token);
   });
+
+  it("keeps computer control opt-in instead of adding it to provider defaults", () => {
+    const registry = makeAgentGatewaySessionRegistry({ randomId: () => "computer" });
+    const ordinary = registry.issue(ThreadId.makeUnsafe("thread-1"), "codex");
+    const optedIn = registry.issue(ThreadId.makeUnsafe("thread-2"), "codex", {
+      additionalCapabilities: ["computer:control"],
+    });
+
+    assert.isFalse(ordinary.capabilities.has("computer:control"));
+    assert.isTrue(optedIn.capabilities.has("computer:control"));
+  });
 });

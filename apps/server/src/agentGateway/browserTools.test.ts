@@ -14,6 +14,7 @@ const context: ToolContext = {
     turnId: "turn-a",
   },
   callerThreadId: "thread-a",
+  callerThreadLabel: null,
   callerSessionKey: "gateway-session:test",
   callerProvider: "claudeAgent",
   callerCapabilities: new Set(["browser:control"]),

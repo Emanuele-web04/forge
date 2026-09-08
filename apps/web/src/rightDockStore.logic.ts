@@ -12,6 +12,7 @@ import { isPlainObject, sanitizeStringKeyedRecord } from "./persistedRecord";
 export const RIGHT_DOCK_PANE_KINDS = [
   "browser",
   "device",
+  "computer",
   "diff",
   "explorer",
   "file",

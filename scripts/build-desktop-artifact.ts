@@ -17,10 +17,19 @@ import serverPackageJson from "../apps/server/package.json" with { type: "json" 
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 import {
   createDesktopPlatformBuildConfig,
+  MAC_AFTER_SIGN_CONFIG_PATH,
+  MAC_AFTER_SIGN_HOOK_PATH,
+  MAC_APPSNAP_HELPER_NAME,
   MAC_APPSNAP_HELPER_STAGE_PATH,
+  MAC_COMPUTER_HELPER_BUNDLE_PATH,
+  MAC_COMPUTER_HELPER_EXECUTABLE_BUNDLE_PATH,
+  MAC_COMPUTER_HELPER_STAGE_PATH,
   MAC_DEVICE_HELPER_RESOURCE_PATH,
+  MAC_ENTITLEMENTS_PATH,
+  MAC_HELPER_ENTITLEMENTS_PATH,
   validateDesktopNativeBuildHost,
 } from "./lib/desktop-platform-build-config.ts";
+import { COMPUTER_HELPER_BUNDLE_NAME } from "@synara/shared/computerHelperPaths";
 import { SYNARA_PRODUCTION_BUNDLE_ID } from "@synara/shared/desktopIdentity";
 import { parseBooleanEnvValue } from "./lib/env-bool.ts";
 import { finalizeSignedMacDmg } from "./lib/mac-dmg-finalize.ts";
@@ -34,7 +43,18 @@ import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Config, Data, Effect, FileSystem, Layer, Logger, Option, Path, Schema } from "effect";
+import {
+  Config,
+  Data,
+  Effect,
+  FileSystem,
+  Layer,
+  Logger,
+  Option,
+  Path,
+  PlatformError,
+  Schema,
+} from "effect";
 import { Command, Flag } from "effect/unstable/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
@@ -72,6 +92,11 @@ const AppSnapHelperBuildScript = Effect.zipWith(
   RepoRoot,
   Effect.service(Path.Path),
   (repoRoot, path) => path.join(repoRoot, "apps/desktop/scripts/build-appsnap-helper.mjs"),
+);
+const ComputerHelperBuildScript = Effect.zipWith(
+  RepoRoot,
+  Effect.service(Path.Path),
+  (repoRoot, path) => path.join(repoRoot, "apps/desktop/scripts/build-computer-helper.mjs"),
 );
 const encodeJsonString = Schema.encodeEffect(Schema.UnknownFromJsonString);
 
@@ -111,6 +136,7 @@ interface BuildCliInput {
   readonly skipBuild: Option.Option<boolean>;
   readonly keepStage: Option.Option<boolean>;
   readonly signed: Option.Option<boolean>;
+  readonly notarize: Option.Option<boolean>;
   readonly verbose: Option.Option<boolean>;
   readonly mockUpdates: Option.Option<boolean>;
   readonly mockUpdateServerPort: Option.Option<string>;
@@ -210,6 +236,7 @@ interface ResolvedBuildOptions {
   readonly skipBuild: boolean;
   readonly keepStage: boolean;
   readonly signed: boolean;
+  readonly notarize: boolean;
   readonly verbose: boolean;
   readonly mockUpdates: boolean;
   readonly mockUpdateServerPort: string | undefined;
@@ -262,13 +289,18 @@ const BuildEnvConfig = Config.all({
   skipBuild: Config.string("SYNARA_DESKTOP_SKIP_BUILD").pipe(Config.option),
   keepStage: Config.string("SYNARA_DESKTOP_KEEP_STAGE").pipe(Config.option),
   signed: Config.string("SYNARA_DESKTOP_SIGNED").pipe(Config.option),
+  notarize: Config.string("SYNARA_DESKTOP_NOTARIZE").pipe(Config.option),
   verbose: Config.string("SYNARA_DESKTOP_VERBOSE").pipe(Config.option),
   mockUpdates: Config.string("SYNARA_DESKTOP_MOCK_UPDATES").pipe(Config.option),
   mockUpdateServerPort: Config.string("SYNARA_DESKTOP_MOCK_UPDATE_SERVER_PORT").pipe(Config.option),
 });
 
+// A CLI boolean flag is `Some(false)` when it is absent, not `None`, so the
+// environment variable each flag documents would never be read if the flag's
+// value simply won the merge. Both switches only ever turn a behaviour on, so
+// either one asking for it is enough.
 const resolveBooleanFlag = (flag: Option.Option<boolean>, envValue: boolean) =>
-  Option.getOrElse(flag, () => envValue);
+  Option.getOrElse(flag, () => false) || envValue;
 const mergeOptions = <A>(a: Option.Option<A>, b: Option.Option<A>, defaultValue: A) =>
   Option.getOrElse(a, () => Option.getOrElse(b, () => defaultValue));
 const resolveBooleanEnv = (name: string, value: Option.Option<string>) =>
@@ -313,6 +345,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
   const envSkipBuild = yield* resolveBooleanEnv("SYNARA_DESKTOP_SKIP_BUILD", env.skipBuild);
   const envKeepStage = yield* resolveBooleanEnv("SYNARA_DESKTOP_KEEP_STAGE", env.keepStage);
   const envSigned = yield* resolveBooleanEnv("SYNARA_DESKTOP_SIGNED", env.signed);
+  const envNotarize = yield* resolveBooleanEnv("SYNARA_DESKTOP_NOTARIZE", env.notarize);
   const envVerbose = yield* resolveBooleanEnv("SYNARA_DESKTOP_VERBOSE", env.verbose);
   const envMockUpdates = yield* resolveBooleanEnv("SYNARA_DESKTOP_MOCK_UPDATES", env.mockUpdates);
   const releaseDir = resolveBooleanFlag(input.mockUpdates, envMockUpdates)
@@ -325,7 +358,12 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
 
   const skipBuild = resolveBooleanFlag(input.skipBuild, envSkipBuild);
   const keepStage = resolveBooleanFlag(input.keepStage, envKeepStage);
-  const signed = resolveBooleanFlag(input.signed, envSigned);
+  // Notarization implies signing — Apple has nothing to notarize otherwise —
+  // but signing no longer implies notarization: a locally signed build wants a
+  // stable designated requirement so macOS keeps its TCC grants across
+  // rebuilds, and has no Developer ID to submit with.
+  const notarize = resolveBooleanFlag(input.notarize, envNotarize);
+  const signed = notarize || resolveBooleanFlag(input.signed, envSigned);
   const verbose = resolveBooleanFlag(input.verbose, envVerbose);
   const mockUpdates = resolveBooleanFlag(input.mockUpdates, envMockUpdates);
   const mockUpdateServerPort = mergeOptions(
@@ -346,6 +384,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     skipBuild,
     keepStage,
     signed,
+    notarize,
     verbose,
     mockUpdates,
     mockUpdateServerPort,
@@ -763,6 +802,7 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     platform,
     target,
     signed,
+    ...(process.env.CSC_NAME?.trim() ? { macSigningIdentity: process.env.CSC_NAME.trim() } : {}),
     ...(windowsAzureSignOptions ? { windowsAzureSignOptions } : {}),
   } as const;
 
@@ -795,61 +835,289 @@ const assertPlatformBuildResources = Effect.fn("assertPlatformBuildResources")(f
   }
 });
 
+/**
+ * Where a packaging run keeps its compiled Swift helpers between builds.
+ *
+ * Both build scripts already refuse to recompile when their fingerprint
+ * (sources, toolchain, target triple, Info.plist) matches the metadata beside
+ * an existing output — but packaging used to point them at a fresh temporary
+ * stage directory, so the cache could never hit and every run paid two
+ * whole-module-optimization Swift compiles. Keyed by arch because a universal
+ * build produces different bytes from an arm64 one and the two must not evict
+ * each other; kept out of the dev bundle's own path so packaging cannot clobber
+ * the helper `bun run dev` is using.
+ */
+const macHelperBuildCacheDir = (repoRoot: string, path: Path.Path, arch: string) =>
+  path.join(repoRoot, "apps/desktop/.electron-runtime/packaging-helpers", arch);
+
+/**
+ * Compiles one native Swift helper and copies it into the staged app tree.
+ *
+ * Both macOS helpers are produced the same way — a node build script invoked
+ * with the target arch and an output path — so they share one implementation.
+ * The build script is resolved from the real repository (not the stage), which
+ * is what lets it find the Swift sources.
+ *
+ * The build lands in the repository-level cache above and is copied into the
+ * stage with `ditto`, which preserves the mode bits, symlinks and extended
+ * attributes an already-signed `.app` bundle depends on; a plain recursive copy
+ * has broken nested bundle signatures before.
+ */
+const stageMacSwiftHelper = Effect.fn("stageMacSwiftHelper")(function* (options: {
+  readonly label: string;
+  readonly buildScript: string;
+  readonly stageAppDir: string;
+  readonly stageRelativeOutputPath: string;
+  readonly cacheEntryName: string;
+  readonly arch: typeof BuildArch.Type;
+  readonly verbose: boolean;
+}) {
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+  const repoRoot = yield* RepoRoot;
+  const cacheDir = macHelperBuildCacheDir(repoRoot, path, options.arch);
+  const cachedPath = path.join(cacheDir, options.cacheEntryName);
+  const outputPath = path.join(options.stageAppDir, options.stageRelativeOutputPath);
+
+  yield* fs.makeDirectory(cacheDir, { recursive: true });
+  yield* Effect.log(
+    `[desktop-artifact] Building native ${options.label} helper (${options.arch})...`,
+  );
+  yield* runCommand(
+    ChildProcess.make({
+      cwd: repoRoot,
+      ...commandOutputOptions(options.verbose),
+    })`node ${options.buildScript} --arch ${options.arch} --release --output ${cachedPath}`,
+  );
+
+  if (!(yield* fs.exists(cachedPath))) {
+    return yield* new BuildScriptError({
+      message: `${options.label} helper build completed but output was not found at ${cachedPath}`,
+    });
+  }
+
+  yield* fs.makeDirectory(path.dirname(outputPath), { recursive: true });
+  yield* fs.remove(outputPath, { recursive: true, force: true });
+  yield* runCommand(
+    ChildProcess.make({
+      cwd: repoRoot,
+      ...commandOutputOptions(options.verbose),
+    })`ditto ${cachedPath} ${outputPath}`,
+  );
+
+  if (!(yield* fs.exists(outputPath))) {
+    return yield* new BuildScriptError({
+      message: `${options.label} helper was not staged at ${outputPath}`,
+    });
+  }
+});
+
+/**
+ * Stages the `afterSign` hook and the JSON that tells it what to do.
+ *
+ * The hook has to be a file inside the staged project — electron-builder
+ * `require`s it relative to the project directory and refuses a path outside
+ * the workspace root — but everything it needs to know is defined in
+ * TypeScript, and a plain-`node` CommonJS module cannot import that. The
+ * sidecar carries those values across so neither side restates the other's
+ * constants.
+ */
+const stageMacAfterSignHook = Effect.fn("stageMacAfterSignHook")(function* (
+  stageAppDir: string,
+  notarize: boolean,
+) {
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+  const repoRoot = yield* RepoRoot;
+  const hookDestination = path.join(stageAppDir, MAC_AFTER_SIGN_HOOK_PATH);
+  yield* fs.makeDirectory(path.dirname(hookDestination), { recursive: true });
+  yield* fs.copyFile(path.join(repoRoot, "scripts/lib/mac-after-sign.cjs"), hookDestination);
+  const hookConfig = yield* encodeJsonString({
+    helperBundleRelativePath: MAC_COMPUTER_HELPER_BUNDLE_PATH,
+    helperEntitlementsPath: MAC_HELPER_ENTITLEMENTS_PATH,
+    appEntitlementsPath: MAC_ENTITLEMENTS_PATH,
+    notarize,
+  });
+  yield* fs.writeFileString(path.join(stageAppDir, MAC_AFTER_SIGN_CONFIG_PATH), `${hookConfig}\n`);
+});
+
 const stageMacAppSnapHelper = Effect.fn("stageMacAppSnapHelper")(function* (
   stageAppDir: string,
   arch: typeof BuildArch.Type,
   verbose: boolean,
 ) {
+  yield* stageMacSwiftHelper({
+    label: "AppSnap",
+    buildScript: yield* AppSnapHelperBuildScript,
+    stageAppDir,
+    stageRelativeOutputPath: MAC_APPSNAP_HELPER_STAGE_PATH,
+    cacheEntryName: MAC_APPSNAP_HELPER_NAME,
+    arch,
+    verbose,
+  });
+});
+
+const stageMacComputerHelper = Effect.fn("stageMacComputerHelper")(function* (
+  stageAppDir: string,
+  arch: typeof BuildArch.Type,
+  verbose: boolean,
+) {
+  yield* stageMacSwiftHelper({
+    label: "computer-use",
+    buildScript: yield* ComputerHelperBuildScript,
+    stageAppDir,
+    stageRelativeOutputPath: MAC_COMPUTER_HELPER_STAGE_PATH,
+    cacheEntryName: COMPUTER_HELPER_BUNDLE_NAME,
+    arch,
+    verbose,
+  });
+});
+
+/**
+ * Runs `check` against each packaged `<ProductName>.app` under the dist dir and
+ * succeeds on the first that satisfies it. electron-builder writes one such app
+ * per target directory, so the scan is over targets, not over candidates.
+ */
+const assertPackagedMacApp = Effect.fn("assertPackagedMacApp")(function* (options: {
+  readonly stageDistDir: string;
+  readonly productName: string;
+  readonly missingMessage: string;
+  readonly check: (
+    appDir: string,
+  ) => Effect.Effect<
+    boolean,
+    PlatformError.PlatformError | BuildScriptError,
+    FileSystem.FileSystem | Path.Path
+  >;
+}) {
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
-  const buildScript = yield* AppSnapHelperBuildScript;
-  const outputPath = path.join(stageAppDir, MAC_APPSNAP_HELPER_STAGE_PATH);
-
-  yield* fs.makeDirectory(path.dirname(outputPath), { recursive: true });
-  yield* Effect.log(`[desktop-artifact] Building native AppSnap helper (${arch})...`);
-  yield* runCommand(
-    ChildProcess.make({
-      cwd: stageAppDir,
-      ...commandOutputOptions(verbose),
-    })`node ${buildScript} --arch ${arch} --release --output ${outputPath}`,
-  );
-
-  if (!(yield* fs.exists(outputPath))) {
-    return yield* new BuildScriptError({
-      message: `AppSnap helper build completed but output was not found at ${outputPath}`,
-    });
+  const entries = yield* fs.readDirectory(options.stageDistDir);
+  for (const entry of entries) {
+    const packagedEntryPath = path.join(options.stageDistDir, entry);
+    const packagedEntryStat = yield* fs
+      .stat(packagedEntryPath)
+      .pipe(Effect.catch(() => Effect.succeed(null)));
+    if (!packagedEntryStat || packagedEntryStat.type !== "Directory") continue;
+    const appDir = path.join(packagedEntryPath, `${options.productName}.app`);
+    if (yield* options.check(appDir)) return;
   }
+  return yield* new BuildScriptError({ message: options.missingMessage });
 });
 
 const assertPackagedMacDeviceHelper = Effect.fn("assertPackagedMacDeviceHelper")(function* (
   stageDistDir: string,
   productName: string,
 ) {
-  const path = yield* Path.Path;
-  const fs = yield* FileSystem.FileSystem;
-  const entries = yield* fs.readDirectory(stageDistDir);
-  for (const entry of entries) {
-    const packagedEntryPath = path.join(stageDistDir, entry);
-    const packagedEntryStat = yield* fs
-      .stat(packagedEntryPath)
-      .pipe(Effect.catch(() => Effect.succeed(null)));
-    if (!packagedEntryStat || packagedEntryStat.type !== "Directory") continue;
+  yield* assertPackagedMacApp({
+    stageDistDir,
+    productName,
+    missingMessage: `Packaged macOS app is missing physical device helper sources under Contents/${MAC_DEVICE_HELPER_RESOURCE_PATH}`,
+    check: Effect.fn(function* (appDir: string) {
+      const path = yield* Path.Path;
+      const fs = yield* FileSystem.FileSystem;
+      const helperRoot = path.join(appDir, "Contents", MAC_DEVICE_HELPER_RESOURCE_PATH);
+      return (
+        (yield* fs.exists(path.join(helperRoot, "build.sh"))) &&
+        (yield* fs.exists(path.join(helperRoot, "Sources/main.swift")))
+      );
+    }),
+  });
+});
 
-    const helperRoot = path.join(
-      packagedEntryPath,
-      `${productName}.app`,
-      "Contents",
-      MAC_DEVICE_HELPER_RESOURCE_PATH,
-    );
-    if (
-      (yield* fs.exists(path.join(helperRoot, "build.sh"))) &&
-      (yield* fs.exists(path.join(helperRoot, "Sources/main.swift")))
-    ) {
-      return;
-    }
+/**
+ * Why the nested helper bundle's signature is unusable, or null when it is fine.
+ *
+ * The helper ships as an app bundle of its own because a bundle is the unit
+ * macOS signs and notarizes, and a released one has to carry the app's Team ID
+ * and the hardened runtime or Gatekeeper refuses it on a user's machine. (Its
+ * TCC grants are a separate matter and are filed against Synara, not against
+ * this bundle.) Nothing in the packaging config makes the signing happen on
+ * purpose — `@electron/osx-sign` collects nested `.app` directories while
+ * walking the packaged `Contents/`, so a change to the staging path, the asar
+ * globs, or the sign step could quietly drop the helper from the walk. The
+ * build would still succeed, ship the ad-hoc signature
+ * `build-computer-helper.mjs` writes, and fail on a user's machine at
+ * notarization or first launch. This is what notices instead.
+ *
+ * Structural integrity is checked for every build, released or not: `afterSign`
+ * re-signs this bundle and re-seals the app around it, and a re-sign that
+ * produced a broken seal is exactly the failure a local build should surface
+ * before a user meets it. Team ID and hardened runtime are only demanded of a
+ * build that will actually be notarized — a self-signed local identity has
+ * neither and is a supported way to build.
+ */
+function nestedMacBundleSignatureIssue(
+  bundlePath: string,
+  requireNotarizableIdentity: boolean,
+): string | null {
+  const verification = spawnSync("codesign", ["--verify", "--strict", "--verbose=2", bundlePath], {
+    encoding: "utf8",
+  });
+  if (verification.status !== 0) {
+    const detail = `${verification.stdout ?? ""}${verification.stderr ?? ""}`.trim();
+    return `${bundlePath} does not pass 'codesign --verify --strict': ${detail || `exit ${verification.status ?? "unknown"}`}`;
   }
-  return yield* new BuildScriptError({
-    message: `Packaged macOS app is missing physical device helper sources under Contents/${MAC_DEVICE_HELPER_RESOURCE_PATH}`,
+
+  const result = spawnSync("codesign", ["-dvvv", bundlePath], { encoding: "utf8" });
+  // codesign writes its description to stderr; stdout is joined in so a future
+  // version that moves it cannot make this silently pass.
+  const output = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
+  if (result.status !== 0) {
+    return `codesign could not read ${bundlePath}: ${output || `exit ${result.status ?? "unknown"}`}`;
+  }
+
+  // The entitlement repair is the point of the `afterSign` hook, so its result
+  // is asserted here rather than trusted: Electron's inherited set includes
+  // `disable-library-validation`, and this is the process holding Accessibility
+  // and Screen Recording.
+  const entitlements = spawnSync("codesign", ["-d", "--entitlements", ":-", "--xml", bundlePath], {
+    encoding: "utf8",
+  });
+  const entitlementKeys = [...`${entitlements.stdout ?? ""}`.matchAll(/<key>([^<]+)<\/key>/g)].map(
+    (match) => match[1],
+  );
+  if (entitlementKeys.length > 0) {
+    return `${bundlePath} still carries entitlements (${entitlementKeys.join(", ")}); the afterSign hook did not strip them.`;
+  }
+
+  if (!requireNotarizableIdentity) return null;
+
+  const teamIdentifier = /^TeamIdentifier=(.+)$/m.exec(output)?.[1]?.trim();
+  if (!teamIdentifier || teamIdentifier === "not set") {
+    return `${bundlePath} carries no TeamIdentifier — it is still ad-hoc signed and will not notarize.\n${output}`;
+  }
+  const flags = /^CodeDirectory .*\bflags=0x[0-9a-f]+\(([^)]*)\)/m.exec(output)?.[1] ?? "";
+  if (!flags.split(",").includes("runtime")) {
+    return `${bundlePath} is signed without the hardened runtime.\n${output}`;
+  }
+  return null;
+}
+
+const assertPackagedMacComputerHelper = Effect.fn("assertPackagedMacComputerHelper")(function* (
+  stageDistDir: string,
+  productName: string,
+  notarize: boolean,
+) {
+  yield* assertPackagedMacApp({
+    stageDistDir,
+    productName,
+    // The executable, not just the bundle directory: an empty `.app` shell
+    // satisfies a directory check and still ships a build with no helper.
+    missingMessage: `Packaged macOS app is missing ${MAC_COMPUTER_HELPER_EXECUTABLE_BUNDLE_PATH}`,
+    check: Effect.fn(function* (appDir: string) {
+      const path = yield* Path.Path;
+      const fs = yield* FileSystem.FileSystem;
+      if (!(yield* fs.exists(path.join(appDir, MAC_COMPUTER_HELPER_EXECUTABLE_BUNDLE_PATH)))) {
+        return false;
+      }
+      const issue = nestedMacBundleSignatureIssue(
+        path.join(appDir, MAC_COMPUTER_HELPER_BUNDLE_PATH),
+        notarize,
+      );
+      if (issue) return yield* new BuildScriptError({ message: issue });
+      return true;
+    }),
   });
 });
 
@@ -1037,6 +1305,8 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   if (options.platform === "mac") {
     yield* stageMacAppSnapHelper(stageAppDir, options.arch, options.verbose);
+    yield* stageMacComputerHelper(stageAppDir, options.arch, options.verbose);
+    yield* stageMacAfterSignHook(stageAppDir, options.notarize);
   }
 
   // electron-builder is filtering out stageResourcesDir directory in the AppImage for production
@@ -1094,9 +1364,21 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     }
   }
   if (!options.signed) {
-    buildEnv.CSC_IDENTITY_AUTO_DISCOVERY = "false";
-    delete buildEnv.CSC_LINK;
-    delete buildEnv.CSC_KEY_PASSWORD;
+    // An explicit CSC_NAME is a deliberate "sign with this identity" and is
+    // honoured on its own: that is how a developer gets a locally signed build
+    // with a stable designated requirement, so macOS stops discarding the
+    // helper's Accessibility and Screen Recording grants on every rebuild.
+    // Without one, discovery stays off so an unrelated certificate in the login
+    // keychain cannot silently sign a build nobody asked to sign.
+    if (!buildEnv.CSC_NAME) {
+      buildEnv.CSC_IDENTITY_AUTO_DISCOVERY = "false";
+      delete buildEnv.CSC_LINK;
+      delete buildEnv.CSC_KEY_PASSWORD;
+    }
+  }
+  if (!options.notarize) {
+    // The credentials are the hook's only trigger, so an unnotarized build must
+    // not inherit them from a shell that happens to have them exported.
     delete buildEnv.APPLE_API_KEY;
     delete buildEnv.APPLE_API_KEY_ID;
     delete buildEnv.APPLE_API_ISSUER;
@@ -1133,9 +1415,14 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   if (options.platform === "mac") {
     yield* assertPackagedMacDeviceHelper(stageDistDir, desktopPackageJson.productName ?? "Synara");
+    yield* assertPackagedMacComputerHelper(
+      stageDistDir,
+      desktopPackageJson.productName ?? "Synara",
+      options.notarize,
+    );
   }
 
-  if (options.platform === "mac" && options.target === "dmg" && options.signed) {
+  if (options.platform === "mac" && options.target === "dmg" && options.notarize) {
     yield* Effect.log("[desktop-artifact] Notarizing and validating signed macOS DMG...");
     const finalizedDmg = yield* Effect.try({
       try: () =>
@@ -1163,7 +1450,9 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       try: () =>
         finalizeMacUpdateZip({
           stageDistDir,
-          signed: options.signed,
+          // Local builds carry a real ad-hoc app seal too. Verify it both
+          // before archiving and after extraction, just like a release seal.
+          signed: true,
           verbose: options.verbose,
         }),
       catch: (cause) =>
@@ -1255,7 +1544,13 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   ),
   signed: Flag.boolean("signed").pipe(
     Flag.withDescription(
-      "Enable signing/notarization discovery; Windows uses Azure Trusted Signing (env: SYNARA_DESKTOP_SIGNED).",
+      "Sign with a discoverable identity (CSC_NAME/CSC_LINK/login keychain); Windows uses Azure Trusted Signing. Does not notarize (env: SYNARA_DESKTOP_SIGNED).",
+    ),
+    Flag.optional,
+  ),
+  notarize: Flag.boolean("notarize").pipe(
+    Flag.withDescription(
+      "Notarize and staple the signed macOS artifacts; implies --signed and needs a Developer ID (env: SYNARA_DESKTOP_NOTARIZE).",
     ),
     Flag.optional,
   ),

@@ -456,7 +456,16 @@ export const createComposerDraftStoreState =
       if (!draftThread?.promotedTo) {
         return;
       }
+      // Computer control is a chat preference, even though it is stored with
+      // the composer. Dropping it here silently removes tools on turn two.
+      const enableComputerControl = get().draftsByThreadId[threadId]?.enableComputerControl;
       get().clearDraftThread(threadId);
+      if (
+        enableComputerControl !== undefined &&
+        get().draftsByThreadId[draftThread.promotedTo]?.enableComputerControl === undefined
+      ) {
+        get().setEnableComputerControl(draftThread.promotedTo, enableComputerControl);
+      }
     },
     clearDraftThread: (threadId) => {
       if (threadId.length === 0) {
@@ -1031,6 +1040,30 @@ export const createComposerDraftStoreState =
         const nextDraft: ComposerThreadDraftState = {
           ...base,
           interactionMode: nextInteractionMode,
+        };
+        const nextDraftsByThreadId = { ...state.draftsByThreadId };
+        if (shouldRemoveDraft(nextDraft)) {
+          delete nextDraftsByThreadId[threadId];
+        } else {
+          nextDraftsByThreadId[threadId] = nextDraft;
+        }
+        return { draftsByThreadId: nextDraftsByThreadId };
+      });
+    },
+    setEnableComputerControl: (threadId, enabled) => {
+      if (threadId.length === 0) {
+        return;
+      }
+      set((state) => {
+        // Always record the choice, even an explicit false: the flag is tri-state
+        // and an untouched draft follows the new-chat default instead.
+        const base = state.draftsByThreadId[threadId] ?? createEmptyThreadDraft();
+        if (base.enableComputerControl === enabled) {
+          return state;
+        }
+        const nextDraft: ComposerThreadDraftState = {
+          ...base,
+          enableComputerControl: enabled,
         };
         const nextDraftsByThreadId = { ...state.draftsByThreadId };
         if (shouldRemoveDraft(nextDraft)) {

@@ -260,9 +260,13 @@ jobs:
               key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
               printf '%s' "$APPLE_API_KEY" > "$key_path"
               export APPLE_API_KEY="$key_path"
-              echo "macOS signing enabled."
+              echo "macOS signing and notarization enabled."
               signed=true
-              args+=(--signed)
+              # --notarize implies --signed. The two are separate flags because a
+              # locally signed build (self-signed identity, stable designated
+              # requirement, no Developer ID) is now supported; a release needs
+              # both and asks for both by asking for the stronger one.
+              args+=(--notarize)
             elif [[ "$SYNARA_PUBLISH_RELEASE" == "true" ]]; then
               echo "Publishing macOS artifacts requires every signing and notarization secret."
               exit 1

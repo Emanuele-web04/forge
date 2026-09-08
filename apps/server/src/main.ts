@@ -52,6 +52,7 @@ import { makeServerApplicationLayers } from "./serverLayers";
 import { startServerMemoryDiagnostics } from "./memoryDiagnostics";
 import { createClaudeCredentialKeepaliveController } from "./provider/claudeCredentialKeepalive";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
+import { ComputerLeaseReactorLive } from "./computer/Layers/ComputerLeaseReactor";
 import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper";
 import { ProviderRuntimeReconcilerLive } from "./provider/Layers/ProviderRuntimeReconciler";
 import { Server } from "./effectServer";
@@ -360,12 +361,20 @@ const LayerLive = (input: CliInput) => {
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(providerLayer),
   );
+  const computerLeaseReactorLayer = ComputerLeaseReactorLive.pipe(
+    // Pairs the computer manager (runtime graph) with provider runtime events
+    // (provider graph), so it lands at the top level for the same reason the
+    // reaper does.
+    Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(providerLayer),
+  );
 
   return Layer.empty.pipe(
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(providerLayer),
     Layer.provideMerge(providerSessionReaperLayer),
     Layer.provideMerge(providerRuntimeReconcilerLayer),
+    Layer.provideMerge(computerLeaseReactorLayer),
     Layer.provideMerge(SqlitePersistence.layerConfig),
     Layer.provideMerge(ServerLoggerLive),
     Layer.provideMerge(ServerConfigLive(input)),

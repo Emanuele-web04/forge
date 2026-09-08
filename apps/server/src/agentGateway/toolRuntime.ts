@@ -43,6 +43,13 @@ export type AgentGatewayPrincipal = ProviderSessionPrincipal | ExternalClientPri
 export interface ToolContext {
   readonly principal: ProviderSessionPrincipal;
   readonly callerThreadId: string;
+  /**
+   * The caller thread as a human would name it, for surfaces the human sees -
+   * today the agent cursor's badge on the desktop. Null when the thread has no
+   * title yet, which is not an error: the surface falls back to a generic
+   * label rather than showing a thread id.
+   */
+  readonly callerThreadLabel: string | null;
   readonly callerSessionKey: string;
   readonly callerProvider: ProviderKind;
   readonly callerCapabilities: ReadonlySet<AgentGatewayCapability>;
@@ -70,6 +77,23 @@ export interface McpToolEntry<Context, Capability extends string> {
     context: Context,
   ) => Effect.Effect<McpToolCallResult>;
   readonly requiredCapability: Capability;
+}
+
+/**
+ * Narrow a tool catalog to what one caller may actually invoke.
+ *
+ * Both MCP surfaces build their catalog once and gate per call, so without
+ * this a `tools/list` advertises tools whose every invocation is denied — the
+ * caller pays prompt tokens for them and learns they are unusable only by
+ * failing. Capabilities are fixed when a credential is issued (granting or
+ * revoking one restarts the session), so a filtered list can never go stale
+ * mid-session and no `listChanged` notification is owed.
+ */
+export function filterToolsByCapability<
+  Capability extends string,
+  Tool extends { readonly requiredCapability: Capability },
+>(tools: ReadonlyArray<Tool>, capabilities: ReadonlySet<Capability>): ReadonlyArray<Tool> {
+  return tools.filter((tool) => capabilities.has(tool.requiredCapability));
 }
 
 export class GatewayToolError extends Error {

@@ -12,6 +12,9 @@ packages/*/dist
 build/
 .logs/
 release/
+# Mock-update packaging output, the sibling of release/ that
+# build-desktop-artifact.ts writes for --mock-updates runs.
+release-mock/
 .synara
 /.synara/electron-dev
 /.synara/backups
@@ -20,6 +23,8 @@ release/
 /.synara/
 /.synara-*/
 .idea/
+.claude/worktrees/
+__pycache__/
 apps/web/.playwright
 apps/web/playwright-report
 apps/web/test-results
