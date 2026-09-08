@@ -9,6 +9,10 @@
 import { ServiceMap } from "effect";
 import type { Effect, Scope } from "effect";
 import type {
+  GitBlameLineInput,
+  GitReadFileAtRevInput,
+  GitReadFileAtRevResult,
+  GitBlameLineResult,
   GitCheckoutInput,
   GitCreateBranchInput,
   GitCreateDetachedWorktreeInput,
@@ -19,6 +23,8 @@ import type {
   GitInitInput,
   GitListBranchesInput,
   GitListBranchesResult,
+  GitListRecentCommitsInput,
+  GitListRecentCommitsResult,
   GitPullResult,
   GitRemoveIndexLockInput,
   GitRemoveWorktreeInput,
@@ -64,7 +70,7 @@ export interface GitBranchContext {
   readonly upstreamRef: string | null;
 }
 
-export type GitDiffScope = "branch" | "staged" | "unstaged" | "workingTree";
+export type GitDiffScope = "branch" | "staged" | "unstaged" | "workingTree" | "ref";
 
 export interface GitPreparedCommitContext {
   stagedSummary: string;
@@ -72,6 +78,8 @@ export interface GitPreparedCommitContext {
 }
 
 export interface ExecuteGitProgress {
+  /** Use NUL records for machine-readable Git output containing arbitrary paths. */
+  readonly stdoutLineDelimiter?: "\n" | "\0";
   readonly onStdoutLine?: (line: string) => Effect.Effect<void, never>;
   readonly onStderrLine?: (line: string) => Effect.Effect<void, never>;
   readonly onHookStarted?: (hookName: string) => Effect.Effect<void, never>;
@@ -219,9 +227,11 @@ export interface GitCoreShape {
 
   /**
    * Read a unified patch for the current working tree, including untracked files.
+   * An optional file path limits the patch to that literal path and its rename source.
    */
   readonly readWorkingTreePatch: (
     cwd: string,
+    filePath?: string,
   ) => Effect.Effect<GitWorkingTreePatch, GitCommandError>;
 
   /**
@@ -239,10 +249,24 @@ export interface GitCoreShape {
    */
   readonly readBranchPatch: (cwd: string) => Effect.Effect<GitWorkingTreePatch, GitCommandError>;
 
+  readonly blameLine: (
+    input: GitBlameLineInput,
+  ) => Effect.Effect<GitBlameLineResult, GitCommandError>;
+
+  readonly readFileAtRev: (
+    input: GitReadFileAtRevInput,
+  ) => Effect.Effect<GitReadFileAtRevResult, GitCommandError>;
+
+  readonly readRefPatch: (
+    cwd: string,
+    ref: string,
+  ) => Effect.Effect<GitWorkingTreePatch, GitCommandError>;
+
   /** Read aggregate diff counts without materializing a unified patch. */
   readonly readDiffStats: (
     cwd: string,
     scope: GitDiffScope,
+    ref?: string,
   ) => Effect.Effect<GitWorkingTreeDiffStatsResult, GitCommandError>;
 
   /**
@@ -293,6 +317,10 @@ export interface GitCoreShape {
   readonly listBranches: (
     input: GitListBranchesInput,
   ) => Effect.Effect<GitListBranchesResult, GitCommandError>;
+
+  readonly listRecentCommits: (
+    input: GitListRecentCommitsInput,
+  ) => Effect.Effect<GitListRecentCommitsResult, GitCommandError>;
 
   /**
    * Pull current branch from upstream using fast-forward only.

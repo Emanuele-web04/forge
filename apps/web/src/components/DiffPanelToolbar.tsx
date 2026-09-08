@@ -37,11 +37,18 @@ import { REPO_DIFF_SCOPE_LABELS } from "~/repoDiffScopeStore";
 import { formatShortTimestamp } from "~/timestampFormat";
 import {
   DIFF_PANEL_PICKER_SCOPE_OPTIONS,
+  isDiffPanelRepoScopeOption,
   resolveDiffPanelPickerLabel,
   resolveDiffPanelScopePickerValue,
+  type DiffPanelRepoScopeOption,
   type DiffPanelTurnScopeIntent,
   type DiffPanelViewSource,
 } from "./DiffPanel.logic";
+import {
+  DiffPanelChangeNavigationButtons,
+  type DiffPanelChangeNavigation,
+} from "./DiffPanelChangeNavigation";
+import { DiffPanelCompareRefMenuSection } from "./DiffPanelCompareRefMenuSection";
 import { DiffPanelFileJumpMenu } from "./DiffPanelFileJumpMenu";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { EnvironmentRowBody, EnvironmentRowChevron } from "./chat/environment/EnvironmentRow";
@@ -101,7 +108,12 @@ interface DiffPanelToolbarProps {
   isDiffCopied: boolean;
   reloading: boolean;
   allFilesCollapsed: boolean;
-  onSelectRepoScope: (scope: RepoDiffScope) => void;
+  changeMarkersEnabled: boolean;
+  changeNavigation: DiffPanelChangeNavigation;
+  onChangeMarkersEnabledChange: (enabled: boolean) => void;
+  compareRef: string | null;
+  onSelectRepoScope: (scope: DiffPanelRepoScopeOption) => void;
+  onSelectCompareRef: (ref: string) => void;
   onSelectAllTurns: () => void;
   onSelectLastTurn: () => void;
   onSelectTurn: (turnId: TurnId | null) => void;
@@ -129,7 +141,7 @@ function ScopeCountBadge(props: { count: number | undefined }) {
   );
 }
 
-function resolveScopeMenuIcon(scope: RepoDiffScope | "lastTurn") {
+function resolveScopeMenuIcon(scope: DiffPanelRepoScopeOption | "lastTurn") {
   switch (scope) {
     case "unstaged":
       return <ChangesIcon className={DIFF_PANEL_MENU_ICON_CLASS_NAME} />;
@@ -159,7 +171,11 @@ function resolveTurnNumber(
 
 export const DiffPanelToolbar = function DiffPanelToolbar(props: DiffPanelToolbarProps) {
   const [visibleTurnCount, setVisibleTurnCount] = useState(INITIAL_VISIBLE_TURN_COUNT);
-  const scopePickerLabel = resolveDiffPanelPickerLabel(props.viewSource, props.turnScopeIntent);
+  const scopePickerLabel = resolveDiffPanelPickerLabel(
+    props.viewSource,
+    props.turnScopeIntent,
+    props.compareRef,
+  );
 
   let scopePickerIcon: ReactNode;
   if (props.viewSource.kind === "turn") {
@@ -190,6 +206,7 @@ export const DiffPanelToolbar = function DiffPanelToolbar(props: DiffPanelToolba
     viewSource: props.viewSource,
     latestTurnId,
     turnScopeIntent: props.turnScopeIntent,
+    compareRef: props.compareRef,
   });
   const selectedTurnIndex = props.selectedTurnId
     ? props.orderedTurnDiffSummaries.findIndex((summary) => summary.turnId === props.selectedTurnId)
@@ -254,12 +271,7 @@ export const DiffPanelToolbar = function DiffPanelToolbar(props: DiffPanelToolba
                   props.onSelectLastTurn();
                   return;
                 }
-                if (
-                  value === "workingTree" ||
-                  value === "unstaged" ||
-                  value === "staged" ||
-                  value === "branch"
-                ) {
+                if (isDiffPanelRepoScopeOption(value)) {
                   props.onSelectRepoScope(value);
                 }
               }}
@@ -281,6 +293,14 @@ export const DiffPanelToolbar = function DiffPanelToolbar(props: DiffPanelToolba
               </MenuRadioItem>
             </MenuRadioGroup>
           </MenuGroup>
+          <DiffPanelCompareRefMenuSection
+            cwd={props.activeCwd}
+            open={props.scopePickerOpen ?? false}
+            compareRef={props.compareRef}
+            scopeIsRef={props.viewSource.kind === "repo" && props.viewSource.scope === "ref"}
+            iconClassName={DIFF_PANEL_MENU_ICON_CLASS_NAME}
+            onSelectCompareRef={props.onSelectCompareRef}
+          />
         </ComposerPickerMenuPopup>
       </Menu>
 
@@ -362,6 +382,15 @@ export const DiffPanelToolbar = function DiffPanelToolbar(props: DiffPanelToolba
                 >
                   Wrap long lines
                 </MenuCheckboxItem>
+                <MenuCheckboxItem
+                  checked={props.changeMarkersEnabled}
+                  variant="switch"
+                  onCheckedChange={(checked) => {
+                    props.onChangeMarkersEnabledChange(checked === true);
+                  }}
+                >
+                  Change markers
+                </MenuCheckboxItem>
                 {props.diffCopyText ? (
                   <MenuItem
                     onClick={() => {
@@ -387,6 +416,11 @@ export const DiffPanelToolbar = function DiffPanelToolbar(props: DiffPanelToolba
               </MenuGroup>
             </ComposerPickerMenuPopup>
           </Menu>
+
+          <DiffPanelChangeNavigationButtons
+            navigation={props.changeNavigation}
+            className={DIFF_PANEL_TOOLBAR_ICON_BUTTON_CLASS_NAME}
+          />
 
           <DiffPanelFileJumpMenu
             renderableFiles={props.renderableFiles}

@@ -31,6 +31,7 @@ import {
   use,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -44,8 +45,10 @@ import {
   type ChatFileReference,
 } from "~/lib/chatReferences";
 import { resolveDiffThemeName, type DiffThemeName } from "~/lib/diffRendering";
+import { extractEditorGutterChanges, type EditorGutterChangeRange } from "~/lib/editorGutterDiff";
 import { formatFileCommentRange, type FileCommentSelection } from "~/lib/fileComments";
 import { showFileReferenceContextMenu } from "~/lib/fileReferenceContextMenu";
+import { gitWorkingTreeDiffQueryOptions } from "~/lib/gitReactQuery";
 import { PlusIcon } from "~/lib/icons";
 import { toggleMarkdownTaskMarker } from "~/lib/markdownTaskList";
 import { isRpcCapacityExceededError } from "~/lib/expensiveReadRetry";
@@ -57,7 +60,7 @@ import {
   refetchFreshProjectFileQuery,
   projectResolveOutOfRootFileReferenceQueryOptions,
 } from "~/lib/projectReactQuery";
-import { gitQueryKeys } from "~/lib/gitReactQuery";
+import { gitQueryKeys, refreshGitWorkingTreeDiffsForCwd } from "~/lib/gitReactQuery";
 import {
   MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS,
   cacheSyntaxHighlightedHtml,
@@ -68,6 +71,7 @@ import {
   highlightCodeToHtmlWithFallback,
 } from "~/lib/syntaxHighlighting";
 import { cn } from "~/lib/utils";
+import { resolveWorkspaceFileEditorReadOnlyReason } from "~/lib/workspaceFileEditor";
 import { readNativeApi } from "~/nativeApi";
 import ChatMarkdown from "./ChatMarkdown";
 import { FileLineCommentBox } from "./chat/FileLineCommentBox";
@@ -257,6 +261,47 @@ function FileContentsView(props: { path: string; contents: string; themeName: Di
   );
 }
 
+function filePreviewRowOffset(rows: number): string {
+  return `calc(var(--editor-file-padding, 1rem) + ${rows} * var(--editor-file-line-height, 1.65) * 1em)`;
+}
+
+function filePreviewRowSpan(rows: number): string {
+  return `calc(${rows} * var(--editor-file-line-height, 1.65) * 1em)`;
+}
+
+function FilePreviewChangeGutter(props: {
+  ranges: readonly EditorGutterChangeRange[];
+  subtle: boolean;
+}) {
+  return (
+    <div
+      className="editor-file-viewer__change-gutter"
+      data-subtle={props.subtle ? "true" : undefined}
+      aria-hidden="true"
+    >
+      {props.ranges.map((range) =>
+        range.kind === "deleted" ? (
+          <span
+            key={`deleted-${range.startLine}`}
+            className="editor-file-viewer__change-notch"
+            style={{ top: filePreviewRowOffset(range.startLine) }}
+          />
+        ) : (
+          <span
+            key={`${range.kind}-${range.startLine}-${range.endLine}`}
+            className="editor-file-viewer__change-bar"
+            data-change={range.kind}
+            style={{
+              top: filePreviewRowOffset(range.startLine - 1),
+              height: filePreviewRowSpan(range.endLine - range.startLine + 1),
+            }}
+          />
+        ),
+      )}
+    </div>
+  );
+}
+
 // Mimics indented code lines so the placeholder reads as a file body
 // instead of a generic spinner block.
 const FILE_PREVIEW_SKELETON_LINES = [
@@ -319,6 +364,7 @@ export interface WorkspaceFilePreviewProps {
   onReferenceInChat?: ((reference: ChatFileReference) => void) | undefined;
   onAskWhyInChat?: ((reference: ChatFileReference) => void) | undefined;
   onCommentInChat?: ((comment: FileCommentSelection) => void) | undefined;
+  onEditFile?: ((filePath: string) => void) | undefined;
 }
 
 type EditableLineEnding = Exclude<ProjectFileLineEnding, "mixed">;
@@ -461,6 +507,9 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     isWorkspaceRelativePathSafe(requestedFilePath)
       ? requestedFilePath
       : null);
+  // Decided below once the file and its editability are known; the watcher
+  // callback reads the latest value through the ref.
+  const changeGutterEnabledRef = useRef(false);
   const handleWatchedFileChange = useCallback(
     (event: ProjectFileChangeEvent) => {
       if (!workspaceRoot || !watchedWorkspaceRelativePath) return;
@@ -468,10 +517,16 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         cwd: workspaceRoot,
         relativePath: requestedFilePath,
       });
-      void queryClient.invalidateQueries({
-        queryKey: gitQueryKeys.workingTreeDiffs(workspaceRoot),
-        refetchType: "none",
-      });
+      if (changeGutterEnabledRef.current) {
+        // The gutter renders from the active diff query, so refresh it now;
+        // a bare invalidation would leave the markers stale until refocus.
+        void refreshGitWorkingTreeDiffsForCwd(queryClient, workspaceRoot);
+      } else {
+        void queryClient.invalidateQueries({
+          queryKey: gitQueryKeys.workingTreeDiffs(workspaceRoot),
+          refetchType: "none",
+        });
+      }
       if (fileIsImage || fileIsPdf) {
         setBinaryPreviewReloading(true);
         setBinaryPreviewRevision((current) => current + 1);
@@ -569,7 +624,8 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     fileQuery.data.version !== null &&
     fileQuery.data.encoding !== null &&
     fileQuery.data.lineEnding !== null &&
-    fileQuery.data.lineEnding !== "mixed"
+    fileQuery.data.lineEnding !== "mixed" &&
+    !fileQuery.data.symlink
       ? {
           key: `${workspaceRoot}\0${fileQuery.data.relativePath}`,
           relativePath: fileQuery.data.relativePath,
@@ -598,13 +654,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       ? null
       : !fileIsWorkspaceRelative
         ? "Only files inside the project can be edited."
-        : fileQuery.data.truncated
-          ? "Large files are read-only."
-          : fileQuery.data.lineEnding === "mixed"
-            ? "Files with mixed line endings are read-only to preserve their exact format."
-            : fileQuery.data.version === null || fileQuery.data.encoding === null
-              ? "This file format is read-only."
-              : null;
+        : resolveWorkspaceFileEditorReadOnlyReason(fileQuery.data);
 
   const handleEditBufferChange = (contents: string) => {
     if (!editableDocument) return;
@@ -714,6 +764,30 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         );
       });
   };
+  // Wait for the file read before asking for the working-tree diff: while the
+  // read is pending the editable document is still unresolved, and an editor
+  // that turns out to be editable never needs the read-only gutter.
+  const changeGutterEnabled =
+    props.workspaceRoot !== null &&
+    resolvedWorkspaceRelativePath !== null &&
+    fileQuery.data !== undefined &&
+    !fileIsImage &&
+    !fileIsPdf &&
+    !showMarkdownPreview &&
+    editableDocument === null;
+  changeGutterEnabledRef.current = changeGutterEnabled;
+  const workingTreeDiffQuery = useQuery(
+    gitWorkingTreeDiffQueryOptions({
+      cwd: props.workspaceRoot,
+      filePath: resolvedWorkspaceRelativePath,
+      enabled: changeGutterEnabled,
+    }),
+  );
+  const workingTreePatch = changeGutterEnabled ? workingTreeDiffQuery.data?.patch : undefined;
+  const { ranges: changeRanges, wholeFileAddition: changeGutterSubtle } = useMemo(
+    () => extractEditorGutterChanges(workingTreePatch, resolvedWorkspaceRelativePath),
+    [workingTreePatch, resolvedWorkspaceRelativePath],
+  );
   // Highlight -> floating "Add to chat" -> reference that points at exactly what
   // was selected, mirroring the transcript flow. In the source view the DOM
   // mirrors the file's lines/columns 1:1, so a selection resolves to an exact
@@ -860,6 +934,19 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     fileQuery.data.lineEnding !== null &&
     fileQuery.data.lineEnding !== "mixed" &&
     !editBufferDirty;
+  const { onEditFile } = props;
+  // The editor writes the path back in place, so it is offered only for
+  // sources the shared editor rules consider writable (symlinks included).
+  const editFile =
+    onEditFile &&
+    canToggleTasks &&
+    !fileIsImage &&
+    !fileIsPdf &&
+    filePath !== null &&
+    fileQuery.data !== undefined &&
+    resolveWorkspaceFileEditorReadOnlyReason(fileQuery.data) === null
+      ? () => onEditFile(filePath)
+      : undefined;
 
   if (!props.workspaceRoot && !fileIsLocalAbsolute && !fileIsScratchBinaryPreview) {
     return (
@@ -939,6 +1026,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         onAskWhyInChat={onAskWhyInChat}
         contentsForCopy={fileIsImage || fileQuery.data === undefined ? null : displayedFileContents}
         truncated={fileQuery.data?.truncated ?? false}
+        onEditFile={editFile}
         dirty={editBufferDirty}
         readOnlyReason={readOnlyReason}
         reloading={fileIsImage || fileIsPdf ? binaryPreviewReloading : fileQuery.isFetching}
@@ -1065,6 +1153,9 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
           ) : (
             <FileContentsView path={filePath} contents={fileContents} themeName={diffThemeName} />
           )}
+          {!showMarkdownPreview && changeRanges.length > 0 ? (
+            <FilePreviewChangeGutter ranges={changeRanges} subtle={changeGutterSubtle} />
+          ) : null}
           {!showMarkdownPreview && lineCount > 0 ? (
             <span className="sr-only">{lineCount} lines</span>
           ) : null}

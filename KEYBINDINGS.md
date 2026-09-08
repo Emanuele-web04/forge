@@ -28,7 +28,10 @@ See the full schema for more details: [`packages/contracts/src/keybindings.ts`](
   { "key": "mod+shift+n", "command": "chat.newLocal", "when": "!terminalFocus" },
   { "key": "mod+shift+t", "command": "chat.newTerminal", "when": "!terminalFocus" },
   { "key": "cmd+l", "command": "composer.focus.toggle", "when": "!terminalFocus" },
-  { "key": "mod+o", "command": "editor.openFavorite" }
+  { "key": "alt+arrowdown", "command": "diff.change.next", "when": "!terminalFocus" },
+  { "key": "alt+arrowup", "command": "diff.change.previous", "when": "!terminalFocus" },
+  { "key": "mod+o", "command": "editor.openFavorite" },
+  { "key": "mod+s", "command": "editor.file.save", "when": "!terminalFocus" }
 ]
 ```
 
@@ -55,9 +58,12 @@ Invalid rules are ignored. Invalid config files are ignored. Warnings are logged
 - `chat.new`: create a new chat thread preserving the active thread's branch/worktree state
 - `chat.newLocal`: create a new chat thread for the active project in a new environment (local/worktree determined by app settings (default `local`))
 - `chat.newTerminal`: create a new terminal-first thread preserving the active thread's branch/worktree state
+- `diff.change.next`: scroll the diff panel to the next changed file (only while the diff panel is open)
+- `diff.change.previous`: scroll the diff panel to the previous changed file (only while the diff panel is open)
 - `composer.focus.toggle`: focus or blur the chat prompt composer
 - `thread.copyId`: copy the active thread's ID to the clipboard
 - `editor.openFavorite`: open current project/worktree in the last-used editor
+- `editor.file.save`: write the focused file editor's unsaved changes back to disk (editor view file and diff editors)
 - `script.{id}.run`: run a project script by id (for example `script.test.run`)
 
 ### Key Syntax

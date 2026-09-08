@@ -64,6 +64,11 @@ describe("buildShortcutSheetSections", () => {
         (entry) => entry.id === "sidebar.activity" && entry.shortcutLabel === "⌥⌘U",
       ),
     ).toBe(true);
+    expect(
+      sections[0]?.entries.some(
+        (entry) => entry.id === "editor.file.save" && entry.label === "Save file",
+      ),
+    ).toBe(true);
     expect(sections[1]?.title).toBe("In workspace mode");
     expect(sections[2]?.entries[0]?.shortcutLabel).toBe("⌘R");
   });

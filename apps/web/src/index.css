@@ -1107,10 +1107,10 @@ label:has(> select#reasoning-effort) select {
   border: 0;
   border-radius: 0;
   background: transparent !important;
-  padding: 1rem;
+  padding: var(--editor-file-padding, 1rem);
   font-family: var(--font-chat-code-family);
   font-size: var(--app-font-size-chat-code, 12px);
-  line-height: 1.65;
+  line-height: var(--editor-file-line-height, 1.65);
   tab-size: 2;
 }
 
@@ -1195,6 +1195,45 @@ label:has(> select#reasoning-effort) select {
    in content space and therefore scroll with the lines. */
 .editor-file-viewer {
   position: relative;
+  --editor-file-padding: 1rem;
+  --editor-file-line-height: 1.65;
+}
+
+.editor-file-viewer__change-gutter {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  pointer-events: none;
+  font-family: var(--font-chat-code-family);
+  font-size: var(--app-font-size-chat-code, 12px);
+}
+
+.editor-file-viewer__change-gutter[data-subtle="true"] {
+  opacity: 0.6;
+}
+
+.editor-file-viewer__change-bar {
+  position: absolute;
+  left: calc(var(--editor-file-padding) + 4.6ch);
+  width: 3px;
+  border-radius: 1px;
+  background: var(--success);
+}
+
+.editor-file-viewer__change-bar[data-change="modified"] {
+  background: var(--info);
+}
+
+.editor-file-viewer__change-notch {
+  position: absolute;
+  left: calc(var(--editor-file-padding) + 4.6ch);
+  width: 0;
+  height: 0;
+  transform: translateY(-50%);
+  border-top: 3px solid transparent;
+  border-bottom: 3px solid transparent;
+  border-left: 5px solid var(--destructive);
 }
 
 /* Hover affordance painted over the line-number gutter: an opaque surface strip

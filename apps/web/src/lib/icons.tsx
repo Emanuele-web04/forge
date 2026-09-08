@@ -10,6 +10,7 @@ import {
   IconAlertTriangle,
   IconArchive,
   IconArrowBackUp,
+  IconArrowForwardUp,
   IconArrowDown,
   IconArrowLeft,
   IconArrowRight,
@@ -295,6 +296,7 @@ export const TextWrapIcon = adaptIcon(IconTextWrap);
 export const Trash2 = adaptIcon(IconTrash);
 export const TriangleAlertIcon = adaptIcon(IconAlertTriangle);
 export const Undo2Icon = adaptIcon(IconArrowBackUp);
+export const Redo2Icon = adaptIcon(IconArrowForwardUp);
 export const WorktreeIcon = centralIconWrapper("arrow-split-right");
 export const XIcon = adaptIcon(IconX);
 export const ZapIcon = adaptIcon(IconBolt);

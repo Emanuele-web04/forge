@@ -220,6 +220,10 @@
       "types": "./src/toolOutputSummary.ts",
       "import": "./src/toolOutputSummary.ts"
     },
+    "./workspaceFileWrite": {
+      "types": "./src/workspaceFileWrite.ts",
+      "import": "./src/workspaceFileWrite.ts"
+    },
     "./localPreviewFiles": {
       "types": "./src/localPreviewFiles.ts",
       "import": "./src/localPreviewFiles.ts"

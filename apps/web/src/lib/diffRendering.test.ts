@@ -10,10 +10,13 @@ import {
   compareDiffPaths,
   fileDiffStatsByPath,
   getRenderablePatch,
+  hasUneditableGitMode,
   resolveDiffCopyText,
   resolveFileDiffStatByChangedPath,
   resolveFileDiffPath,
+  resolveFileDiffPrevPath,
   sortFileDiffsByPath,
+  splitPatchIntoFileSegments,
   splitRepoRelativePath,
   summarizePatchTotals,
 } from "./diffRendering";
@@ -44,6 +47,94 @@ describe("buildPatchCacheKey", () => {
     expect(buildPatchCacheKey(patch, "diff-panel:light")).not.toBe(
       buildPatchCacheKey(patch, "diff-panel:dark"),
     );
+  });
+});
+
+const FILE_A_PATCH = [
+  "diff --git a/a.ts b/a.ts",
+  "index 0000001..0000002 100644",
+  "--- a/a.ts",
+  "+++ b/a.ts",
+  "@@ -1,2 +1,2 @@",
+  " const shared = 1;",
+  "-const a = 1;",
+  "+const a = 2;",
+].join("\n");
+
+const FILE_B_PATCH = [
+  "diff --git a/b.ts b/b.ts",
+  "index 0000003..0000004 100644",
+  "--- a/b.ts",
+  "+++ b/b.ts",
+  "@@ -1,1 +1,2 @@",
+  " const b = 1;",
+  "+const added = 2;",
+].join("\n");
+
+const FILE_B_PATCH_EDITED = FILE_B_PATCH.replace("const added = 2;", "const added = 3;");
+
+describe("splitPatchIntoFileSegments", () => {
+  it("splits a multi-file patch on file boundaries", () => {
+    const segments = splitPatchIntoFileSegments(`${FILE_A_PATCH}\n${FILE_B_PATCH}`);
+
+    expect(segments).toHaveLength(2);
+    expect(segments[0]).toContain("a/a.ts");
+    expect(segments[0]).not.toContain("a/b.ts");
+    expect(segments[1]).toContain("a/b.ts");
+  });
+
+  it("returns a single-file patch unchanged", () => {
+    expect(splitPatchIntoFileSegments(FILE_A_PATCH)).toEqual([FILE_A_PATCH]);
+  });
+
+  it("keeps leading metadata attached to the first segment", () => {
+    const segments = splitPatchIntoFileSegments(`commit message\n${FILE_A_PATCH}\n${FILE_B_PATCH}`);
+
+    expect(segments).toHaveLength(2);
+    expect(segments[0]).toContain("commit message");
+  });
+
+  it("does not split on hunk lines that mention diff --git", () => {
+    const patch = [
+      "diff --git a/notes.md b/notes.md",
+      "--- a/notes.md",
+      "+++ b/notes.md",
+      "@@ -1,1 +1,2 @@",
+      " existing",
+      "+diff --git is a header prefix",
+    ].join("\n");
+
+    expect(splitPatchIntoFileSegments(patch)).toEqual([patch]);
+  });
+});
+
+describe("getRenderablePatch per-file cache keys", () => {
+  it("keeps a file's render key stable when another file changes", () => {
+    const before = getRenderablePatch(`${FILE_A_PATCH}\n${FILE_B_PATCH}`);
+    const after = getRenderablePatch(`${FILE_A_PATCH}\n${FILE_B_PATCH_EDITED}`);
+    if (before?.kind !== "files" || after?.kind !== "files") {
+      throw new Error("expected parsed files");
+    }
+
+    const keyOf = (renderable: typeof before, path: string) => {
+      const file = renderable.files.find((candidate) => resolveFileDiffPath(candidate) === path);
+      if (!file) throw new Error(`missing ${path}`);
+      return buildFileDiffRenderKey(file);
+    };
+
+    expect(keyOf(after, "a.ts")).toBe(keyOf(before, "a.ts"));
+    expect(keyOf(after, "b.ts")).not.toBe(keyOf(before, "b.ts"));
+  });
+
+  it("parses the same files and stats as before splitting", () => {
+    const patch = `${FILE_A_PATCH}\n${FILE_B_PATCH}`;
+    const renderable = getRenderablePatch(patch);
+    if (renderable?.kind !== "files") {
+      throw new Error("expected parsed files");
+    }
+
+    expect(renderable.files.map((file) => resolveFileDiffPath(file))).toEqual(["a.ts", "b.ts"]);
+    expect(summarizePatchTotals(patch)).toEqual({ additions: 2, deletions: 1, fileCount: 2 });
   });
 });
 
@@ -84,6 +175,143 @@ describe("resolveDiffCopyText", () => {
   it("does not expose empty or missing patches as copyable", () => {
     expect(resolveDiffCopyText(undefined)).toBeNull();
     expect(resolveDiffCopyText(" \n\t ")).toBeNull();
+  });
+});
+
+describe("resolveFileDiffPrevPath", () => {
+  const parseSingleFile = (patch: string) => {
+    const renderable = getRenderablePatch(patch, "prev-path:test");
+    if (renderable?.kind !== "files" || renderable.files.length !== 1) {
+      throw new Error("expected one parsed file");
+    }
+    return renderable.files[0]!;
+  };
+
+  it("returns the old path only for renamed files", () => {
+    const renamed = parseSingleFile(
+      [
+        "diff --git a/src/old.ts b/src/new.ts",
+        "similarity index 80%",
+        "rename from src/old.ts",
+        "rename to src/new.ts",
+        "index 1111111..2222222 100644",
+        "--- a/src/old.ts",
+        "+++ b/src/new.ts",
+        "@@ -1,1 +1,1 @@",
+        "-const value = 1;",
+        "+const value = 2;",
+        "",
+      ].join("\n"),
+    );
+    expect(resolveFileDiffPath(renamed)).toBe("src/new.ts");
+    expect(resolveFileDiffPrevPath(renamed)).toBe("src/old.ts");
+  });
+
+  it("reports no old path for added files, whose base side does not exist", () => {
+    const added = parseSingleFile(
+      [
+        "diff --git a/src/added.ts b/src/added.ts",
+        "new file mode 100644",
+        "index 0000000..2222222",
+        "--- /dev/null",
+        "+++ b/src/added.ts",
+        "@@ -0,0 +1,1 @@",
+        "+const value = 1;",
+        "",
+      ].join("\n"),
+    );
+    expect(added.type).toBe("new");
+    expect(resolveFileDiffPrevPath(added)).toBeNull();
+  });
+
+  it("reports no old path for in-place edits", () => {
+    const changed = parseSingleFile(
+      [
+        "diff --git a/src/one.ts b/src/one.ts",
+        "index 1111111..2222222 100644",
+        "--- a/src/one.ts",
+        "+++ b/src/one.ts",
+        "@@ -1,1 +1,1 @@",
+        "-const one = 1;",
+        "+const one = 2;",
+        "",
+      ].join("\n"),
+    );
+    expect(resolveFileDiffPrevPath(changed)).toBeNull();
+  });
+});
+
+describe("hasUneditableGitMode", () => {
+  const parseSingleFile = (patch: string) => {
+    const renderable = getRenderablePatch(patch, "symlink:test");
+    if (renderable?.kind !== "files" || renderable.files.length !== 1) {
+      throw new Error("expected one parsed file");
+    }
+    return renderable.files[0]!;
+  };
+
+  it("recognizes changed and added symlinks by their git mode", () => {
+    const changed = parseSingleFile(
+      [
+        "diff --git a/link b/link",
+        "index 1111111..2222222 120000",
+        "--- a/link",
+        "+++ b/link",
+        "@@ -1 +1 @@",
+        "-old-target",
+        "\\ No newline at end of file",
+        "+new-target",
+        "\\ No newline at end of file",
+        "",
+      ].join("\n"),
+    );
+    expect(hasUneditableGitMode(changed)).toBe(true);
+    const added = parseSingleFile(
+      [
+        "diff --git a/link b/link",
+        "new file mode 120000",
+        "index 0000000..2222222",
+        "--- /dev/null",
+        "+++ b/link",
+        "@@ -0,0 +1 @@",
+        "+target",
+        "\\ No newline at end of file",
+        "",
+      ].join("\n"),
+    );
+    expect(hasUneditableGitMode(added)).toBe(true);
+  });
+
+  it("recognizes submodule entries by their gitlink mode", () => {
+    const submodule = parseSingleFile(
+      [
+        "diff --git a/vendor/lib b/vendor/lib",
+        "index 1111111..2222222 160000",
+        "--- a/vendor/lib",
+        "+++ b/vendor/lib",
+        "@@ -1 +1 @@",
+        "-Subproject commit 1111111111111111111111111111111111111111",
+        "+Subproject commit 2222222222222222222222222222222222222222",
+        "",
+      ].join("\n"),
+    );
+    expect(hasUneditableGitMode(submodule)).toBe(true);
+  });
+
+  it("treats regular files as editable", () => {
+    const regular = parseSingleFile(
+      [
+        "diff --git a/src/one.ts b/src/one.ts",
+        "index 1111111..2222222 100644",
+        "--- a/src/one.ts",
+        "+++ b/src/one.ts",
+        "@@ -1,1 +1,1 @@",
+        "-const one = 1;",
+        "+const one = 2;",
+        "",
+      ].join("\n"),
+    );
+    expect(hasUneditableGitMode(regular)).toBe(false);
   });
 });
 

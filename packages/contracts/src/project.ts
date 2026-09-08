@@ -207,6 +207,8 @@ export const ProjectReadFileResult = Schema.Struct({
   version: Schema.NullOr(TrimmedNonEmptyString),
   encoding: Schema.NullOr(ProjectFileEncoding),
   lineEnding: Schema.NullOr(ProjectFileLineEnding),
+  /** True when the requested path itself is a symbolic link; reads follow it, writes must not edit through it. */
+  symlink: Schema.optional(Schema.Boolean),
 });
 export type ProjectReadFileResult = typeof ProjectReadFileResult.Type;
 

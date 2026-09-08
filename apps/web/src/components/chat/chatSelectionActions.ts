@@ -219,7 +219,10 @@ export function resolveTranscriptSelectionActionLayout(input: {
   selectionRect: DOMRect | null;
   pointer: { x: number; y: number };
   viewport?: { width: number; height: number } | null;
+  size?: { width: number; height: number } | null;
 }): TranscriptSelectionActionLayout {
+  const surfaceWidth = input.size?.width ?? TRANSCRIPT_SELECTION_ACTION_WIDTH_PX;
+  const surfaceHeight = input.size?.height ?? TRANSCRIPT_SELECTION_ACTION_HEIGHT_PX;
   const viewportWidth =
     input.viewport?.width ??
     (typeof window === "undefined" ? input.pointer.x + 8 : window.innerWidth);
@@ -236,29 +239,26 @@ export function resolveTranscriptSelectionActionLayout(input: {
   const availableAbove = selectionTop;
   const availableBelow = viewportHeight - selectionBottom;
   const placement =
-    availableAbove >= TRANSCRIPT_SELECTION_ACTION_HEIGHT_PX + TRANSCRIPT_SELECTION_ACTION_GAP_PX ||
+    availableAbove >= surfaceHeight + TRANSCRIPT_SELECTION_ACTION_GAP_PX ||
     availableAbove >= availableBelow
       ? "top"
       : "bottom";
   const unclampedTop =
     placement === "top"
-      ? selectionTop - TRANSCRIPT_SELECTION_ACTION_HEIGHT_PX - TRANSCRIPT_SELECTION_ACTION_GAP_PX
+      ? selectionTop - surfaceHeight - TRANSCRIPT_SELECTION_ACTION_GAP_PX
       : selectionBottom + TRANSCRIPT_SELECTION_ACTION_GAP_PX;
 
   return {
     left: Math.max(
       8,
       Math.min(
-        Math.round(anchorCenterX - TRANSCRIPT_SELECTION_ACTION_WIDTH_PX / 2),
-        Math.max(viewportWidth - TRANSCRIPT_SELECTION_ACTION_WIDTH_PX - 8, 8),
+        Math.round(anchorCenterX - surfaceWidth / 2),
+        Math.max(viewportWidth - surfaceWidth - 8, 8),
       ),
     ),
     top: Math.max(
       8,
-      Math.min(
-        Math.round(unclampedTop),
-        Math.max(viewportHeight - TRANSCRIPT_SELECTION_ACTION_HEIGHT_PX - 8, 8),
-      ),
+      Math.min(Math.round(unclampedTop), Math.max(viewportHeight - surfaceHeight - 8, 8)),
     ),
     placement,
   };

@@ -175,6 +175,16 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     shortcut: commandShortcut("e", { shiftKey: true }),
     whenAst: whenNotTerminalFocus,
   },
+  {
+    command: "diff.change.next",
+    shortcut: commandShortcut("arrowdown", { altKey: true, modKey: false }),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
+    command: "diff.change.previous",
+    shortcut: commandShortcut("arrowup", { altKey: true, modKey: false }),
+    whenAst: whenNotTerminalFocus,
+  },
   // Cmd-only instead of mod so Ctrl+L remains available to shells on non-macOS.
   {
     command: "composer.focus.toggle",
@@ -280,6 +290,11 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     command: "terminal.workspace.chat",
     shortcut: commandShortcut("2", { ctrlKey: true, modKey: false }),
     whenAst: whenIdentifier("terminalWorkspaceOpen"),
+  },
+  {
+    command: "editor.file.save",
+    shortcut: commandShortcut("s"),
+    whenAst: whenNotTerminalFocus,
   },
 ];
 
@@ -688,6 +703,14 @@ export function isOpenFavoriteEditorShortcut(
   options?: ShortcutMatchOptions,
 ): boolean {
   return matchesCommandShortcut(event, keybindings, "editor.openFavorite", options);
+}
+
+export function isEditorFileSaveShortcut(
+  event: ShortcutEventLike,
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): boolean {
+  return matchesCommandShortcut(event, keybindings, "editor.file.save", options);
 }
 
 export function isTerminalClearShortcut(event: ShortcutEventLike): boolean {

@@ -10,6 +10,7 @@ import {
   DiffPanelShell,
   type DiffPanelMode,
 } from "../DiffPanelShell";
+import type { DiffFileEditRequest } from "../../lib/diffEditBaseRev";
 import type { SplitViewPanePanelState } from "../../splitViewStore";
 import { CHAT_BACKGROUND_CLASS_NAME } from "./composerPickerStyles";
 import { Spinner } from "../ui/spinner";
@@ -46,6 +47,8 @@ export function LazyDiffPanel(props: {
   hideHeader?: boolean;
   onRenderableFilesChange?: (files: ReadonlyArray<FileDiffMetadata>, isLoading: boolean) => void;
   onEditorDiffOptionsChange?: (control: ReactNode | null) => void;
+  onVisibleFileChange?: (filePath: string | null) => void;
+  onEditFile?: (request: DiffFileEditRequest) => void;
 }) {
   return (
     <DiffWorkerPoolProvider>
@@ -68,12 +71,14 @@ export function LazyDiffPanel(props: {
             : {})}
           {...(props.queriesEnabled !== undefined ? { queriesEnabled: props.queriesEnabled } : {})}
           {...(props.hideHeader !== undefined ? { hideHeader: props.hideHeader } : {})}
+          {...(props.onEditFile ? { onEditFile: props.onEditFile } : {})}
           {...(props.onRenderableFilesChange
             ? { onRenderableFilesChange: props.onRenderableFilesChange }
             : {})}
           {...(props.onEditorDiffOptionsChange
             ? { onEditorDiffOptionsChange: props.onEditorDiffOptionsChange }
             : {})}
+          {...(props.onVisibleFileChange ? { onVisibleFileChange: props.onVisibleFileChange } : {})}
         />
       </Suspense>
     </DiffWorkerPoolProvider>

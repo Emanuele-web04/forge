@@ -7,7 +7,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { gitWorkingTreeDiffStatsQueryOptions } from "~/lib/gitReactQuery";
-import { useRepoDiffScopeStore } from "~/repoDiffScopeStore";
+import { useRepoDiffScope } from "~/repoDiffScopeStore";
 
 export interface RepoDiffTotals {
   additions: number;
@@ -29,7 +29,7 @@ export function useRepoDiffTotals({
 }): RepoDiffTotals {
   const refetchInterval = refetchIntervalProp ?? false;
   // Match the Diff panel source selector so every surface shows the selected scope.
-  const repoDiffScope = useRepoDiffScopeStore((store) => store.scope);
+  const { scope: repoDiffScope, compareRef: repoDiffCompareRef } = useRepoDiffScope(gitCwd);
   // Counts only. These poll every few seconds during a live turn, and the patch they used to
   // be derived from grows with the working tree, so fetching it here made a large diff cost
   // megabytes of transfer plus a main-thread reparse per poll. The server counts the same
@@ -38,6 +38,7 @@ export function useRepoDiffTotals({
     gitWorkingTreeDiffStatsQueryOptions({
       cwd: gitCwd,
       scope: repoDiffScope,
+      compareRef: repoDiffCompareRef,
       enabled: isGitRepo,
       refetchInterval,
     }),

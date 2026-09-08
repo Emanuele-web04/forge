@@ -227,6 +227,26 @@ export type RenderablePatch =
       reason: string;
     };
 
+const PATCH_FILE_BOUNDARY_PATTERN = /^diff --git /gm;
+
+export function splitPatchIntoFileSegments(patch: string): string[] {
+  const boundaries: number[] = [];
+  for (const match of patch.matchAll(PATCH_FILE_BOUNDARY_PATTERN)) {
+    boundaries.push(match.index);
+  }
+  if (boundaries.length <= 1) {
+    return [patch];
+  }
+  const segments: string[] = [];
+  let start = 0;
+  for (const boundary of boundaries.slice(1)) {
+    segments.push(patch.slice(start, boundary));
+    start = boundary;
+  }
+  segments.push(patch.slice(start));
+  return segments;
+}
+
 export function getRenderablePatch(
   patch: string | undefined,
   cacheScope = "diff-panel",
@@ -236,11 +256,11 @@ export function getRenderablePatch(
   if (normalizedPatch.length === 0) return null;
 
   try {
-    const parsedPatches = parsePatchFiles(
-      normalizedPatch,
-      buildPatchCacheKey(normalizedPatch, cacheScope),
+    const files = splitPatchIntoFileSegments(normalizedPatch).flatMap((segment) =>
+      parsePatchFiles(segment, buildPatchCacheKey(segment, cacheScope)).flatMap(
+        (parsedPatch) => parsedPatch.files,
+      ),
     );
-    const files = parsedPatches.flatMap((parsedPatch) => parsedPatch.files);
     if (files.length > 0) {
       return { kind: "files", files };
     }
@@ -267,6 +287,33 @@ export function resolveFileDiffPath(fileDiff: FileDiffMetadata): string {
     return raw.slice(2);
   }
   return raw;
+}
+
+// Resolve the pre-change path for a parsed file diff (the old side of a
+// rename/move), stripping the conventional `a/` patch prefix. Returns null for
+// files that were not renamed or moved: the parser also fills `prevName` for
+// added files, where it is `/dev/null` or a copy of the new name.
+export function resolveFileDiffPrevPath(fileDiff: FileDiffMetadata): string | null {
+  if (
+    fileDiff.prevName === undefined ||
+    (fileDiff.type !== "rename-pure" && fileDiff.type !== "rename-changed")
+  ) {
+    return null;
+  }
+  const raw = fileDiff.prevName;
+  if (raw.startsWith("a/") || raw.startsWith("b/")) {
+    return raw.slice(2);
+  }
+  return raw;
+}
+
+// Symlinks (120000) show their target path but the workspace read/write path
+// follows the link, and gitlinks (160000, submodules) are directories in the
+// working tree: neither can be edited in place as the text the diff shows.
+const UNEDITABLE_GIT_MODES = new Set(["120000", "160000"]);
+
+export function hasUneditableGitMode(fileDiff: FileDiffMetadata): boolean {
+  return UNEDITABLE_GIT_MODES.has(fileDiff.mode ?? fileDiff.prevMode ?? "");
 }
 
 // Stable identity for a parsed file diff, used as a React key and selection id.
@@ -374,6 +421,21 @@ function diffStatPathsReferToSameFile(left: string, right: string): boolean {
   );
 }
 
+export function resolveDiffEntryByPath<T>(
+  entriesByPath: ReadonlyMap<string, T>,
+  changedFilePath: string,
+): T | undefined {
+  const direct = entriesByPath.get(changedFilePath);
+  if (direct) {
+    return direct;
+  }
+
+  const matches = Array.from(entriesByPath.entries())
+    .filter(([path]) => diffStatPathsReferToSameFile(path, changedFilePath))
+    .map(([, entry]) => entry);
+  return matches.length === 1 ? matches.at(0) : undefined;
+}
+
 // Resolve a parsed patch stat for a visible changed-file row. Parsed patch paths are
 // usually repo-relative, while work-log changedFiles can be absolute or basename-only.
 export function resolveFileDiffStatByChangedPath(
@@ -385,17 +447,9 @@ export function resolveFileDiffStatByChangedPath(
     return undefined;
   }
 
-  const direct = statsByPath.get(changedFilePath);
-  if (direct) {
-    return direct;
-  }
-
-  const matchingStats = Array.from(statsByPath.entries())
-    .filter(([path]) => diffStatPathsReferToSameFile(path, changedFilePath))
-    .map(([, stat]) => stat);
-  const uniqueMatch = matchingStats.length === 1 ? matchingStats.at(0) : undefined;
-  if (uniqueMatch) {
-    return uniqueMatch;
+  const match = resolveDiffEntryByPath(statsByPath, changedFilePath);
+  if (match) {
+    return match;
   }
 
   if (statsByPath.size === 1 && changedFileCount === 1) {

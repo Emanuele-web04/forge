@@ -4,6 +4,7 @@ import * as NodeFs from "node:fs/promises";
 import * as NodePath from "node:path";
 
 import { isLocalAbsolutePath } from "@synara/shared/path";
+import { normalizeLineEndings } from "@synara/shared/text";
 import { Effect, Layer, Path } from "effect";
 
 import { resolveLocalPreviewGrantRealPath } from "../../localImageFiles";
@@ -39,10 +40,6 @@ function detectLineEnding(contents: string): "lf" | "crlf" | "cr" | "mixed" {
   if (crlfCount > 0) return "crlf";
   if (crCount > 0) return "cr";
   return "lf";
-}
-
-function normalizeLineEndings(contents: string): string {
-  return contents.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
 }
 
 function encodeWorkspaceText(
@@ -384,6 +381,15 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
         realPath = resolution.realPath;
       }
 
+      // The requested path (not its resolved target) decides whether the file
+      // is a symlink, so editors can refuse to write through the link.
+      const symlink = yield* Effect.promise(() =>
+        NodeFs.lstat(target.absolutePath).then(
+          (stat) => stat.isSymbolicLink(),
+          () => false,
+        ),
+      );
+
       // Stat through the open handle so the size and the bytes come from the
       // same file even if the path is swapped between the two calls.
       const { bytes, fileSize } = yield* Effect.tryPromise({
@@ -432,6 +438,7 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
           version: null,
           encoding: null,
           lineEnding: null,
+          symlink,
         };
       }
 
@@ -458,6 +465,7 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
         version: fileVersion(bytes),
         encoding: hasUtf8Bom ? "utf8-bom" : "utf8",
         lineEnding,
+        symlink,
       };
     },
   );
@@ -471,12 +479,13 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
     });
 
     const guardedWrite = input.expectedVersion !== undefined;
-    if (
-      guardedWrite &&
-      (input.encoding === undefined ||
-        input.lineEnding === undefined ||
-        input.lineEnding === "mixed")
-    ) {
+    // Any save that knows the file's format re-encodes with it, so an
+    // unguarded overwrite keeps CRLF/BOM files in their original shape too.
+    const textFormat =
+      input.encoding !== undefined && input.lineEnding !== undefined && input.lineEnding !== "mixed"
+        ? { encoding: input.encoding, lineEnding: input.lineEnding }
+        : null;
+    if (guardedWrite && textFormat === null) {
       return yield* new WorkspaceFileSystemError({
         cwd: input.cwd,
         relativePath: input.relativePath,
@@ -484,12 +493,8 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
         detail: "Guarded text saves require a supported encoding and consistent line endings.",
       });
     }
-    const bytes = guardedWrite
-      ? encodeWorkspaceText(
-          input.contents,
-          input.encoding as "utf8" | "utf8-bom",
-          input.lineEnding as "lf" | "crlf" | "cr",
-        )
+    const bytes = textFormat
+      ? encodeWorkspaceText(input.contents, textFormat.encoding, textFormat.lineEnding)
       : Buffer.from(input.contents, "utf8");
     if (guardedWrite && bytes.length > DEFAULT_READ_FILE_MAX_BYTES) {
       return yield* new WorkspaceFileSystemError({

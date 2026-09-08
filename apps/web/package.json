@@ -29,7 +29,7 @@
     "@formkit/auto-animate": "^0.9.0",
     "@legendapp/list": "3.3.3",
     "@lexical/react": "^0.41.0",
-    "@pierre/diffs": "^1.2.12",
+    "@pierre/diffs": "1.3.5",
     "@synara/contracts": "workspace:*",
     "@synara/shared": "workspace:*",
     "@tabler/icons-react": "^3.44.0",

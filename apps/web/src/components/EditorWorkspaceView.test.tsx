@@ -56,6 +56,10 @@ describe("EditorWorkspaceView", () => {
         onSelectDiffFile={vi.fn()}
         onToggleDirectory={vi.fn()}
         onCenterModeChange={vi.fn()}
+        editFilePath={null}
+        editDiffBaseRev={null}
+        onEditFile={vi.fn()}
+        onCloseEdit={vi.fn()}
         onExitEditorView={vi.fn()}
         onSelectProject={vi.fn()}
       />,
@@ -81,6 +85,10 @@ describe("EditorWorkspaceView", () => {
         onSelectDiffFile={vi.fn()}
         onToggleDirectory={vi.fn()}
         onCenterModeChange={vi.fn()}
+        editFilePath={null}
+        editDiffBaseRev={null}
+        onEditFile={vi.fn()}
+        onCloseEdit={vi.fn()}
         onExitEditorView={vi.fn()}
       />,
     );
@@ -110,6 +118,10 @@ describe("EditorWorkspaceView", () => {
           onSelectDiffFile={vi.fn()}
           onToggleDirectory={vi.fn()}
           onCenterModeChange={vi.fn()}
+          editFilePath={null}
+          editDiffBaseRev={null}
+          onEditFile={vi.fn()}
+          onCloseEdit={vi.fn()}
           onExitEditorView={vi.fn()}
         />
       </SidebarProvider>,
@@ -150,6 +162,10 @@ describe("EditorWorkspaceView", () => {
           onSelectDiffFile={vi.fn()}
           onToggleDirectory={vi.fn()}
           onCenterModeChange={vi.fn()}
+          editFilePath={null}
+          editDiffBaseRev={null}
+          onEditFile={vi.fn()}
+          onCloseEdit={vi.fn()}
           onExitEditorView={vi.fn()}
         />
       </SidebarProvider>,
@@ -178,6 +194,10 @@ describe("EditorWorkspaceView", () => {
             onSelectDiffFile={vi.fn()}
             onToggleDirectory={vi.fn()}
             onCenterModeChange={vi.fn()}
+            editFilePath={null}
+            editDiffBaseRev={null}
+            onEditFile={vi.fn()}
+            onCloseEdit={vi.fn()}
             onExitEditorView={vi.fn()}
           />
         </SidebarProvider>
@@ -208,6 +228,10 @@ describe("EditorWorkspaceView", () => {
           onSelectDiffFile={vi.fn()}
           onToggleDirectory={vi.fn()}
           onCenterModeChange={vi.fn()}
+          editFilePath={null}
+          editDiffBaseRev={null}
+          onEditFile={vi.fn()}
+          onCloseEdit={vi.fn()}
           onExitEditorView={vi.fn()}
         />
       </QueryClientProvider>,
@@ -239,6 +263,10 @@ describe("EditorWorkspaceView", () => {
           onSelectDiffFile={vi.fn()}
           onToggleDirectory={vi.fn()}
           onCenterModeChange={vi.fn()}
+          editFilePath={null}
+          editDiffBaseRev={null}
+          onEditFile={vi.fn()}
+          onCloseEdit={vi.fn()}
           onExitEditorView={vi.fn()}
         />
       </QueryClientProvider>,
@@ -271,6 +299,10 @@ describe("EditorWorkspaceView", () => {
           onSelectDiffFile={vi.fn()}
           onToggleDirectory={vi.fn()}
           onCenterModeChange={vi.fn()}
+          editFilePath={null}
+          editDiffBaseRev={null}
+          onEditFile={vi.fn()}
+          onCloseEdit={vi.fn()}
           onExitEditorView={vi.fn()}
         />
       </QueryClientProvider>,
@@ -298,6 +330,10 @@ describe("EditorWorkspaceView", () => {
           onSelectDiffFile={vi.fn()}
           onToggleDirectory={vi.fn()}
           onCenterModeChange={vi.fn()}
+          editFilePath={null}
+          editDiffBaseRev={null}
+          onEditFile={vi.fn()}
+          onCloseEdit={vi.fn()}
           onExitEditorView={vi.fn()}
         />
       </QueryClientProvider>,
@@ -329,6 +365,10 @@ describe("EditorWorkspaceView", () => {
           onSelectDiffFile={vi.fn()}
           onToggleDirectory={vi.fn()}
           onCenterModeChange={vi.fn()}
+          editFilePath={null}
+          editDiffBaseRev={null}
+          onEditFile={vi.fn()}
+          onCloseEdit={vi.fn()}
           onExitEditorView={vi.fn()}
         />
       </QueryClientProvider>,
@@ -358,6 +398,10 @@ describe("EditorWorkspaceView", () => {
           onSelectDiffFile={vi.fn()}
           onToggleDirectory={vi.fn()}
           onCenterModeChange={vi.fn()}
+          editFilePath={null}
+          editDiffBaseRev={null}
+          onEditFile={vi.fn()}
+          onCloseEdit={vi.fn()}
           onExitEditorView={vi.fn()}
         />
       </QueryClientProvider>,
@@ -391,6 +435,10 @@ describe("EditorWorkspaceView", () => {
             onSelectDiffFile={vi.fn()}
             onToggleDirectory={vi.fn()}
             onCenterModeChange={vi.fn()}
+            editFilePath={null}
+            editDiffBaseRev={null}
+            onEditFile={vi.fn()}
+            onCloseEdit={vi.fn()}
             onExitEditorView={vi.fn()}
           />
         </SidebarProvider>
@@ -470,6 +518,10 @@ describe("EditorWorkspaceView", () => {
             onSelectDiffFile={vi.fn()}
             onToggleDirectory={vi.fn()}
             onCenterModeChange={vi.fn()}
+            editFilePath={null}
+            editDiffBaseRev={null}
+            onEditFile={vi.fn()}
+            onCloseEdit={vi.fn()}
             onExitEditorView={vi.fn()}
           />
         </SidebarProvider>

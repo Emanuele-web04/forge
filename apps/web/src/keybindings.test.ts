@@ -9,6 +9,7 @@ import {
 import {
   formatKeybindingWhenExpression,
   formatShortcutLabel,
+  isEditorFileSaveShortcut,
   isKeyboardShortcutsHelpShortcut,
   isOpenFavoriteEditorShortcut,
   isTerminalClearShortcut,
@@ -403,6 +404,11 @@ const DEFAULT_BINDINGS = compile([
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
   { shortcut: modShortcut("o"), command: "editor.openFavorite" },
+  {
+    shortcut: modShortcut("s"),
+    command: "editor.file.save",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
 ]);
 
 describe("terminal toggle command", () => {
@@ -1352,6 +1358,27 @@ describe("chat/editor shortcuts", () => {
     assert.isTrue(
       isOpenFavoriteEditorShortcut(event({ key: "o", ctrlKey: true }), DEFAULT_BINDINGS, {
         platform: "Linux",
+      }),
+    );
+  });
+
+  it("matches editor.file.save shortcut outside terminal focus", () => {
+    assert.isTrue(
+      isEditorFileSaveShortcut(event({ key: "s", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+    );
+    assert.isTrue(
+      isEditorFileSaveShortcut(event({ key: "s", ctrlKey: true }), DEFAULT_BINDINGS, {
+        platform: "Linux",
+        context: { terminalFocus: false },
+      }),
+    );
+    assert.isFalse(
+      isEditorFileSaveShortcut(event({ key: "s", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: true },
       }),
     );
   });

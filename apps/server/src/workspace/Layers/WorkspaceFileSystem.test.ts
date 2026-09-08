@@ -63,6 +63,7 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
           truncated: false,
           encoding: "utf8",
           lineEnding: "lf",
+          symlink: false,
         });
         expect(result.version).toMatch(/^sha256:[0-9a-f]{64}$/);
       }),
@@ -87,6 +88,7 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
           version: null,
           encoding: null,
           lineEnding: null,
+          symlink: false,
         });
       }),
     );
@@ -268,6 +270,7 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
 
         expect(result.contents).toBe("export const value = 1;\n");
         expect(result.truncated).toBe(false);
+        expect(result.symlink).toBe(true);
       }),
     );
   });
@@ -292,6 +295,48 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
         expect(result.relativePath).toBe("plans/effect-rpc.md");
         expect(result.version).toMatch(/^sha256:[0-9a-f]{64}$/);
         expect(saved).toBe("# Plan\n");
+      }),
+    );
+
+    it.effect("overwrites unconditionally when no version guard is supplied", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        yield* writeTextFile(cwd, "src/app.ts", "changed by someone else\n");
+
+        yield* workspaceFileSystem.writeFile({
+          cwd,
+          relativePath: "src/app.ts",
+          contents: "mine\n",
+        });
+
+        const saved = yield* fileSystem
+          .readFileString(path.join(cwd, "src/app.ts"))
+          .pipe(Effect.orDie);
+        expect(saved).toBe("mine\n");
+      }),
+    );
+
+    it.effect("re-encodes an unguarded overwrite with the supplied format", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        yield* writeTextFile(cwd, "src/app.ts", "changed by someone else\r\n");
+
+        yield* workspaceFileSystem.writeFile({
+          cwd,
+          relativePath: "src/app.ts",
+          contents: "mine\nagain\n",
+          encoding: "utf8-bom",
+          lineEnding: "crlf",
+        });
+
+        const saved = yield* fileSystem.readFile(path.join(cwd, "src/app.ts")).pipe(Effect.orDie);
+        expect(Buffer.from(saved).toString("utf8")).toBe("\uFEFFmine\r\nagain\r\n");
       }),
     );
 

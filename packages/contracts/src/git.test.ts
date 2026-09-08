@@ -7,6 +7,7 @@ import {
   GitPreparePullRequestThreadInput,
   GitRunStackedActionInput,
   GitResolvePullRequestResult,
+  GitReadWorkingTreeDiffInput,
   GitSummarizeDiffInput,
 } from "./git";
 
@@ -18,6 +19,20 @@ const decodePreparePullRequestThreadInput = Schema.decodeUnknownSync(
 const decodeRunStackedActionInput = Schema.decodeUnknownSync(GitRunStackedActionInput);
 const decodeSummarizeDiffInput = Schema.decodeUnknownSync(GitSummarizeDiffInput);
 const decodeResolvePullRequestResult = Schema.decodeUnknownSync(GitResolvePullRequestResult);
+
+describe("GitReadWorkingTreeDiffInput", () => {
+  it("preserves the optional literal file path through the RPC schema", () => {
+    const decode = Schema.decodeUnknownSync(GitReadWorkingTreeDiffInput);
+    expect(decode({ cwd: "/repo", scope: "workingTree", filePath: "src/[name].ts" })).toMatchObject(
+      {
+        cwd: "/repo",
+        scope: "workingTree",
+        filePath: "src/[name].ts",
+      },
+    );
+    expect(decode({ cwd: "/repo" })).not.toHaveProperty("filePath");
+  });
+});
 
 describe("GitCreateWorktreeInput", () => {
   it("accepts omitted newBranch for existing-branch worktrees", () => {

@@ -189,6 +189,16 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Open or close the working tree diff panel.",
   },
   {
+    command: "diff.change.next",
+    label: "Next change",
+    description: "Jump the diff viewport to the next changed file.",
+  },
+  {
+    command: "diff.change.previous",
+    label: "Previous change",
+    description: "Jump the diff viewport to the previous changed file.",
+  },
+  {
     command: "browser.toggle",
     label: "Toggle browser",
     description: "Reveal the built-in browser panel for the active thread.",
@@ -217,6 +227,11 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     command: "editor.openFavorite",
     label: "Open in favorite editor",
     description: "Send the current thread or workspace target to your preferred editor.",
+  },
+  {
+    command: "editor.file.save",
+    label: "Save file",
+    description: "Write the focused editor's unsaved changes back to disk.",
   },
   {
     command: "git.commitAndPush",
