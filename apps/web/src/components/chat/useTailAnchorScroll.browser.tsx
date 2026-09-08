@@ -1,5 +1,4 @@
 import { MessageId } from "@synara/contracts";
-import type { LegendListRef } from "@legendapp/list/react";
 import { useRef } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
@@ -12,7 +11,7 @@ const ANCHOR_ID = MessageId.makeUnsafe("delayed-steer");
 function DelayedLayout({ revision, onFinished }: { revision: number; onFinished: () => void }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const listRef = useRef({ getScrollableNode: () => containerRef.current! } as LegendListRef);
+  const listRef = useRef({ getScrollableNode: (): HTMLElement => containerRef.current! });
   useTailAnchorScroll({
     listRef,
     timelineRootRef: rootRef,

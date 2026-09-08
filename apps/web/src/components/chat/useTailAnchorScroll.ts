@@ -54,8 +54,10 @@ const ANCHOR_OVERFLOW_SLACK_PX = 8;
 // row's content position to repeat, but no longer than this.
 const ANCHOR_POSITION_CONFIRM_MAX_MS = 150;
 
+type ScrollableListRef = RefObject<Pick<LegendListRef, "getScrollableNode"> | null>;
+
 interface UseTailAnchorScrollOptions {
-  listRef: RefObject<LegendListRef | null>;
+  listRef: ScrollableListRef;
   timelineRootRef: RefObject<HTMLElement | null>;
   /** User message currently anchored at the viewport top; null releases the hook. */
   anchorMessageId: MessageId | null;
@@ -73,7 +75,7 @@ interface UseTailAnchorScrollOptions {
   animateAnchorSlide?: boolean | undefined;
 }
 
-function getScrollContainer(listRef: RefObject<LegendListRef | null>): HTMLElement | null {
+function getScrollContainer(listRef: ScrollableListRef): HTMLElement | null {
   const node: unknown = listRef.current?.getScrollableNode?.();
   return node instanceof HTMLElement ? node : null;
 }
