@@ -44,8 +44,7 @@ export interface LocalOnboardingCompletion {
 
 /**
  * The local marker is a pending write for one installation, not unconditional completion.
- * It only counts when it was recorded against the current server (or when the server's
- * identity is unknown because its config could not be read).
+ * It only counts when both identities are known and match the current server.
  */
 export function resolveLocalOnboardingCompletion(
   local: LocalOnboardingCompletion,
@@ -53,7 +52,7 @@ export function resolveLocalOnboardingCompletion(
 ): string | null {
   if (local.completedAt === null) return null;
   if (currentInstallationKey === null || local.installationKey === null) {
-    return local.completedAt;
+    return null;
   }
   return local.installationKey === currentInstallationKey ? local.completedAt : null;
 }
@@ -61,6 +60,8 @@ export function resolveLocalOnboardingCompletion(
 export type OnboardingGate = "pending" | "show" | "hidden";
 
 export interface OnboardingGateInputs {
+  /** Wait for an installation identity; config failures defer the tour without blocking the app. */
+  readonly installationKeyStatus: "pending" | "success" | "error";
   /** Local project state has been hydrated from the server at least once. */
   readonly threadsHydrated: boolean;
   /** The server settings query has settled (success or error). */
@@ -83,9 +84,14 @@ export interface OnboardingGateInputs {
  * snapshots and settings arrive instead of latching the first non-pending answer.
  */
 export function resolveOnboardingGate(input: OnboardingGateInputs): OnboardingGate {
-  if (!input.threadsHydrated || !input.settingsSettled) {
+  if (
+    input.installationKeyStatus === "pending" ||
+    !input.threadsHydrated ||
+    !input.settingsSettled
+  ) {
     return "pending";
   }
+  if (input.installationKeyStatus === "error") return "hidden";
   const completed = input.serverCompletedAt !== null || input.localCompletedAt !== null;
   return !completed && input.projectCount === 0 ? "show" : "hidden";
 }

@@ -17,6 +17,7 @@ const COMPLETED_AT = "2026-09-07T00:00:00.000Z";
 const NOW = "2026-09-08T00:00:00.000Z";
 
 const GATE_BASE = {
+  installationKeyStatus: "success",
   threadsHydrated: true,
   settingsSettled: true,
   projectCount: 0,
@@ -59,6 +60,17 @@ describe("resolveOnboardingGate", () => {
     expect(resolveOnboardingGate({ ...GATE_BASE, settingsSettled: false })).toBe("pending");
   });
 
+  it("waits for the installation identity before offering first-run completion", () => {
+    expect(resolveOnboardingGate({ ...GATE_BASE, installationKeyStatus: "pending" })).toBe(
+      "pending",
+    );
+  });
+
+  it("leaves the app usable after config failure and offers the tour after recovery", () => {
+    expect(resolveOnboardingGate({ ...GATE_BASE, installationKeyStatus: "error" })).toBe("hidden");
+    expect(resolveOnboardingGate(GATE_BASE)).toBe("show");
+  });
+
   it("shows on a fresh install with no ordinary projects", () => {
     expect(resolveOnboardingGate(GATE_BASE)).toBe("show");
   });
@@ -92,17 +104,28 @@ describe("resolveLocalOnboardingCompletion", () => {
     expect(resolveLocalOnboardingCompletion(local, "/home/b/.synara/worktrees")).toBeNull();
   });
 
-  it("falls back to the marker when either installation identity is unknown", () => {
+  it("ignores a marker when either installation identity is unknown", () => {
     expect(
       resolveLocalOnboardingCompletion({ completedAt: COMPLETED_AT, installationKey: "/a" }, null),
-    ).toBe(COMPLETED_AT);
+    ).toBeNull();
     expect(
       resolveLocalOnboardingCompletion({ completedAt: COMPLETED_AT, installationKey: null }, "/a"),
-    ).toBe(COMPLETED_AT);
+    ).toBeNull();
   });
 });
 
 describe("resolveOnboardingCompletionToReconcile", () => {
+  it("does not copy an unscoped completion onto a fresh installation", () => {
+    const localCompletedAt = resolveLocalOnboardingCompletion(
+      { completedAt: COMPLETED_AT, installationKey: null },
+      "/new-installation/worktrees",
+    );
+    expect(
+      resolveOnboardingCompletionToReconcile({ ...RECONCILE_BASE, localCompletedAt }),
+    ).toBeNull();
+    expect(resolveOnboardingGate({ ...GATE_BASE, localCompletedAt })).toBe("show");
+  });
+
   it("does nothing before hydration, without readable settings, or once the server has a marker", () => {
     expect(
       resolveOnboardingCompletionToReconcile({

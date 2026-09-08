@@ -80,6 +80,7 @@ export function useOnboarding(): UseOnboardingResult {
   const localCompletedAt = resolveLocalOnboardingCompletion(storage, installationKey);
 
   const gate = resolveOnboardingGate({
+    installationKeyStatus: installationKeyQuery.status,
     threadsHydrated,
     settingsSettled,
     projectCount,
@@ -125,9 +126,11 @@ export function useOnboarding(): UseOnboardingResult {
 
   const complete = () => {
     const completedAt = new Date().toISOString();
-    // Local first so the gate flips to hidden synchronously; the server write is awaited
-    // through the settings mutation queue and, if it fails, reconciled on the next launch.
-    setStorage({ completedAt, installationKey });
+    // Keep the fallback scoped even when Settings manually opens the tour before config
+    // arrives. Only a known installation can safely retain a failed server write.
+    if (installationKey !== null) {
+      setStorage({ completedAt, installationKey });
+    }
     closeStore();
     if (serverCompletedAt === null) {
       void updateSettingsAndWait({ onboardingCompletedAt: completedAt });
