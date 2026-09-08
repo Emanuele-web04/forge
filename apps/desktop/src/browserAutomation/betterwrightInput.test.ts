@@ -28,6 +28,29 @@ describe("Betterwright input provenance", () => {
     ).toEqual([
       { kind: "key", key: "arrowleft", alt: false, control: false, meta: false, shift: false },
     ]);
+    // The space key must match Electron's KeyboardEvent.key value (" ").
+    for (const space of [" ", "Space", "Spacebar"]) {
+      expect(
+        betterwrightExpectedInputs("Input.dispatchKeyEvent", {
+          type: "rawKeyDown",
+          key: space,
+          modifiers: 0,
+        }),
+      ).toEqual([{ kind: "key", key: " ", alt: false, control: false, meta: false, shift: false }]);
+    }
+    expect(
+      betterwrightExpectedInputs("Input.dispatchKeyEvent", {
+        type: "rawKeyDown",
+        code: "Space",
+        modifiers: 0,
+      }),
+    ).toEqual([{ kind: "key", key: " ", alt: false, control: false, meta: false, shift: false }]);
+    expect(
+      betterwrightExpectedInputs("Input.dispatchKeyEvent", {
+        type: "rawKeyDown",
+        windowsVirtualKeyCode: 32,
+      }),
+    ).toEqual([{ kind: "key", key: " ", alt: false, control: false, meta: false, shift: false }]);
     expect(
       betterwrightExpectedInputs("Input.dispatchKeyEvent", {
         type: "rawKeyDown",

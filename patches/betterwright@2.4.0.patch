@@ -1,5 +1,5 @@
 diff --git a/dist/src/client.js b/dist/src/client.js
-index 1701abb..6e0aad7 100644
+index 1701abbbbf141a6f47b8b15ffefe4c168fb77ca9..6e0aad76e3d6d45d15918428ae2d895ab4002f49 100644
 --- a/dist/src/client.js
 +++ b/dist/src/client.js
 @@ -330,6 +330,14 @@ export class BetterWright {
@@ -77,7 +77,7 @@ index 1701abb..6e0aad7 100644
      _extractCookieSync(options) {
          return extractCookieSync(options);
 diff --git a/dist/src/cookie-sync.js b/dist/src/cookie-sync.js
-index ef70566..c6cff4f 100644
+index ef705665c8c54d34f2f42c3a2d3820103e81dfc6..b15980ea402632ae78ac400266a6eca3f48a553d 100644
 --- a/dist/src/cookie-sync.js
 +++ b/dist/src/cookie-sync.js
 @@ -1,5 +1,6 @@
@@ -101,7 +101,7 @@ index ef70566..c6cff4f 100644
      reader = await load();
      const readOptions = {
          browser: options.source.browser,
-@@ -445,34 +449,75 @@ export async function extractCookieSync(options, load = loadCookieReader) {
+@@ -445,34 +449,95 @@ export async function extractCookieSync(options, load = loadCookieReader) {
      try {
          snapshot = await reader.read(readOptions);
      }
@@ -140,10 +140,24 @@ index ef70566..c6cff4f 100644
      }
      return normalizeCookieSnapshot(snapshot, options);
  }
++function classifyCookieReaderListError(cause, fallback) {
++    const error = new Error("Cookie Sync could not list browser sources on this host.");
++    const code = untrustedField(cause, "rookieCode");
++    error.cookieReaderCode = isString(code) &&
++        ["source_extraction_failed", "source_inspection_failed", "discovery_failed",
++            "no_selected_source", "no_discovered_source", "timed_out", "cancelled", "resource_exhausted"].includes(code)
++        ? code
++        : fallback;
++    const message = untrustedField(cause, "message");
++    error.cookiePermissionDenied = isString(message) &&
++        /\b(?:Permission denied|Operation not permitted|os error (?:1|13))\b/i.test(message);
++    return error;
++}
  export async function listCookieSourceBrowsers(load = loadCookieReader) {
 -    const reader = await load();
 -    let value;
 +    const browsers = [];
++    let nativeError;
      try {
 -        value = await reader.supportedBrowsers();
 +        const reader = await load();
@@ -151,8 +165,10 @@ index ef70566..c6cff4f 100644
 +        try {
 +            value = await reader.supportedBrowsers();
 +        }
-+        catch {
-+            // Keep the native reader error from hiding Helium.
++        catch (cause) {
++            // Keep the native reader error from hiding Helium, but preserve it
++            // so an empty result is not mistaken for no available source.
++            nativeError = classifyCookieReaderListError(cause, "reader_failed");
 +            value = undefined;
 +        }
 +        if (Array.isArray(value)) {
@@ -168,9 +184,12 @@ index ef70566..c6cff4f 100644
 +            }
 +        }
      }
-     catch {
+-    catch {
 -        throw new Error("Cookie Sync could not list browsers on this host.");
++    catch (cause) {
 +        // The native reader is optional; Helium has its own reader.
++        // Do not let the failure read as an empty discovery result.
++        nativeError = classifyCookieReaderListError(cause, "reader_unavailable");
      }
 -    if (!Array.isArray(value))
 -        throw new Error("Cookie Sync returned an invalid browser list.");
@@ -184,6 +203,8 @@ index ef70566..c6cff4f 100644
 -    });
 +    const helium = await heliumCookieSourceAvailable();
 +    if (helium && !browsers.some((entry) => entry.id === helium.id)) browsers.push(helium);
++    if (browsers.length === 0 && nativeError)
++        throw nativeError;
 +    return browsers;
  }
  export async function listCookieSourceProfiles(browser, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}, load = loadCookieReader) {
@@ -195,7 +216,7 @@ index ef70566..c6cff4f 100644
      try {
 diff --git a/dist/src/helium-cookie-source.js b/dist/src/helium-cookie-source.js
 new file mode 100644
-index 0000000..4e6b0c9
+index 0000000000000000000000000000000000000000..4e6b0c936c44d7347244eee4ead2161b08c2b1fa
 --- /dev/null
 +++ b/dist/src/helium-cookie-source.js
 @@ -0,0 +1,311 @@
@@ -511,9 +532,18 @@ index 0000000..4e6b0c9
 +
 +}
 diff --git a/dist/src/vault-capture.js b/dist/src/vault-capture.js
-index d704ee9..017e0a2 100644
+index d704ee96ab1b8b89ca80f993572804327d0bb442..46a1ff5c85f7c9f1540fe8990a712dedea2e4bb9 100644
 --- a/dist/src/vault-capture.js
 +++ b/dist/src/vault-capture.js
+@@ -76,7 +76,7 @@ function saveNeverOrigins(prefsPath, neverOrigins) {
+  * @param {number} [deps.promptTtlMs] prompt lifetime (default 30000)
+  * @param {number} [deps.modelWindowMs] model-activity window (default 5000)
+  */
+-export function installVaultCapture(context, deps = {}) {
++export function installVaultCapture(context, deps) {
+     const timings = {
+         gateMs: Math.max(50, Number(deps.gateMs) || 8_000),
+         confirmMs: Math.max(50, Number(deps.confirmMs) || 2_500),
 @@ -89,6 +89,8 @@ export function installVaultCapture(context, deps = {}) {
      const state = {
          disposed: false,
@@ -664,7 +694,7 @@ index d704ee9..017e0a2 100644
                  dropPrompt(promptId, false);
              }
 diff --git a/dist/src/vault-sensor.js b/dist/src/vault-sensor.js
-index ed10d8d..1b0b16a 100644
+index ed10d8db2a2fe10000b3cf085ebf9f33b1fe8806..1b0b16ab51937d173dcbdae63145243846c11a1a 100644
 --- a/dist/src/vault-sensor.js
 +++ b/dist/src/vault-sensor.js
 @@ -17,6 +17,7 @@
@@ -733,7 +763,7 @@ index ed10d8d..1b0b16a 100644
 +    };
  })();
 diff --git a/dist/src/vault.js b/dist/src/vault.js
-index a0918cb..71dcd4d 100644
+index a0918cb207235ed2a36ab600518017583c20b3e3..71dcd4df2bdf2cfc7ca8a287bb4ec75ba39b1684 100644
 --- a/dist/src/vault.js
 +++ b/dist/src/vault.js
 @@ -1147,16 +1147,22 @@ async function acquireLock(paths, timeoutMs, staleMs, afterPublish = null) {
@@ -811,7 +841,7 @@ index a0918cb..71dcd4d 100644
                      const index = snapshot.records.findIndex((candidate) => candidate.id === wanted);
                      const pendingIndex = index === -1
 diff --git a/dist/src/worker.js b/dist/src/worker.js
-index c53eda6..17a7091 100755
+index c53eda622f60b7f5084698e850ef6a00f66e60f3..17a70911b9fe57357660a4c60486dac50a8e12aa 100755
 --- a/dist/src/worker.js
 +++ b/dist/src/worker.js
 @@ -463,8 +463,8 @@ function sendResult(message) {
@@ -900,7 +930,7 @@ index c53eda6..17a7091 100755
      catch {
          /* parent/process exit */
 diff --git a/package.json b/package.json
-index 6a77351..58b08d0 100644
+index 6a77351c67f82950e967a6c7ad1808ad0157baf5..58b08d0bb606634230f70e2e82c3a6f1ec2fb6ba 100644
 --- a/package.json
 +++ b/package.json
 @@ -6,6 +6,11 @@
@@ -917,7 +947,7 @@ index 6a77351..58b08d0 100644
        "import": "./dist/src/index.js",
 diff --git a/types/capture.d.ts b/types/capture.d.ts
 new file mode 100644
-index 0000000..30cb7fe
+index 0000000000000000000000000000000000000000..3b95156e5daefedd1156860949ed6316e633b498
 --- /dev/null
 +++ b/types/capture.d.ts
 @@ -0,0 +1,58 @@
@@ -977,10 +1007,10 @@ index 0000000..30cb7fe
 +
 +export function installVaultCapture(
 +  context: CaptureContext,
-+  deps?: Partial<VaultCaptureDeps>,
++  deps: VaultCaptureDeps,
 +): VaultCapture;
 diff --git a/types/public.d.ts b/types/public.d.ts
-index 7fbd0aa..272b8fd 100644
+index 7fbd0aa6136ac82660443871a5177afdebf6818d..272b8fdce93dd5948d5e2b3fec0325c1c48b3173 100644
 --- a/types/public.d.ts
 +++ b/types/public.d.ts
 @@ -106,8 +106,9 @@ export type CookieSyncResult =
@@ -1006,7 +1036,7 @@ index 7fbd0aa..272b8fd 100644
     * Named persistent browser profile inside the home: a separate identity,
     * with its own cookie jar, its own profile lock, and its own session daemon,
 diff --git a/types/vault.d.ts b/types/vault.d.ts
-index 0876c43..ca87e73 100644
+index 0876c43aa1fab6643fc4c080cb0c5631295a7047..ca87e73231102ec4e4cd800611d1ee128a2c7899 100644
 --- a/types/vault.d.ts
 +++ b/types/vault.d.ts
 @@ -23,6 +23,8 @@ export type VaultJsonValue =

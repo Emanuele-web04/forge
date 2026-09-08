@@ -86,6 +86,7 @@ class FakeRendererWebContents extends FakeWebContents {
   isLoading = () => false;
   canGoBack = () => false;
   canGoForward = () => false;
+  getZoomFactor = () => 1;
   loadURL = vi.fn((url: string) => {
     this.currentUrl = url;
     return Promise.resolve();
@@ -620,5 +621,43 @@ describe("DesktopBrowserManager repeated workflow characterization", () => {
 
     expect(beforeInputEvent).toHaveBeenCalledWith(event, input);
     expect(event.preventDefault).toHaveBeenCalledOnce();
+  });
+
+  it("matches synthetic space keypresses from every accepted representation", () => {
+    const manager = new DesktopBrowserManager();
+    const initial = manager.open({ threadId: THREAD_ID });
+    const tabId = initial.activeTabId;
+    expect(tabId).not.toBeNull();
+    if (!tabId) return;
+
+    const guest = new FakeRendererWebContents(17);
+    rendererWebContentsById.set(guest.id, guest);
+    manager.attachWebview(
+      { threadId: THREAD_ID, tabId, webContentsId: guest.id },
+      guest.hostWebContents.id,
+    );
+    const runtime = manager.getVisibleAutomationRuntime({ threadId: THREAD_ID, tabId });
+    const initialEpoch = manager.getAutomationHumanControlEpoch(THREAD_ID);
+
+    for (const key of [" ", "Space", "Spacebar"]) {
+      const event = { preventDefault: vi.fn() };
+      runtime.expectAgentInput!({
+        kind: "key",
+        key: " ",
+        alt: false,
+        control: false,
+        meta: false,
+        shift: false,
+      });
+      guest.emit("before-input-event", event, {
+        type: "keyDown",
+        key,
+        alt: false,
+        control: false,
+        meta: false,
+        shift: false,
+      });
+      expect(manager.getAutomationHumanControlEpoch(THREAD_ID)).toBe(initialEpoch);
+    }
   });
 });

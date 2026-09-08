@@ -231,6 +231,29 @@ describe("human-only cookie import", () => {
     expect(releaseHumanOperation).toHaveBeenCalledTimes(1);
   });
 
+  it("persists a completed import even when the destination changes after the transfer", async () => {
+    const { importer, contents, rememberSessionImport, releaseHumanOperation } = fixture();
+    mocks.sync.mockImplementation(async () => {
+      contents.getURL = () => "https://other.test";
+      return {
+        ok: true,
+        synced: 2,
+        skipped: 1,
+        cookieImportDomains: ["example.test"],
+      };
+    });
+    const result = await importer.import(input);
+    expect(result).toEqual({
+      ok: true,
+      imported: 2,
+      skipped: 1,
+      warnings: [],
+    });
+    expect(contents.session.cookies.flushStore).toHaveBeenCalledOnce();
+    expect(rememberSessionImport).toHaveBeenCalledWith(["example.test"]);
+    expect(releaseHumanOperation).toHaveBeenCalledOnce();
+  });
+
   it("requires explicit profile consent and permits all-sites import from a blank tab", async () => {
     const { importer, contents, rememberSessionImport } = fixture();
     const profile = {

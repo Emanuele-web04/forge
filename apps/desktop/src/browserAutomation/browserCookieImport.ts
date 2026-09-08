@@ -139,7 +139,14 @@ export class BrowserCookieImport {
             ...(stage ? { stage } : {}),
           };
         }
-        await assertTarget();
+        // A destination change that happens after syncCookies has already
+        // succeeded does not undo the transfer. Persist the completed import
+        // even if the tab has since navigated away.
+        try {
+          await assertTarget();
+        } catch {
+          /* post-transfer destination change: still flush and remember */
+        }
         await runtime.webContents.session.cookies.flushStore();
         try {
           if (!Array.isArray(result.cookieImportDomains))

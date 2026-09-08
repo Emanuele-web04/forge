@@ -7,7 +7,7 @@ const VIRTUAL_KEYS: Readonly<Record<number, string>> = {
   17: "control",
   18: "alt",
   27: "escape",
-  32: "space",
+  32: " ",
   37: "arrowleft",
   39: "arrowright",
   45: "insert",
@@ -71,7 +71,7 @@ const SAFE_COMMANDS = new Set([
 ]);
 
 function normalizeKey(key: string): string {
-  if (key === " ") return "space";
+  if (key === " " || key === "Space" || key === "Spacebar" || key === "space") return " ";
   return key
     .toLowerCase()
     .replace(/^key([a-z])$/, "$1")
@@ -105,7 +105,7 @@ function deniedKey(key: string, modifiers: number): boolean {
   const shift = (modifiers & 8) !== 0;
   return (
     ((control || meta) && ["l", "n", "p", "r", "t", "w"].includes(key)) ||
-    (meta && ["q", "h", "m", "space", "tab"].includes(key)) ||
+    (meta && ["q", "h", "m", " ", "tab"].includes(key)) ||
     ((control || meta) && shift && ["i", "j"].includes(key)) ||
     ((control || meta) && alt && ["i", "j"].includes(key)) ||
     (alt && ["f4", "arrowleft", "arrowright", "escape", "tab"].includes(key)) ||

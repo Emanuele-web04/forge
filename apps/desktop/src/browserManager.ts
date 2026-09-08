@@ -375,7 +375,7 @@ function isAllowedBrowserRuntimeNavigation(url: string, currentUrl: string): boo
 }
 
 function normalizeAutomationKey(value: string): string {
-  if (value === "Space" || value === " ") {
+  if (value === "Space" || value === "Spacebar" || value === " ") {
     return " ";
   }
   return value.toLocaleLowerCase("en-US");

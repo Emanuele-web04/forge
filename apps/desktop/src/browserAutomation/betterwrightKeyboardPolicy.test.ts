@@ -49,6 +49,19 @@ describe("Betterwright native keyboard policy", () => {
     }
   });
 
+  it("denies command-space and command-spacebar across all representations", () => {
+    const policy = new BetterwrightKeyboardPolicy();
+    for (const space of [" ", "Space", "Spacebar"]) {
+      expect(() => policy.check({ type: "rawKeyDown", modifiers: 4, key: space })).toThrow();
+      expect(() => policy.check({ type: "rawKeyDown", modifiers: 4, code: "Space" })).toThrow();
+      expect(() =>
+        policy.check({ type: "rawKeyDown", modifiers: 4, windowsVirtualKeyCode: 32 }),
+      ).toThrow();
+    }
+    // Space without a command remains safe native typing.
+    expect(() => policy.check({ type: "rawKeyDown", modifiers: 0, key: " " })).not.toThrow();
+  });
+
   it("does not trust a safe key when its alternate native identity is unsafe", () => {
     const policy = new BetterwrightKeyboardPolicy();
     for (const params of [

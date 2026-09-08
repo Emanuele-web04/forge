@@ -438,3 +438,43 @@ describe.skipIf(process.platform !== "darwin")("helium cookie source", () => {
     expect(error).toBe(cause);
   });
 });
+
+describe("patched Betterwright listCookieSourceBrowsers", () => {
+  it("does not treat a native-reader load failure as an empty source list", async () => {
+    await rm(join(home, "Library", "Application Support", "net.imput.helium"), {
+      recursive: true,
+      force: true,
+    });
+    const load = vi.fn(async () => {
+      throw new Error("synthetic native reader load failure");
+    });
+    await expect(cookieSync.listCookieSourceBrowsers(load)).rejects.toMatchObject({
+      cookieReaderCode: "reader_unavailable",
+    });
+  });
+
+  it("does not treat a native-reader supported-browsers failure as an empty source list", async () => {
+    await rm(join(home, "Library", "Application Support", "net.imput.helium"), {
+      recursive: true,
+      force: true,
+    });
+    const load = vi.fn(async () => ({
+      supportedBrowsers: async () => {
+        throw Object.assign(new Error("synthetic supported failure"), {
+          rookieCode: "discovery_failed",
+        });
+      },
+    }));
+    await expect(cookieSync.listCookieSourceBrowsers(load)).rejects.toMatchObject({
+      cookieReaderCode: "discovery_failed",
+    });
+  });
+
+  it("returns Helium independently when the native reader fails", async () => {
+    const load = vi.fn(async () => {
+      throw new Error("synthetic native reader load failure");
+    });
+    const result = await cookieSync.listCookieSourceBrowsers(load);
+    expect(result.some((entry: { id: string }) => entry.id === "helium")).toBe(true);
+  });
+});
