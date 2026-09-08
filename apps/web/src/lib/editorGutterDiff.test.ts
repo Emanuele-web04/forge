@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractGutterChangeRanges, isWholeFileAddition } from "./editorGutterDiff";
+import { extractEditorGutterChanges } from "./editorGutterDiff";
 
 const addedOnlyPatch = [
   "diff --git a/src/app.ts b/src/app.ts",
@@ -78,59 +78,61 @@ const untrackedPatch = [
   "",
 ].join("\n");
 
-describe("extractGutterChangeRanges", () => {
+describe("extractEditorGutterChanges", () => {
   it("marks an addition-only hunk as added", () => {
-    expect(extractGutterChangeRanges(addedOnlyPatch, "src/app.ts")).toEqual([
+    expect(extractEditorGutterChanges(addedOnlyPatch, "src/app.ts").ranges).toEqual([
       { kind: "added", startLine: 2, endLine: 3 },
     ]);
   });
 
   it("collapses a deletion-only run into one marker anchored at the preceding line", () => {
-    expect(extractGutterChangeRanges(deletionOnlyPatch, "src/app.ts")).toEqual([
+    expect(extractEditorGutterChanges(deletionOnlyPatch, "src/app.ts").ranges).toEqual([
       { kind: "deleted", startLine: 2, endLine: 2 },
     ]);
   });
 
   it("marks a replaced line as modified", () => {
-    expect(extractGutterChangeRanges(modifiedPatch, "src/app.ts")).toEqual([
+    expect(extractEditorGutterChanges(modifiedPatch, "src/app.ts").ranges).toEqual([
       { kind: "modified", startLine: 2, endLine: 2 },
     ]);
   });
 
   it("reports every hunk in new-file line numbers", () => {
-    expect(extractGutterChangeRanges(multiHunkPatch, "src/app.ts")).toEqual([
+    expect(extractEditorGutterChanges(multiHunkPatch, "src/app.ts").ranges).toEqual([
       { kind: "added", startLine: 2, endLine: 2 },
       { kind: "modified", startLine: 23, endLine: 23 },
     ]);
   });
 
   it("matches an absolute preview path against repo-relative patch paths", () => {
-    expect(extractGutterChangeRanges(addedOnlyPatch, "/Users/dev/repo/src/app.ts")).toEqual([
-      { kind: "added", startLine: 2, endLine: 3 },
-    ]);
+    expect(extractEditorGutterChanges(addedOnlyPatch, "/Users/dev/repo/src/app.ts").ranges).toEqual(
+      [{ kind: "added", startLine: 2, endLine: 3 }],
+    );
   });
 
   it("returns nothing when the file is missing from the patch", () => {
-    expect(extractGutterChangeRanges(addedOnlyPatch, "src/other.ts")).toEqual([]);
+    expect(extractEditorGutterChanges(addedOnlyPatch, "src/other.ts").ranges).toEqual([]);
   });
 
   it("returns nothing without a patch or a path", () => {
-    expect(extractGutterChangeRanges(undefined, "src/app.ts")).toEqual([]);
-    expect(extractGutterChangeRanges("", "src/app.ts")).toEqual([]);
-    expect(extractGutterChangeRanges(addedOnlyPatch, null)).toEqual([]);
+    expect(extractEditorGutterChanges(undefined, "src/app.ts").ranges).toEqual([]);
+    expect(extractEditorGutterChanges("", "src/app.ts").ranges).toEqual([]);
+    expect(extractEditorGutterChanges(addedOnlyPatch, null).ranges).toEqual([]);
   });
 
   it("covers a new file as one added range", () => {
-    expect(extractGutterChangeRanges(untrackedPatch, "src/fresh.ts")).toEqual([
+    expect(extractEditorGutterChanges(untrackedPatch, "src/fresh.ts").ranges).toEqual([
       { kind: "added", startLine: 1, endLine: 3 },
     ]);
   });
 });
 
-describe("isWholeFileAddition", () => {
+describe("whole-file addition flag", () => {
   it("is true for a new file and false for an edited one", () => {
-    expect(isWholeFileAddition(untrackedPatch, "src/fresh.ts")).toBe(true);
-    expect(isWholeFileAddition(addedOnlyPatch, "src/app.ts")).toBe(false);
-    expect(isWholeFileAddition(addedOnlyPatch, "src/missing.ts")).toBe(false);
+    expect(extractEditorGutterChanges(untrackedPatch, "src/fresh.ts").wholeFileAddition).toBe(true);
+    expect(extractEditorGutterChanges(addedOnlyPatch, "src/app.ts").wholeFileAddition).toBe(false);
+    expect(extractEditorGutterChanges(addedOnlyPatch, "src/missing.ts").wholeFileAddition).toBe(
+      false,
+    );
   });
 });

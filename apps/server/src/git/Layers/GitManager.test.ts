@@ -392,22 +392,36 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       });
       const { manager } = yield* makeManager();
       const { patch } = yield* manager.readWorkingTreeDiff({
-        cwd: repoDir, scope: "workingTree", filePath: "selected.txt",
+        cwd: repoDir,
+        scope: "workingTree",
+        filePath: "selected.txt",
       });
       expect(patch).toContain("selected.txt");
       expect(patch).not.toContain("other.txt");
       for (const scope of ["staged", "unstaged", "branch", "ref"] as const) {
-        const exit = yield* manager.readWorkingTreeDiff({
-          cwd: repoDir, scope, filePath: "selected.txt", compareRef: "HEAD",
-        }).pipe(Effect.exit);
+        const exit = yield* manager
+          .readWorkingTreeDiff({
+            cwd: repoDir,
+            scope,
+            filePath: "selected.txt",
+            compareRef: "HEAD",
+          })
+          .pipe(Effect.exit);
         expect(Exit.isFailure(exit)).toBe(true);
-        if (Exit.isFailure(exit)) expect(String(exit.cause)).toContain("only supported for the working tree");
+        if (Exit.isFailure(exit))
+          expect(String(exit.cause)).toContain("only supported for the working tree");
       }
-      expect(Exit.isFailure(yield* manager.readWorkingTreeDiffStats({
-        cwd: repoDir,
-        scope: "workingTree",
-        filePath: "selected.txt",
-      }).pipe(Effect.exit))).toBe(true);
+      expect(
+        Exit.isFailure(
+          yield* manager
+            .readWorkingTreeDiffStats({
+              cwd: repoDir,
+              scope: "workingTree",
+              filePath: "selected.txt",
+            })
+            .pipe(Effect.exit),
+        ),
+      ).toBe(true);
     }),
   );
 

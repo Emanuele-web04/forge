@@ -1850,13 +1850,14 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         let untrackedFiles: ReadonlyArray<string> | undefined;
         if (filePath !== undefined) {
           const isDirectory = yield* Effect.tryPromise({
-            try: () => nodeFs.lstat(nodePath.join(cwd, filePath)).then(
-              (stat) => stat.isDirectory(),
-              (error: NodeJS.ErrnoException) => {
-                if (error.code === "ENOENT" || error.code === "ENOTDIR") return false;
-                throw error;
-              },
-            ),
+            try: () =>
+              nodeFs.lstat(nodePath.join(cwd, filePath)).then(
+                (stat) => stat.isDirectory(),
+                (error: NodeJS.ErrnoException) => {
+                  if (error.code === "ENOENT" || error.code === "ENOTDIR") return false;
+                  throw error;
+                },
+              ),
             catch: (cause) =>
               createGitCommandError(
                 "GitCore.readWorkingTreePatch.path",
@@ -1897,7 +1898,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
               ["diff", "--name-status", "-z", "--no-ext-diff", "HEAD"],
               { timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS },
             ).pipe(Effect.map((result) => result.stdout.split("\0")));
-            for (let index = 0; index < records.length;) {
+            for (let index = 0; index < records.length; ) {
               const status = records[index++];
               const oldPath = records[index++];
               if (status?.startsWith("R") || status?.startsWith("C")) {
@@ -2159,7 +2160,13 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             yield* executeGit(
               `${operationPrefix}.seedGitlink`,
               cwd,
-              ["update-index", "--add", "--replace", "--cacheinfo", `160000,${objectId},${filePath}`],
+              [
+                "update-index",
+                "--add",
+                "--replace",
+                "--cacheinfo",
+                `160000,${objectId},${filePath}`,
+              ],
               { env, timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS },
             );
             seededGitlinks.add(filePath);
@@ -2219,32 +2226,36 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           );
         }
 
-        return yield* withRefIndex(cwd, resolvedRef, "GitCore.readRefPatch", (env, seededGitlinks) =>
-          Effect.gen(function* () {
-            const trackedPatch = yield* executeGit(
-              "GitCore.readRefPatch.trackedPatch",
-              cwd,
-              ["diff", "--patch", "--no-color", "--no-ext-diff", resolvedRef],
-              {
+        return yield* withRefIndex(
+          cwd,
+          resolvedRef,
+          "GitCore.readRefPatch",
+          (env, seededGitlinks) =>
+            Effect.gen(function* () {
+              const trackedPatch = yield* executeGit(
+                "GitCore.readRefPatch.trackedPatch",
+                cwd,
+                ["diff", "--patch", "--no-color", "--no-ext-diff", resolvedRef],
+                {
+                  env,
+                  timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
+                  maxOutputBytes: 10_000_000,
+                },
+              ).pipe(Effect.map((result) => result.stdout));
+              const untrackedFiles = yield* listWorkingTreeAdditionsAgainstRef(
+                cwd,
+                resolvedRef,
                 env,
-                timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
-                maxOutputBytes: 10_000_000,
-              },
-            ).pipe(Effect.map((result) => result.stdout));
-            const untrackedFiles = yield* listWorkingTreeAdditionsAgainstRef(
-              cwd,
-              resolvedRef,
-              env,
-              "GitCore.readRefPatch",
-              seededGitlinks,
-            );
-            const untrackedPatches = yield* readUntrackedPatches(
-              cwd,
-              "GitCore.readRefPatch",
-              untrackedFiles,
-            );
-            return { patch: joinPatchSegments([trackedPatch, ...untrackedPatches]) };
-          }),
+                "GitCore.readRefPatch",
+                seededGitlinks,
+              );
+              const untrackedPatches = yield* readUntrackedPatches(
+                cwd,
+                "GitCore.readRefPatch",
+                untrackedFiles,
+              );
+              return { patch: joinPatchSegments([trackedPatch, ...untrackedPatches]) };
+            }),
         );
       });
 
@@ -2283,32 +2294,36 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                 `Cannot resolve "${compareRef}" to a commit in this repository.`,
               );
             }
-            return yield* withRefIndex(cwd, resolvedRef, "GitCore.readDiffStats", (env, seededGitlinks) =>
-              Effect.gen(function* () {
-                const tracked = yield* executeGit(
-                  "GitCore.readDiffStats.tracked",
-                  cwd,
-                  ["diff", "--numstat", "-z", "--no-ext-diff", resolvedRef],
-                  { env, timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS, maxOutputBytes: 10_000_000 },
-                ).pipe(Effect.map((result) => result.stdout));
-                const untracked = yield* readUntrackedNumstats(
-                  cwd,
-                  "GitCore.readDiffStats",
-                  yield* listWorkingTreeAdditionsAgainstRef(
+            return yield* withRefIndex(
+              cwd,
+              resolvedRef,
+              "GitCore.readDiffStats",
+              (env, seededGitlinks) =>
+                Effect.gen(function* () {
+                  const tracked = yield* executeGit(
+                    "GitCore.readDiffStats.tracked",
                     cwd,
-                    resolvedRef,
-                    env,
+                    ["diff", "--numstat", "-z", "--no-ext-diff", resolvedRef],
+                    { env, timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS, maxOutputBytes: 10_000_000 },
+                  ).pipe(Effect.map((result) => result.stdout));
+                  const untracked = yield* readUntrackedNumstats(
+                    cwd,
                     "GitCore.readDiffStats",
-                    seededGitlinks,
-                  ),
-                );
-                const totals = summarizeGitNumstatOutputs([tracked, ...untracked]);
-                return {
-                  additions: totals.insertions,
-                  deletions: totals.deletions,
-                  fileCount: totals.files.length,
-                };
-              }),
+                    yield* listWorkingTreeAdditionsAgainstRef(
+                      cwd,
+                      resolvedRef,
+                      env,
+                      "GitCore.readDiffStats",
+                      seededGitlinks,
+                    ),
+                  );
+                  const totals = summarizeGitNumstatOutputs([tracked, ...untracked]);
+                  return {
+                    additions: totals.insertions,
+                    deletions: totals.deletions,
+                    fileCount: totals.files.length,
+                  };
+                }),
             );
           }
           case "workingTree":

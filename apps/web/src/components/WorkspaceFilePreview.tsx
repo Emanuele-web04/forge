@@ -45,11 +45,7 @@ import {
   type ChatFileReference,
 } from "~/lib/chatReferences";
 import { resolveDiffThemeName, type DiffThemeName } from "~/lib/diffRendering";
-import {
-  extractGutterChangeRanges,
-  isWholeFileAddition,
-  type EditorGutterChangeRange,
-} from "~/lib/editorGutterDiff";
+import { extractEditorGutterChanges, type EditorGutterChangeRange } from "~/lib/editorGutterDiff";
 import { formatFileCommentRange, type FileCommentSelection } from "~/lib/fileComments";
 import { showFileReferenceContextMenu } from "~/lib/fileReferenceContextMenu";
 import { gitWorkingTreeDiffQueryOptions } from "~/lib/gitReactQuery";
@@ -773,7 +769,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   // that turns out to be editable never needs the read-only gutter.
   const changeGutterEnabled =
     props.workspaceRoot !== null &&
-    filePath !== null &&
+    resolvedWorkspaceRelativePath !== null &&
     fileQuery.data !== undefined &&
     !fileIsImage &&
     !fileIsPdf &&
@@ -781,16 +777,16 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     editableDocument === null;
   changeGutterEnabledRef.current = changeGutterEnabled;
   const workingTreeDiffQuery = useQuery(
-    gitWorkingTreeDiffQueryOptions({ cwd: props.workspaceRoot, enabled: changeGutterEnabled }),
+    gitWorkingTreeDiffQueryOptions({
+      cwd: props.workspaceRoot,
+      filePath: resolvedWorkspaceRelativePath,
+      enabled: changeGutterEnabled,
+    }),
   );
   const workingTreePatch = changeGutterEnabled ? workingTreeDiffQuery.data?.patch : undefined;
-  const changeRanges = useMemo(
-    () => extractGutterChangeRanges(workingTreePatch, filePath),
-    [workingTreePatch, filePath],
-  );
-  const changeGutterSubtle = useMemo(
-    () => isWholeFileAddition(workingTreePatch, filePath),
-    [workingTreePatch, filePath],
+  const { ranges: changeRanges, wholeFileAddition: changeGutterSubtle } = useMemo(
+    () => extractEditorGutterChanges(workingTreePatch, resolvedWorkspaceRelativePath),
+    [workingTreePatch, resolvedWorkspaceRelativePath],
   );
   // Highlight -> floating "Add to chat" -> reference that points at exactly what
   // was selected, mirroring the transcript flow. In the source view the DOM

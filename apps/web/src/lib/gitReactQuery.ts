@@ -46,7 +46,11 @@ export const gitQueryKeys = {
     cwd: string | null,
     scope: GitReadWorkingTreeDiffInput["scope"] = "workingTree",
     compareRef: string | null = null,
-  ) => ["git", "working-tree-diff", cwd, scope, compareRef] as const,
+    filePath: string | null = null,
+  ) =>
+    filePath === null
+      ? (["git", "working-tree-diff", cwd, scope, compareRef] as const)
+      : (["git", "working-tree-diff", cwd, scope, compareRef, "file", filePath] as const),
   // Deliberately nested under the patch key so every existing
   // `["git", "working-tree-diff", ...]` invalidation refreshes the counts too.
   workingTreeDiffStats: (
@@ -580,6 +584,7 @@ export function gitWorkingTreeDiffQueryOptions(input: {
   cwd: string | null;
   scope?: GitReadWorkingTreeDiffInput["scope"];
   compareRef?: string | null;
+  filePath?: string | null | undefined;
   enabled?: boolean;
   refetchInterval?: number | false;
 }) {
@@ -587,7 +592,7 @@ export function gitWorkingTreeDiffQueryOptions(input: {
   const compareRef = resolveGitCompareRef(scope, input.compareRef);
   const refetchInterval = input.refetchInterval;
   return queryOptions({
-    queryKey: gitQueryKeys.workingTreeDiff(input.cwd, scope, compareRef),
+    queryKey: gitQueryKeys.workingTreeDiff(input.cwd, scope, compareRef, input.filePath ?? null),
     queryFn: async () => {
       const api = ensureNativeApi();
       if (!input.cwd) {
@@ -597,6 +602,7 @@ export function gitWorkingTreeDiffQueryOptions(input: {
         cwd: input.cwd,
         scope,
         ...(compareRef ? { compareRef } : {}),
+        ...(input.filePath ? { filePath: input.filePath } : {}),
       });
     },
     enabled: (input.enabled ?? true) && input.cwd !== null && (scope !== "ref" || !!compareRef),

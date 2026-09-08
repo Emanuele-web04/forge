@@ -1411,7 +1411,11 @@ export const makeGitManager = Effect.gen(function* () {
 
   const readWorkingTreeDiff: GitManagerShape["readWorkingTreeDiff"] = Effect.fnUntraced(
     function* (input) {
-      if (input.filePath !== undefined && input.scope !== undefined && input.scope !== "workingTree") {
+      if (
+        input.filePath !== undefined &&
+        input.scope !== undefined &&
+        input.scope !== "workingTree"
+      ) {
         return yield* gitManagerError(
           "readWorkingTreeDiff",
           "File-scoped diffs are only supported for the working tree scope.",

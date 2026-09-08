@@ -4,6 +4,7 @@ import * as NodeFs from "node:fs/promises";
 import * as NodePath from "node:path";
 
 import { isLocalAbsolutePath } from "@synara/shared/path";
+import { normalizeLineEndings } from "@synara/shared/text";
 import { Effect, Layer, Path } from "effect";
 
 import { resolveLocalPreviewGrantRealPath } from "../../localImageFiles";
@@ -39,10 +40,6 @@ function detectLineEnding(contents: string): "lf" | "crlf" | "cr" | "mixed" {
   if (crlfCount > 0) return "crlf";
   if (crCount > 0) return "cr";
   return "lf";
-}
-
-function normalizeLineEndings(contents: string): string {
-  return contents.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
 }
 
 function encodeWorkspaceText(

@@ -157,6 +157,8 @@ export const GitReadWorkingTreeDiffInput = Schema.Struct({
     Schema.Literals(["workingTree", "unstaged", "staged", "branch", "ref"]),
   ).pipe(Schema.withConstructorDefault(() => Option.some("workingTree" as const))),
   compareRef: Schema.optional(GitRevisionArgumentSchema),
+  /** Limit a workingTree patch to one exact workspace-relative file. */
+  filePath: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type GitReadWorkingTreeDiffInput = typeof GitReadWorkingTreeDiffInput.Type;
 

@@ -1,5 +1,12 @@
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
+
+const { readWorkingTreeDiff } = vi.hoisted(() => ({
+  readWorkingTreeDiff: vi.fn(async (input: { filePath?: string }) => ({
+    patch: input.filePath ?? "all",
+  })),
+}));
+vi.mock("../nativeApi", () => ({ ensureNativeApi: () => ({ git: { readWorkingTreeDiff } }) }));
 import {
   GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS,
   gitQueryKeys,
@@ -24,6 +31,21 @@ function deferredVoid() {
   });
   return { promise, resolve };
 }
+
+describe("file-scoped working tree diffs", () => {
+  it("keeps each file separate from other files and the repository-wide cache", async () => {
+    const client = new QueryClient();
+    const query = (filePath?: string) => gitWorkingTreeDiffQueryOptions({ cwd: "/repo", filePath });
+    expect(await client.fetchQuery(query())).toEqual({ patch: "all" });
+    expect(await client.fetchQuery(query("src/a.ts"))).toEqual({ patch: "src/a.ts" });
+    expect(await client.fetchQuery(query("src/b.ts"))).toEqual({ patch: "src/b.ts" });
+    expect(readWorkingTreeDiff).toHaveBeenCalledWith({
+      cwd: "/repo",
+      scope: "workingTree",
+      filePath: "src/a.ts",
+    });
+  });
+});
 
 describe("gitMutationKeys", () => {
   it("scopes stacked action keys by cwd", () => {

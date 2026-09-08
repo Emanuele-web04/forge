@@ -2,7 +2,13 @@
 // Purpose: Small, dependency-free text helpers shared across server and web so
 // repeated string semantics (count pluralization, etc.) live in one place.
 // Layer: Shared runtime utility
-// Exports: pluralize, nonEmptyTrimmed, splitsSurrogatePair, unicodeSafeEndOffset
+// Exports: normalizeLineEndings, pluralize, nonEmptyTrimmed, splitsSurrogatePair, unicodeSafeEndOffset
+
+// Workspace text buffers use LF; retain the separate on-disk format metadata
+// when this representation is used for editing or comparison.
+export function normalizeLineEndings(contents: string): string {
+  return contents.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
+}
 
 // Reports whether a UTF-16 offset falls between the high and low surrogate of
 // one Unicode code point. JavaScript string lengths and slice offsets count

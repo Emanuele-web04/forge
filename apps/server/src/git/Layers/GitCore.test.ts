@@ -184,7 +184,6 @@ it.layer(TestLayer)("git integration", (it) => {
     );
   });
 
-
   describe("bounded working-tree and ref reads", () => {
     it.effect("preserves a regular-file to gitlink type change against the ref", () =>
       Effect.gen(function* () {
@@ -202,12 +201,16 @@ it.layer(TestLayer)("git integration", (it) => {
         expect(patch).toContain("new file mode 160000");
         expect(patch).toContain("+Subproject commit ");
         expect(yield* core.readDiffStats(tmp, "ref", "HEAD")).toEqual({
-          additions: 4, deletions: 1, fileCount: 2,
+          additions: 4,
+          deletions: 1,
+          fileCount: 2,
         });
         yield* git(tmp, ["submodule", "deinit", "-f", "vendor"]);
         expect((yield* core.readRefPatch(tmp, "HEAD")).patch).toContain("new file mode 160000");
         expect(yield* core.readDiffStats(tmp, "ref", "HEAD")).toEqual({
-          additions: 4, deletions: 1, fileCount: 2,
+          additions: 4,
+          deletions: 1,
+          fileCount: 2,
         });
       }),
     );
@@ -233,7 +236,9 @@ it.layer(TestLayer)("git integration", (it) => {
         const patch = (yield* core.readRefPatch(tmp, "HEAD")).patch;
         expect(patch).toContain(`+Subproject commit ${nextCommit}`);
         expect(yield* core.readDiffStats(tmp, "ref", "HEAD")).toEqual({
-          additions: 1, deletions: 1, fileCount: 1,
+          additions: 1,
+          deletions: 1,
+          fileCount: 1,
         });
       }),
     );
@@ -241,22 +246,26 @@ it.layer(TestLayer)("git integration", (it) => {
     for (const edited of [false, true]) {
       it.effect(
         "preserves " + (edited ? "edited" : "pure") + " rename metadata in a destination-only read",
-        () => Effect.gen(function* () {
-          const core = yield* GitCore;
-          const tmp = yield* makeTmpDir();
-          yield* initRepoWithCommit(tmp);
-          yield* writeTextFile(path.join(tmp, "old.txt"), "unchanged\n".repeat(20));
-          yield* git(tmp, ["add", "."]);
-          yield* git(tmp, ["commit", "-m", "base"]);
-          yield* git(tmp, ["mv", "old.txt", "new.txt"]);
-          if (edited) {
-            yield* writeTextFile(path.join(tmp, "new.txt"), "unchanged\n".repeat(19) + "edited\n");
-          }
-          const fullPatch = (yield* core.readWorkingTreePatch(tmp)).patch;
-          expect((yield* core.readWorkingTreePatch(tmp, "new.txt")).patch).toBe(fullPatch);
-          expect(fullPatch).toContain("rename from old.txt");
-          expect(fullPatch).toContain("rename to new.txt");
-        }),
+        () =>
+          Effect.gen(function* () {
+            const core = yield* GitCore;
+            const tmp = yield* makeTmpDir();
+            yield* initRepoWithCommit(tmp);
+            yield* writeTextFile(path.join(tmp, "old.txt"), "unchanged\n".repeat(20));
+            yield* git(tmp, ["add", "."]);
+            yield* git(tmp, ["commit", "-m", "base"]);
+            yield* git(tmp, ["mv", "old.txt", "new.txt"]);
+            if (edited) {
+              yield* writeTextFile(
+                path.join(tmp, "new.txt"),
+                "unchanged\n".repeat(19) + "edited\n",
+              );
+            }
+            const fullPatch = (yield* core.readWorkingTreePatch(tmp)).patch;
+            expect((yield* core.readWorkingTreePatch(tmp, "new.txt")).patch).toBe(fullPatch);
+            expect(fullPatch).toContain("rename from old.txt");
+            expect(fullPatch).toContain("rename to new.txt");
+          }),
       );
     }
 
@@ -269,14 +278,18 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* Effect.promise(() => fs.symlink("README.md", path.join(tmp, "old-link")));
         yield* git(tmp, ["add", "."]);
         yield* git(tmp, ["commit", "-m", "link"]);
-        yield* Effect.promise(() => fs.rename(path.join(tmp, "old-link"), path.join(tmp, "new-link")));
+        yield* Effect.promise(() =>
+          fs.rename(path.join(tmp, "old-link"), path.join(tmp, "new-link")),
+        );
         yield* git(tmp, ["add", "-u"]);
         yield* git(tmp, ["add", "-f", "new-link"]);
         const patch = (yield* core.readRefPatch(tmp, "HEAD")).patch;
         expect(patch).toContain("new file mode 120000");
         expect(patch).toContain("+README.md");
         expect(yield* core.readDiffStats(tmp, "ref", "HEAD")).toEqual({
-          additions: 1, deletions: 1, fileCount: 2,
+          additions: 1,
+          deletions: 1,
+          fileCount: 2,
         });
       }),
     );
@@ -290,9 +303,10 @@ it.layer(TestLayer)("git integration", (it) => {
             ["first\nsecond\n", "third\nfourth\n"].map((text) => new TextEncoder().encode(text)),
           ),
           8,
-          (line) => Effect.sync(() => {
-            lines.push(line);
-          }),
+          (line) =>
+            Effect.sync(() => {
+              lines.push(line);
+            }),
           "truncate",
         );
         expect(output).toBe("first\nse");
@@ -310,14 +324,18 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* Effect.promise(() => fs.chmod(path.join(tmp, "old.sh"), 0o755));
         yield* git(tmp, ["add", "."]);
         yield* git(tmp, ["commit", "-m", "base"]);
-        yield* Effect.promise(() => fs.rename(path.join(tmp, "old.sh"), path.join(tmp, "renamed.sh")));
+        yield* Effect.promise(() =>
+          fs.rename(path.join(tmp, "old.sh"), path.join(tmp, "renamed.sh")),
+        );
         yield* git(tmp, ["add", "-u"]);
         yield* git(tmp, ["add", "-f", "renamed.sh"]);
         const patch = (yield* core.readRefPatch(tmp, "HEAD")).patch;
         expect(patch).toContain("b/renamed.sh");
         expect(patch).toContain("new file mode 100755");
         expect(yield* core.readDiffStats(tmp, "ref", "HEAD")).toEqual({
-          additions: 5, deletions: 5, fileCount: 2,
+          additions: 5,
+          deletions: 5,
+          fileCount: 2,
         });
       }),
     );
@@ -325,27 +343,41 @@ it.layer(TestLayer)("git integration", (it) => {
     for (const initialized of [true, false]) {
       it.effect(
         `includes a new ${initialized ? "initialized" : "uninitialized"} gitlink and preserves the real index`,
-        () => Effect.gen(function* () {
-          const core = yield* GitCore;
-          const tmp = yield* makeTmpDir();
-          const sub = yield* makeTmpDir();
-          yield* initRepoWithCommit(tmp);
-          yield* initRepoWithCommit(sub);
-          yield* git(tmp, ["-c", "protocol.file.allow=always", "submodule", "add", sub, "vendor"]);
-          if (!initialized) {
-            yield* git(tmp, ["submodule", "deinit", "-f", "vendor"]);
-          }
-          const indexBefore = yield* Effect.promise(() => fs.readFile(path.join(tmp, ".git", "index")));
-          const patch = (yield* core.readRefPatch(tmp, "HEAD")).patch;
-          expect(patch).toContain("new file mode 160000");
-          expect(patch).toContain("+Subproject commit ");
-          expect(patch.match(/diff --git a\/vendor b\/vendor/g)).toHaveLength(1);
-          expect(yield* core.readDiffStats(tmp, "ref", "HEAD")).toEqual({
-            additions: 4, deletions: 0, fileCount: 2,
-          });
-          const indexAfter = yield* Effect.promise(() => fs.readFile(path.join(tmp, ".git", "index")));
-          expect(indexAfter).toEqual(indexBefore);
-        }),
+        () =>
+          Effect.gen(function* () {
+            const core = yield* GitCore;
+            const tmp = yield* makeTmpDir();
+            const sub = yield* makeTmpDir();
+            yield* initRepoWithCommit(tmp);
+            yield* initRepoWithCommit(sub);
+            yield* git(tmp, [
+              "-c",
+              "protocol.file.allow=always",
+              "submodule",
+              "add",
+              sub,
+              "vendor",
+            ]);
+            if (!initialized) {
+              yield* git(tmp, ["submodule", "deinit", "-f", "vendor"]);
+            }
+            const indexBefore = yield* Effect.promise(() =>
+              fs.readFile(path.join(tmp, ".git", "index")),
+            );
+            const patch = (yield* core.readRefPatch(tmp, "HEAD")).patch;
+            expect(patch).toContain("new file mode 160000");
+            expect(patch).toContain("+Subproject commit ");
+            expect(patch.match(/diff --git a\/vendor b\/vendor/g)).toHaveLength(1);
+            expect(yield* core.readDiffStats(tmp, "ref", "HEAD")).toEqual({
+              additions: 4,
+              deletions: 0,
+              fileCount: 2,
+            });
+            const indexAfter = yield* Effect.promise(() =>
+              fs.readFile(path.join(tmp, ".git", "index")),
+            );
+            expect(indexAfter).toEqual(indexBefore);
+          }),
       );
     }
 
@@ -356,9 +388,13 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* initRepoWithCommit(tmp);
         yield* writeTextFile(path.join(tmp, "1:foo.txt"), "literal filename\n");
         yield* git(tmp, ["add", "--", "1:foo.txt"]);
-        expect(yield* core.readFileAtRev({
-          cwd: tmp, filePath: "1:foo.txt", base: "index",
-        })).toMatchObject({ missing: false, contents: "literal filename\n" });
+        expect(
+          yield* core.readFileAtRev({
+            cwd: tmp,
+            filePath: "1:foo.txt",
+            base: "index",
+          }),
+        ).toMatchObject({ missing: false, contents: "literal filename\n" });
       }),
     );
 
@@ -393,11 +429,15 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* writeTextFile(path.join(tmp, "selected.txt"), "selected\n");
         yield* writeTextFile(path.join(tmp, "other.txt"), "other\n");
         yield* git(tmp, ["add", "."]);
-        expect((yield* core.readWorkingTreePatch(tmp, "selected.txt")).patch).not.toContain("other.txt");
+        expect((yield* core.readWorkingTreePatch(tmp, "selected.txt")).patch).not.toContain(
+          "other.txt",
+        );
         yield* writeTextFile(path.join(tmp, ".gitignore"), "renamed.txt\n");
         yield* git(tmp, ["add", "."]);
         yield* git(tmp, ["commit", "-m", "base"]);
-        yield* Effect.promise(() => fs.rename(path.join(tmp, "selected.txt"), path.join(tmp, "renamed.txt")));
+        yield* Effect.promise(() =>
+          fs.rename(path.join(tmp, "selected.txt"), path.join(tmp, "renamed.txt")),
+        );
         yield* git(tmp, ["add", "-u"]);
         yield* git(tmp, ["add", "-f", "renamed.txt"]);
         yield* writeTextFile(path.join(tmp, "other.txt"), "unrelated change\n");

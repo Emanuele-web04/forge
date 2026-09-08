@@ -68,6 +68,47 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
+it("requests only the resolved preview file for gutters and refreshes it on file events", async () => {
+  const resolvedPath = "packages/app/src/app.ts";
+  const readFile = vi.fn().mockResolvedValue(loadedFile({ relativePath: resolvedPath }));
+  const readWorkingTreeDiff = vi.fn().mockResolvedValue({ patch: "" });
+  const subscription: { listener?: (event: ProjectFileChangeEvent) => void } = {};
+  const onFileChange = vi.fn(
+    (_input: ProjectWatchFileInput, listener: (event: ProjectFileChangeEvent) => void) => {
+      subscription.listener = listener;
+      return () => undefined;
+    },
+  );
+  const restoreNativeApi = installNativeApi({
+    projects: { readFile, onFileChange },
+    git: { readWorkingTreeDiff },
+  } as unknown as NativeApi);
+  try {
+    const view = await render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} />
+      </QueryClientProvider>,
+    );
+    await vi.waitFor(() => expect(readWorkingTreeDiff).toHaveBeenCalledTimes(1));
+    expect(readWorkingTreeDiff).toHaveBeenLastCalledWith({
+      cwd: WORKSPACE_ROOT,
+      scope: "workingTree",
+      filePath: resolvedPath,
+    });
+    await vi.waitFor(() => expect(onFileChange).toHaveBeenCalledTimes(1));
+    subscription.listener?.({ type: "changed", relativePath: resolvedPath, mtimeMs: Date.now() });
+    await vi.waitFor(() => expect(readWorkingTreeDiff).toHaveBeenCalledTimes(2));
+    expect(readWorkingTreeDiff).toHaveBeenLastCalledWith({
+      cwd: WORKSPACE_ROOT,
+      scope: "workingTree",
+      filePath: resolvedPath,
+    });
+    await view.unmount();
+  } finally {
+    restoreNativeApi();
+  }
+});
+
 it("tracks dirty state and saves the loaded version with Ctrl+S", async () => {
   const readFile = vi.fn().mockResolvedValue(loadedFile());
   const writeFile = vi.fn().mockResolvedValue({ relativePath: FILE_PATH, version: SAVED_VERSION });

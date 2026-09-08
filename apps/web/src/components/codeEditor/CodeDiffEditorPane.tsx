@@ -1,5 +1,6 @@
 import { parseDiffFromFile } from "@pierre/diffs";
 import { FileDiff } from "@pierre/diffs/react";
+import { normalizeLineEndings } from "@synara/shared/text";
 import { useMemo, useRef, useState, type RefObject } from "react";
 
 import { buildDiffPanelUnsafeCSS, resolveDiffThemeName } from "~/lib/diffRendering";
@@ -47,12 +48,12 @@ export function CodeDiffEditorPane(props: CodeDiffEditorPaneProps) {
       parseDiffFromFile(
         {
           name: props.fileName,
-          contents: originalRef.current,
+          contents: normalizeLineEndings(originalRef.current),
           cacheKey: `diff-edit:${props.fileName}:old:${props.originalVersion}:${parseGeneration.version}`,
         },
         {
           name: props.fileName,
-          contents: modifiedRef.current,
+          contents: normalizeLineEndings(modifiedRef.current),
           cacheKey: `diff-edit:${props.fileName}:new:${props.modifiedVersion}:${parseGeneration.version}`,
         },
       ),
