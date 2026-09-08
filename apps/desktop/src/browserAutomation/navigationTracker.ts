@@ -179,10 +179,43 @@ class BrowserNavigationTracker {
     await this.ensure(runtime, signal);
     const startedAt = performance.now();
     const deadline = startedAt + Math.max(0, timeoutMs);
+    let activeMark = mark;
     while (performance.now() <= deadline) {
       throwIfAborted(signal);
-      const matching = mark
-        ? this.events.filter((event) => event.sequence > mark.sequence && this.matches(mark, event))
+      if (activeMark) {
+        const previousMark = activeMark;
+        const firstCommit = this.events.find(
+          (event) =>
+            event.kind === "commit" &&
+            event.sequence > previousMark.sequence &&
+            this.matches(previousMark, event),
+        );
+        if (firstCommit) {
+          // A script can replace the document before it finishes loading. Follow
+          // that main frame's newest commit, never the old loader's late events.
+          const latestCommit =
+            this.events.findLast(
+              (event) =>
+                event.kind === "commit" &&
+                event.sequence >= firstCommit.sequence &&
+                event.frameId === firstCommit.frameId,
+            ) ?? firstCommit;
+          activeMark = this.withNavigationIdentity(
+            {
+              sequence: latestCommit.sequence - 1,
+              startedAt: previousMark.startedAt,
+              initialUrl: previousMark.initialUrl,
+            },
+            latestCommit.loaderId ?? previousMark.loaderId,
+            latestCommit.frameId ?? previousMark.frameId,
+          );
+        }
+      }
+      const currentMark = activeMark;
+      const matching = currentMark
+        ? this.events.filter(
+            (event) => event.sequence > currentMark.sequence && this.matches(currentMark, event),
+          )
         : this.events;
       const committed = mark ? matching.some((event) => event.kind === "commit") : true;
       let state: BrowserLoadMilestone = "commit";
@@ -211,7 +244,9 @@ class BrowserNavigationTracker {
       }
       if (committed && browserLoadMilestoneSatisfied(state, expected)) {
         const redirects: string[] = [];
-        for (const event of matching) {
+        for (const event of this.events) {
+          if (mark && event.sequence <= mark.sequence) continue;
+          if (mark?.frameId && event.frameId && mark.frameId !== event.frameId) continue;
           if (!event.redirectUrl || redirects.includes(event.redirectUrl)) continue;
           redirects.push(event.redirectUrl);
           if (redirects.length >= 20) break;
@@ -281,8 +316,13 @@ class BrowserNavigationTracker {
     this.lastNetworkActivityAt = performance.now();
   }
 
-  private readonly onMessage = (_event: unknown, method: string, rawParams: unknown): void => {
-    if (this.disposed || !rawParams || typeof rawParams !== "object") return;
+  private readonly onMessage = (
+    _event: unknown,
+    method: string,
+    rawParams: unknown,
+    sessionId?: string,
+  ): void => {
+    if (sessionId || this.disposed || !rawParams || typeof rawParams !== "object") return;
     const params = rawParams as DebuggerMessageParams;
     const now = performance.now();
     if (method === "Network.requestWillBeSent" && params.requestId && params.request?.url) {

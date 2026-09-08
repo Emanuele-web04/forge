@@ -742,6 +742,15 @@ test("production MCP controls one persistent Electron page across visibility cha
       );
       expect(emptyLocators.structuredContent.value).toEqual([]);
     });
+    await test.step("follows a client redirect before the first document finishes loading", async () => {
+      const result = await mcp.call("browser_open", {
+        url: new URL("/client-redirect", site.appUrl).href,
+        reuse: false,
+        timeoutMs: 3000,
+      });
+      expect(result.structuredContent.finalUrl).toBe(site.nextUrl);
+      expect(result.structuredContent.loadState).not.toBe("commit");
+    });
   } finally {
     try {
       await closeElectronApplication(electronApp);

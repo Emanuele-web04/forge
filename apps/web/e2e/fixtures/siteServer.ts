@@ -229,11 +229,18 @@ const HTML_BY_PATH: Readonly<Record<string, string>> = {
   "/oauth": OAUTH_HTML,
   "/popup": POPUP_HTML,
   "/signin": SIGNIN_HTML,
+  "/client-redirect":
+    "<!doctype html><script>location.replace('/next')</script><script src='/redirect-blocker.js'></script>",
 };
 
 export async function startVisibleBrowserFixtureSite(): Promise<VisibleBrowserFixtureSite> {
   const server: Server = createServer((request, response) => {
     const requestPath = new URL(request.url ?? "/", "http://fixture.test").pathname;
+    if (requestPath === "/redirect-blocker.js") {
+      response.setHeader("Content-Type", "text/javascript");
+      setTimeout(() => response.end(""), 500);
+      return;
+    }
     if (requestPath === "/redirect") {
       response.statusCode = 302;
       response.setHeader("Location", "/next");
