@@ -236,6 +236,7 @@ function RootRouteView() {
   useNativeFontSmoothing();
   useSyncDesktopTopBarTrafficLightGutterZoom();
   useTheme();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
   const [compatibilityIssue, setCompatibilityIssue] = useState<WsCompatibilityError | null>(() =>
     readLatestWsCompatibilityIssue(),
   );
@@ -277,6 +278,13 @@ function RootRouteView() {
         {desktopChrome}
       </>
     );
+  }
+
+  // Cloud identity is a browser session owned by the cloud control plane, not a
+  // desktop pairing session. These routes must stay reachable when the local
+  // WebSocket server is absent, and must never mount local event hydration.
+  if (pathname === "/login" || pathname === "/signup") {
+    return <Outlet />;
   }
 
   if (!readNativeApi()) {
