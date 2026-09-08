@@ -115,6 +115,8 @@ import Migration0096 from "./Migrations/096_ProjectionThreadsGoalAchievements.ts
 import Migration0097 from "./Migrations/097_ProjectionThreadsSidechatLifecycle.ts";
 import Migration0098 from "./Migrations/098_MigrateKiloToOpenCode.ts";
 import Migration0099 from "./Migrations/099_InvalidateProjectionThreadsCursor.ts";
+import Migration0100 from "./Migrations/100_AccountUsageSync.ts";
+import Migration0101 from "./Migrations/101_AccountUsageSyncIdentity.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -229,6 +231,8 @@ export const migrationEntries = [
   [97, "ProjectionThreadsSidechatLifecycle", Migration0097],
   [98, "MigrateKiloToOpenCode", Migration0098],
   [99, "InvalidateProjectionThreadsCursor", Migration0099],
+  [100, "AccountUsageSync", Migration0100],
+  [101, "AccountUsageSyncIdentity", Migration0101],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
@@ -332,6 +336,20 @@ export const MIGRATION_LINEAGE_ALIASES: readonly MigrationLineageAlias[] = [
     historicalName: "ProjectPullRequestPins",
     currentId: 69,
     historicalSlotRequiresRerun: false,
+  },
+  {
+    // Pre-merge feat/account-api dev builds recorded AccountUsageSync at 90;
+    // upstream landed ProjectionThreadMessageTextSegments there first, so ours
+    // moved to 91, then to 99 when upstream's released 91-98 arrived, then to
+    // 100 when upstream took 99 for InvalidateProjectionThreadsCursor.
+    // `currentId` tracks where the migration lives today — 100_AccountUsageSync, which is
+    // idempotent (CREATE TABLE IF NOT EXISTS + INSERT OR IGNORE) and so is safe
+    // to re-run. Slot 90's new occupant has real work to do on those databases,
+    // hence the rerun.
+    historicalId: 90,
+    historicalName: "AccountUsageSync",
+    currentId: 100,
+    historicalSlotRequiresRerun: true,
   },
 ];
 

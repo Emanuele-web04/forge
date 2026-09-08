@@ -1,0 +1,10 @@
+# Never bake local environments or dependency trees into images.
+.env
+.env.*
+**/.env
+**/.env.*
+**/node_modules
+.git
+.claude
+.superpowers
+**/ui/dist

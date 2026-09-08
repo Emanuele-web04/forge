@@ -9,6 +9,7 @@ import type {
   ProfileTokenStats,
   ProviderKind,
 } from "@synara/contracts";
+import type { AccountUsageView } from "~/lib/accountUsageAdapter";
 
 export interface ProfileHeatmapSelection {
   readonly cells: ReadonlyArray<ProfileHeatmapCell>;
@@ -61,6 +62,51 @@ export function selectProfileTopProvider(
     provider: stats.insights.topProvider,
     percent: stats.insights.topProviderPercent,
     metric: "turns",
+  };
+}
+
+/**
+ * Everything the shareable card renders, scope-neutral: built from the local
+ * device stats or from the account-wide usage summary, so the exported PNG
+ * always shows the numbers the user selected in the panel's scope toggle.
+ */
+export interface ShareCardStats {
+  readonly lifetimeTokens: number | null;
+  readonly peakDayTokens: number | null;
+  readonly currentStreakDays: number;
+  readonly longestStreakDays: number;
+  readonly topProvider: {
+    readonly provider: ProviderKind | null;
+    readonly percent: number | null;
+  };
+  readonly heatmapCells: ReadonlyArray<ProfileHeatmapCell>;
+}
+
+/** The This-device share card: same tokens-first series as the profile page. */
+export function selectDeviceShareCardStats(
+  stats: ProfileStats,
+  tokenStats: ProfileTokenStats | null,
+): ShareCardStats {
+  const topProvider = selectProfileTopProvider(stats, tokenStats);
+  return {
+    lifetimeTokens: tokenStats?.lifetimeTotalTokens ?? null,
+    peakDayTokens: tokenStats?.peakDayTokens ?? null,
+    currentStreakDays: stats.activity.currentStreakDays,
+    longestStreakDays: stats.activity.longestStreakDays,
+    topProvider: { provider: topProvider.provider, percent: topProvider.percent },
+    heatmapCells: selectProfileHeatmap(stats, tokenStats).cells,
+  };
+}
+
+/** The Account share card, from the already-derived account usage view. */
+export function selectAccountShareCardStats(view: AccountUsageView): ShareCardStats {
+  return {
+    lifetimeTokens: view.lifetimeTokens,
+    peakDayTokens: view.peakDayTokens,
+    currentStreakDays: view.currentStreakDays,
+    longestStreakDays: view.longestStreakDays,
+    topProvider: view.topProvider,
+    heatmapCells: view.heatmap.cells,
   };
 }
 

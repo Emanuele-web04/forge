@@ -3,6 +3,16 @@ import { Schema } from "effect";
 export const TrimmedString = Schema.Trim;
 export const TrimmedNonEmptyString = TrimmedString.check(Schema.isNonEmpty());
 
+/**
+ * A {@link TrimmedNonEmptyString} with an explicit upper bound, for
+ * externally-supplied fields: an unbounded string in a request contract lets
+ * an unauthenticated caller inflate database rows, responses, and logs to
+ * whatever the transport accepts. Response-only fields may stay unbounded;
+ * anything decoded off a request should carry a maximum.
+ */
+export const boundedTrimmedNonEmptyString = (maxLength: number) =>
+  TrimmedNonEmptyString.check(Schema.isMaxLength(maxLength));
+
 export const NonNegativeInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 export const PositiveInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1));
 

@@ -5,7 +5,7 @@
 import { type ProviderKind, type ThreadId } from "@synara/contracts";
 import { memo, type ReactNode } from "react";
 
-import { SynaraLogo } from "../SynaraLogo";
+import { SynaraLogo } from "@synara/profile-ui/logo";
 import { cn } from "~/lib/utils";
 
 export interface CrossTaskOrigin {

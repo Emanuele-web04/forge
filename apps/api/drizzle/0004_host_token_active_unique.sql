@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "host_tokens_one_active_per_host" ON "host_tokens" USING btree ("host_id") WHERE "host_tokens"."revoked_at" IS NULL;

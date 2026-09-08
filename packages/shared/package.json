@@ -16,6 +16,10 @@
       "types": "./src/git.ts",
       "import": "./src/git.ts"
     },
+    "./account": {
+      "types": "./src/account.ts",
+      "import": "./src/account.ts"
+    },
     "./githubAvatar": {
       "types": "./src/githubAvatar.ts",
       "import": "./src/githubAvatar.ts"
@@ -308,6 +312,18 @@
       "types": "./src/deviceHelperCache.ts",
       "import": "./src/deviceHelperCache.ts"
     },
+    "./deviceKey": {
+      "types": "./src/deviceKey.ts",
+      "import": "./src/deviceKey.ts"
+    },
+    "./transportRace": {
+      "types": "./src/transportRace.ts",
+      "import": "./src/transportRace.ts"
+    },
+    "./hostSecrets": {
+      "types": "./src/hostSecrets.ts",
+      "import": "./src/hostSecrets.ts"
+    },
     "./searchQuery": {
       "types": "./src/searchQuery.ts",
       "import": "./src/searchQuery.ts"
@@ -322,7 +338,8 @@
   },
   "dependencies": {
     "@synara/contracts": "workspace:*",
-    "effect": "catalog:"
+    "effect": "catalog:",
+    "jose": "^6.1.0"
   },
   "devDependencies": {
     "@effect/language-service": "catalog:",

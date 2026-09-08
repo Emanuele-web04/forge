@@ -158,6 +158,10 @@ it.layer(testLayer)("server CLI command", (it) => {
         "--no-browser",
         "--auth-token",
         "auth-secret",
+        "--relay-url",
+        "https://relay.flag.test",
+        "--ssh-forward-port",
+        "4778",
       ]);
 
       assert.equal(start.mock.calls.length, 1);
@@ -169,6 +173,8 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(resolvedConfig?.devUrl?.toString(), "http://127.0.0.1:5173/");
       assert.equal(resolvedConfig?.noBrowser, true);
       assert.equal(resolvedConfig?.authToken, "auth-secret");
+      assert.equal(resolvedConfig?.relayUrl?.toString(), "https://relay.flag.test/");
+      assert.equal(resolvedConfig?.sshForwardPort, 4778);
       assert.equal(resolvedConfig?.publicUrl, undefined);
       assert.equal(resolvedConfig?.allowInsecureRemote, false);
       assert.equal(resolvedConfig?.autoBootstrapProjectFromCwd, false);
@@ -377,6 +383,8 @@ it.layer(testLayer)("server CLI command", (it) => {
         SYNARA_AUTH_TOKEN: "env-token",
         SYNARA_DESKTOP_SHUTDOWN_TOKEN: "shutdown-token",
         SYNARA_MIGRATION_DIVERGENCE_CONSENT: "migration-consent",
+        SYNARA_RELAY_URL: "https://relay.example.test",
+        SYNARA_SSH_FORWARD_PORT: "4777",
       });
 
       assert.equal(start.mock.calls.length, 1);
@@ -390,6 +398,11 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(resolvedConfig?.authToken, "env-token");
       assert.equal(resolvedConfig?.desktopShutdownToken, "shutdown-token");
       assert.equal(resolvedConfig?.migrationDivergenceConsent, "migration-consent");
+      // Parsed from the environment AND carried into the config the host
+      // connectivity layer reads: a linked host with these unset never dials
+      // the relay, and revocations silently degrade to the credential TTL.
+      assert.equal(resolvedConfig?.relayUrl?.toString(), "https://relay.example.test/");
+      assert.equal(resolvedConfig?.sshForwardPort, 4777);
       assert.equal(resolvedConfig?.autoBootstrapProjectFromCwd, false);
       assert.equal(resolvedConfig?.logProviderEvents, false);
       assert.equal(resolvedConfig?.logWebSocketEvents, false);
@@ -899,6 +912,67 @@ it.layer(testLayer)("server CLI command", (it) => {
       // effect/unstable/cli renders help/errors for parse failures and returns success.
       assert.equal(start.mock.calls.length, 0);
       assert.equal(stop.mock.calls.length, 0);
+    }),
+  );
+
+  // `synara auth` with a stored session must never send the stored token to a
+  // DIFFERENT service: a conflicting explicit --account-url fails before any
+  // request is made, pointing at `synara auth logout`.
+  it.effect("refuses `synara auth` against a URL conflicting with the stored session", () =>
+    Effect.gen(function* () {
+      const homeDir = makeTempHome("synara-main-auth-conflict-");
+      fs.writeFileSync(
+        path.join(homeDir, "account-credentials.json"),
+        JSON.stringify({
+          accountUrl: "https://accounts.example.com",
+          workosClientId: "client_01ABC",
+          workosApiUrl: "https://api.workos.example",
+          organizationId: "org_1",
+          accessToken: "access-1",
+          refreshToken: "refresh-1",
+        }),
+      );
+
+      const exit = yield* Effect.exit(
+        runCli(["auth", "--home-dir", homeDir, "--account-url", "https://other.example.com"]),
+      );
+
+      assert.isTrue(Exit.isFailure(exit));
+      if (Exit.isFailure(exit)) {
+        const rendered = Cause.pretty(exit.cause);
+        assert.include(rendered, "signed in to https://accounts.example.com");
+        assert.include(rendered, "synara auth logout");
+      }
+      assert.equal(start.mock.calls.length, 0);
+    }),
+  );
+
+  // With a stored session and NO explicit URL anywhere, `synara auth` resolves
+  // the persisted accountUrl instead of failing "not configured". The session
+  // proves the URL requirement is satisfied from the file even when the host
+  // link still needs to be completed.
+  it.effect("lets `synara auth` use the persisted accountUrl with no env or flag", () =>
+    Effect.gen(function* () {
+      const homeDir = makeTempHome("synara-main-auth-persisted-");
+      fs.writeFileSync(
+        path.join(homeDir, "account-credentials.json"),
+        JSON.stringify({
+          accountUrl: "https://accounts.example.com",
+          workosClientId: "client_01ABC",
+          workosApiUrl: "https://api.workos.example",
+          organizationId: "org_1",
+          accessToken: "access-1",
+          refreshToken: "refresh-1",
+          hostId: "host_1",
+          hostOwnerUserId: "user_1",
+          hostKeyGeneration: 1,
+        }),
+      );
+
+      const exit = yield* Effect.exit(runCli(["auth", "--home-dir", homeDir]));
+
+      assert.isTrue(Exit.isSuccess(exit));
+      assert.equal(start.mock.calls.length, 0);
     }),
   );
 });

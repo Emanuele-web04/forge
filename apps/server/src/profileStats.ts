@@ -584,9 +584,11 @@ function buildMostWorkedProject(row: MostWorkedProjectRow | undefined): MostWork
 
 // Maps every turn to the provider/model selected when it was started: turn-start
 // events carry the pending messageId, which projection_turns links back to the
-// turn_id that token activities reference. Shared by the live token stats query
-// and the delete-time archive snapshot so both attribute token deltas the same
-// way. Pass `scope` to restrict the CTE to a single thread (archive path).
+// turn_id that token activities reference. Shared by the live token stats query,
+// the delete-time archive snapshot, and the per-minute account usage reporter
+// (accountUsageReporter.ts) so all attribute token deltas the same way.
+// `reasoning` is the turn's reasoning effort/level, NULL when the model ran
+// without one. Pass `scope` to restrict the CTE to a single thread (archive path).
 export function turnModelSelectionCte(
   sql: SqlClient.SqlClient,
   scope?: { readonly threadId: string },
@@ -602,7 +604,11 @@ export function turnModelSelectionCte(
       pt.thread_id AS thread_id,
       pt.turn_id AS turn_id,
       MAX(json_extract(e.payload_json, '$.modelSelection.provider')) AS provider,
-      MAX(json_extract(e.payload_json, '$.modelSelection.model')) AS model
+      MAX(json_extract(e.payload_json, '$.modelSelection.model')) AS model,
+      MAX(COALESCE(
+        json_extract(e.payload_json, '$.modelSelection.options.reasoningEffort'),
+        json_extract(e.payload_json, '$.modelSelection.options.effort')
+      )) AS reasoning
     FROM orchestration_events e
     JOIN projection_turns pt
       ON pt.thread_id = ${turnThreadMatch}

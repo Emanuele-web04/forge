@@ -6,6 +6,10 @@ interface ForkLineageThread {
   readonly id: string;
   readonly projectId: string;
   readonly title: string;
+  // `undefined` is admitted alongside `null` because the orchestration read
+  // model carries these as optional branded ids: under
+  // `exactOptionalPropertyTypes` an explicitly-undefined property is not
+  // assignable to an optional that only admits `string | null`.
   readonly forkSourceThreadId?: string | null | undefined;
   readonly sidechatSourceThreadId?: string | null | undefined;
 }

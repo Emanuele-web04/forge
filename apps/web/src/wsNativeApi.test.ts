@@ -687,6 +687,61 @@ describe("wsNativeApi", () => {
     expect(requestMock).toHaveBeenCalledWith(WS_METHODS.serverGetEnvironment);
   });
 
+  it("exposes and forwards the complete hosts namespace", async () => {
+    requestMock.mockResolvedValue(undefined);
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi() as ReturnType<typeof createWsNativeApi> & {
+      hosts: Record<string, (input?: unknown) => Promise<unknown>>;
+    };
+    const calls = [
+      ["listHosts", WS_METHODS.hostsList, undefined],
+      ["updateHost", WS_METHODS.hostsUpdate, { hostId: "host_1", discoverable: false }],
+      ["deleteHost", WS_METHODS.hostsDelete, { hostId: "host_1" }],
+      ["listDevices", WS_METHODS.hostsListDevices, undefined],
+      [
+        "revokeDevice",
+        WS_METHODS.hostsRevokeDevice,
+        { deviceId: "00000000-0000-4000-8000-000000000001" },
+      ],
+      ["approveDeviceLink", WS_METHODS.hostsApproveDeviceLink, { userCode: "ABCDEFGH" }],
+      ["requestGrant", WS_METHODS.hostsRequestGrant, { hostId: "host_1" }],
+      ["enrollment", WS_METHODS.hostsEnrollment, undefined],
+      ["unlinkLocalHost", WS_METHODS.hostsUnlinkLocalHost, undefined],
+      ["listSessions", WS_METHODS.hostsListSessions, undefined],
+      ["endSession", WS_METHODS.hostsEndSession, { sessionId: "session-1" }],
+      ["beginSyncKeyPairing", WS_METHODS.hostsBeginSyncKeyPairing, undefined],
+      [
+        "offerSyncKey",
+        WS_METHODS.hostsOfferSyncKey,
+        {
+          recipientDeviceId: "00000000-0000-4000-8000-000000000001",
+          recipientPublicJwk: { kty: "EC", crv: "P-256", x: "eA", y: "eQ" },
+        },
+      ],
+      ["receiveSyncKey", WS_METHODS.hostsReceiveSyncKey, undefined],
+      ["confirmSyncKey", WS_METHODS.hostsConfirmSyncKey, { verificationCode: "ABC234" }],
+      ["disconnect", WS_METHODS.hostsDisconnect, { hostId: "host_1" }],
+      ["listConnections", WS_METHODS.hostsListConnections, undefined],
+    ] as const;
+
+    for (const [method, wsMethod, input] of calls) {
+      await api.hosts[method]?.(input);
+      expect(requestMock).toHaveBeenLastCalledWith(
+        wsMethod,
+        ...(input === undefined ? [] : [input]),
+      );
+    }
+    // Connect carries its own deadline: a transport race plus a handshake.
+    await api.hosts.connect?.({ hostId: "host_1" });
+    expect(requestMock).toHaveBeenLastCalledWith(
+      WS_METHODS.hostsConnect,
+      { hostId: "host_1" },
+      { timeoutMs: 30_000 },
+    );
+    expect(api.hosts).not.toHaveProperty("checkReachability");
+  });
+
   it("uses websocket RPC for external MCP management in packaged and browser builds", async () => {
     requestMock
       .mockResolvedValueOnce([])

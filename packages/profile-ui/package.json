@@ -1,0 +1,53 @@
+{
+  "name": "@synara/profile-ui",
+  "version": "0.0.0-alpha.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./logo": {
+      "types": "./src/logo.tsx",
+      "import": "./src/logo.tsx"
+    },
+    "./avatar": {
+      "types": "./src/avatar.tsx",
+      "import": "./src/avatar.tsx"
+    },
+    "./heatmap": {
+      "types": "./src/heatmap.tsx",
+      "import": "./src/heatmap.tsx"
+    },
+    "./formatting": {
+      "types": "./src/formatting.ts",
+      "import": "./src/formatting.ts"
+    },
+    "./sections": {
+      "types": "./src/sections.tsx",
+      "import": "./src/sections.tsx"
+    },
+    "./provider-icon": {
+      "types": "./src/providerIcon.tsx",
+      "import": "./src/providerIcon.tsx"
+    },
+    "./skeleton": {
+      "types": "./src/skeleton.tsx",
+      "import": "./src/skeleton.tsx"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "class-variance-authority": "^0.7.1",
+    "tailwind-merge": "^3.6.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "react": "^19.0.0",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  }
+}

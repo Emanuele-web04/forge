@@ -30,6 +30,8 @@ import { RunningChatsQuitCoordinator } from "../components/RunningChatsQuitCoord
 import { AppSnapCoordinator } from "../components/AppSnapCoordinator";
 import { AppSnapWelcomeDialog } from "../components/AppSnapWelcomeDialog";
 import { QueuedComposerDrainCoordinator } from "../components/QueuedComposerDrainCoordinator";
+import { GlobalAccountDialogs } from "../components/account/GlobalAccountDialogs";
+import { HostDiscoverabilityPrompt } from "../components/hosts/HostDiscoverabilityPrompt";
 import { FeedbackDialog } from "../components/FeedbackDialog";
 import { SETTINGS_TARGETS } from "../settingsNavigation";
 import ShortcutsDialog from "../components/ShortcutsDialog";
@@ -45,6 +47,7 @@ import { useFeatureFlags } from "../featureFlags";
 import { useFocusedChatContext } from "../focusedChatContext";
 import { useFeedbackDialogStore } from "../feedbackDialogStore";
 import type { FeedbackThreadContext } from "../feedback";
+import { invalidateAccountStatus } from "../lib/accountReactQuery";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import {
   invalidateProviderUsageQueries,
@@ -303,6 +306,10 @@ function RootRouteView() {
           <ProviderStatusRefreshCoordinator />
           <GlobalShortcutsDialog />
           <GlobalFeedbackDialog />
+          <GlobalAccountDialogs />
+          {/* Mounted globally because the host it asks about registers itself
+              at sign-in, wherever the user happens to be in the app. */}
+          <HostDiscoverabilityPrompt />
           <GlobalWhatsNewSurface />
           <TaskCompletionNotifications />
           <QueuedComposerDrainCoordinator />
@@ -2308,6 +2315,9 @@ function EventRouter() {
         // Reopening the socket is a projection boundary. React Query otherwise
         // keeps the previous infinite-stale config and can strand "Checking".
         void refreshServerConfigAfterTransportOpen(queryClient).catch(() => undefined);
+        // A completeSso cut off by the dropped socket still persisted
+        // credentials server-side; re-reading status recovers that result.
+        void invalidateAccountStatus(queryClient).catch(() => undefined);
       },
       { replayCurrent: true },
     );

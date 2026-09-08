@@ -1,0 +1,68 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "synara-profiles",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "workers_dev": true,
+  "routes": [
+    {
+      // The dev/single-domain deployment (see next.config.ts): this app owns
+      // the domain. Custom domain, so Cloudflare manages the DNS record.
+      "pattern": "synara.vrbty.dev",
+      "custom_domain": true,
+    },
+  ],
+  "assets": {
+    "binding": "ASSETS",
+    "directory": ".open-next/assets",
+  },
+  "r2_buckets": [
+    {
+      // Backs the Next data cache (the 15s-revalidated profile fetch).
+      // Reuses the existing avatar bucket (the API's S3_BUCKET): cache
+      // entries live under their own prefix, so they cannot collide with
+      // avatars/. The bucket was created in the EU jurisdiction, so the
+      // binding must say so or wrangler reports it missing.
+      "binding": "NEXT_INC_CACHE_R2_BUCKET",
+      "bucket_name": "synara",
+      "jurisdiction": "eu",
+    },
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        // Serializes time-based revalidations of cached entries.
+        "name": "NEXT_CACHE_DO_QUEUE",
+        "class_name": "DOQueueHandler",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["DOQueueHandler"],
+    },
+  ],
+  "services": [
+    {
+      // Lets the worker call itself (revalidation requests) without a
+      // public round trip.
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "synara-profiles",
+    },
+  ],
+  "vars": {
+    // Non-secret config. PROFILE_PROXY_SECRET is a secret:
+    //   wrangler secret put PROFILE_PROXY_SECRET
+    "ACCOUNT_API_URL": "https://api.synara.vrbty.dev",
+    // synara.vrbty.dev is the single-domain dev shape: non-profile paths
+    // proxy to the marketing site (src/middleware.ts). Points at the
+    // canonical domain, not a specific Vercel deployment URL. www because
+    // the apex 307s there — skip the redirect hop on every proxied page.
+    "MARKETING_ORIGIN": "https://www.trysynara.com",
+    // The shared bucket is public (cdn.synara.vrbty.dev), so keep the cache
+    // under a clearly non-content prefix beside avatars/.
+    "NEXT_INC_CACHE_R2_PREFIX": "profiles-next-cache",
+  },
+}

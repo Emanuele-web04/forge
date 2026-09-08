@@ -3,7 +3,7 @@ import { Effect, FileSystem, Layer, Path, Random } from "effect";
 
 import packageJson from "../../../package.json" with { type: "json" };
 import { ServerConfig } from "../../config";
-import { writeFileStringAtomically } from "../../atomicWrite";
+import { createFileStringExclusively } from "../../atomicWrite";
 import { ServerEnvironment, type ServerEnvironmentShape } from "../Services/ServerEnvironment";
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel";
 
@@ -48,21 +48,28 @@ export const makeServerEnvironment = Effect.fn(function* () {
     return raw.length > 0 ? raw : null;
   });
 
-  const persistEnvironmentId = (value: string) =>
-    Effect.gen(function* () {
-      yield* writeFileStringAtomically({
-        filePath: serverConfig.environmentIdPath,
-        contents: `${value}\n`,
-      });
-    });
-
   const environmentIdRaw = yield* Effect.gen(function* () {
     const persisted = yield* readPersistedEnvironmentId;
     if (persisted) return persisted;
 
+    // Exclusive create: `synara auth` can race first startup on the same
+    // file, and both minting different UUIDs would leave one process
+    // registered under an id that was never persisted. The loser reads the
+    // winner's id instead.
     const generated = yield* Random.nextUUIDv4;
-    yield* persistEnvironmentId(generated);
-    return generated;
+    const created = yield* createFileStringExclusively({
+      filePath: serverConfig.environmentIdPath,
+      contents: `${generated}\n`,
+    });
+    if (created) return generated;
+
+    const winner = yield* readPersistedEnvironmentId;
+    if (!winner) {
+      return yield* Effect.die(
+        new Error(`environment-id file exists but is empty: ${serverConfig.environmentIdPath}`),
+      );
+    }
+    return winner;
   });
 
   const environmentId = EnvironmentId.makeUnsafe(environmentIdRaw);

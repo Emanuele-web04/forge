@@ -19,6 +19,7 @@ import {
   ServiceMap,
   Stream,
 } from "effect";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { Command, Flag } from "effect/unstable/cli";
 import { NetService } from "@synara/shared/Net";
 import {
@@ -46,6 +47,7 @@ import {
 import { fixPath, resolveBaseDir } from "./os-jank";
 import { Open } from "./open";
 import { ServerAuth } from "./auth/Services/ServerAuth";
+import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
 import * as SqlitePersistence from "./persistence/Layers/Sqlite";
 import { ProviderRuntimeEventRepositoryLive } from "./persistence/Layers/ProviderRuntimeEvents";
 import { makeServerApplicationLayers } from "./serverLayers";
@@ -58,6 +60,9 @@ import { Server } from "./effectServer";
 import { ServerLoggerLive } from "./serverLogger";
 import { ServerSettingsService } from "./serverSettings";
 import { formatHostForUrl, isLoopbackHost, isWildcardHost } from "./startupAccess";
+import { startHostConnectivity } from "./hostConnectivity";
+import { superviseHostConnectivity } from "./hostConnectivitySupervisor";
+import { RemoteSessionRegistryService } from "./remoteSessions/sessionRegistry";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { startThreadRetentionJob } from "./threadRetention";
 import {
@@ -68,6 +73,20 @@ import {
   verifyServerRuntime,
 } from "./externalMcp/bridge";
 import { externalMcpLauncher, externalMcpShellCommand } from "./externalMcp/launcher";
+import {
+  ACCOUNT_URL_ENV_NAME,
+  resolveAccountUrl,
+  resolveAuthLoginAccountUrl,
+  runAuthLogin,
+  runDeviceCodeHostLink,
+  runAuthLogout,
+  runStatus,
+} from "./accountAuth";
+import {
+  createAccountUsageReporter,
+  isAccountUsageRelevantEventType,
+} from "./accountUsageReporter";
+import { registerAccountUsageReporterNudge } from "./accountUsageReporterRegistry";
 import { fetchSynaraServerStatus, formatSynaraServerStatus } from "./serverStatusCli";
 import {
   embeddedMigrationRuntimeSourceDigest,
@@ -103,6 +122,8 @@ interface CliInput {
   readonly synaraHome: Option.Option<string>;
   readonly devUrl: Option.Option<URL>;
   readonly publicUrl: Option.Option<URL>;
+  readonly relayUrl: Option.Option<URL>;
+  readonly sshForwardPort: Option.Option<number>;
   readonly allowInsecureRemote: BooleanFlagInput;
   readonly noBrowser: BooleanFlagInput;
   readonly authToken: Option.Option<string>;
@@ -169,6 +190,11 @@ const CliEnvConfig = Config.all({
   synaraHome: Config.string("SYNARA_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
   devUrl: Config.url("VITE_DEV_SERVER_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
   publicUrl: Config.url("SYNARA_PUBLIC_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
+  relayUrl: Config.url("SYNARA_RELAY_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
+  sshForwardPort: Config.port("SYNARA_SSH_FORWARD_PORT").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
   allowInsecureRemote: optionalBooleanEnvironmentConfig("SYNARA_ALLOW_INSECURE_REMOTE"),
   noBrowser: optionalBooleanEnvironmentConfig("SYNARA_NO_BROWSER"),
   authToken: Config.string("SYNARA_AUTH_TOKEN").pipe(
@@ -277,6 +303,8 @@ const ServerConfigLive = (input: CliInput) =>
       });
       const noBrowser = resolveBooleanConfig(input.noBrowser, env.noBrowser, mode === "desktop");
       const authToken = Option.getOrUndefined(input.authToken) ?? env.authToken;
+      const relayUrl = Option.getOrUndefined(input.relayUrl) ?? env.relayUrl;
+      const sshForwardPort = Option.getOrUndefined(input.sshForwardPort) ?? env.sshForwardPort;
       const desktopShutdownToken = env.desktopShutdownToken ?? liveProcessDesktopShutdownToken;
       const migrationDivergenceConsent =
         env.migrationDivergenceConsent ?? liveProcessMigrationConsent;
@@ -333,6 +361,8 @@ const ServerConfigLive = (input: CliInput) =>
         staticDir,
         devUrl,
         publicUrl,
+        relayUrl,
+        sshForwardPort,
         allowInsecureRemote,
         noBrowser,
         authToken,
@@ -392,7 +422,9 @@ const makeServerProgram = (input: CliInput) =>
     const { start, stopSignal } = yield* Server;
     const openDeps = yield* Open;
     const serverAuth = yield* ServerAuth;
+    const localSessions = yield* SessionCredentialService;
     const serverSettings = yield* ServerSettingsService;
+    const remoteSessions = yield* RemoteSessionRegistryService;
     yield* cliConfig.fixPath;
 
     const config = yield* ServerConfig;
@@ -408,6 +440,29 @@ const makeServerProgram = (input: CliInput) =>
     }
 
     yield* start;
+    // Follows the credentials file for the server's lifetime: signing in and
+    // linking this machine starts the relay dial right away, and unlinking
+    // stops it, with no restart in between.
+    const hostConnectivity = yield* Effect.tryPromise(() =>
+      superviseHostConnectivity({
+        baseDir: config.baseDir,
+        start: () =>
+          startHostConnectivity({
+            config,
+            listeningPort: config.port,
+            localSessions,
+            remoteSessions,
+          }),
+        log: (message, detail) => console.warn(`[synara] ${message}`, detail ?? ""),
+      }),
+    ).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("Host connectivity supervisor did not start.", {
+          cause: String(cause),
+        }).pipe(Effect.as({ reconcile: () => Promise.resolve(), stop: () => {} })),
+      ),
+    );
+    yield* Effect.addFinalizer(() => Effect.sync(() => hostConnectivity.stop()));
 
     const localUrl = `http://localhost:${config.port}`;
     const bindUrl =
@@ -433,6 +488,31 @@ const makeServerProgram = (input: CliInput) =>
     // Start the retention loop after the server is live so startup can serve
     // existing history first, then hide inactive threads from the app in the background.
     yield* startThreadRetentionJob(orchestrationEngine, projectionSnapshotQuery);
+    // Event-driven account usage sync: every committed usage-relevant domain
+    // event nudges the reporter, which debounces, recomputes recent per-minute
+    // buckets from the local projections, and pushes absolute values to the
+    // account. Best-effort and fully inert while signed out — like the host
+    // registration above, it must never delay or fail a boot.
+    const usageReporterSql = yield* SqlClient.SqlClient;
+    const accountUsageReporter = createAccountUsageReporter({
+      sql: usageReporterSql,
+      baseDir: config.baseDir,
+      ...(config.devUrl ? { devUrl: config.devUrl } : {}),
+    });
+    registerAccountUsageReporterNudge(() => void accountUsageReporter.flushNow());
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        registerAccountUsageReporterNudge(undefined);
+        accountUsageReporter.stop();
+      }),
+    );
+    yield* Effect.forkChild(
+      Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) =>
+        isAccountUsageRelevantEventType(event.type)
+          ? Effect.sync(() => accountUsageReporter.notifyActivity())
+          : Effect.void,
+      ),
+    );
     // Optional Claude OAuth keepalive. Disabled by default because it touches
     // Claude Code auth data in the background; users can opt in with
     // SYNARA_CLAUDE_KEEPALIVE=1.
@@ -538,6 +618,18 @@ const publicUrlFlag = Flag.string("public-url").pipe(
   ),
   Flag.optional,
 );
+const relayUrlFlag = Flag.string("relay-url").pipe(
+  Flag.withSchema(Schema.URLFromString),
+  Flag.withDescription("Relay service root URL (equivalent to SYNARA_RELAY_URL)."),
+  Flag.optional,
+);
+const sshForwardPortFlag = Flag.integer("ssh-forward-port").pipe(
+  Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }))),
+  Flag.withDescription(
+    "Loopback-only credential-gated WebSocket port for SSH forwarding (equivalent to SYNARA_SSH_FORWARD_PORT).",
+  ),
+  Flag.optional,
+);
 const allowInsecureRemoteFlag = optionalBooleanFlag("allow-insecure-remote", {
   description:
     "Explicitly allow unencrypted authenticated remote access on a trusted LAN (equivalent to SYNARA_ALLOW_INSECURE_REMOTE).",
@@ -584,6 +676,8 @@ const baseServerCommand = Command.make("synara", {
   synaraHome: synaraHomeFlag,
   devUrl: devUrlFlag,
   publicUrl: publicUrlFlag,
+  relayUrl: relayUrlFlag,
+  sshForwardPort: sshForwardPortFlag,
   allowInsecureRemote: allowInsecureRemoteFlag,
   noBrowser: noBrowserFlag,
   authToken: authTokenFlag,
@@ -721,9 +815,120 @@ const mcpCommand = Command.make("mcp").pipe(
   Command.withSubcommands([mcpServeCommand, mcpPairCommand]),
 );
 
+const accountUrlFlag = Flag.string("account-url").pipe(
+  Flag.withDescription(`Synara account server to talk to (overrides ${ACCOUNT_URL_ENV_NAME}).`),
+  Flag.optional,
+);
+
+const requireAccountUrl = (flag: Option.Option<string>) =>
+  Effect.gen(function* () {
+    const accountUrl = resolveAccountUrl({ flag: Option.getOrUndefined(flag) });
+    if (!accountUrl) {
+      return yield* new StartupError({
+        message: `Account features are not configured — set ${ACCOUNT_URL_ENV_NAME} or pass --account-url.`,
+      });
+    }
+    return accountUrl;
+  });
+
+// `--account-url` lives only on the base `auth` command: the Effect CLI rejects
+// a flag declared on both a parent and its subcommand, so `logout` reads the
+// parsed value out of the parent's context (same shape as `--home-dir` above).
+const baseAuthCommand = Command.make("auth", {
+  accountUrl: accountUrlFlag,
+  deviceCode: Flag.boolean("device-code").pipe(
+    Flag.withDescription("Link a headless host using a browser approval code."),
+  ),
+}).pipe(Command.withDescription("Link this machine as an account host."));
+
+const authLogoutCommand = Command.make("logout", {}, () =>
+  Effect.gen(function* () {
+    const root = yield* baseServerCommand;
+    const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(root.synaraHome));
+    // No `--account-url` gate: logout uses the URL stored at login, so it must
+    // keep working after the ambient env var is unset.
+    yield* Effect.tryPromise({
+      try: () => runAuthLogout({ baseDir }),
+      catch: (cause) => new StartupError({ message: "Sign-out failed.", cause }),
+    });
+  }),
+).pipe(
+  Command.withDescription(
+    "Sign this machine out, deregistering the host and deleting credentials.",
+  ),
+);
+
+const authCommand = baseAuthCommand.pipe(
+  Command.withHandler(({ accountUrl, deviceCode }) =>
+    Effect.gen(function* () {
+      const root = yield* baseServerCommand;
+      const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(root.synaraHome));
+      if (deviceCode) {
+        const resolved = yield* requireAccountUrl(accountUrl);
+        yield* Effect.tryPromise({
+          try: () =>
+            runDeviceCodeHostLink({
+              accountUrl: resolved,
+              baseDir,
+              ...(Option.isSome(root.devUrl) ? { devUrl: root.devUrl.value } : {}),
+            }),
+          catch: (cause) => new StartupError({ message: "Device-code host link failed.", cause }),
+        });
+        return;
+      }
+      // Once a session exists, the URL stored at sign-in wins (as refresh,
+      // status, and logout already do): the stored tokens belong to THAT
+      // service, and a conflicting explicit URL is refused rather than
+      // silently sending them elsewhere. Only with no session does the
+      // explicit flag/env requirement below apply.
+      const sessionUrl = yield* Effect.tryPromise({
+        try: () =>
+          resolveAuthLoginAccountUrl({
+            baseDir,
+            explicitUrl: resolveAccountUrl({ flag: Option.getOrUndefined(accountUrl) }),
+          }),
+        catch: (cause) =>
+          new StartupError({
+            message: cause instanceof Error ? cause.message : "Host registration failed.",
+            cause,
+          }),
+      });
+      const resolved = sessionUrl !== undefined ? sessionUrl : yield* requireAccountUrl(accountUrl);
+      yield* Effect.tryPromise({
+        try: () =>
+          runAuthLogin({
+            accountUrl: resolved,
+            baseDir,
+            ...(Option.isSome(root.devUrl) ? { devUrl: root.devUrl.value } : {}),
+          }),
+        catch: (cause) => new StartupError({ message: "Host registration failed.", cause }),
+      });
+    }),
+  ),
+  Command.withSubcommands([authLogoutCommand]),
+);
+
+const statusCommand = Command.make("status", { accountUrl: accountUrlFlag }, ({ accountUrl }) =>
+  Effect.gen(function* () {
+    const parent = yield* baseServerCommand;
+    const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(parent.synaraHome));
+    yield* Effect.tryPromise({
+      try: () =>
+        runStatus({
+          accountUrl: resolveAccountUrl({ flag: Option.getOrUndefined(accountUrl) }),
+          baseDir,
+          ...(Option.isSome(parent.devUrl) ? { devUrl: parent.devUrl.value } : {}),
+        }),
+      catch: (cause) => new StartupError({ message: "Failed to read account status.", cause }),
+    });
+  }),
+).pipe(
+  Command.withDescription("Show the signed-in account, this host, and every registered host."),
+);
+
 const serverCommand = baseServerCommand.pipe(
   Command.withHandler((input) => makeServerProgram(input)),
-  Command.withSubcommands([serverToolsCommand, mcpCommand]),
+  Command.withSubcommands([serverToolsCommand, mcpCommand, authCommand, statusCommand]),
 );
 
 export const synaraCli = serverCommand;
