@@ -297,6 +297,10 @@ test("production MCP controls one persistent Electron page across visibility cha
           'await human.click(page.getByRole("link",{name:"Download fixture",exact:true})); return true;',
         ),
       ).rejects.toThrow(/BrowserDownloadApprovalRequired/);
+      // Give a broken block time to write the file before asserting it never
+      // appeared; an immediate check would pass a regression that downloads
+      // slightly late.
+      await new Promise((resolve) => setTimeout(resolve, 100));
       expect(existsSync(join(home, "Downloads", "fixture-download.txt"))).toBe(false);
     });
 

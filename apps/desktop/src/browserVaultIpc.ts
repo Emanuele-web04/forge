@@ -12,7 +12,7 @@ const Reveal = Schema.Struct({
   id: Schema.String.check(Schema.isMaxLength(256)),
   password: Password,
 });
-const CookieSource = Schema.Literals(["chrome", "safari", "edge"]);
+const CookieSource = Schema.Literals(["chrome", "safari", "edge", "helium"]);
 
 export function registerBrowserVaultIpc(
   ipcMain: IpcMain,

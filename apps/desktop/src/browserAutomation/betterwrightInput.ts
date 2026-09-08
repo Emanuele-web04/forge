@@ -1,4 +1,5 @@
 import type { BrowserAutomationExpectedInput } from "../browserManager";
+import { normalizedKeyEventKey } from "./betterwrightKeyboardPolicy";
 
 export function betterwrightExpectedInputs(
   method: string,
@@ -6,14 +7,20 @@ export function betterwrightExpectedInputs(
 ): BrowserAutomationExpectedInput[] {
   if (
     method === "Input.dispatchKeyEvent" &&
-    ["keyDown", "rawKeyDown"].includes(String(params.type)) &&
-    typeof params.key === "string"
+    ["keyDown", "rawKeyDown"].includes(String(params.type))
   ) {
+    // The keyboard policy accepts key, code, text and virtual-key forms; the
+    // takeover signal must register for every one of them or a valid dispatch
+    // reads as an unexpected synthetic key. A caller-supplied key keeps its
+    // exact casing; the alternate representations normalize.
+    const key =
+      typeof params.key === "string" && params.key ? params.key : normalizedKeyEventKey(params);
+    if (!key) return [];
     const modifiers = typeof params.modifiers === "number" ? params.modifiers : 0;
     return [
       {
         kind: "key",
-        key: params.key,
+        key,
         alt: Boolean(modifiers & 1),
         control: Boolean(modifiers & 2),
         meta: Boolean(modifiers & 4),

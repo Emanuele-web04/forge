@@ -38,16 +38,23 @@ async function smoke() {
   if (window.isDestroyed() || unrelated.isDestroyed())
     throw new Error("Worker closed a user-owned window.");
   if (unrelated.getTitle() !== "Unrelated target") throw new Error("Unrelated target changed.");
-  await writeFile(path.join(home, "browser.png"), (await window.webContents.capturePage()).toPNG());
+  await writeFile(path.join(home, "browser.png"), (await contents.capturePage()).toPNG());
 
-  clipboard.writeText("synthetic-native-clipboard-smoke");
-  const keyboard = await runBetterwright<{ value: string }>({
-    ...options,
-    signal: new AbortController().signal,
-    code: `await page.getByRole('textbox').fill(''); await page.keyboard.press('ControlOrMeta+V'); await page.keyboard.press('a'); return { value: await page.getByRole('textbox').inputValue() };`,
-  });
-  if (keyboard.value !== "synthetic-native-clipboard-smokea")
-    throw new Error("Shared clipboard or modifier cleanup failed.");
+  const previousClipboard = clipboard.readText();
+  try {
+    clipboard.writeText("synthetic-native-clipboard-smoke");
+    const keyboard = await runBetterwright<{ value: string }>({
+      ...options,
+      signal: new AbortController().signal,
+      code: `await page.getByRole('textbox').fill(''); await page.keyboard.press('ControlOrMeta+V'); await page.keyboard.press('a'); return { value: await page.getByRole('textbox').inputValue() };`,
+    });
+    if (keyboard.value !== "synthetic-native-clipboard-smokea")
+      throw new Error("Shared clipboard or modifier cleanup failed.");
+  } finally {
+    // The smoke runs against the user's real clipboard session; never leave a
+    // synthetic value behind.
+    clipboard.writeText(previousClipboard);
+  }
   await contents.executeJavaScript("document.querySelector('input').focus()");
   window.webContents.focus();
   await window.webContents.executeJavaScript("document.querySelector('input').focus()");
@@ -69,7 +76,7 @@ async function smoke() {
     code: "await page.evaluate(() => { window.cancelStarted = true; }); await page.waitForTimeout(5000); await page.evaluate(() => { window.lateMutation = true; });",
   }).then(
     () => false,
-    () => true,
+    (error) => error instanceof Error && error.message === "Synthetic human takeover.",
   );
   const deadline = Date.now() + 15_000;
   while (!(await contents.executeJavaScript("window.cancelStarted === true"))) {

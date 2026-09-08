@@ -1,6 +1,8 @@
 const MODIFIERS: Readonly<Record<string, number>> = { alt: 1, control: 2, meta: 4, shift: 8 };
 const VIRTUAL_KEYS: Readonly<Record<number, string>> = {
+  8: "backspace",
   9: "tab",
+  13: "enter",
   16: "shift",
   17: "control",
   18: "alt",
@@ -76,6 +78,26 @@ function normalizeKey(key: string): string {
     .replace(/^(alt|control|meta|shift)(left|right)$/, "$1");
 }
 
+/**
+ * The one normalized key every accepted representation of this event names.
+ * The policy validates each representation independently, so the takeover
+ * signal must be derivable from whichever form the caller sent.
+ */
+export function normalizedKeyEventKey(params: Record<string, unknown>): string | undefined {
+  for (const field of ["key", "code", "text", "unmodifiedText"]) {
+    const value = params[field];
+    if (typeof value === "string" && value) return normalizeKey(value);
+  }
+  const virtual = params.windowsVirtualKeyCode;
+  if (typeof virtual === "number" && Number.isInteger(virtual) && virtual >= 0 && virtual <= 255) {
+    return (
+      VIRTUAL_KEYS[virtual] ??
+      (virtual >= 65 && virtual <= 90 ? String.fromCharCode(virtual).toLowerCase() : undefined)
+    );
+  }
+  return undefined;
+}
+
 function deniedKey(key: string, modifiers: number): boolean {
   const control = (modifiers & 2) !== 0;
   const meta = (modifiers & 4) !== 0;
@@ -85,6 +107,7 @@ function deniedKey(key: string, modifiers: number): boolean {
     ((control || meta) && ["l", "n", "p", "r", "t", "w"].includes(key)) ||
     (meta && ["q", "h", "m", "space", "tab"].includes(key)) ||
     ((control || meta) && shift && ["i", "j"].includes(key)) ||
+    ((control || meta) && alt && ["i", "j"].includes(key)) ||
     (alt && ["f4", "arrowleft", "arrowright", "escape", "tab"].includes(key)) ||
     (control && alt && key === "delete")
   );
@@ -112,6 +135,7 @@ export class BetterwrightKeyboardPolicy {
     if (
       (params.keyIdentifier !== undefined && params.keyIdentifier !== "") ||
       (params.nativeVirtualKeyCode !== undefined && params.nativeVirtualKeyCode !== 0) ||
+      (params.macCharCode !== undefined && params.macCharCode !== 0) ||
       (params.isSystemKey !== undefined && params.isSystemKey !== false)
     )
       reject();

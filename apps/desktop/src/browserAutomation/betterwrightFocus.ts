@@ -34,6 +34,8 @@ export async function withRendererGuestFocus<T>(
       throw new Error("Browser focus unavailable.");
     return await operation();
   } finally {
-    if (!host.isDestroyed()) await host.executeJavaScript(`globalThis[${key}]?.()`);
+    if (!host.isDestroyed())
+      // Cleanup must never mask the operation's own error or lease diagnostics.
+      await host.executeJavaScript(`globalThis[${key}]?.()`).catch(() => {});
   }
 }

@@ -238,6 +238,7 @@ export async function startVisibleBrowserFixtureSite(): Promise<VisibleBrowserFi
     const requestPath = new URL(request.url ?? "/", "http://fixture.test").pathname;
     if (requestPath === "/redirect-blocker.js") {
       response.setHeader("Content-Type", "text/javascript");
+      response.setHeader("Cache-Control", "no-store");
       setTimeout(() => response.end(""), 500);
       return;
     }

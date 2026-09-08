@@ -50,13 +50,34 @@ export async function runBetterwright<T>(options: BetterwrightRunOptions): Promi
 }
 
 async function runConnectedBetterwright<T>(options: BetterwrightRunOptions): Promise<T> {
-  const connection = await openBetterwrightConnection(
+  const setup = openBetterwrightConnection(
     options.contents,
     undefined,
     options.uploadFiles ?? [],
     false,
     options.expectAgentInput,
   );
+  const aborting = new Promise<never>((_, reject) => {
+    options.signal.addEventListener(
+      "abort",
+      () => reject(options.signal.reason ?? new Error("Browser run cancelled.")),
+      { once: true },
+    );
+  });
+  let connection: Awaited<typeof setup>;
+  try {
+    connection = await Promise.race([setup, aborting]);
+  } catch (error) {
+    // A cancelled or stalled setup must still tear down whatever opened, or the
+    // debugger session and loopback transport outlive the run.
+    await setup
+      .then(
+        (opened) => opened.close(true),
+        () => undefined,
+      )
+      .catch(() => {});
+    throw error;
+  }
   let browser: BetterWright | undefined;
   let stopping: Promise<void> | undefined;
   const stop = (cancel: boolean): Promise<void> => {

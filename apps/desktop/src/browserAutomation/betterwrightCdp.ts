@@ -110,6 +110,9 @@ export class BetterwrightCdpTarget {
 
   private readonly onDetach = () => {
     this.disposed = true;
+    // Electron detached the debugger outside this lease's teardown. Settle the
+    // lease so pending sends reject instead of hanging on the lease promise.
+    this.endLease();
     this.emit({ method: "Target.detachedFromTarget", params: { sessionId: this.pageSession } });
   };
 
@@ -162,10 +165,13 @@ export class BetterwrightCdpTarget {
     }
   }
 
-  private send(method: string, params: Params, sessionId?: string): Promise<unknown> {
+  private send(method: string, params: Params, sessionId?: string | null): Promise<unknown> {
     if (this.disposed) return Promise.reject(new Error("Browser target lease ended."));
+    // `null` forces the debugger's root connection: browser-level commands are
+    // rejected when addressed to the leased page session.
+    const route = sessionId === null ? undefined : (sessionId ?? this.backendSessionId);
     const operation = Promise.race([
-      this.contents.debugger.sendCommand(method, params, sessionId ?? this.backendSessionId),
+      this.contents.debugger.sendCommand(method, params, route),
       this.leaseEnded.then(() => {
         throw new Error("Browser target lease ended.");
       }),
@@ -191,7 +197,7 @@ export class BetterwrightCdpTarget {
       return { targetInfo: this.targetInfo() };
     }
     if (root) {
-      if (method === "Browser.getVersion") return this.send(method, {});
+      if (method === "Browser.getVersion") return this.send(method, {}, null);
       if (method === "Target.getTargets") return { targetInfos: [this.targetInfo()] };
       if (method === "Target.getBrowserContexts") return { browserContextIds: [] };
       if (method === "Target.setDiscoverTargets") return {};

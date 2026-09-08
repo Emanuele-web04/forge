@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 
 const require = createRequire(import.meta.url);
 const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -13,6 +13,21 @@ const asar = await import(pathToFileURL(asarPath).href);
 const home = await mkdtemp(path.join(tmpdir(), "synara-betterwright-asar-"));
 const stage = path.join(home, "stage");
 await mkdir(stage);
+// The CJS fixture is generated from the TypeScript smoke: bundling keeps the
+// probe identical to the unpackaged run while staying requireable from ASAR.
+const fixture = path.join(desktop, ".smoke/betterwright-smoke.cjs");
+await mkdir(path.dirname(fixture), { recursive: true });
+await execFile("bun", [
+  "build",
+  path.join(desktop, "scripts/betterwright-smoke.ts"),
+  "--target=node",
+  "--format=cjs",
+  "--external",
+  "betterwright",
+  "--external",
+  "electron",
+  `--outfile=${fixture}`,
+]);
 await cp(path.join(desktop, ".smoke/betterwright-smoke.cjs"), path.join(stage, "main.cjs"));
 await writeFile(
   path.join(stage, "package.json"),

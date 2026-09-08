@@ -62,7 +62,9 @@ async function smoke() {
       'await page.getByText("Never appears").waitFor(); await page.getByRole("button",{name:"Enabled action",exact:true}).click(); return true;',
       controller.signal,
     );
-    const rejection = assert.rejects(pending);
+    // Only a rejection carrying this run's abort reason proves cancellation; an
+    // unrelated early failure would otherwise pass this phase by accident.
+    const rejection = assert.rejects(pending, /Synthetic cancellation/);
     setTimeout(() => controller.abort(new Error("Synthetic cancellation")), 500);
     await rejection;
     assert.equal(

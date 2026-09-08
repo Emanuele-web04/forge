@@ -59,6 +59,9 @@ export async function openBetterwrightConnection(
           expectAgentInput,
         );
       } catch {
+        // The lease never came up: release the backend session and transport,
+        // otherwise the debugger attachment and loopback server leak.
+        void close().catch(() => {});
         client.close();
         return;
       }

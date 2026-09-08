@@ -16,6 +16,31 @@ describe("Betterwright input provenance", () => {
     expect(betterwrightExpectedInputs("Input.insertText", { text: "synthetic" })).toEqual([]);
   });
 
+  it("registers the takeover signal for every accepted key representation", () => {
+    // The keyboard policy accepts these forms, so each must register an
+    // expected signal instead of tripping human takeover.
+    expect(
+      betterwrightExpectedInputs("Input.dispatchKeyEvent", {
+        type: "rawKeyDown",
+        code: "Enter",
+        modifiers: 0,
+      }),
+    ).toEqual([
+      { kind: "key", key: "enter", alt: false, control: false, meta: false, shift: false },
+    ]);
+    expect(
+      betterwrightExpectedInputs("Input.dispatchKeyEvent", {
+        type: "rawKeyDown",
+        windowsVirtualKeyCode: 13,
+      }),
+    ).toEqual([
+      { kind: "key", key: "enter", alt: false, control: false, meta: false, shift: false },
+    ]);
+    expect(betterwrightExpectedInputs("Input.dispatchKeyEvent", { type: "rawKeyDown" })).toEqual(
+      [],
+    );
+  });
+
   it("matches click, context-menu and wheel events without suppressing unrelated pointer input", () => {
     expect(
       betterwrightExpectedInputs("Input.dispatchMouseEvent", {

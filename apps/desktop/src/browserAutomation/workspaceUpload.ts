@@ -583,6 +583,7 @@ export const uploadBrowserFiles = async (
     if (!retainReservedDirectory(runtime.webContents, reservation, staged.directory)) {
       untrackedStagingDirectory = staged.directory;
     }
+    const retainedDirectory = staged.directory;
     const filesForChromium = staged.files.map((file) => file.path);
     staged = undefined;
     const result = await runBetterwright<{
@@ -603,7 +604,7 @@ const count = await target.count();
 if (count !== 1) return {code: count === 0 ? "BrowserTargetNotFound" : "BrowserTargetAmbiguous"};
 const details = await target.evaluate(element => ({
   file: element instanceof HTMLInputElement && element.type === "file",
-  disabled: element.matches(":disabled") || element.getAttribute("aria-disabled") === "true",
+  disabled: element.matches(":disabled") || String(element.getAttribute("aria-disabled") || "").toLowerCase() === "true",
   multiple: element.multiple === true
 }));
 if (!details.file || (!details.multiple && ${filesForChromium.length} !== 1)) return {code: "BrowserInputUnsupported"};
@@ -611,7 +612,14 @@ if (details.disabled) return {code: "BrowserTargetNotEnabled"};
 await target.setInputFiles(${JSON.stringify(filesForChromium)});
 return {};`,
     });
-    if (result.code)
+    if (result.code) {
+      // These codes are decided before setInputFiles ran, so the staged copies
+      // can never be consumed; release them instead of holding the quota until
+      // the document navigates.
+      const state = reservation?.state;
+      const accounting = state?.directories.get(retainedDirectory);
+      if (state && accounting)
+        await removeRetainedDirectory(state, retainedDirectory, accounting).catch(() => {});
       browserHostError({
         code: result.code,
         tabId: runtime.tabId as BrowserTabId,
@@ -619,6 +627,7 @@ return {};`,
         retryable: false,
         effectMayHaveCommitted: false,
       });
+    }
     return {
       tabId: runtime.tabId as BrowserTabId,
       target: {},

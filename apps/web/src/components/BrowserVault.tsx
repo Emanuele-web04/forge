@@ -58,6 +58,7 @@ export function BrowserVaultDialog() {
       const next = await api.snapshot();
       if (!mounted.current || request !== revision.current) return;
       setSnapshot(next);
+      setError(null);
       const id = next.pending[0]?.id;
       if (id && id !== lastPrompt.current) setOpen(true);
       lastPrompt.current = id;
@@ -114,6 +115,9 @@ export function BrowserVaultDialog() {
         if (!next) {
           setDeleting(null);
           setMaster(null);
+          // A pending-save prompt must never reopen cookie import for a tab
+          // that was only the dialog's previous destination.
+          setDestination(undefined);
         }
       }}
     >

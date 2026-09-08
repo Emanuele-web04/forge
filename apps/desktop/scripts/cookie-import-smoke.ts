@@ -12,9 +12,12 @@ void (async () => {
   app.setPath("userData", join(home, "electron"));
   await app.whenReady();
   // Generate the source here so this smoke can never select a personal profile.
-  process.env.HOME = execFileSync("node", [resolve("scripts/synthetic-cookie-profile.mjs")], {
-    encoding: "utf8",
-  }).trim();
+  // Resolve from this module so the fixture is found from any working directory.
+  process.env.HOME = execFileSync(
+    "node",
+    [join(import.meta.dirname, "synthetic-cookie-profile.mjs")],
+    { encoding: "utf8" },
+  ).trim();
   const view = new WebContentsView({
     webPreferences: { partition: "persist:import-smoke", sandbox: true, contextIsolation: true },
   });

@@ -102,6 +102,10 @@ describe("patched Betterwright native reader diagnostics", () => {
       cookieReaderCode: "reader_failed",
       cookiePermissionDenied: false,
     });
+    // JSON.stringify drops an Error's non-enumerable message, so assert the
+    // stringified error too or a leaked diagnostic would pass unnoticed.
+    expect(String(error)).not.toContain("secret");
+    expect(String(error)).not.toContain("private-profile");
     expect(JSON.stringify(error)).not.toContain("secret");
     expect(JSON.stringify(error)).not.toContain("private-profile");
   });

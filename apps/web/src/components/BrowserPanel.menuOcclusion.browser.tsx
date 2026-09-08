@@ -32,10 +32,22 @@ const api = vi.hoisted(() => ({
     onState: vi.fn(() => () => {}),
     onCopyLink: vi.fn(() => () => {}),
     detachWebview: vi.fn(async () => {}),
+    attachWebview: vi.fn(async () => {}),
   },
 }));
 
 vi.mock("../nativeApi", () => ({ readNativeApi: () => api, ensureNativeApi: () => api }));
+
+// A positive webContents id gives the attach path a real lease to hold, so the
+// no-detach assertions below can actually catch a stale Electron lease.
+class SyntheticBrowserWebview extends HTMLElement {
+  getWebContentsId(): number {
+    return 4242;
+  }
+}
+if (!customElements.get("webview")) {
+  customElements.define("webview", SyntheticBrowserWebview);
+}
 
 const threadId = ThreadId.makeUnsafe("menu-occlusion-fixture");
 const state: ThreadBrowserState = {

@@ -1,51 +1,54 @@
 diff --git a/node_modules/betterwright/.bun-tag-2818573c67d7b19b b/.bun-tag-2818573c67d7b19b
 new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+index 0000000..e69de29
 diff --git a/node_modules/betterwright/.bun-tag-29e8fc06f5b346b9 b/.bun-tag-29e8fc06f5b346b9
 new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+index 0000000..e69de29
 diff --git a/node_modules/betterwright/.bun-tag-42f2166c6e2accf0 b/.bun-tag-42f2166c6e2accf0
 new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+index 0000000..e69de29
 diff --git a/node_modules/betterwright/.bun-tag-4ade45b32361aba3 b/.bun-tag-4ade45b32361aba3
 new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+index 0000000..e69de29
 diff --git a/node_modules/betterwright/.bun-tag-4ba60b008e829498 b/.bun-tag-4ba60b008e829498
 new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+index 0000000..e69de29
+diff --git a/node_modules/betterwright/.bun-tag-735109557453c95f b/.bun-tag-735109557453c95f
+new file mode 100644
+index 0000000..e69de29
 diff --git a/node_modules/betterwright/.bun-tag-755a3c0d947adbd0 b/.bun-tag-755a3c0d947adbd0
 new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+index 0000000..e69de29
 diff --git a/node_modules/betterwright/.bun-tag-7ded427ef8e1cf82 b/.bun-tag-7ded427ef8e1cf82
 new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+index 0000000..e69de29
 diff --git a/node_modules/betterwright/.bun-tag-8f96ea77d0fce2c4 b/.bun-tag-8f96ea77d0fce2c4
 new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+index 0000000..e69de29
 diff --git a/node_modules/betterwright/.bun-tag-c7d3ed853f191214 b/.bun-tag-c7d3ed853f191214
 new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+index 0000000..e69de29
 diff --git a/node_modules/betterwright/.bun-tag-c916bf746146e07e b/.bun-tag-c916bf746146e07e
 new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+index 0000000..e69de29
 diff --git a/node_modules/betterwright/.bun-tag-ce72083686ab4ee7 b/.bun-tag-ce72083686ab4ee7
 new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+index 0000000..e69de29
 diff --git a/node_modules/betterwright/.bun-tag-da1702e74478cad b/.bun-tag-da1702e74478cad
 new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+index 0000000..e69de29
 diff --git a/node_modules/betterwright/.bun-tag-ec250626d41ee73c b/.bun-tag-ec250626d41ee73c
 new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+index 0000000..e69de29
 diff --git a/node_modules/betterwright/.bun-tag-eed0a70e8998437f b/.bun-tag-eed0a70e8998437f
 new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+index 0000000..e69de29
 diff --git a/node_modules/betterwright/.bun-tag-f713d9c4cebd79fc b/.bun-tag-f713d9c4cebd79fc
 new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+index 0000000..e69de29
 diff --git a/dist/src/client.js b/dist/src/client.js
-index 1701abbbbf141a6f47b8b15ffefe4c168fb77ca9..6e0aad76e3d6d45d15918428ae2d895ab4002f49 100644
---- a/dist/src/client.js
+index 1701abb..6e0aad7 100644
+--- a/pristine-bw/dist/src/client.js
 +++ b/dist/src/client.js
 @@ -330,6 +330,14 @@ export class BetterWright {
       *   machine on the network. Pass `{host:"127.0.0.1"}` for loopback-only.
@@ -122,8 +125,8 @@ index 1701abbbbf141a6f47b8b15ffefe4c168fb77ca9..6e0aad76e3d6d45d15918428ae2d895a
      _extractCookieSync(options) {
          return extractCookieSync(options);
 diff --git a/dist/src/cookie-sync.js b/dist/src/cookie-sync.js
-index ef705665c8c54d34f2f42c3a2d3820103e81dfc6..8070c3a91dbac6e03e97e83ece07186a45976360 100644
---- a/dist/src/cookie-sync.js
+index ef70566..8070c3a 100644
+--- a/pristine-bw/dist/src/cookie-sync.js
 +++ b/dist/src/cookie-sync.js
 @@ -1,5 +1,6 @@
  import { isIP } from "node:net";
@@ -209,12 +212,12 @@ index ef705665c8c54d34f2f42c3a2d3820103e81dfc6..8070c3a91dbac6e03e97e83ece07186a
      const reader = await load();
      let value;
      try {
-diff --git a/node_modules/betterwright/dist/src/helium-cookie-source.js b/dist/src/helium-cookie-source.js
+diff --git a/patched-bw/dist/src/helium-cookie-source.js b/dist/src/helium-cookie-source.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..66fb5323aa647bbe3f75a0b8eb0ff6d375dd846f
+index 0000000..22162f9
 --- /dev/null
 +++ b/dist/src/helium-cookie-source.js
-@@ -0,0 +1,238 @@
+@@ -0,0 +1,250 @@
 +// Helium (net.imput.helium) cookie source for hosts whose native reader does
 +// not register the browser yet. Reads the same Chromium cookie database the
 +// native reader would, decrypts v10 rows with the profile's Keychain secret,
@@ -222,7 +225,7 @@ index 0000000000000000000000000000000000000000..66fb5323aa647bbe3f75a0b8eb0ff6d3
 +// the regular Cookie Sync transfer pipeline stays in charge.
 +import { execFile } from "node:child_process";
 +import { createDecipheriv, pbkdf2Sync } from "node:crypto";
-+import { copyFile, mkdtemp, readdir, rm, stat } from "node:fs/promises";
++import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
 +import { homedir, tmpdir } from "node:os";
 +import { join } from "node:path";
 +import { DatabaseSync } from "node:sqlite";
@@ -273,7 +276,9 @@ index 0000000000000000000000000000000000000000..66fb5323aa647bbe3f75a0b8eb0ff6d3
 +}
 +
 +async function heliumCookieDatabasePath(profileDir) {
-+    for (const candidate of [join(profileDir, "Network", "Cookies"), join(profileDir, "Cookies")]) {
++    // Helium writes the legacy per-profile Cookies file today; probe it first so
++    // a future Network/Cookies layout never shadows the active legacy store.
++    for (const candidate of [join(profileDir, "Cookies"), join(profileDir, "Network", "Cookies")]) {
 +        try {
 +            if ((await stat(candidate)).isFile()) return candidate;
 +        } catch { /* Try the next known cookie location. */ }
@@ -390,6 +395,19 @@ index 0000000000000000000000000000000000000000..66fb5323aa647bbe3f75a0b8eb0ff6d3
 +    return { cookie, context };
 +}
 +
++async function snapshotHeliumDatabase(databasePath, workspace) {
++    // VACUUM INTO takes one consistent snapshot under a read transaction, so a
++    // live Helium write can never be observed as a torn database + WAL pair.
++    const database = new DatabaseSync(databasePath, { readOnly: true });
++    try {
++        const copyPath = join(workspace, "Cookies");
++        database.exec(`VACUUM INTO '${copyPath.replaceAll("'", "''")}'`);
++        return copyPath;
++    } finally {
++        database.close();
++    }
++}
++
 +async function queryHeliumCookies(databasePath, key, warnings) {
 +    const database = new DatabaseSync(databasePath, { readBigInts: true });
 +    try {
@@ -435,10 +453,7 @@ index 0000000000000000000000000000000000000000..66fb5323aa647bbe3f75a0b8eb0ff6d3
 +    if (!databasePath) throw heliumError("no_selected_source", "acquisition");
 +    const workspace = await mkdtemp(join(tmpdir(), "betterwright-helium-"));
 +    try {
-+        const copyPath = join(workspace, "Cookies");
-+        await copyFile(databasePath, copyPath);
-+        await copyFile(`${databasePath}-wal`, `${copyPath}-wal`).catch(() => {});
-+        await copyFile(`${databasePath}-shm`, `${copyPath}-shm`).catch(() => {});
++        const copyPath = await snapshotHeliumDatabase(databasePath, workspace);
 +        const keychainPassword = deps.keychainPassword ?? spawnKeychainPassword;
 +        const password = await keychainPassword(Math.min(options.timeoutMs, HELIUM_KEYCHAIN_TIMEOUT_MS));
 +        if (!password) throw heliumError("source_extraction_failed", "decrypt");
@@ -454,8 +469,8 @@ index 0000000000000000000000000000000000000000..66fb5323aa647bbe3f75a0b8eb0ff6d3
 +    }
 +}
 diff --git a/dist/src/vault-capture.js b/dist/src/vault-capture.js
-index d704ee96ab1b8b89ca80f993572804327d0bb442..017e0a2d32dfa1315bfc8a7ab1351dd5096aa6f4 100644
---- a/dist/src/vault-capture.js
+index d704ee9..017e0a2 100644
+--- a/pristine-bw/dist/src/vault-capture.js
 +++ b/dist/src/vault-capture.js
 @@ -89,6 +89,8 @@ export function installVaultCapture(context, deps = {}) {
      const state = {
@@ -607,8 +622,8 @@ index d704ee96ab1b8b89ca80f993572804327d0bb442..017e0a2d32dfa1315bfc8a7ab1351dd5
                  dropPrompt(promptId, false);
              }
 diff --git a/dist/src/vault-sensor.js b/dist/src/vault-sensor.js
-index ed10d8db2a2fe10000b3cf085ebf9f33b1fe8806..1b0b16ab51937d173dcbdae63145243846c11a1a 100644
---- a/dist/src/vault-sensor.js
+index ed10d8d..1b0b16a 100644
+--- a/pristine-bw/dist/src/vault-sensor.js
 +++ b/dist/src/vault-sensor.js
 @@ -17,6 +17,7 @@
      if (globalThis.__bwVaultSensorInstalled)
@@ -676,8 +691,8 @@ index ed10d8db2a2fe10000b3cf085ebf9f33b1fe8806..1b0b16ab51937d173dcbdae631452438
 +    };
  })();
 diff --git a/dist/src/vault.js b/dist/src/vault.js
-index a0918cb207235ed2a36ab600518017583c20b3e3..71dcd4df2bdf2cfc7ca8a287bb4ec75ba39b1684 100644
---- a/dist/src/vault.js
+index a0918cb..71dcd4d 100644
+--- a/pristine-bw/dist/src/vault.js
 +++ b/dist/src/vault.js
 @@ -1147,16 +1147,22 @@ async function acquireLock(paths, timeoutMs, staleMs, afterPublish = null) {
  function emptySnapshot() {
@@ -754,8 +769,8 @@ index a0918cb207235ed2a36ab600518017583c20b3e3..71dcd4df2bdf2cfc7ca8a287bb4ec75b
                      const index = snapshot.records.findIndex((candidate) => candidate.id === wanted);
                      const pendingIndex = index === -1
 diff --git a/dist/src/worker.js b/dist/src/worker.js
-index c53eda622f60b7f5084698e850ef6a00f66e60f3..17a70911b9fe57357660a4c60486dac50a8e12aa 100755
---- a/dist/src/worker.js
+index c53eda6..17a7091 100755
+--- a/pristine-bw/dist/src/worker.js
 +++ b/dist/src/worker.js
 @@ -463,8 +463,8 @@ function sendResult(message) {
          message.events = [];
@@ -843,8 +858,8 @@ index c53eda622f60b7f5084698e850ef6a00f66e60f3..17a70911b9fe57357660a4c60486dac5
      catch {
          /* parent/process exit */
 diff --git a/package.json b/package.json
-index 6a77351c67f82950e967a6c7ad1808ad0157baf5..58b08d0bb606634230f70e2e82c3a6f1ec2fb6ba 100644
---- a/package.json
+index 6a77351..58b08d0 100644
+--- a/pristine-bw/package.json
 +++ b/package.json
 @@ -6,6 +6,11 @@
    "main": "dist/src/index.js",
@@ -858,9 +873,9 @@ index 6a77351c67f82950e967a6c7ad1808ad0157baf5..58b08d0bb606634230f70e2e82c3a6f1
      ".": {
        "types": "./types/index.d.ts",
        "import": "./dist/src/index.js",
-diff --git a/node_modules/betterwright/types/capture.d.ts b/types/capture.d.ts
+diff --git a/patched-bw/types/capture.d.ts b/types/capture.d.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..c28171ae9d5f84f147750060c2ac339f2dc0d023
+index 0000000..c28171a
 --- /dev/null
 +++ b/types/capture.d.ts
 @@ -0,0 +1,26 @@
@@ -891,8 +906,8 @@ index 0000000000000000000000000000000000000000..c28171ae9d5f84f147750060c2ac339f
 +  onReady?(): void;
 +}): { dispose(): Promise<void>; isBusy(page: CapturePage): boolean };
 diff --git a/types/public.d.ts b/types/public.d.ts
-index 7fbd0aa6136ac82660443871a5177afdebf6818d..272b8fdce93dd5948d5e2b3fec0325c1c48b3173 100644
---- a/types/public.d.ts
+index 7fbd0aa..272b8fd 100644
+--- a/pristine-bw/types/public.d.ts
 +++ b/types/public.d.ts
 @@ -106,8 +106,9 @@ export type CookieSyncResult =
        target: string;
@@ -917,8 +932,8 @@ index 7fbd0aa6136ac82660443871a5177afdebf6818d..272b8fdce93dd5948d5e2b3fec0325c1
     * Named persistent browser profile inside the home: a separate identity,
     * with its own cookie jar, its own profile lock, and its own session daemon,
 diff --git a/types/vault.d.ts b/types/vault.d.ts
-index 0876c43aa1fab6643fc4c080cb0c5631295a7047..ca87e73231102ec4e4cd800611d1ee128a2c7899 100644
---- a/types/vault.d.ts
+index 0876c43..ca87e73 100644
+--- a/pristine-bw/types/vault.d.ts
 +++ b/types/vault.d.ts
 @@ -23,6 +23,8 @@ export type VaultJsonValue =
    | { [key: string]: VaultJsonValue };

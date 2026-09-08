@@ -14,6 +14,7 @@ export function createCookieSessionBackend(partition: string): CookieSessionBack
   const contents = view.webContents;
   contents.debugger.attach("1.3");
   const ready = contents.loadURL("about:blank");
+  const changedListeners = new Set<() => void>();
   return {
     async read() {
       await ready;
@@ -29,8 +30,14 @@ export function createCookieSessionBackend(partition: string): CookieSessionBack
     },
     onChange(listener) {
       contents.session.cookies.on("changed", listener);
+      changedListeners.add(listener);
     },
     dispose() {
+      // The partition session outlives this view; a stale listener would fire
+      // the restore path against a closed backend.
+      for (const listener of changedListeners)
+        contents.session.cookies.removeListener("changed", listener);
+      changedListeners.clear();
       if (!view.webContents.isDestroyed()) view.webContents.close();
     },
   };

@@ -95,7 +95,12 @@ export class VaultKeyProtection {
         this.key = null;
       }
     });
-    void this.ready.catch(() => {});
+    // A failed initialization must not leave key material resident: the vault
+    // is unusable after a rejected load, so zero it immediately.
+    void this.ready.catch(() => {
+      this.key?.fill(0);
+      this.key = null;
+    });
   }
 
   private async load(): Promise<void> {

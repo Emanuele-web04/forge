@@ -201,7 +201,16 @@ export class BrowserVault {
       typeof result.id === "string"
     ) {
       this.sources.set(result.id, source);
-      await this.persist();
+      try {
+        await this.persist();
+      } catch (error) {
+        // The credential committed but its provenance did not. A stored login
+        // without a source breaks ownership accounting after restart, so roll
+        // the record back instead of keeping a half-saved state.
+        await this.vault.ownerRemove(result.id).catch(() => {});
+        this.sources.delete(result.id);
+        throw error;
+      }
     }
     if (
       action === "generate" &&
