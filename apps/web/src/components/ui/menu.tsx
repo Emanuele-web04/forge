@@ -67,6 +67,7 @@ function MenuPopupBase({
   alignOffset,
   side: sideProp,
   anchor,
+  collisionAvoidance,
   ...props
 }: MenuPrimitive.Popup.Props & {
   align?: MenuPrimitive.Positioner.Props["align"];
@@ -74,6 +75,10 @@ function MenuPopupBase({
   alignOffset?: MenuPrimitive.Positioner.Props["alignOffset"];
   side?: MenuPrimitive.Positioner.Props["side"];
   anchor?: MenuPrimitive.Positioner.Props["anchor"];
+  /** Root menus default to flipping only along their own axis (no top/bottom fallback for
+   *  a side-placed menu); pass `{ fallbackAxisSide: "end" }` for side-placed root menus so
+   *  they drop below the anchor when neither side fits. */
+  collisionAvoidance?: MenuPrimitive.Positioner.Props["collisionAvoidance"];
   surface?: "default" | "composer";
   pickerSize?: "small" | "normal" | undefined;
 }) {
@@ -94,6 +99,7 @@ function MenuPopupBase({
         align={align}
         alignOffset={alignOffset}
         anchor={anchor}
+        collisionAvoidance={collisionAvoidance}
         className={cn("z-50 min-w-32", isComposerSurface ? undefined : className)}
         data-slot="menu-positioner"
         side={side}
@@ -429,17 +435,21 @@ function MenuSubPopup({
   sideOffset: sideOffsetProp,
   alignOffset,
   align: alignProp,
+  side: sideProp,
   ...props
 }: MenuPrimitive.Popup.Props & {
   align?: MenuPrimitive.Positioner.Props["align"];
   sideOffset?: MenuPrimitive.Positioner.Props["sideOffset"];
   alignOffset?: MenuPrimitive.Positioner.Props["alignOffset"];
+  /** Cascade direction; `inline-start` when the parent menu already opened toward the start. */
+  side?: "inline-end" | "inline-start";
   surface?: "default" | "composer";
   pickerSize?: "small" | "normal";
 }) {
   const surface = surfaceProp ?? "default";
   const sideOffset = sideOffsetProp ?? 0;
   const align = alignProp ?? "start";
+  const side = sideProp ?? "inline-end";
   const defaultAlignOffset = align !== "center" ? -5 : undefined;
 
   return (
@@ -449,7 +459,7 @@ function MenuSubPopup({
       className={className}
       data-slot="menu-sub-content"
       pickerSize={pickerSize}
-      side="inline-end"
+      side={side}
       sideOffset={sideOffset}
       surface={surface}
       {...props}

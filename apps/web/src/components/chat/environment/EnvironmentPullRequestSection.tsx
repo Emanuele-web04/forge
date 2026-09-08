@@ -105,8 +105,14 @@ import {
 } from "./environmentPullRequest.logic";
 
 const MENU_ICON_CLASS_NAME = "size-3.5 shrink-0";
-/** Right-aligned secondary value on a menu row (diff stat, count, current status). */
-const MENU_TRAILING_CLASS_NAME = "ml-auto shrink-0 pl-3 text-muted-foreground tabular-nums";
+/** Right-aligned secondary value on a menu row (diff stat, count, current status).
+ *  The label grows instead of this span using `ml-auto`: sub-trigger chevrons already carry
+ *  `margin-inline-start: auto`, and two auto margins would split the free space and float
+ *  the value mid-row instead of flush against the chevron. */
+const MENU_TRAILING_CLASS_NAME = "shrink-0 pl-3 text-muted-foreground tabular-nums";
+/** The root menu opens to the left of the docked panel, so submenus keep cascading that way
+ *  instead of folding back over the panel. Base UI flips them when there is no room. */
+const SUBMENU_SIDE = "inline-start";
 
 const MERGE_METHOD_LABELS: Record<PullRequestMergeMethod, string> = {
   merge: "Merge commit",
@@ -266,7 +272,7 @@ function MenuRowLabel({
   return (
     <>
       {icon}
-      <span className="min-w-0 truncate">{label}</span>
+      <span className="min-w-0 flex-1 truncate">{label}</span>
       {trailing ? <span className={MENU_TRAILING_CLASS_NAME}>{trailing}</span> : null}
     </>
   );
@@ -515,7 +521,17 @@ export function EnvironmentPullRequestSection({
             }
           />
         </MenuTrigger>
-        <ComposerPickerMenuPopup align="start" side="bottom" className="w-72 min-w-72">
+        {/* Opens beside the row (the panel docks on the right, so screen-left) like a hover
+            card, rather than dropping down over the rest of the panel. Base UI flips it to
+            the other side when there is no room, and falls back below the row when neither
+            side fits (narrow windows). */}
+        <ComposerPickerMenuPopup
+          align="start"
+          side="left"
+          sideOffset={8}
+          collisionAvoidance={{ fallbackAxisSide: "end" }}
+          className="w-72 min-w-72"
+        >
           <MenuItem onClick={() => openPullRequest()}>
             <MenuRowLabel
               icon={<FileIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
@@ -548,7 +564,7 @@ export function EnvironmentPullRequestSection({
                     trailing={loading ? "Loading…" : failed ? "Unavailable" : checksSummary.label}
                   />
                 </MenuSubTrigger>
-                <ComposerPickerMenuSubPopup className="w-72 min-w-72">
+                <ComposerPickerMenuSubPopup side={SUBMENU_SIDE} className="w-72 min-w-72">
                   {failed ? (
                     <MenuItem onClick={() => void snapshotQuery.refetch()}>
                       <MenuRowLabel
@@ -588,7 +604,7 @@ export function EnvironmentPullRequestSection({
                     }
                   />
                 </MenuSubTrigger>
-                <ComposerPickerMenuSubPopup className="w-80 min-w-80">
+                <ComposerPickerMenuSubPopup side={SUBMENU_SIDE} className="w-80 min-w-80">
                   {failed ? (
                     <MenuItem onClick={() => void snapshotQuery.refetch()}>
                       <MenuRowLabel
@@ -644,7 +660,7 @@ export function EnvironmentPullRequestSection({
                     }
                   />
                 </MenuSubTrigger>
-                <ComposerPickerMenuSubPopup className="w-60 min-w-60">
+                <ComposerPickerMenuSubPopup side={SUBMENU_SIDE} className="w-60 min-w-60">
                   <MenuItem
                     disabled={repairs.comments === 0}
                     onClick={() => attachContextCard("comments")}
@@ -703,7 +719,7 @@ export function EnvironmentPullRequestSection({
                       trailing={mergeTrailing}
                     />
                   </MenuSubTrigger>
-                  <ComposerPickerMenuSubPopup className="w-56 min-w-56">
+                  <ComposerPickerMenuSubPopup side={SUBMENU_SIDE} className="w-56 min-w-56">
                     {allowedMergeMethods.map((method) => (
                       <MenuItem key={method} onClick={() => setConfirmMerge(method)}>
                         <MenuRowLabel
@@ -738,7 +754,7 @@ export function EnvironmentPullRequestSection({
                   trailing={stateLabel}
                 />
               </MenuSubTrigger>
-              <ComposerPickerMenuSubPopup className="w-56 min-w-56">
+              <ComposerPickerMenuSubPopup side={SUBMENU_SIDE} className="w-56 min-w-56">
                 <MenuRadioGroup
                   value={displayPr.isDraft ? "draft" : "ready"}
                   onValueChange={(value) => {
