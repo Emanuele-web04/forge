@@ -1,14 +1,16 @@
-# Synara platform-readiness audit — 2026-09-08
+# CORTEX platform-readiness audit — 2026-09-08
 
 ## Decision
 
-**Do not position the current repository as a hosted, multi-tenant AI development
+**Do not position CORTEX as a hosted, multi-tenant AI development
 platform yet.** It is a capable and unusually well-tested *local-first agent
 workstation*. The recent cloud work establishes useful contracts and a PostgreSQL data
 model, but it does not yet provide the cloud control plane, execution plane, or
 operational boundary that turns those foundations into a SaaS product.
 
-This is a new platform audit, not a replacement for the focused local-runtime audit in
+The public product brand is **CORTEX**. Existing technical identifiers (`@synara/*`, `synara.*`,
+local storage keys, migration lineages, and PostgreSQL `synara.*` request settings) remain stable
+until a separately reviewed migration exists. This is a new platform audit, not a replacement for the focused local-runtime audit in
 [`PR357_MERGE_READINESS_AUDIT.md`](./PR357_MERGE_READINESS_AUDIT.md). The latter remains
 the source of truth for its local provider/ACP follow-ups. This document identifies the
 missing product boundaries and orders the next work so that we do not accidentally ship
@@ -53,11 +55,18 @@ yet,” which accurately describes the current state.
 
 ### P0-PLATFORM-01 — There is no deployable cloud control-plane application
 
-**Evidence.** `apps/cloud-control` contains only three SQL migration files; it has no
-`package.json`, source application, test suite, migration runner, container image, or
-deployment configuration. The only server executable is the local CLI, which wires
-`ServerLive`. No Cloudflare, Kubernetes, Terraform, Docker, or equivalent deployment
-definition was found.
+**Foundation status (2026-09-08).** An initial, separate `apps/cloud-control` Bun service now
+exists with fail-fast PostgreSQL configuration, liveness/readiness endpoints, request IDs, and
+structured request logging. It deliberately rejects every `/v1/*` request until P0-PLATFORM-02
+can establish cloud identity and transaction-scoped tenant context. This closes the *absence of a
+process* only; it does not meet this workstream's exit gate or make cloud APIs available.
+
+**Evidence.** Before the foundation-status update above, `apps/cloud-control` contained only
+three SQL migration files. It now has a package, source entrypoint, focused tests, and operational
+endpoints, but still has no migration runner, container image, deployment configuration, cloud
+identity, tenant transaction layer, or product API. The local CLI continues to wire only local
+`ServerLive`; no Cloudflare, Kubernetes, Terraform, Docker, or equivalent deployment definition
+was found.
 
 **Impact.** The web app can render cloud authentication routes but no repository-owned
 service can answer them. There is no place to enforce organization authorization,
@@ -80,6 +89,10 @@ an organization through authenticated HTTP, and prove that a query without tenan
 context returns no tenant rows.
 
 ### P0-PLATFORM-02 — Cloud authentication is UI/protocol-only; no server identity flow exists
+
+**Foundation status (2026-09-08).** The control-plane process now fails closed rather than
+accepting caller-supplied identity. Cloud login, password/OAuth verification, cookie sessions,
+CSRF, and organization-context transactions remain unimplemented.
 
 **Evidence.** The web gateway POSTs to `/api/cloud/auth/login` and `/signup`, starts
 OAuth by browser navigation, and expects an HttpOnly-cookie session. No matching route
@@ -129,6 +142,12 @@ tenant cannot reach another workspace or metadata IP, and interrupted provisioni
 reconciled without duplicate billing/resource creation.
 
 ### P0-PLATFORM-04 — Cloud persistence has schema but no command/event consistency model
+
+**Foundation status (2026-09-08).** A fourth PostgreSQL migration reserves owner-scoped,
+RLS-protected metadata storage for hashed API tokens, and a dependency-free crypto module defines
+the CSPRNG, domain-separated SHA-256, constant-time comparison, and scope allowlist. There are no
+token CRUD/authentication endpoints or runner event handlers before P0-PLATFORM-02; this is
+intentionally not presented as a durable command/event implementation.
 
 **Evidence.** The SQL schema contains `workspaces`, `tasks`, `task_events`, and quota
 tables, while `CloudEvent` exposes an unconstrained `payload: Schema.Unknown`. There is
