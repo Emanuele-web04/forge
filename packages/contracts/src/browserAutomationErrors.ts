@@ -40,6 +40,7 @@ export const BrowserErrorCode = Schema.Literals([
   "BrowserInvalidArguments",
   "BrowserInvalidTimeout",
   "BrowserCredentialTargetRequired",
+  "BrowserCredentialUseUnavailable",
   "BrowserNavigationBlocked",
   "BrowserNetworkBlocked",
   "BrowserNavigationFailed",
@@ -152,7 +153,9 @@ export const BrowserAutomationErrorMessages = Object.freeze({
   BrowserInvalidTimeout:
     "timeoutMs must be an integer from 100 to 30000 milliseconds. No browser action ran. Use timeoutMs: 30000 or omit it, and split longer workflows into smaller calls.",
   BrowserCredentialTargetRequired:
-    "Saved login form detection could not select a target. Use credentials.inspect({generate:true}) for signup or credentials.inspect() for login, then pass observed passwordSelector and usernameSelector to credentials.generateAndFill({username, passwordSelector, usernameSelector}) or credentials.fill. Do not repeat unchanged calls or switch auth methods. Check credentials.listPending() before generating again. Never expose passwords.",
+    "Saved login form detection could not select a target. Agent password filling and generation are unavailable. Ask the user to sign in manually or import a browser session through Saved logins. Never ask for passwords in chat.",
+  BrowserCredentialUseUnavailable:
+    "Saved logins are metadata-only for agents. Password filling, generation and changes are unavailable. Ask the user to sign in manually or import a browser session through Saved logins. Never ask for passwords in chat.",
   BrowserNavigationBlocked:
     "Browser navigation was rejected: browser tools accept only http/https URLs (localhost is allowed) or a resolvable annotationId. The user can open local HTML files from the integrated browser's address bar.",
   BrowserNetworkBlocked: "The browser network request was blocked by policy.",
@@ -160,7 +163,8 @@ export const BrowserAutomationErrorMessages = Object.freeze({
   BrowserPopupBlocked: "The browser popup was blocked by policy.",
   BrowserPopupOpenerUnsupported: "The popup opener relationship is unsupported.",
   BrowserDownloadApprovalRequired: "The browser download requires explicit approval.",
-  BrowserEvaluationFailed: "Browser evaluation failed before a confirmed result was available. Inspect the current page and use a separate focused call to isolate the failing operation; do not repeat unchanged calls. For saved login failures use credentials.inspect(), and check credentials.listPending() before generating another password.",
+  BrowserEvaluationFailed:
+    "Browser evaluation failed before a confirmed result was available. Inspect the current page and use a separate focused call to isolate the failing operation; do not repeat unchanged calls. Agent password filling and generation are unavailable; ask the user to sign in manually or import a browser session through Saved logins.",
   BrowserEvaluationResultTooLarge: "The browser evaluation result exceeds the safe response limit.",
   BrowserSnapshotTooLarge: "The browser snapshot exceeds the safe response limit.",
   BrowserScreenshotTooLarge: "The browser screenshot exceeds the safe response limit.",

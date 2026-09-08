@@ -116,7 +116,9 @@ it("drags, resizes, and exposes pop/close controls", async () => {
     expect({ width: rect.width, height: rect.height }).toEqual({ width: 420, height: 263 });
   });
 
-  const host = document.querySelector<HTMLElement>("[data-floating-browser-host='true']")?.parentElement;
+  const host = document.querySelector<HTMLElement>(
+    "[data-floating-browser-host='true']",
+  )?.parentElement;
   if (!host) throw new Error("Floating browser host is missing");
   const boundsSync = vi.fn();
   window.addEventListener(BROWSER_PANEL_BOUNDS_SYNC_EVENT, boundsSync);
@@ -153,9 +155,15 @@ it("drags, resizes, and exposes pop/close controls", async () => {
 
 it("drags from the preview without opening it, and expands only on a click", async () => {
   const onPopToSidebar = vi.fn();
-  const mounted = await render(<div className="relative h-[600px] w-[900px] overflow-hidden">
-    <FloatingBrowserPanel threadId={ThreadId.makeUnsafe("preview-gestures")} onClose={() => {}} onPopToSidebar={onPopToSidebar} />
-  </div>);
+  const mounted = await render(
+    <div className="relative h-[600px] w-[900px] overflow-hidden">
+      <FloatingBrowserPanel
+        threadId={ThreadId.makeUnsafe("preview-gestures")}
+        onClose={() => {}}
+        onPopToSidebar={onPopToSidebar}
+      />
+    </div>,
+  );
   const shield = document.querySelector("[data-floating-browser-preview-shield]")!;
   const sync = vi.fn();
   window.addEventListener(BROWSER_PANEL_BOUNDS_SYNC_EVENT, sync);

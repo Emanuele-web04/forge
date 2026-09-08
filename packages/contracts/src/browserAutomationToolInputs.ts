@@ -8,7 +8,11 @@ import {
   BrowserWebMcpToolId,
 } from "./browserAutomationIds";
 import { BrowserBoundedJsonObject } from "./browserAutomationJson";
-import { BrowserLocator, BrowserNodeTarget, BrowserPointerTarget } from "./browserAutomationTargets";
+import {
+  BrowserLocator,
+  BrowserNodeTarget,
+  BrowserPointerTarget,
+} from "./browserAutomationTargets";
 import { BrowserCssSelector } from "./browserAutomationCssSelector";
 import {
   BrowserLoadState,
@@ -22,7 +26,8 @@ const described = <S extends Schema.Top>(schema: S, description: string): S =>
 export const BROWSER_FIELD_INSTRUCTION_COPY = {
   tabId:
     "Optional scoped tab returned by browser_tabs/open; omit to use provider-session affinity.",
-  timeoutMs: "Optional end-to-end action deadline: integer from 100 to 30000 milliseconds. Never pass 45000 or 60000; split longer workflows into smaller calls.",
+  timeoutMs:
+    "Optional end-to-end action deadline: integer from 100 to 30000 milliseconds. Never pass 45000 or 60000; split longer workflows into smaller calls.",
   idempotencyKey:
     "Optional advanced retry key. Synara derives a stable key from the authenticated tool request when omitted; provide one only to deliberately deduplicate a byte-identical retry.",
   target:
@@ -209,7 +214,12 @@ export const BrowserWebMcpCallInput = closedStruct({
 export const BrowserScreenshotInput = closedStruct({
   ...invocationFields,
   ...optionalTabField,
-  kind: Schema.optional(described(Schema.Literals(["proof", "debug", "question"]), "Use proof to save a completion screenshot for embedding in chat; otherwise capture only for inspection.")),
+  kind: Schema.optional(
+    described(
+      Schema.Literals(["proof", "debug", "question"]),
+      "Use proof to save a completion screenshot for embedding in chat; otherwise capture only for inspection.",
+    ),
+  ),
   fullPage: optionalDefault(
     described(
       Schema.Boolean,
@@ -429,7 +439,10 @@ export const BrowserEvaluateInput = closedStruct({
 export const BrowserRunInput = closedStruct({
   ...invocationFields,
   ...optionalTabField,
-  code: described(BoundedUtf8String(16_384, 1), "A bounded Betterwright snippet using page and snapshot(); return JSON. Snippet state does not persist between calls."),
+  code: described(
+    BoundedUtf8String(16_384, 1),
+    "A bounded Betterwright snippet using page and snapshot(); return JSON. Snippet state does not persist between calls.",
+  ),
 });
 export const BrowserCloseInput = closedStruct({
   ...invocationFields,

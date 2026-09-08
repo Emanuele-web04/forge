@@ -3516,26 +3516,74 @@ describe("deriveTimelineEntries", () => {
     const oldTurn = TurnId.makeUnsafe("old-turn");
     const newTurn = TurnId.makeUnsafe("new-turn");
     const messages = [
-      { id: MessageId.makeUnsafe("first-user"), role: "user" as const, text: "First request", createdAt: "2026-09-07T00:00:00Z", streaming: false },
-      { id: MessageId.makeUnsafe("first-answer"), role: "assistant" as const, turnId: oldTurn, text: "Done", createdAt: "2026-09-07T00:01:00Z", streaming: false },
-      { id: MessageId.makeUnsafe("second-user"), role: "user" as const, text: "Next request", createdAt: "2026-09-07T00:02:00Z", streaming: false },
-      { id: MessageId.makeUnsafe("second-answer"), role: "assistant" as const, turnId: newTurn, text: "Working", createdAt: "2026-09-07T00:02:01Z", streaming: true },
+      {
+        id: MessageId.makeUnsafe("first-user"),
+        role: "user" as const,
+        text: "First request",
+        createdAt: "2026-09-07T00:00:00Z",
+        streaming: false,
+      },
+      {
+        id: MessageId.makeUnsafe("first-answer"),
+        role: "assistant" as const,
+        turnId: oldTurn,
+        text: "Done",
+        createdAt: "2026-09-07T00:01:00Z",
+        streaming: false,
+      },
+      {
+        id: MessageId.makeUnsafe("second-user"),
+        role: "user" as const,
+        text: "Next request",
+        createdAt: "2026-09-07T00:02:00Z",
+        streaming: false,
+      },
+      {
+        id: MessageId.makeUnsafe("second-answer"),
+        role: "assistant" as const,
+        turnId: newTurn,
+        text: "Working",
+        createdAt: "2026-09-07T00:02:01Z",
+        streaming: true,
+      },
     ];
     const oldWork = Array.from({ length: 79 }, (_, index) => ({
-      id: `old-tool-${index}`, turnId: oldTurn, sequence: 200 + index,
-      createdAt: "2026-09-07T00:03:00Z", tone: "tool" as const, label: "Earlier tool",
+      id: `old-tool-${index}`,
+      turnId: oldTurn,
+      sequence: 200 + index,
+      createdAt: "2026-09-07T00:03:00Z",
+      tone: "tool" as const,
+      label: "Earlier tool",
     }));
-    const entries = deriveTimelineEntries(messages, [], [
-      ...oldWork,
-      { id: "new-tool", turnId: newTurn, sequence: 100, createdAt: "2026-09-07T00:02:02Z", tone: "tool", label: "Current tool" },
-      { id: "legacy", createdAt: "2026-09-07T00:02:03Z", tone: "info", label: "Legacy status" },
-    ]);
-    const boundary = entries.findIndex(entry => entry.id === "second-user");
-    expect(entries.slice(0, boundary).filter(entry => entry.kind === "work")).toHaveLength(79);
-    expect(entries.slice(boundary).filter(entry => entry.kind === "work").map(entry => entry.id))
-      .toEqual(["new-tool", "legacy"]);
-    expect(entries.filter(entry => entry.kind === "work" && entry.entry.turnId === oldTurn)
-      .map(entry => entry.createdAt)).toEqual(oldWork.map(entry => entry.createdAt));
+    const entries = deriveTimelineEntries(
+      messages,
+      [],
+      [
+        ...oldWork,
+        {
+          id: "new-tool",
+          turnId: newTurn,
+          sequence: 100,
+          createdAt: "2026-09-07T00:02:02Z",
+          tone: "tool",
+          label: "Current tool",
+        },
+        { id: "legacy", createdAt: "2026-09-07T00:02:03Z", tone: "info", label: "Legacy status" },
+      ],
+    );
+    const boundary = entries.findIndex((entry) => entry.id === "second-user");
+    expect(entries.slice(0, boundary).filter((entry) => entry.kind === "work")).toHaveLength(79);
+    expect(
+      entries
+        .slice(boundary)
+        .filter((entry) => entry.kind === "work")
+        .map((entry) => entry.id),
+    ).toEqual(["new-tool", "legacy"]);
+    expect(
+      entries
+        .filter((entry) => entry.kind === "work" && entry.entry.turnId === oldTurn)
+        .map((entry) => entry.createdAt),
+    ).toEqual(oldWork.map((entry) => entry.createdAt));
   });
 
   it("includes proposed plans alongside messages and work entries in chronological order", () => {

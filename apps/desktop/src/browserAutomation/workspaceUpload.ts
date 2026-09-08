@@ -585,7 +585,13 @@ export const uploadBrowserFiles = async (
     }
     const filesForChromium = staged.files.map((file) => file.path);
     staged = undefined;
-    const result = await runBetterwright<{ code?: "BrowserInputUnsupported" | "BrowserTargetNotFound" | "BrowserTargetAmbiguous" | "BrowserTargetNotEnabled" }>({
+    const result = await runBetterwright<{
+      code?:
+        | "BrowserInputUnsupported"
+        | "BrowserTargetNotFound"
+        | "BrowserTargetAmbiguous"
+        | "BrowserTargetNotEnabled";
+    }>({
       home: join(app.getPath("userData"), "browser-engine"),
       contents: runtime.webContents,
       expectAgentInput: runtime.expectAgentInput,
@@ -605,7 +611,14 @@ if (details.disabled) return {code: "BrowserTargetNotEnabled"};
 await target.setInputFiles(${JSON.stringify(filesForChromium)});
 return {};`,
     });
-    if (result.code) browserHostError({ code: result.code, tabId: runtime.tabId as BrowserTabId });
+    if (result.code)
+      browserHostError({
+        code: result.code,
+        tabId: runtime.tabId as BrowserTabId,
+        phase: "input",
+        retryable: false,
+        effectMayHaveCommitted: false,
+      });
     return {
       tabId: runtime.tabId as BrowserTabId,
       target: {},

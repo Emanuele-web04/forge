@@ -1,13 +1,13 @@
-import {ThreadId} from "@synara/contracts";
-import type {WebContents} from "electron";
-import {EventEmitter} from "node:events";
-import {describe,expect,it,vi} from "vitest";
-import {beginBrowserNavigation} from "./navigationTracker";
-import {waitForLoadMilestone,browserEvaluationOutput} from "./waitAndEvaluate";
-const THREAD_ID=ThreadId.makeUnsafe("thread-host-results");
-const TAB_ID="1193e0d9-eb76-43d2-ae99-6bc14346b3a6";
+import { ThreadId } from "@synara/contracts";
+import type { WebContents } from "electron";
+import { EventEmitter } from "node:events";
+import { describe, expect, it, vi } from "vitest";
+import { beginBrowserNavigation } from "./navigationTracker";
+import { waitForLoadMilestone, browserEvaluationOutput } from "./waitAndEvaluate";
+const THREAD_ID = ThreadId.makeUnsafe("thread-host-results");
+const TAB_ID = "1193e0d9-eb76-43d2-ae99-6bc14346b3a6";
 
-describe("browser host results",()=>{
+describe("browser host results", () => {
   it("treats a committed same-document navigation as an already loaded document", async () => {
     let url = "https://example.test/page";
     const debuggerEvents = new EventEmitter();
@@ -50,11 +50,12 @@ describe("browser host results",()=>{
     });
   });
 
-  it("bounds Betterwright results without evaluating page code",()=>{
-    expect(browserEvaluationOutput(TAB_ID,{ok:true})).toMatchObject({value:{ok:true}});
-    expect(()=>browserEvaluationOutput(TAB_ID,undefined)).toThrow();
-    expect(()=>browserEvaluationOutput(TAB_ID,"x".repeat(262145))).toThrow();
-    const cyclic={};cyclic.self=cyclic;
-    expect(()=>browserEvaluationOutput(TAB_ID,cyclic)).toThrow();
+  it("bounds Betterwright results without evaluating page code", () => {
+    expect(browserEvaluationOutput(TAB_ID, { ok: true })).toMatchObject({ value: { ok: true } });
+    expect(() => browserEvaluationOutput(TAB_ID, undefined)).toThrow();
+    expect(() => browserEvaluationOutput(TAB_ID, "x".repeat(262145))).toThrow();
+    const cyclic: { self?: unknown } = {};
+    cyclic.self = cyclic;
+    expect(() => browserEvaluationOutput(TAB_ID, cyclic)).toThrow();
   });
 });

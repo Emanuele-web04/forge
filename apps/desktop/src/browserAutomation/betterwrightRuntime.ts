@@ -1,4 +1,5 @@
 import { BetterWright, NetworkPolicy, type CredentialVault } from "betterwright";
+import { BrowserAutomationErrorMessages } from "@synara/contracts";
 import type { WebContents } from "electron";
 import { openBetterwrightConnection } from "./betterwrightConnection";
 import type { BrowserAutomationVisibleRuntime } from "../browserManager";
@@ -18,7 +19,13 @@ export interface BetterwrightRunOptions {
 /** The caller must hold Synara's tab, human-control and download-denial leases. */
 export async function runBetterwright<T>(options: BetterwrightRunOptions): Promise<T> {
   options.signal.throwIfAborted();
-  const connection = await openBetterwrightConnection(options.contents, undefined, options.uploadFiles ?? [], false, options.expectAgentInput);
+  const connection = await openBetterwrightConnection(
+    options.contents,
+    undefined,
+    options.uploadFiles ?? [],
+    false,
+    options.expectAgentInput,
+  );
   let browser: BetterWright | undefined;
   let stopping: Promise<void> | undefined;
   const stop = (cancel: boolean): Promise<void> => {
@@ -27,7 +34,9 @@ export async function runBetterwright<T>(options: BetterwrightRunOptions): Promi
     stopping ??= Promise.all([connection.close(cancel), browser?.close()]).then(() => undefined);
     return stopping;
   };
-  const onAbort = () => { void stop(true).catch(() => {}); };
+  const onAbort = () => {
+    void stop(true).catch(() => {});
+  };
   options.signal.addEventListener("abort", onAbort, { once: true });
   let succeeded = false;
   try {
@@ -36,7 +45,7 @@ export async function runBetterwright<T>(options: BetterwrightRunOptions): Promi
       home: options.home,
       provider: connection.provider,
       hostOwnedTarget: true,
-      hostUploadFiles: options.uploadFiles,
+      ...(options.uploadFiles ? { hostUploadFiles: options.uploadFiles } : {}),
       downloadPolicy: "deny",
       vault: options.vault ?? false,
       credentialCapture: false,
@@ -49,10 +58,18 @@ export async function runBetterwright<T>(options: BetterwrightRunOptions): Promi
     options.signal.throwIfAborted();
     if (!result.ok) {
       // Only fixed host-owned guidance crosses the boundary, never worker error text.
-      const credentialTarget = typeof result.error === "string" &&
-        /^credential form (?:not-found:|ambiguous:|detection found no password field\.|submit detection failed:)/u.test(result.error);
+      const credentialTarget =
+        typeof result.error === "string" &&
+        /^credential form (?:not-found:|ambiguous:|detection found no password field\.|submit detection failed:)/u.test(
+          result.error,
+        );
       throw new BrowserAutomationHostError({
-        code: credentialTarget ? "BrowserCredentialTargetRequired" : "BrowserEvaluationFailed",
+        code:
+          result.error === BrowserAutomationErrorMessages.BrowserCredentialUseUnavailable
+            ? "BrowserCredentialUseUnavailable"
+            : credentialTarget
+              ? "BrowserCredentialTargetRequired"
+              : "BrowserEvaluationFailed",
         retryable: false,
         phase: "evaluate",
         effectMayHaveCommitted: true,

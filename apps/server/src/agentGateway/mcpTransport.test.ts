@@ -243,7 +243,7 @@ describe("makeAgentGatewayMcpTransport cancellation", () => {
         const hostStarted = yield* Deferred.make<void>();
         const hostAbortObserved = yield* Deferred.make<void>();
         let hostCalls = 0;
-        const browserWait = makeAgentGatewayBrowserTools({
+        const browserRun = makeAgentGatewayBrowserTools({
           available: true,
           execute: () => {
             hostCalls += 1;
@@ -267,21 +267,21 @@ describe("makeAgentGatewayMcpTransport cancellation", () => {
               catch: (error) => new BrowserHostRpcError("transport", String(error)),
             });
           },
-        }).find((tool) => tool.definition.name === "browser_wait");
-        assert.isDefined(browserWait);
+        }).find((tool) => tool.definition.name === "browser_run");
+        assert.isDefined(browserRun);
         const transport = makeTransport({
           threads: [makeThread("thread-detached")],
-          tool: browserWait!,
+          tool: browserRun!,
         });
         const body = {
           jsonrpc: "2.0",
           id: "detached-browser-wait",
           method: "tools/call",
           params: {
-            name: "browser_wait",
+            name: "browser_run",
             arguments: {
               tabId: "53756993-1de8-47a5-82c9-e00766199802",
-              conditions: [{ kind: "text", text: "STOP_SENTINEL_NEVER_APPEARS", state: "present" }],
+              code: 'await page.getByText("STOP_SENTINEL_NEVER_APPEARS").waitFor(); return true;',
               timeoutMs: 30_000,
             },
           },

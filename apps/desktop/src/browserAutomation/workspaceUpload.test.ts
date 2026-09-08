@@ -94,8 +94,11 @@ const createRuntime = (
     webContents,
   } satisfies BrowserAutomationVisibleRuntime;
   vi.mocked(runBetterwright).mockImplementation(async (options) => {
-    if (!multiple && options.uploadFiles?.length !== 1) return {code: "BrowserInputUnsupported"};
-    await sendCommand("DOM.setFileInputFiles", {objectId: "file-input", files: options.uploadFiles});
+    if (!multiple && options.uploadFiles?.length !== 1) return { code: "BrowserInputUnsupported" };
+    await sendCommand("DOM.setFileInputFiles", {
+      objectId: "file-input",
+      files: options.uploadFiles,
+    });
     return {};
   });
   if (uploadConfiguration) {

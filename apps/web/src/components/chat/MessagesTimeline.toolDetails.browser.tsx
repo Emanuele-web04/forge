@@ -21,30 +21,32 @@ function ToolDetailsTimeline({ entries }: { entries?: TimelineEntry[] }) {
       isWorking={entries !== undefined}
       activeTurnInProgress={entries !== undefined}
       activeTurnStartedAt={null}
-      timelineEntries={entries ?? [
-        {
-          id: "entry-command-details",
-          kind: "work",
-          createdAt: "2026-03-17T19:12:28.000Z",
-          entry: {
-            id: "work-command-details",
+      timelineEntries={
+        entries ?? [
+          {
+            id: "entry-command-details",
+            kind: "work",
             createdAt: "2026-03-17T19:12:28.000Z",
-            label: "Ran command",
-            tone: "tool",
-            itemType: "command_execution",
-            toolTitle: "Searched",
-            command: `rg -n "toolDetails" apps/web/src`,
-            toolDetails: {
-              kind: "command",
-              title: "Searched",
+            entry: {
+              id: "work-command-details",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "Ran command",
+              tone: "tool",
+              itemType: "command_execution",
+              toolTitle: "Searched",
               command: `rg -n "toolDetails" apps/web/src`,
-              output: {
-                stdout: "apps/web/src/session-logic.ts:55: toolDetails",
+              toolDetails: {
+                kind: "command",
+                title: "Searched",
+                command: `rg -n "toolDetails" apps/web/src`,
+                output: {
+                  stdout: "apps/web/src/session-logic.ts:55: toolDetails",
+                },
               },
             },
           },
-        },
-      ]}
+        ]
+      }
       turnDiffSummaryByAssistantMessageId={new Map()}
       nowIso="2026-03-17T19:12:30.000Z"
       expandedWorkGroups={{}}
@@ -114,33 +116,79 @@ describe("MessagesTimeline tool details", () => {
   it("keeps historical tool disclosures above the next request after late updates", async () => {
     const oldTurn = TurnId.makeUnsafe("old-tools");
     const newTurn = TurnId.makeUnsafe("current-tools");
-    const entries = (late: boolean) => deriveTimelineEntries([
-      { id: MessageId.makeUnsafe("old-user"), role: "user", text: "Earlier request", createdAt: "2026-09-07T00:00:00Z", streaming: false },
-      { id: MessageId.makeUnsafe("old-answer"), role: "assistant", turnId: oldTurn, text: "Earlier answer", createdAt: "2026-09-07T00:01:00Z", streaming: false },
-      { id: MessageId.makeUnsafe("current-user"), role: "user", text: "Current request", createdAt: "2026-09-07T00:02:00Z", streaming: false },
-      { id: MessageId.makeUnsafe("current-answer"), role: "assistant", turnId: newTurn, text: "Current answer", createdAt: "2026-09-07T00:02:01Z", streaming: true },
-    ], [], [
-      ...Array.from({ length: 79 }, (_, index) => ({
-        id: `earlier-tool-${index}`, turnId: oldTurn, tone: "tool" as const,
-        label: "Earlier tool", createdAt: late ? "2026-09-07T00:03:00Z" : "2026-09-07T00:00:30Z",
-      })),
-      { id: "current-tool", turnId: newTurn, tone: "tool", label: "Current tool", createdAt: "2026-09-07T00:02:02Z" },
-    ]);
+    const entries = (late: boolean) =>
+      deriveTimelineEntries(
+        [
+          {
+            id: MessageId.makeUnsafe("old-user"),
+            role: "user",
+            text: "Earlier request",
+            createdAt: "2026-09-07T00:00:00Z",
+            streaming: false,
+          },
+          {
+            id: MessageId.makeUnsafe("old-answer"),
+            role: "assistant",
+            turnId: oldTurn,
+            text: "Earlier answer",
+            createdAt: "2026-09-07T00:01:00Z",
+            streaming: false,
+          },
+          {
+            id: MessageId.makeUnsafe("current-user"),
+            role: "user",
+            text: "Current request",
+            createdAt: "2026-09-07T00:02:00Z",
+            streaming: false,
+          },
+          {
+            id: MessageId.makeUnsafe("current-answer"),
+            role: "assistant",
+            turnId: newTurn,
+            text: "Current answer",
+            createdAt: "2026-09-07T00:02:01Z",
+            streaming: true,
+          },
+        ],
+        [],
+        [
+          ...Array.from({ length: 79 }, (_, index) => ({
+            id: `earlier-tool-${index}`,
+            turnId: oldTurn,
+            tone: "tool" as const,
+            label: "Earlier tool",
+            createdAt: late ? "2026-09-07T00:03:00Z" : "2026-09-07T00:00:30Z",
+          })),
+          {
+            id: "current-tool",
+            turnId: newTurn,
+            tone: "tool",
+            label: "Current tool",
+            createdAt: "2026-09-07T00:02:02Z",
+          },
+        ],
+      );
     const host = createTimelineHost();
-    const screen = await render(<ToolDetailsTimeline entries={entries(false)} />, { container: host });
+    const screen = await render(<ToolDetailsTimeline entries={entries(false)} />, {
+      container: host,
+    });
     try {
       await screen.rerender(<ToolDetailsTimeline entries={entries(true)} />);
       await settleLayout();
       const boundary = host.querySelector('[data-message-id="current-user"]')!;
       expect(boundary).not.toBeNull();
-      const rows = [...host.querySelectorAll('[data-timeline-row-kind]')];
-      const currentRows = rows.filter(row => Boolean(boundary.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING));
-      const currentText = currentRows.map(row => row.textContent).join(" ");
+      const rows = [...host.querySelectorAll("[data-timeline-row-kind]")];
+      const currentRows = rows.filter((row) =>
+        Boolean(boundary.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING),
+      );
+      const currentText = currentRows.map((row) => row.textContent).join(" ");
       expect(currentText).toContain("Current tool");
       expect(currentText).not.toMatch(/Earlier tool|Show .* more/);
-      const earlierRows = rows.filter(row => Boolean(boundary.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_PRECEDING));
+      const earlierRows = rows.filter((row) =>
+        Boolean(boundary.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_PRECEDING),
+      );
       expect(earlierRows.length).toBeGreaterThan(0);
-      expect(earlierRows.some(row => row.textContent?.includes("Earlier answer"))).toBe(true);
+      expect(earlierRows.some((row) => row.textContent?.includes("Earlier answer"))).toBe(true);
     } finally {
       await screen.unmount();
       host.remove();

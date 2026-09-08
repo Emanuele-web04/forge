@@ -9,14 +9,40 @@ const mocks = vi.hoisted(() => ({ install: vi.fn(), dispose: vi.fn() }));
 vi.mock("betterwright/capture", () => ({ installVaultCapture: mocks.install }));
 import { BrowserVaultCapture } from "./browserVaultCapture";
 
-beforeEach(() => { vi.clearAllMocks(); mocks.dispose.mockResolvedValue(undefined); mocks.install.mockReturnValue({ dispose: mocks.dispose }); });
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.dispose.mockResolvedValue(undefined);
+  mocks.install.mockReturnValue({ dispose: mocks.dispose });
+});
 
 function fixture() {
   let changed = () => {};
-  let state: BrowserVaultSnapshot = { protection: { configured: true, locked: false, osProtected: false }, settings: { offerSave: false, autosave: false, agentUse: true }, logins: [], pending: [], error: null };
-  const vault = { snapshot: async () => state, onChanged: (listener: () => void) => { changed = listener; return () => { changed = () => {}; }; }, reportCaptureFailure: vi.fn() };
+  let state: BrowserVaultSnapshot = {
+    protection: { configured: true, locked: false, osProtected: false },
+    settings: { offerSave: false, autosave: false, agentUse: true },
+    logins: [],
+    pending: [],
+    error: null,
+  };
+  const vault = {
+    snapshot: async () => state,
+    onChanged: (listener: () => void) => {
+      changed = listener;
+      return () => {
+        changed = () => {};
+      };
+    },
+    reportCaptureFailure: vi.fn(),
+  };
   const capture = new BrowserVaultCapture(vault as unknown as BrowserVault);
-  return { capture, vault, update: (patch: Partial<BrowserVaultSnapshot>) => { state = { ...state, ...patch }; changed(); } };
+  return {
+    capture,
+    vault,
+    update: (patch: Partial<BrowserVaultSnapshot>) => {
+      state = { ...state, ...patch };
+      changed();
+    },
+  };
 }
 
 describe("native credential capture lifecycle", () => {
@@ -38,9 +64,15 @@ describe("native credential capture lifecycle", () => {
     const context = mocks.install.mock.calls[0]![0] as CaptureContext;
     const debuggerApi = Object.assign(new EventEmitter(), {
       isAttached: () => true,
-      sendCommand: vi.fn(async (method: string) => method === "Target.getTargetInfo" ? { targetInfo: { targetId: "own-target" } } : { sessionId: "capture-session" }),
+      sendCommand: vi.fn(async (method: string) =>
+        method === "Target.getTargetInfo"
+          ? { targetInfo: { targetId: "own-target" } }
+          : { sessionId: "capture-session" },
+      ),
     });
-    const unregister = f.capture.register({ webContents: { debugger: debuggerApi, isDestroyed: () => false } } as unknown as BrowserAutomationVisibleRuntime);
+    const unregister = f.capture.register({
+      webContents: { debugger: debuggerApi, isDestroyed: () => false },
+    } as unknown as BrowserAutomationVisibleRuntime);
     const session = await context.newCDPSession(context.pages()[0]!);
     const listener = vi.fn();
     session.on("Runtime.bindingCalled", listener);
@@ -50,7 +82,9 @@ describe("native credential capture lifecycle", () => {
     expect(listener).toHaveBeenCalledTimes(1);
     await session.detach();
     expect(debuggerApi.listenerCount("message")).toBe(0);
-    expect(debuggerApi.sendCommand).toHaveBeenLastCalledWith("Target.detachFromTarget", { sessionId: "capture-session" });
+    expect(debuggerApi.sendCommand).toHaveBeenLastCalledWith("Target.detachFromTarget", {
+      sessionId: "capture-session",
+    });
     unregister();
     expect(context.pages()).toEqual([]);
     await f.capture.dispose();

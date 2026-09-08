@@ -58,7 +58,10 @@ describe("browser automation tool schemas", () => {
       fullPage: false,
     });
     expect(Schema.is(BrowserScreenshotInput)({ fullPage: true, extra: true })).toBe(false);
-    expect(Schema.decodeUnknownSync(BrowserScreenshotInput)({ kind: "proof" })).toMatchObject({ kind: "proof", fullPage: false });
+    expect(Schema.decodeUnknownSync(BrowserScreenshotInput)({ kind: "proof" })).toMatchObject({
+      kind: "proof",
+      fullPage: false,
+    });
     expect(Schema.is(BrowserScreenshotInput)({ kind: "fabricated" })).toBe(false);
     expect(Schema.decodeUnknownSync(BrowserLogsInput)({})).toMatchObject({
       includeConsole: true,
@@ -223,12 +226,22 @@ describe("browser automation tool schemas", () => {
   });
 
   it("bounds evaluate and wait inputs", () => {
-    expect(Schema.is(BrowserRunInput)({ code: "return {ok: true}", idempotencyKey: KEY })).toBe(true);
+    expect(Schema.is(BrowserRunInput)({ code: "return {ok: true}", idempotencyKey: KEY })).toBe(
+      true,
+    );
     expect(Schema.is(BrowserRunInput)({ code: "" })).toBe(false);
     expect(Schema.is(BrowserRunInput)({ code: "x".repeat(16_385) })).toBe(false);
     expect(Schema.is(BrowserRunInput)({ code: "return null", threadId: "forged" })).toBe(false);
-    expect(Schema.is(BrowserRunOutput)({ tabId: TAB_ID, value: { ok: true }, serializedByteCount: 11 })).toBe(true);
-    expect(Schema.is(BrowserRunOutput)({ tabId: TAB_ID, value: "x".repeat(262_145), serializedByteCount: 262_147 })).toBe(false);
+    expect(
+      Schema.is(BrowserRunOutput)({ tabId: TAB_ID, value: { ok: true }, serializedByteCount: 11 }),
+    ).toBe(true);
+    expect(
+      Schema.is(BrowserRunOutput)({
+        tabId: TAB_ID,
+        value: "x".repeat(262_145),
+        serializedByteCount: 262_147,
+      }),
+    ).toBe(false);
     expect(
       Schema.is(BrowserEvaluateInput)({ idempotencyKey: KEY, expression: "x".repeat(16_385) }),
     ).toBe(false);

@@ -2,6 +2,7 @@ import { Schema } from "effect";
 import { ThreadId } from "./baseSchemas";
 
 export const BrowserVaultSettings = Schema.Struct({
+  // Retain the persisted key; consent now covers account metadata only.
   agentUse: Schema.Boolean,
   offerSave: Schema.Boolean,
   autosave: Schema.Boolean,
@@ -28,7 +29,11 @@ export const BrowserVaultSavePrompt = Schema.Struct({
 export type BrowserVaultSavePrompt = typeof BrowserVaultSavePrompt.Type;
 
 export const BrowserVaultSnapshot = Schema.Struct({
-  protection: Schema.Struct({ configured: Schema.Boolean, locked: Schema.Boolean, osProtected: Schema.Boolean }),
+  protection: Schema.Struct({
+    configured: Schema.Boolean,
+    locked: Schema.Boolean,
+    osProtected: Schema.Boolean,
+  }),
   logins: Schema.Array(BrowserVaultLogin),
   settings: BrowserVaultSettings,
   pending: Schema.Array(BrowserVaultSavePrompt),
@@ -36,15 +41,45 @@ export const BrowserVaultSnapshot = Schema.Struct({
 });
 export type BrowserVaultSnapshot = typeof BrowserVaultSnapshot.Type;
 
-const CookieImportDestination = { threadId: ThreadId, tabId: Schema.String, browser: Schema.Literals(["chrome", "safari", "edge"]), profile: Schema.String.check(Schema.isMaxLength(4096)) };
+const CookieImportDestination = {
+  threadId: ThreadId,
+  tabId: Schema.String,
+  browser: Schema.Literals(["chrome", "safari", "edge"]),
+  profile: Schema.String.check(Schema.isMaxLength(4096)),
+};
 export const BrowserCookieImportInput = Schema.Union([
-  Schema.Struct({ ...CookieImportDestination, scope: Schema.Literal("site"), origin: Schema.String.check(Schema.isMaxLength(2048)) }),
-  Schema.Struct({ ...CookieImportDestination, scope: Schema.Literal("profile"), confirmed: Schema.Literal(true) }),
+  Schema.Struct({
+    ...CookieImportDestination,
+    scope: Schema.Literal("site"),
+    origin: Schema.String.check(Schema.isMaxLength(2048)),
+  }),
+  Schema.Struct({
+    ...CookieImportDestination,
+    scope: Schema.Literal("profile"),
+    confirmed: Schema.Literal(true),
+  }),
 ]);
 export type BrowserCookieImportInput = typeof BrowserCookieImportInput.Type;
 export type BrowserCookieImportResult =
-  | { ok: true; imported: number; skipped: number; warnings: Array<{ code: string; count: number }> }
-  | { ok: false; code: "permission_denied" | "reader_failed" | "reader_unavailable" | "timed_out" | "source_missing" | "transfer_failed" | "persistence_failed"; platform: "macos" | "windows" | "linux"; stage?: "acquisition" | "parse" | "decrypt" | "decode" | "query" | "discovery" };
+  | {
+      ok: true;
+      imported: number;
+      skipped: number;
+      warnings: Array<{ code: string; count: number }>;
+    }
+  | {
+      ok: false;
+      code:
+        | "permission_denied"
+        | "reader_failed"
+        | "reader_unavailable"
+        | "timed_out"
+        | "source_missing"
+        | "transfer_failed"
+        | "persistence_failed";
+      platform: "macos" | "windows" | "linux";
+      stage?: "acquisition" | "parse" | "decrypt" | "decode" | "query" | "discovery";
+    };
 
 export interface BrowserVaultMethods {
   snapshot(): Promise<BrowserVaultSnapshot>;

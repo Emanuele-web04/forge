@@ -426,7 +426,10 @@ const annotationGuestPreload = Path.join(__dirname, "guestPreload.js");
 const browserOsKeyStore = {
   available: async () => {
     await app.whenReady();
-    return safeStorage.isEncryptionAvailable() && (process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text");
+    return (
+      safeStorage.isEncryptionAvailable() &&
+      (process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text")
+    );
   },
   encrypt: (value: string) => safeStorage.encryptString(value),
   decrypt: (value: Buffer) => safeStorage.decryptString(value),
@@ -4691,17 +4694,41 @@ function registerIpcHandlers(): void {
   registerDesktopVoiceTranscriptionHandler();
   startBrowserPerformanceLogging();
   registerBrowserIpcHandlers(ipcMain, browserManager);
-  registerBrowserVaultIpc(ipcMain, browserManager, browserVault, () => {
-    mainWindow?.webContents.send(IPC.browser.vault.changed);
-  }, new BrowserCookieImport(Path.join(BASE_DIR, "browser-engine"), browserManager, async () => { await browserHostPipeServer?.waitForIdle(); }, async (domains) => {
-    if (!browserSessionRestore) throw new Error("Browser session restoration is unavailable.");
-    try { await browserSessionRestore.rememberImport(domains); }
-    catch (error) {
-      const allowed = ["Secure browser session storage is unavailable.", "Browser session metadata could not be read.", "Browser session metadata is unsupported.", "Secure browser session persistence failed."];
-      console.warn("[Synara browser]", error instanceof Error && allowed.includes(error.message) ? error.message : "Browser session checkpoint failed.");
-      throw new Error("Browser session checkpoint failed.");
-    }
-  }));
+  registerBrowserVaultIpc(
+    ipcMain,
+    browserManager,
+    browserVault,
+    () => {
+      mainWindow?.webContents.send(IPC.browser.vault.changed);
+    },
+    new BrowserCookieImport(
+      Path.join(BASE_DIR, "browser-engine"),
+      browserManager,
+      async () => {
+        await browserHostPipeServer?.waitForIdle();
+      },
+      async (domains) => {
+        if (!browserSessionRestore) throw new Error("Browser session restoration is unavailable.");
+        try {
+          await browserSessionRestore.rememberImport(domains);
+        } catch (error) {
+          const allowed = [
+            "Secure browser session storage is unavailable.",
+            "Browser session metadata could not be read.",
+            "Browser session metadata is unsupported.",
+            "Secure browser session persistence failed.",
+          ];
+          console.warn(
+            "[Synara browser]",
+            error instanceof Error && allowed.includes(error.message)
+              ? error.message
+              : "Browser session checkpoint failed.",
+          );
+          throw new Error("Browser session checkpoint failed.");
+        }
+      },
+    ),
+  );
 }
 
 function getIconOption(): { icon: string } | Record<string, never> {
@@ -5196,9 +5223,18 @@ async function bootstrap(): Promise<void> {
   backendAuthToken = Crypto.randomBytes(24).toString("hex");
   await reserveBackendEndpoint("bootstrap");
 
-  browserSessionRestore = new BrowserSessionRestore(Path.join(BASE_DIR, "browser-session-restore"), createCookieSessionBackend(BROWSER_SESSION_PARTITION), browserOsKeyStore);
-  try { await browserSessionRestore.initialize(); }
-  catch { console.warn("[Synara browser] Secure session restoration is unavailable; no saved session cookies were restored."); }
+  browserSessionRestore = new BrowserSessionRestore(
+    Path.join(BASE_DIR, "browser-session-restore"),
+    createCookieSessionBackend(BROWSER_SESSION_PARTITION),
+    browserOsKeyStore,
+  );
+  try {
+    await browserSessionRestore.initialize();
+  } catch {
+    console.warn(
+      "[Synara browser] Secure session restoration is unavailable; no saved session cookies were restored.",
+    );
+  }
 
   registerIpcHandlers();
   writeDesktopLogHeader("bootstrap ipc handlers registered");

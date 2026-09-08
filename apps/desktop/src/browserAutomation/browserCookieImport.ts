@@ -1,4 +1,9 @@
-import { BetterWright, listCookieSourceBrowsers, listCookieSourceProfiles, NetworkPolicy } from "betterwright";
+import {
+  BetterWright,
+  listCookieSourceBrowsers,
+  listCookieSourceProfiles,
+  NetworkPolicy,
+} from "betterwright";
 import type { BrowserCookieImportInput, BrowserCookieImportResult } from "@synara/contracts";
 import type { DesktopBrowserManager } from "../browserManager";
 import { openBetterwrightConnection } from "./betterwrightConnection";
@@ -8,7 +13,14 @@ const SOURCES = new Set(["chrome", "safari", "edge"]);
 export class BrowserCookieImport {
   private busy = false;
 
-  constructor(private readonly home: string, private readonly manager: DesktopBrowserManager, private readonly waitForAgents: () => Promise<void>, private readonly rememberSessionImport: (domains: readonly string[]) => Promise<void> = async () => {}) {}
+  constructor(
+    private readonly home: string,
+    private readonly manager: DesktopBrowserManager,
+    private readonly waitForAgents: () => Promise<void>,
+    private readonly rememberSessionImport: (
+      domains: readonly string[],
+    ) => Promise<void> = async () => {},
+  ) {}
 
   async sources() {
     const browsers = (await listCookieSourceBrowsers()).filter(({ id }) => SOURCES.has(id));
@@ -28,14 +40,26 @@ export class BrowserCookieImport {
       releaseHumanOperation = this.manager.beginHumanBrowserOperation();
       const runtime = await this.manager.getCookieImportRuntime(input);
       const origin = input.scope === "site" ? new URL(input.origin) : null;
-      if (input.scope === "profile" && input.confirmed !== true) throw new Error("Confirm whole-profile session access.");
-      if (input.scope === "site" && origin && (!["https:", "http:"].includes(origin.protocol) || origin.origin !== input.origin || new URL(runtime.webContents.getURL()).origin !== input.origin)) {
+      if (input.scope === "profile" && input.confirmed !== true)
+        throw new Error("Confirm whole-profile session access.");
+      if (
+        input.scope === "site" &&
+        origin &&
+        (!["https:", "http:"].includes(origin.protocol) ||
+          origin.origin !== input.origin ||
+          new URL(runtime.webContents.getURL()).origin !== input.origin)
+      ) {
         throw new Error("Cookie import must match the visible site.");
       }
       const profiles = await this.profiles(input.browser);
-      if (!profiles.some(({ id }) => id === input.profile)) throw new Error("Choose an available browser profile.");
+      if (!profiles.some(({ id }) => id === input.profile))
+        throw new Error("Choose an available browser profile.");
       const assertTarget = async () => {
-        if ((await this.manager.getCookieImportRuntime(input)).webContents !== runtime.webContents || (origin && new URL(runtime.webContents.getURL()).origin !== origin.origin)) throw new Error("The cookie import destination changed.");
+        if (
+          (await this.manager.getCookieImportRuntime(input)).webContents !== runtime.webContents ||
+          (origin && new URL(runtime.webContents.getURL()).origin !== origin.origin)
+        )
+          throw new Error("The cookie import destination changed.");
       };
       await assertTarget();
       await this.waitForAgents();
@@ -43,8 +67,18 @@ export class BrowserCookieImport {
       const connection = await openBetterwrightConnection(runtime.webContents, undefined, [], true);
       let browser: BetterWright | undefined;
       let close: Promise<void> | undefined;
-      const stop = () => { close ??= connection.close(false); void close.catch(() => {}); };
-      const navigation = (_event: unknown, _url: string, _inPlace: boolean, isMainFrame: boolean) => { if (isMainFrame) stop(); };
+      const stop = () => {
+        close ??= connection.close(false);
+        void close.catch(() => {});
+      };
+      const navigation = (
+        _event: unknown,
+        _url: string,
+        _inPlace: boolean,
+        isMainFrame: boolean,
+      ) => {
+        if (isMainFrame) stop();
+      };
       runtime.webContents.on("did-start-navigation", navigation);
       runtime.webContents.once("destroyed", stop);
       const timeout = setTimeout(stop, 60_000);
@@ -71,23 +105,64 @@ export class BrowserCookieImport {
           cloudConsent: `cdp:${target.host}`,
         });
         if (!result.ok) {
-          const stages = ["acquisition", "parse", "decrypt", "decode", "query", "discovery"] as const;
+          const stages = [
+            "acquisition",
+            "parse",
+            "decrypt",
+            "decode",
+            "query",
+            "discovery",
+          ] as const;
           const stage = stages.find((stage) => stage === result.cookieReaderStage);
-          const code = result.cookiePermissionDenied ? "permission_denied" :
-            result.cookieReaderCode === "timed_out" ? "timed_out" :
-            ["no_selected_source", "no_discovered_source"].includes(result.cookieReaderCode ?? "") ? "source_missing" :
-            result.cookieReaderCode === "reader_unavailable" ? "reader_unavailable" :
-            result.cookieReaderCode ? "reader_failed" : "transfer_failed";
-          return { ok: false, code, platform: process.platform === "darwin" ? "macos" : process.platform === "win32" ? "windows" : "linux", ...(stage ? { stage } : {}) };
+          const code = result.cookiePermissionDenied
+            ? "permission_denied"
+            : result.cookieReaderCode === "timed_out"
+              ? "timed_out"
+              : ["no_selected_source", "no_discovered_source"].includes(
+                    result.cookieReaderCode ?? "",
+                  )
+                ? "source_missing"
+                : result.cookieReaderCode === "reader_unavailable"
+                  ? "reader_unavailable"
+                  : result.cookieReaderCode
+                    ? "reader_failed"
+                    : "transfer_failed";
+          return {
+            ok: false,
+            code,
+            platform:
+              process.platform === "darwin"
+                ? "macos"
+                : process.platform === "win32"
+                  ? "windows"
+                  : "linux",
+            ...(stage ? { stage } : {}),
+          };
         }
         await assertTarget();
         await runtime.webContents.session.cookies.flushStore();
         try {
-          if (!Array.isArray(result.cookieImportDomains)) throw new Error("Import scope metadata is unavailable.");
+          if (!Array.isArray(result.cookieImportDomains))
+            throw new Error("Import scope metadata is unavailable.");
           await this.rememberSessionImport(result.cookieImportDomains);
+        } catch {
+          return {
+            ok: false,
+            code: "persistence_failed",
+            platform:
+              process.platform === "darwin"
+                ? "macos"
+                : process.platform === "win32"
+                  ? "windows"
+                  : "linux",
+          };
         }
-        catch { return { ok: false, code: "persistence_failed", platform: process.platform === "darwin" ? "macos" : process.platform === "win32" ? "windows" : "linux" }; }
-        return { ok: true, imported: result.synced, skipped: result.skipped, warnings: (result.warnings ?? []).map(({ code, count }) => ({ code, count })) };
+        return {
+          ok: true,
+          imported: result.synced,
+          skipped: result.skipped,
+          warnings: (result.warnings ?? []).map(({ code, count }) => ({ code, count })),
+        };
       } finally {
         clearTimeout(timeout);
         runtime.webContents.removeListener("did-start-navigation", navigation);

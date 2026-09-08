@@ -82,13 +82,24 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
   it("parks native previews outside hit testing, captures bounded frames and restores the same page", async () => {
     const contents = new FakeWebContents(121);
     const thumbnail = { toJPEG: vi.fn(() => Buffer.from("thumbnail")) };
-    const image = { isEmpty: () => false, getSize: () => ({ width: 1280, height: 800 }), resize: vi.fn(() => thumbnail) };
+    const image = {
+      isEmpty: () => false,
+      getSize: () => ({ width: 1280, height: 800 }),
+      resize: vi.fn(() => thumbnail),
+    };
     const capturePage = vi.fn(async () => image);
     Object.assign(contents, { capturePage });
-    const view = { webContents: contents, setBounds: vi.fn(), setVisible: vi.fn(), setBorderRadius: vi.fn() };
+    const view = {
+      webContents: contents,
+      setBounds: vi.fn(),
+      setVisible: vi.fn(),
+      setBorderRadius: vi.fn(),
+    };
     webContentsViewConstructor.mockReturnValueOnce(view);
     const manager = new DesktopBrowserManager();
-    manager.setWindow({ contentView: { addChildView: vi.fn(), removeChildView: vi.fn() } } as never);
+    manager.setWindow({
+      contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+    } as never);
     try {
       const state = manager.open({ threadId: THREAD_ID, initialUrl: "https://example.test/" });
       const input = { threadId: THREAD_ID, tabId: state.activeTabId! };
@@ -96,7 +107,9 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds, preview: true });
       const loads = contents.loadURL.mock.calls.length;
       expect(view.setBounds).toHaveBeenLastCalledWith({ ...bounds, x: -10000, y: -10000 });
-      expect(await manager.capturePreview(input)).toBe(`data:image/jpeg;base64,${Buffer.from("thumbnail").toString("base64")}`);
+      expect(await manager.capturePreview(input)).toBe(
+        `data:image/jpeg;base64,${Buffer.from("thumbnail").toString("base64")}`,
+      );
       expect(image.resize).toHaveBeenCalledWith({ width: 640 });
       expect(capturePage).toHaveBeenCalledWith(undefined, { stayHidden: true, stayAwake: true });
       manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
@@ -112,7 +125,12 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
   it("does not suspend a native page behind a long-lived menu, but still suspends after panel hide", async () => {
     vi.useFakeTimers();
     const contents = new FakeWebContents(101);
-    const view = { webContents: contents, setBounds: vi.fn(), setVisible: vi.fn(), setBorderRadius: vi.fn() };
+    const view = {
+      webContents: contents,
+      setBounds: vi.fn(),
+      setVisible: vi.fn(),
+      setBorderRadius: vi.fn(),
+    };
     webContentsViewConstructor.mockReturnValueOnce(view);
     const manager = new DesktopBrowserManager();
     const parent = { addChildView: vi.fn(), removeChildView: vi.fn() };
@@ -124,14 +142,24 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
       const runtime = manager.getVisibleAutomationRuntime(input);
       const loads = contents.loadURL.mock.calls.length;
-      manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds: null, occluded: true });
+      manager.setPanelBounds({
+        threadId: THREAD_ID,
+        surface: "native",
+        bounds: null,
+        occluded: true,
+      });
       expect(parent.removeChildView).toHaveBeenCalledWith(view);
       await vi.advanceTimersByTimeAsync(60_000);
       expect(contents.close).not.toHaveBeenCalled();
       manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
       expect(manager.getVisibleAutomationRuntime(input).webContents).toBe(runtime.webContents);
       expect(contents.loadURL).toHaveBeenCalledTimes(loads);
-      manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds: null, occluded: true });
+      manager.setPanelBounds({
+        threadId: THREAD_ID,
+        surface: "native",
+        bounds: null,
+        occluded: true,
+      });
       manager.hide({ threadId: THREAD_ID });
       await vi.advanceTimersByTimeAsync(30_001);
       expect(contents.close).toHaveBeenCalledOnce();
@@ -146,22 +174,40 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     const contents = new FakeWebContents(98);
     let popupUrl = "";
     contents.getURL = () => popupUrl;
-    contents.loadURL = vi.fn(async (url?: string) => { popupUrl = url ?? ""; });
-    const view = (webContents: FakeWebContents) => ({ webContents, setBounds: vi.fn(), setVisible: vi.fn(), setBorderRadius: vi.fn() });
-    webContentsViewConstructor.mockReturnValueOnce(view(source)).mockReturnValueOnce(view(contents));
+    contents.loadURL = vi.fn(async (url?: string) => {
+      popupUrl = url ?? "";
+    });
+    const view = (webContents: FakeWebContents) => ({
+      webContents,
+      setBounds: vi.fn(),
+      setVisible: vi.fn(),
+      setBorderRadius: vi.fn(),
+    });
+    webContentsViewConstructor
+      .mockReturnValueOnce(view(source))
+      .mockReturnValueOnce(view(contents));
     const manager = new DesktopBrowserManager();
-    manager.setWindow({ contentView: { addChildView: vi.fn(), removeChildView: vi.fn() } } as never);
+    manager.setWindow({
+      contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+    } as never);
     const state = manager.open({ threadId: THREAD_ID });
     const bounds = { x: 0, y: 50, width: 600, height: 600 };
     manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
     const input = { threadId: THREAD_ID, tabId: state.activeTabId! };
     const stopDownloads = manager.trackAutomationDownload(input, vi.fn());
     const stopTracking = manager.trackAutomationWindowOpen(input, vi.fn());
-    source.windowOpenHandler?.({ url: "https://opened.example/path", frameName: "", features: "", disposition: "foreground-tab" });
+    source.windowOpenHandler?.({
+      url: "https://opened.example/path",
+      frameName: "",
+      features: "",
+      disposition: "foreground-tab",
+    });
     await new Promise<void>((resolve) => setImmediate(resolve));
     stopTracking();
     stopDownloads();
-    await vi.waitFor(() => expect(contents.loadURL).toHaveBeenCalledWith("https://opened.example/path"));
+    await vi.waitFor(() =>
+      expect(contents.loadURL).toHaveBeenCalledWith("https://opened.example/path"),
+    );
     const download = { preventDefault: vi.fn() };
     willDownloadListener.current?.(download, {}, contents);
     expect(download.preventDefault).toHaveBeenCalledOnce();
@@ -174,20 +220,35 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
 
   it("allows an owner import while the selected native tab is covered, without revealing or claiming it", async () => {
     const contents = new FakeWebContents(99);
-    const view = { webContents: contents, setBounds: vi.fn(), setVisible: vi.fn(), setBorderRadius: vi.fn() };
+    const view = {
+      webContents: contents,
+      setBounds: vi.fn(),
+      setVisible: vi.fn(),
+      setBorderRadius: vi.fn(),
+    };
     webContentsViewConstructor.mockReturnValueOnce(view);
     const manager = new DesktopBrowserManager();
-    manager.setWindow({ contentView: { addChildView: vi.fn(), removeChildView: vi.fn() } } as never);
+    manager.setWindow({
+      contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+    } as never);
     const state = manager.open({ threadId: THREAD_ID });
     const input = { threadId: THREAD_ID, tabId: state.activeTabId! };
-    manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds: { x: 0, y: 50, width: 600, height: 600 } });
+    manager.setPanelBounds({
+      threadId: THREAD_ID,
+      surface: "native",
+      bounds: { x: 0, y: 50, width: 600, height: 600 },
+    });
     manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds: null });
     expect(() => manager.getVisibleAutomationRuntime(input)).toThrow("not currently visible");
     view.setVisible.mockClear();
     expect((await manager.getCookieImportRuntime(input)).webContents).toBe(contents);
     expect(view.setVisible).not.toHaveBeenCalledWith(true);
-    await expect(manager.getCookieImportRuntime({ ...input, threadId: ThreadId.makeUnsafe("another-thread") })).rejects.toThrow();
-    await expect(manager.getCookieImportRuntime({ ...input, tabId: "another-tab" })).rejects.toThrow();
+    await expect(
+      manager.getCookieImportRuntime({ ...input, threadId: ThreadId.makeUnsafe("another-thread") }),
+    ).rejects.toThrow();
+    await expect(
+      manager.getCookieImportRuntime({ ...input, tabId: "another-tab" }),
+    ).rejects.toThrow();
     manager.dispose();
   });
   it("keeps a manually opened native page alive across expanded and floating presentations", async () => {
@@ -199,17 +260,34 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       setBorderRadius: vi.fn(),
     });
     const manager = new DesktopBrowserManager();
-    manager.setWindow({ contentView: { addChildView: vi.fn(), removeChildView: vi.fn() } } as never);
+    manager.setWindow({
+      contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+    } as never);
     const state = manager.open({ threadId: THREAD_ID });
     expect(state.tabs[0]?.runtimeSurface).toBe("native");
-    manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds: { x: 700, y: 50, width: 600, height: 700 }, pageZoomFactor: 1 });
+    manager.setPanelBounds({
+      threadId: THREAD_ID,
+      surface: "native",
+      bounds: { x: 700, y: 50, width: 600, height: 700 },
+      pageZoomFactor: 1,
+    });
     const tabId = state.activeTabId!;
     const before = await manager.getAutomationRuntime({ threadId: THREAD_ID, tabId });
     const loads = contents.loadURL.mock.calls.length;
     manager.hide({ threadId: THREAD_ID });
-    manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds: { x: 900, y: 500, width: 320, height: 200 }, pageZoomFactor: 0.25 });
+    manager.setPanelBounds({
+      threadId: THREAD_ID,
+      surface: "native",
+      bounds: { x: 900, y: 500, width: 320, height: 200 },
+      pageZoomFactor: 0.25,
+    });
     const floating = await manager.getAutomationRuntime({ threadId: THREAD_ID, tabId });
-    manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds: { x: 600, y: 50, width: 700, height: 700 }, pageZoomFactor: 1 });
+    manager.setPanelBounds({
+      threadId: THREAD_ID,
+      surface: "native",
+      bounds: { x: 600, y: 50, width: 700, height: 700 },
+      pageZoomFactor: 1,
+    });
     expect(floating.webContents).toBe(before.webContents);
     expect(contents.loadURL).toHaveBeenCalledTimes(loads);
     expect(contents.close).not.toHaveBeenCalled();
@@ -1067,8 +1145,19 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     access.configureRuntimeWebContents(runtime);
     const visible = manager.getVisibleAutomationRuntime({ threadId: THREAD_ID, tabId });
 
-    const release = visible.expectAgentInput?.({kind: "mouse", type: "mouseDown", button: "left", x: 320, y: 48});
-    await visible.webContents.debugger.sendCommand("Input.dispatchMouseEvent", {type: "mousePressed", button: "left", x: 320, y: 48});
+    const release = visible.expectAgentInput?.({
+      kind: "mouse",
+      type: "mouseDown",
+      button: "left",
+      x: 320,
+      y: 48,
+    });
+    await visible.webContents.debugger.sendCommand("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      button: "left",
+      x: 320,
+      y: 48,
+    });
     release?.();
     await new Promise((resolve) => setImmediate(resolve));
 
@@ -1246,110 +1335,133 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     expect(manager.getAutomationHumanControlEpoch(THREAD_ID)).toBe(1);
   });
 
-  it.each(["script", "opener", "before-publish"])("embeds an OAuth popup and handles %s closure", async (closure) => {
-    const manager = new DesktopBrowserManager();
-    const prepared = manager.prepareAutomationTab({ threadId: THREAD_ID, reuse: true });
-    const sourceTabId = prepared.activeTabId!;
-    const webContents = new FakeWebContents();
-    const runtime = {
-      key: `${THREAD_ID}:${sourceTabId}`,
-      threadId: THREAD_ID,
-      tabId: sourceTabId,
-      webContents: webContents as unknown as WebContents,
-      view: null,
-      ownsWebContents: false as const,
-      listenerDisposers: [] as Array<() => void>,
-    };
-    const access = manager as unknown as {
-      runtimes: Map<string, typeof runtime>;
-      configureRuntimeWebContents(value: typeof runtime): void;
-    };
-    access.runtimes.set(runtime.key, runtime);
-    access.configureRuntimeWebContents(runtime);
-    const observed = vi.fn();
-    const release = manager.trackAutomationWindowOpen(
-      { threadId: THREAD_ID, tabId: sourceTabId },
-      observed,
-    );
+  it.each(["script", "opener", "before-publish"])(
+    "embeds an OAuth popup and handles %s closure",
+    async (closure) => {
+      const manager = new DesktopBrowserManager();
+      const prepared = manager.prepareAutomationTab({ threadId: THREAD_ID, reuse: true });
+      const sourceTabId = prepared.activeTabId!;
+      const webContents = new FakeWebContents();
+      const runtime = {
+        key: `${THREAD_ID}:${sourceTabId}`,
+        threadId: THREAD_ID,
+        tabId: sourceTabId,
+        webContents: webContents as unknown as WebContents,
+        view: null,
+        ownsWebContents: false as const,
+        listenerDisposers: [] as Array<() => void>,
+      };
+      const access = manager as unknown as {
+        runtimes: Map<string, typeof runtime>;
+        configureRuntimeWebContents(value: typeof runtime): void;
+      };
+      access.runtimes.set(runtime.key, runtime);
+      access.configureRuntimeWebContents(runtime);
+      const observed = vi.fn();
+      const release = manager.trackAutomationWindowOpen(
+        { threadId: THREAD_ID, tabId: sourceTabId },
+        observed,
+      );
 
-    const response = webContents.windowOpenHandler?.({
+      const response = webContents.windowOpenHandler?.({
         url: "https://accounts.google.com/o/oauth2/auth",
         frameName: "_blank",
         features: "width=480,height=640",
         disposition: "foreground-tab",
       });
-    expect(response).toMatchObject({ action: "allow", createWindow: expect.any(Function) });
-    expect(observed).toHaveBeenCalledOnce();
-    expect(observed).toHaveBeenCalledWith({
-      threadId: THREAD_ID,
-      sourceTabId,
-      kind: "popup",
-      openedTabId: null,
-    });
-    expect(manager.getState({ threadId: THREAD_ID }).tabs).toHaveLength(1);
-    expect(manager.getState({ threadId: THREAD_ID }).activeTabId).toBe(sourceTabId);
+      expect(response).toMatchObject({ action: "allow", createWindow: expect.any(Function) });
+      expect(observed).toHaveBeenCalledOnce();
+      expect(observed).toHaveBeenCalledWith({
+        threadId: THREAD_ID,
+        sourceTabId,
+        kind: "popup",
+        openedTabId: null,
+      });
+      expect(manager.getState({ threadId: THREAD_ID }).tabs).toHaveLength(1);
+      expect(manager.getState({ threadId: THREAD_ID }).activeTabId).toBe(sourceTabId);
 
-    const child = new FakeWebContents(120);
-    const view = { webContents: child, setBounds: vi.fn(), setVisible: vi.fn(), setBorderRadius: vi.fn() };
-    webContentsViewConstructor.mockReturnValueOnce(view);
-    const preferences = { contextIsolation: true, sandbox: true, nodeIntegration: false };
-    expect(response!.createWindow!({ webContents: child as unknown as WebContents, webPreferences: preferences }))
-      .toBe(child);
-    expect(webContentsViewConstructor).toHaveBeenLastCalledWith(expect.objectContaining({
-      webContents: child, webPreferences: expect.objectContaining(preferences),
-    }));
-    expect(manager.getState({ threadId: THREAD_ID }).activeTabId).toBe(sourceTabId);
-    if (closure === "before-publish") {
-      manager.closeAutomationTab({ threadId: THREAD_ID, tabId: sourceTabId });
+      const child = new FakeWebContents(120);
+      const view = {
+        webContents: child,
+        setBounds: vi.fn(),
+        setVisible: vi.fn(),
+        setBorderRadius: vi.fn(),
+      };
+      webContentsViewConstructor.mockReturnValueOnce(view);
+      const preferences = { contextIsolation: true, sandbox: true, nodeIntegration: false };
+      const popupOptions = {
+        webContents: child as unknown as WebContents,
+        webPreferences: preferences,
+      };
+      expect(response!.createWindow!(popupOptions)).toBe(child);
+      expect(webContentsViewConstructor).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          webContents: child,
+          webPreferences: expect.objectContaining(preferences),
+        }),
+      );
+      expect(manager.getState({ threadId: THREAD_ID }).activeTabId).toBe(sourceTabId);
+      if (closure === "before-publish") {
+        manager.closeAutomationTab({ threadId: THREAD_ID, tabId: sourceTabId });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(manager.getState({ threadId: THREAD_ID }).tabs).toHaveLength(0);
+        expect(child.close).toHaveBeenCalledOnce();
+        release();
+        manager.dispose();
+        return;
+      }
       await new Promise<void>((resolve) => setImmediate(resolve));
-      expect(manager.getState({ threadId: THREAD_ID }).tabs).toHaveLength(0);
-      expect(child.close).toHaveBeenCalledOnce();
-      release();
-      manager.dispose();
-      return;
-    }
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    const popupState = manager.getState({ threadId: THREAD_ID });
-    expect(popupState.tabs).toHaveLength(2);
-    expect(popupState.tabs.find(tab => tab.id === popupState.activeTabId))
-      .toMatchObject({ openerTabId: sourceTabId, runtimeSurface: "native", status: "live" });
-    expect(child.loadURL).not.toHaveBeenCalled();
-    expect(child.windowOpenHandler).toBeTypeOf("function");
-    expect(child.windowOpenHandler?.({ url: "file:///private/fixture", frameName: "", features: "", disposition: "new-window" }))
-      .toEqual({ action: "deny" });
+      const popupState = manager.getState({ threadId: THREAD_ID });
+      expect(popupState.tabs).toHaveLength(2);
+      expect(popupState.tabs.find((tab) => tab.id === popupState.activeTabId)).toMatchObject({
+        openerTabId: sourceTabId,
+        runtimeSurface: "native",
+        status: "live",
+      });
+      expect(child.loadURL).not.toHaveBeenCalled();
+      expect(child.windowOpenHandler).toBeTypeOf("function");
+      expect(
+        child.windowOpenHandler?.({
+          url: "file:///private/fixture",
+          frameName: "",
+          features: "",
+          disposition: "new-window",
+        }),
+      ).toEqual({ action: "deny" });
 
-    vi.useFakeTimers();
-    try {
-      manager.hide({ threadId: THREAD_ID });
-      await vi.advanceTimersByTimeAsync(60_001);
-      expect(child.close).not.toHaveBeenCalled();
+      vi.useFakeTimers();
+      try {
+        manager.hide({ threadId: THREAD_ID });
+        await vi.advanceTimersByTimeAsync(60_001);
+        expect(child.close).not.toHaveBeenCalled();
+        expect(webContents.close).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+
+      if (closure === "opener") {
+        manager.closeAutomationTab({ threadId: THREAD_ID, tabId: sourceTabId });
+        expect(manager.getState({ threadId: THREAD_ID }).tabs).toHaveLength(0);
+        expect(child.close).toHaveBeenCalledOnce();
+        release();
+        manager.dispose();
+        return;
+      }
+
+      const humanEpoch = manager.getAutomationHumanControlEpoch(THREAD_ID);
+      const closeEvent = { preventDefault: vi.fn() };
+      child.emit("close", closeEvent);
+      expect(closeEvent.preventDefault).toHaveBeenCalledOnce();
+      expect(manager.getState({ threadId: THREAD_ID }).tabs).toHaveLength(1);
+      expect(manager.getState({ threadId: THREAD_ID }).activeTabId).toBe(sourceTabId);
+      expect(child.close).toHaveBeenCalledOnce();
       expect(webContents.close).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
+      expect(manager.getAutomationHumanControlEpoch(THREAD_ID)).toBe(humanEpoch);
 
-    if (closure === "opener") {
-      manager.closeAutomationTab({ threadId: THREAD_ID, tabId: sourceTabId });
-      expect(manager.getState({ threadId: THREAD_ID }).tabs).toHaveLength(0);
-      expect(child.close).toHaveBeenCalledOnce();
       release();
       manager.dispose();
-      return;
-    }
-
-    const humanEpoch = manager.getAutomationHumanControlEpoch(THREAD_ID);
-    const closeEvent = { preventDefault: vi.fn() };
-    child.emit("close", closeEvent);
-    expect(closeEvent.preventDefault).toHaveBeenCalledOnce();
-    expect(manager.getState({ threadId: THREAD_ID }).tabs).toHaveLength(1);
-    expect(manager.getState({ threadId: THREAD_ID }).activeTabId).toBe(sourceTabId);
-    expect(child.close).toHaveBeenCalledOnce();
-    expect(webContents.close).not.toHaveBeenCalled();
-    expect(manager.getAutomationHumanControlEpoch(THREAD_ID)).toBe(humanEpoch);
-
-    release();
-    manager.dispose();
-  });
+    },
+  );
 
   it("cancels a deferred window-open when its source tab or manager is torn down", async () => {
     for (const teardown of ["tab", "manager"] as const) {

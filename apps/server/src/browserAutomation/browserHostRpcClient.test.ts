@@ -202,8 +202,8 @@ describe("browser host RPC client", () => {
           sessionKey: "gateway-session:cancelled",
           provider: "codex",
           threadId: "thread-cancelled" as never,
-          name: "browser_wait",
-          arguments: {},
+          name: "browser_run",
+          arguments: { code: "return page.waitForLoadState()" },
           timeoutMs: 30_000,
           signal: controller.signal,
         });

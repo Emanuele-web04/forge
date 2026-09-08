@@ -1,5 +1,14 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { constants, existsSync, mkdirSync, openSync, closeSync, fsyncSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  constants,
+  existsSync,
+  mkdirSync,
+  openSync,
+  closeSync,
+  fsyncSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { open, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Schema } from "effect";
@@ -8,8 +17,13 @@ import { VaultKeyProtection, type VaultKeyStore } from "./vaultKeyProtection";
 const Text = Schema.String.check(Schema.isMaxLength(16_384));
 const PartitionKey = Schema.Struct({ topLevelSite: Text, hasCrossSiteAncestor: Schema.Boolean });
 const Cookie = Schema.Struct({
-  name: Text, value: Text, domain: Text, path: Text,
-  secure: Schema.Boolean, httpOnly: Schema.Boolean, session: Schema.Boolean,
+  name: Text,
+  value: Text,
+  domain: Text,
+  path: Text,
+  secure: Schema.Boolean,
+  httpOnly: Schema.Boolean,
+  session: Schema.Boolean,
   sameSite: Schema.optional(Schema.Literals(["Strict", "Lax", "None"])),
   priority: Schema.Literals(["Low", "Medium", "High"]),
   sourceScheme: Schema.Literals(["Unset", "NonSecure", "Secure"]),
@@ -33,24 +47,38 @@ export interface CookieSessionBackend {
   dispose(): void;
 }
 
-function domainName(domain: string): string { return domain.replace(/^\./, ""); }
+function domainName(domain: string): string {
+  return domain.replace(/^\./, "");
+}
 
 export function sessionCookieParameters(cookie: Cookie): Record<string, unknown> | null {
   if (!cookie.session || cookie.partitionKeyOpaque || !cookie.path.startsWith("/")) return null;
   const host = domainName(cookie.domain);
-  const url = new URL(`${cookie.secure || cookie.sourceScheme === "Secure" ? "https" : "http"}://${host}/`);
+  const url = new URL(
+    `${cookie.secure || cookie.sourceScheme === "Secure" ? "https" : "http"}://${host}/`,
+  );
   if (url.hostname !== host || url.username || url.password || url.port) return null;
   if (cookie.partitionKey) {
     const top = new URL(cookie.partitionKey.topLevelSite);
-    if (!["http:", "https:"].includes(top.protocol) || top.origin !== cookie.partitionKey.topLevelSite) return null;
+    if (
+      !["http:", "https:"].includes(top.protocol) ||
+      top.origin !== cookie.partitionKey.topLevelSite
+    )
+      return null;
   }
   // URL-only preserves host-only cookies; domain cookies retain their leading dot.
   return {
-    name: cookie.name, value: cookie.value, url: url.href,
+    name: cookie.name,
+    value: cookie.value,
+    url: url.href,
     ...(cookie.domain.startsWith(".") ? { domain: cookie.domain } : {}),
-    path: cookie.path, secure: cookie.secure, httpOnly: cookie.httpOnly,
+    path: cookie.path,
+    secure: cookie.secure,
+    httpOnly: cookie.httpOnly,
     ...(cookie.sameSite ? { sameSite: cookie.sameSite } : {}),
-    priority: cookie.priority, sourceScheme: cookie.sourceScheme, sourcePort: cookie.sourcePort,
+    priority: cookie.priority,
+    sourceScheme: cookie.sourceScheme,
+    sourcePort: cookie.sourcePort,
     ...(cookie.partitionKey ? { partitionKey: cookie.partitionKey } : {}),
   };
 }
@@ -66,7 +94,11 @@ export class BrowserSessionRestore {
   private available = false;
   private writing: Promise<void> = Promise.resolve();
 
-  constructor(private readonly directory: string, private readonly backend: CookieSessionBackend, store: VaultKeyStore) {
+  constructor(
+    private readonly directory: string,
+    private readonly backend: CookieSessionBackend,
+    store: VaultKeyStore,
+  ) {
     this.keys = new VaultKeyProtection(directory, store);
     this.dirtyPath = join(directory, "active-run");
     this.snapshotPath = join(directory, "sessions.enc");
@@ -75,11 +107,24 @@ export class BrowserSessionRestore {
   private syncDirectory(): void {
     if (process.platform === "win32") return;
     const fd = openSync(this.directory, "r");
-    try { fsyncSync(fd); } finally { closeSync(fd); }
+    try {
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
   }
 
   private invalidate(): void {
-    writeFileSync(this.dirtyPath, "1", { mode: 0o600, flag: constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0), flush: true });
+    const fd = openSync(
+      this.dirtyPath,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0),
+      0o600,
+    );
+    try {
+      writeFileSync(fd, "1", { flush: true });
+    } finally {
+      closeSync(fd);
+    }
     this.syncDirectory();
     this.clean = false;
   }
@@ -100,14 +145,16 @@ export class BrowserSessionRestore {
       return;
     }
     let file;
-    try { file = await open(this.snapshotPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)); }
-    catch (error) {
+    try {
+      file = await open(this.snapshotPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    } catch (error) {
       if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return;
       throw new Error("Browser session restoration is unavailable.");
     }
     try {
       const stat = await file.stat();
-      if (!stat.isFile() || stat.size > MAX_BYTES || stat.size < 28) throw new Error("Invalid session snapshot.");
+      if (!stat.isFile() || stat.size > MAX_BYTES || stat.size < 28)
+        throw new Error("Invalid session snapshot.");
       const buffer = Buffer.alloc(MAX_BYTES + 1);
       const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
       if (bytesRead > MAX_BYTES) throw new Error("Invalid session snapshot.");
@@ -122,36 +169,53 @@ export class BrowserSessionRestore {
         const snapshot = Schema.decodeUnknownSync(Snapshot)(JSON.parse(plaintext.toString("utf8")));
         this.domains = new Set(snapshot.domains);
         const cookies = snapshot.cookies.map(sessionCookieParameters);
-        if (cookies.some((cookie) => cookie === null)) throw new Error("Unsupported session snapshot.");
+        if (cookies.some((cookie) => cookie === null))
+          throw new Error("Unsupported session snapshot.");
         await this.backend.restore(cookies as Record<string, unknown>[]);
-      } finally { dataKey.fill(0); plaintext?.fill(0); }
+      } finally {
+        dataKey.fill(0);
+        plaintext?.fill(0);
+      }
     } catch {
       this.domains.clear();
       await unlink(this.snapshotPath).catch(() => {});
       throw new Error("Browser session restoration is unavailable.");
-    } finally { await file.close(); }
+    } finally {
+      await file.close();
+    }
   }
 
   async rememberImport(domains: readonly string[]): Promise<void> {
     if (!this.available) throw new Error("Secure browser session storage is unavailable.");
     let raw: unknown[];
-    try { raw = await this.backend.read(); }
-    catch { throw new Error("Browser session metadata could not be read."); }
+    try {
+      raw = await this.backend.read();
+    } catch {
+      throw new Error("Browser session metadata could not be read.");
+    }
     let cookies: readonly Cookie[];
-    try { cookies = Schema.decodeUnknownSync(Schema.Array(Cookie))(raw); }
-    catch { throw new Error("Browser session metadata is unsupported."); }
+    try {
+      cookies = Schema.decodeUnknownSync(Schema.Array(Cookie))(raw);
+    } catch {
+      throw new Error("Browser session metadata is unsupported.");
+    }
     const imported = new Set(domains.map(domainName));
-    for (const cookie of cookies) if (imported.has(domainName(cookie.domain))) this.domains.add(cookie.domain);
+    for (const cookie of cookies)
+      if (imported.has(domainName(cookie.domain))) this.domains.add(cookie.domain);
     await this.save();
   }
 
   private save(): Promise<void> {
     const operation = this.writing.then(async () => {
-      const cookies = Schema.decodeUnknownSync(Schema.Array(Cookie))(await this.backend.read())
-        .filter((cookie) => cookie.session && this.domains.has(cookie.domain));
+      const cookies = Schema.decodeUnknownSync(Schema.Array(Cookie))(
+        await this.backend.read(),
+      ).filter((cookie) => cookie.session && this.domains.has(cookie.domain));
       // Refuse to claim continuity if isolation metadata cannot be replayed.
-      if (cookies.some((cookie) => sessionCookieParameters(cookie) === null)) throw new Error("Unsupported session cookie metadata.");
-      const plaintext = Buffer.from(JSON.stringify({ version: 1, domains: [...this.domains], cookies }));
+      if (cookies.some((cookie) => sessionCookieParameters(cookie) === null))
+        throw new Error("Unsupported session cookie metadata.");
+      const plaintext = Buffer.from(
+        JSON.stringify({ version: 1, domains: [...this.domains], cookies }),
+      );
       if (plaintext.length > MAX_BYTES - 28) throw new Error("Session snapshot is too large.");
       const key = await this.keys.provide();
       const temporary = join(this.directory, `sessions-${randomBytes(16).toString("hex")}.tmp`);
@@ -160,12 +224,22 @@ export class BrowserSessionRestore {
         const cipher = createCipheriv("aes-256-gcm", key, iv);
         cipher.setAAD(AAD);
         const data = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-        await writeFile(temporary, Buffer.concat([iv, cipher.getAuthTag(), data]), { mode: 0o600, flag: "wx", flush: true });
+        await writeFile(temporary, Buffer.concat([iv, cipher.getAuthTag(), data]), {
+          mode: 0o600,
+          flag: "wx",
+          flush: true,
+        });
         await rename(temporary, this.snapshotPath);
         this.syncDirectory();
-      } finally { key.fill(0); plaintext.fill(0); await unlink(temporary).catch(() => {}); }
+      } finally {
+        key.fill(0);
+        plaintext.fill(0);
+        await unlink(temporary).catch(() => {});
+      }
     });
-    const safeOperation = operation.catch(() => { throw new Error("Secure browser session persistence failed."); });
+    const safeOperation = operation.catch(() => {
+      throw new Error("Secure browser session persistence failed.");
+    });
     this.writing = safeOperation.catch(() => {});
     return safeOperation;
   }
@@ -179,6 +253,9 @@ export class BrowserSessionRestore {
       this.clean = true;
       unlinkSync(this.dirtyPath);
       this.syncDirectory();
-    } finally { this.keys.dispose(); this.backend.dispose(); }
+    } finally {
+      this.keys.dispose();
+      this.backend.dispose();
+    }
   }
 }

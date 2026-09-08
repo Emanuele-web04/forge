@@ -28,7 +28,10 @@ export function registerSafariAccessIpc(ipcMain: IpcMain, options: SafariAccessO
   const handle = (channel: string, action: () => unknown) => {
     ipcMain.removeHandler(channel);
     ipcMain.handle(channel, async (event: IpcMainInvokeEvent) => {
-      if (!options.isTrustedRenderer(event.sender.id) || event.senderFrame !== event.sender.mainFrame) {
+      if (
+        !options.isTrustedRenderer(event.sender.id) ||
+        event.senderFrame !== event.sender.mainFrame
+      ) {
         throw new Error("Safari setup access denied.");
       }
       return action();
@@ -38,9 +41,10 @@ export function registerSafariAccessIpc(ipcMain: IpcMain, options: SafariAccessO
   handle(DESKTOP_IPC_CHANNELS.safariAccess.getInfo, () => info);
   handle(DESKTOP_IPC_CHANNELS.safariAccess.openSettings, async () => {
     if (!info.supported) return false;
-    const pane = Number.parseInt(options.systemVersion, 10) >= 13
-      ? "com.apple.settings.PrivacySecurity.extension"
-      : "com.apple.preference.security";
+    const pane =
+      Number.parseInt(options.systemVersion, 10) >= 13
+        ? "com.apple.settings.PrivacySecurity.extension"
+        : "com.apple.preference.security";
     try {
       // A successful URL open says nothing about the app's TCC authorization.
       await options.openExternal(`x-apple.systempreferences:${pane}?Privacy_AllFiles`);

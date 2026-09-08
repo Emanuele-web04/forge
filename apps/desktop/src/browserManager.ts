@@ -404,6 +404,10 @@ function browserAutomationInputMatches(
   );
 }
 
+type EmbeddedPopupOptions = Electron.BrowserWindowConstructorOptions & {
+  webContents?: WebContents;
+};
+
 export class DesktopBrowserManager {
   private window: BrowserWindow | null = null;
   private activeThreadId: ThreadId | null = null;
@@ -776,7 +780,7 @@ export class DesktopBrowserManager {
 
   private createEmbeddedPopup(
     opener: OAuthPopupContext,
-    options: Electron.BrowserWindowConstructorOptions,
+    options: EmbeddedPopupOptions,
     url: string,
   ): WebContents {
     const state = this.ensureWorkspace(opener.threadId);
@@ -793,8 +797,9 @@ export class DesktopBrowserManager {
       event.preventDefault();
       this.closeEmbeddedPopup(runtime);
     };
-    runtime.webContents.on("close", close);
-    runtime.listenerDisposers.push(() => runtime.webContents.removeListener("close", close));
+    const popupEvents: NodeJS.EventEmitter = runtime.webContents;
+    popupEvents.on("close", close);
+    runtime.listenerDisposers.push(() => popupEvents.removeListener("close", close));
 
     // Never publish a tab transition synchronously inside Electron's window-open
     // callback; a renderer-owned opener must survive until the callback returns.
@@ -817,22 +822,26 @@ export class DesktopBrowserManager {
     if (this.runtimes.get(runtime.key) !== runtime) return;
     const state = this.states.get(runtime.threadId);
     if (!state?.tabs.some((tab) => tab.id === runtime.tabId)) return;
-    if (state.activeTabId === runtime.tabId &&
-        state.tabs.some((tab) => tab.id === runtime.popupOpenerTabId)) {
+    if (
+      state.activeTabId === runtime.tabId &&
+      state.tabs.some((tab) => tab.id === runtime.popupOpenerTabId)
+    ) {
       state.activeTabId = runtime.popupOpenerTabId!;
     }
     this.closeAutomationTab({ threadId: runtime.threadId, tabId: runtime.tabId });
   }
 
   private hasEmbeddedPopup(threadId: ThreadId, tabId: string): boolean {
-    return [...this.runtimes.values()].some((runtime) =>
-      runtime.threadId === threadId && runtime.popupOpenerTabId === tabId,
+    return [...this.runtimes.values()].some(
+      (runtime) => runtime.threadId === threadId && runtime.popupOpenerTabId === tabId,
     );
   }
 
   private isEmbeddedPopupFamily(threadId: ThreadId, tabId: string): boolean {
-    return Boolean(this.runtimes.get(buildRuntimeKey(threadId, tabId))?.popupOpenerTabId) ||
-      this.hasEmbeddedPopup(threadId, tabId);
+    return (
+      Boolean(this.runtimes.get(buildRuntimeKey(threadId, tabId))?.popupOpenerTabId) ||
+      this.hasEmbeddedPopup(threadId, tabId)
+    );
   }
 
   private findRuntimeContext(webContents: WebContents): OAuthPopupContext | null {
@@ -997,7 +1006,8 @@ export class DesktopBrowserManager {
     const openedRuntimeKey = buildRuntimeKey(pending.threadId, pending.tab.id);
     this.automationRuntimeKeys.add(openedRuntimeKey);
     const provenance = this.automationSideEffectProvenanceByRuntimeKey.get(key);
-    if (provenance) this.automationSideEffectProvenanceByRuntimeKey.set(openedRuntimeKey, { ...provenance });
+    if (provenance)
+      this.automationSideEffectProvenanceByRuntimeKey.set(openedRuntimeKey, { ...provenance });
     syncThreadLastError(state);
     this.markThreadStateChanged(pending.threadId);
     // The host can now reconcile openedTabId from canonical state, but the
@@ -1029,7 +1039,8 @@ export class DesktopBrowserManager {
       const bounds = pending.reattachActiveTab ? this.getVisibleBoundsForThread(threadId) : null;
       if (pending.reattachActiveTab && this.activeThreadId === threadId && bounds) {
         const initialTabId = pending.initialNavigationTabId;
-        const needsInitialNavigation = initialTabId !== undefined &&
+        const needsInitialNavigation =
+          initialTabId !== undefined &&
           this.states.get(threadId)?.activeTabId === initialTabId &&
           !this.runtimes.get(buildRuntimeKey(threadId, initialTabId))?.webContents.getURL();
         this.attachActiveTab(threadId, bounds, { forceLoad: needsInitialNavigation });
@@ -2136,11 +2147,25 @@ export class DesktopBrowserManager {
   async capturePreview(input: BrowserTabInput): Promise<string | null> {
     const state = this.states.get(input.threadId);
     const runtime = this.runtimes.get(buildRuntimeKey(input.threadId, input.tabId));
-    if (!this.previewThreadIds.has(input.threadId) || !state?.open ||
-        state.activeTabId !== input.tabId || !runtime || runtime.webContents.isDestroyed()) return null;
-    const image = await runtime.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true }).catch(() => null);
-    if (this.runtimes.get(runtime.key) !== runtime || !this.previewThreadIds.has(input.threadId) ||
-        state.activeTabId !== input.tabId || !image || image.isEmpty()) return null;
+    if (
+      !this.previewThreadIds.has(input.threadId) ||
+      !state?.open ||
+      state.activeTabId !== input.tabId ||
+      !runtime ||
+      runtime.webContents.isDestroyed()
+    )
+      return null;
+    const image = await runtime.webContents
+      .capturePage(undefined, { stayHidden: true, stayAwake: true })
+      .catch(() => null);
+    if (
+      this.runtimes.get(runtime.key) !== runtime ||
+      !this.previewThreadIds.has(input.threadId) ||
+      state.activeTabId !== input.tabId ||
+      !image ||
+      image.isEmpty()
+    )
+      return null;
     const thumbnail = image.getSize().width > 640 ? image.resize({ width: 640 }) : image;
     return `data:image/jpeg;base64,${thumbnail.toJPEG(70).toString("base64")}`;
   }
@@ -2801,7 +2826,7 @@ export class DesktopBrowserManager {
   private createLiveRuntime(
     threadId: ThreadId,
     tabId: string,
-    popupOptions?: Electron.BrowserWindowConstructorOptions,
+    popupOptions?: EmbeddedPopupOptions,
   ): LiveTabRuntime {
     const view = new WebContentsView({
       ...(popupOptions?.webContents ? { webContents: popupOptions.webContents } : {}),

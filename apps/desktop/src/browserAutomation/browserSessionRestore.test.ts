@@ -3,11 +3,31 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { BrowserSessionRestore, sessionCookieParameters, type CookieSessionBackend } from "./browserSessionRestore";
+import {
+  BrowserSessionRestore,
+  sessionCookieParameters,
+  type CookieSessionBackend,
+} from "./browserSessionRestore";
 
 const homes: string[] = [];
-const store = { available: async () => true, encrypt: (value: string) => Buffer.from(value), decrypt: (value: Buffer) => value.toString() };
-const cookie = { name: "fixture", value: "synthetic-session-secret", domain: "example.test", path: "/", secure: true, httpOnly: true, session: true, sameSite: "Strict" as const, priority: "High" as const, sourceScheme: "Secure" as const, sourcePort: 443 };
+const store = {
+  available: async () => true,
+  encrypt: (value: string) => Buffer.from(value),
+  decrypt: (value: Buffer) => value.toString(),
+};
+const cookie = {
+  name: "fixture",
+  value: "synthetic-session-secret",
+  domain: "example.test",
+  path: "/",
+  secure: true,
+  httpOnly: true,
+  session: true,
+  sameSite: "Strict" as const,
+  priority: "High" as const,
+  sourceScheme: "Secure" as const,
+  sourcePort: 443,
+};
 
 function backend(initial: unknown[] = [cookie]) {
   let cookies = initial;
@@ -15,9 +35,14 @@ function backend(initial: unknown[] = [cookie]) {
   const api = {
     read: vi.fn(async () => cookies),
     restore: vi.fn(async (_cookies: Record<string, unknown>[]) => {}),
-    onChange: (listener: () => void) => { change = listener; },
+    onChange: (listener: () => void) => {
+      change = listener;
+    },
     dispose: vi.fn(),
-    change(next: unknown[]) { cookies = next; change(); },
+    change(next: unknown[]) {
+      cookies = next;
+      change();
+    },
   } satisfies CookieSessionBackend & { change(next: unknown[]): void };
   return api;
 }
@@ -27,7 +52,9 @@ async function home() {
   homes.push(path);
   return path;
 }
-afterEach(async () => { await Promise.all(homes.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
+afterEach(async () => {
+  await Promise.all(homes.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+});
 
 describe("imported browser session restoration", () => {
   it("restores encrypted session cookies after clean shutdown without fabricating expiry", async () => {
@@ -35,13 +62,24 @@ describe("imported browser session restoration", () => {
     const first = new BrowserSessionRestore(directory, backend(), store);
     await first.initialize();
     await first.rememberImport(["example.test"]);
-    expect((await readFile(join(directory, "sessions.enc"))).includes(Buffer.from(cookie.value))).toBe(false);
+    expect(
+      (await readFile(join(directory, "sessions.enc"))).includes(Buffer.from(cookie.value)),
+    ).toBe(false);
     expect((await stat(join(directory, "sessions.enc"))).mode & 0o777).toBe(0o600);
     await first.shutdown();
     const next = backend([]);
     const second = new BrowserSessionRestore(directory, next, store);
     await second.initialize();
-    expect(next.restore).toHaveBeenCalledWith([expect.objectContaining({ name: cookie.name, value: cookie.value, url: "https://example.test/", secure: true, httpOnly: true, sameSite: "Strict" })]);
+    expect(next.restore).toHaveBeenCalledWith([
+      expect.objectContaining({
+        name: cookie.name,
+        value: cookie.value,
+        url: "https://example.test/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Strict",
+      }),
+    ]);
     expect(next.restore.mock.calls[0]![0][0]).not.toHaveProperty("expires");
     expect(next.restore.mock.calls[0]![0][0]).not.toHaveProperty("domain");
     await second.shutdown();
@@ -79,7 +117,11 @@ describe("imported browser session restoration", () => {
 
   it("stores only imported domains and leaves persistent-cookie expiry to Chromium", async () => {
     const directory = await home();
-    const source = backend([cookie, { ...cookie, name: "persistent", session: false }, { ...cookie, domain: "unrelated.test" }]);
+    const source = backend([
+      cookie,
+      { ...cookie, name: "persistent", session: false },
+      { ...cookie, domain: "unrelated.test" },
+    ]);
     const first = new BrowserSessionRestore(directory, source, store);
     await first.initialize();
     await first.rememberImport(["example.test"]);
@@ -108,7 +150,9 @@ describe("imported browser session restoration", () => {
 
   it("preserves partition keys and domain-cookie scope", () => {
     const partitionKey = { topLevelSite: "https://parent.test", hasCrossSiteAncestor: true };
-    expect(sessionCookieParameters({ ...cookie, domain: ".example.test", partitionKey })).toMatchObject({ domain: ".example.test", partitionKey });
+    expect(
+      sessionCookieParameters({ ...cookie, domain: ".example.test", partitionKey }),
+    ).toMatchObject({ domain: ".example.test", partitionKey });
     expect(sessionCookieParameters({ ...cookie, partitionKeyOpaque: true })).toBeNull();
   });
 
@@ -118,7 +162,10 @@ describe("imported browser session restoration", () => {
     const first = new BrowserSessionRestore(directory, source, store);
     await first.initialize();
     await first.rememberImport(["example.test"]);
-    source.read.mockImplementationOnce(async () => { source.change([]); return [cookie]; });
+    source.read.mockImplementationOnce(async () => {
+      source.change([]);
+      return [cookie];
+    });
     await expect(first.shutdown()).rejects.toThrow();
     expect(existsSync(join(directory, "active-run"))).toBe(true);
   });
@@ -142,7 +189,7 @@ describe("imported browser session restoration", () => {
     await first.shutdown();
     const path = join(directory, "sessions.enc");
     const data = await readFile(path);
-    data[data.length - 1] ^= 1;
+    data[data.length - 1] = data[data.length - 1]! ^ 1;
     await writeFile(path, data);
     const next = backend([]);
     const second = new BrowserSessionRestore(directory, next, store);
@@ -152,9 +199,14 @@ describe("imported browser session restoration", () => {
   });
 
   it("does not claim persistence when secure OS key storage is unavailable", async () => {
-    const first = new BrowserSessionRestore(await home(), backend(), { ...store, available: async () => false });
+    const first = new BrowserSessionRestore(await home(), backend(), {
+      ...store,
+      available: async () => false,
+    });
     await expect(first.initialize()).rejects.toThrow();
-    await expect(first.rememberImport(["example.test"])).rejects.toThrow("Secure browser session storage is unavailable");
+    await expect(first.rememberImport(["example.test"])).rejects.toThrow(
+      "Secure browser session storage is unavailable",
+    );
     await first.shutdown();
   });
 

@@ -1,8 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { BrowserVaultSettings, type BrowserVaultSavePrompt, type BrowserVaultSnapshot } from "@synara/contracts";
-import { createLocalCredentialVault, type CredentialVault, type LocalCredentialVault } from "betterwright";
+import {
+  BrowserAutomationErrorMessages,
+  BrowserVaultSettings,
+  type BrowserVaultSavePrompt,
+  type BrowserVaultSnapshot,
+} from "@synara/contracts";
+import {
+  createLocalCredentialVault,
+  type CredentialVault,
+  type LocalCredentialVault,
+} from "betterwright";
 import { Schema } from "effect";
 import { VaultKeyProtection, type VaultKeyStore } from "./vaultKeyProtection";
 
@@ -14,9 +23,10 @@ const Preferences = Schema.Struct({
 type Source = typeof Source.Type;
 type Payload = Parameters<LocalCredentialVault["handleRequest"]>[1];
 type Action = Parameters<LocalCredentialVault["handleRequest"]>[0];
-interface PageOrigin { getURL(): string; isDestroyed(): boolean }
-
-const ACTIONS: readonly Action[] = ["list", "list-pending", "save", "update", "remove", "fill", "generate", "commit", "discard"];
+interface PageOrigin {
+  getURL(): string;
+  isDestroyed(): boolean;
+}
 
 /** Owner metadata stays in desktop IPC; only the scoped adapter reaches a worker. */
 export class BrowserVault {
@@ -26,11 +36,17 @@ export class BrowserVault {
   private settings: BrowserVaultSettings = { agentUse: true, offerSave: false, autosave: false };
   private readonly sources = new Map<string, Source>();
   private readonly listeners = new Set<() => void>();
-  private readonly pending = new Map<string, { prompt: BrowserVaultSavePrompt; resolve(choice: "save" | "dismiss"): void }>();
+  private readonly pending = new Map<
+    string,
+    { prompt: BrowserVaultSavePrompt; resolve(choice: "save" | "dismiss"): void }
+  >();
   private writing = Promise.resolve();
   private captureError: string | null = null;
 
-  constructor(private readonly home: string, keyStore?: VaultKeyStore) {
+  constructor(
+    private readonly home: string,
+    keyStore?: VaultKeyStore,
+  ) {
     this.keys = new VaultKeyProtection(join(home, "vault"), keyStore);
     this.vault = createLocalCredentialVault({ home, keyProvider: () => this.keys.provide() });
     this.ready = this.load();
@@ -38,8 +54,9 @@ export class BrowserVault {
 
   private async load(): Promise<void> {
     let text: string;
-    try { text = await readFile(join(this.home, "preferences.json"), "utf8"); }
-    catch (error) {
+    try {
+      text = await readFile(join(this.home, "preferences.json"), "utf8");
+    } catch (error) {
       if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return;
       throw new Error("Browser vault settings could not be read.");
     }
@@ -50,14 +67,19 @@ export class BrowserVault {
 
   private persist(settings?: BrowserVaultSettings): Promise<void> {
     const write = async () => {
-      const text = JSON.stringify({ settings: settings ?? this.settings, sources: [...this.sources].map(([id, source]) => ({ id, source })) });
+      const text = JSON.stringify({
+        settings: settings ?? this.settings,
+        sources: [...this.sources].map(([id, source]) => ({ id, source })),
+      });
       await mkdir(this.home, { recursive: true, mode: 0o700 });
       const temporary = join(this.home, `preferences-${randomUUID()}.tmp`);
       try {
         await writeFile(temporary, text, { mode: 0o600, flag: "wx", flush: true });
         await rename(temporary, join(this.home, "preferences.json"));
         if (settings) this.settings = settings;
-      } finally { await unlink(temporary).catch(() => {}); }
+      } finally {
+        await unlink(temporary).catch(() => {});
+      }
     };
     const operation = this.writing.then(write);
     this.writing = operation.catch(() => {});
@@ -66,13 +88,19 @@ export class BrowserVault {
 
   private changed(): void {
     for (const listener of this.listeners) {
-      try { listener(); } catch { /* A closed renderer cannot block vault writes. */ }
+      try {
+        listener();
+      } catch {
+        /* A closed renderer cannot block vault writes. */
+      }
     }
   }
 
   onChanged(listener: () => void): () => void {
     this.listeners.add(listener);
-    return () => { this.listeners.delete(listener); };
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   async snapshot(): Promise<BrowserVaultSnapshot> {
@@ -85,8 +113,24 @@ export class BrowserVault {
       protection,
       settings: this.settings,
       logins: [
-        ...credentials.map(({ id, origin, username, label, updatedAt }) => ({ id, origin, username, label, updatedAt, status: "saved" as const, source: this.sources.get(id) ?? "unknown" })),
-        ...pendingCredentials.map(({ pendingId, origin, username, label, createdAt, expired }) => ({ id: pendingId, origin, username, label, updatedAt: createdAt, status: expired ? "expired" as const : "pending" as const, source: this.sources.get(pendingId) ?? "unknown" })),
+        ...credentials.map(({ id, origin, username, label, updatedAt }) => ({
+          id,
+          origin,
+          username,
+          label,
+          updatedAt,
+          status: "saved" as const,
+          source: this.sources.get(id) ?? ("unknown" as const),
+        })),
+        ...pendingCredentials.map(({ pendingId, origin, username, label, createdAt, expired }) => ({
+          id: pendingId,
+          origin,
+          username,
+          label,
+          updatedAt: createdAt,
+          status: expired ? ("expired" as const) : ("pending" as const),
+          source: this.sources.get(pendingId) ?? ("unknown" as const),
+        })),
       ],
       pending: [...this.pending.values()].map(({ prompt }) => prompt),
       error: this.captureError,
@@ -110,11 +154,15 @@ export class BrowserVault {
     this.changed();
   }
 
-  async reveal(input: { id: string; password: string }): Promise<{ password: string; expiresAt: number }> {
+  async reveal(input: {
+    id: string;
+    password: string;
+  }): Promise<{ password: string; expiresAt: number }> {
     await this.ready;
     await this.keys.authenticate(input.password);
     const record = await this.vault.ownerReveal(input.id);
-    if (record.category !== "login" || record.secret == null) throw new Error("No saved password exists for this login.");
+    if (record.category !== "login" || record.secret == null)
+      throw new Error("No saved password exists for this login.");
     this.vault.trackRedactionSecret(record.secret);
     return { password: record.secret, expiresAt: Date.now() + 20_000 };
   }
@@ -122,7 +170,8 @@ export class BrowserVault {
   async configure(input: BrowserVaultSettings): Promise<BrowserVaultSnapshot> {
     await this.ready;
     const settings = Schema.decodeUnknownSync(BrowserVaultSettings)(input);
-    if (settings.autosave && !settings.offerSave) throw new Error("Enable password saving before autosave.");
+    if (settings.autosave && !settings.offerSave)
+      throw new Error("Enable password saving before autosave.");
     await this.persist(settings);
     if (!settings.offerSave) this.dismissPrompts();
     this.changed();
@@ -139,12 +188,28 @@ export class BrowserVault {
   }
 
   private async request(action: Action, payload: Payload, origin: string, source: Source) {
-    const result = await this.vault.handleRequest(action, { ...payload, matchMode: "exact-origin" }, origin);
-    if (["save", "update", "commit"].includes(action) && result && typeof result === "object" && "id" in result && typeof result.id === "string") {
+    const result = await this.vault.handleRequest(
+      action,
+      { ...payload, matchMode: "exact-origin" },
+      origin,
+    );
+    if (
+      ["save", "update", "commit"].includes(action) &&
+      result &&
+      typeof result === "object" &&
+      "id" in result &&
+      typeof result.id === "string"
+    ) {
       this.sources.set(result.id, source);
       await this.persist();
     }
-    if (action === "generate" && result && typeof result === "object" && "pendingId" in result && typeof result.pendingId === "string") {
+    if (
+      action === "generate" &&
+      result &&
+      typeof result === "object" &&
+      "pendingId" in result &&
+      typeof result.pendingId === "string"
+    ) {
       this.sources.set(result.pendingId, source);
       await this.persist();
     }
@@ -155,17 +220,22 @@ export class BrowserVault {
   agentAdapter(page: PageOrigin, signal: AbortSignal): CredentialVault {
     const assertOrigin = (origin: string) => {
       signal.throwIfAborted();
-      if (!this.settings.agentUse || page.isDestroyed()) throw new Error("Saved login use is unavailable.");
+      if (!this.settings.agentUse || page.isDestroyed())
+        throw new Error("Saved login use is unavailable.");
       const current = new URL(page.getURL());
-      if (!["https:", "http:"].includes(current.protocol) || current.origin !== origin) throw new Error("Saved login does not match this page origin.");
+      if (!["https:", "http:"].includes(current.protocol) || current.origin !== origin)
+        throw new Error("Saved login does not match this page origin.");
     };
     return {
       handleRequest: async (action, payload, origin) => {
         await this.ready;
         assertOrigin(origin);
-        const supported = ACTIONS.find((candidate) => candidate === action);
-        if (!supported) throw new Error("Unsupported saved login operation.");
-        const result = await this.request(supported, payload, origin, "agent");
+        // Agent code can read and transform anything filled into its page, even
+        // across worker restarts. Never give this adapter a secret-bearing action.
+        if (action !== "list" && action !== "list-pending") {
+          throw new Error(BrowserAutomationErrorMessages.BrowserCredentialUseUnavailable);
+        }
+        const result = await this.request(action, payload, origin, "agent");
         assertOrigin(origin);
         return result;
       },
@@ -174,18 +244,33 @@ export class BrowserVault {
     };
   }
 
-  redact<T>(value: T): T { return this.vault.redact(value); }
+  redact<T>(value: T): T {
+    return this.vault.redact(value);
+  }
 
-  trackSecret(secret: string): void { this.vault.trackRedactionSecret(secret); }
+  trackSecret(secret: string): void {
+    this.vault.trackRedactionSecret(secret);
+  }
 
-  async shouldOfferSave(input: { origin: string; username: string; password: string }): Promise<boolean> {
+  async shouldOfferSave(input: {
+    origin: string;
+    username: string;
+    password: string;
+  }): Promise<boolean> {
     await this.ready;
     if (!this.settings.offerSave || (await this.keys.status()).locked) return false;
     const { credentials } = await this.vault.ownerList({ category: "login" });
-    const existing = credentials.find((entry) => entry.origin === input.origin && entry.username === input.username);
+    const existing = credentials.find(
+      (entry) => entry.origin === input.origin && entry.username === input.username,
+    );
     if (!existing) return true;
     const filled = await this.vault.handleRequest("fill", { id: existing.id }, input.origin);
-    return !(filled && typeof filled === "object" && "secret" in filled && filled.secret === input.password);
+    return !(
+      filled &&
+      typeof filled === "object" &&
+      "secret" in filled &&
+      filled.secret === input.password
+    );
   }
 
   reportCaptureFailure(): void {
@@ -216,7 +301,10 @@ export class BrowserVault {
       const timer = setTimeout(() => this.respond({ id, save: false }), 120_000);
       this.pending.set(id, {
         prompt: { ...input, id },
-        resolve: (choice) => { clearTimeout(timer); resolve(choice); },
+        resolve: (choice) => {
+          clearTimeout(timer);
+          resolve(choice);
+        },
       });
       this.changed();
     });

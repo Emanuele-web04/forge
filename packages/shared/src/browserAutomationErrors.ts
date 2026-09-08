@@ -10,9 +10,13 @@ import { Schema } from "effect";
 
 // Classify known fields without exposing parser issues, code or credential values.
 export const browserInputErrorCode = (argumentsValue: unknown) => {
-  if (argumentsValue !== null && typeof argumentsValue === "object" &&
-      "timeoutMs" in argumentsValue && argumentsValue.timeoutMs !== undefined &&
-      !Schema.is(BrowserTimeoutMs)(argumentsValue.timeoutMs)) {
+  if (
+    argumentsValue !== null &&
+    typeof argumentsValue === "object" &&
+    "timeoutMs" in argumentsValue &&
+    argumentsValue.timeoutMs !== undefined &&
+    !Schema.is(BrowserTimeoutMs)(argumentsValue.timeoutMs)
+  ) {
     return "BrowserInvalidTimeout" as const;
   }
   return "BrowserInvalidArguments" as const;

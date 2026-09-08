@@ -234,7 +234,9 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       onChanged: (listener) => {
         const wrapped = () => listener();
         ipcRenderer.on(IPC.browser.vault.changed, wrapped);
-        return () => { ipcRenderer.removeListener(IPC.browser.vault.changed, wrapped); };
+        return () => {
+          ipcRenderer.removeListener(IPC.browser.vault.changed, wrapped);
+        };
       },
     },
     open: (input) => ipcRenderer.invoke(IPC.browser.open, input),

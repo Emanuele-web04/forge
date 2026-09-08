@@ -11,10 +11,20 @@ import {
 describe("Synara harness policy", () => {
   it("includes honest completion evidence and opt-in delegated E2E testing", () => {
     const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
-    for (const text of ["completion report", "artifactPath", "![Result description]", "explicitly asked", "synara_e2e_review", "Do not load it for unrelated work"]) {
+    for (const text of [
+      "completion report",
+      "artifactPath",
+      "![Result description]",
+      "explicitly asked",
+      "synara_e2e_review",
+      "Do not load it for unrelated work",
+    ]) {
       assert.include(policy, text);
     }
-    assert.notInclude(renderSynaraHarnessPolicy({ gatewayControlAvailable: false }), "browser_screenshot({kind:'proof'})");
+    assert.notInclude(
+      renderSynaraHarnessPolicy({ gatewayControlAvailable: false }),
+      "browser_screenshot({kind:'proof'})",
+    );
   });
   it("identifies Synara and explains exact batch coordination when MCP is available", () => {
     const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });

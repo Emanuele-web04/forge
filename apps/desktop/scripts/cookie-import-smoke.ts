@@ -12,13 +12,32 @@ void (async () => {
   app.setPath("userData", join(home, "electron"));
   await app.whenReady();
   // Generate the source here so this smoke can never select a personal profile.
-  process.env.HOME = execFileSync("node", [resolve("scripts/synthetic-cookie-profile.mjs")], { encoding: "utf8" }).trim();
-  const view = new WebContentsView({ webPreferences: { partition: "persist:import-smoke", sandbox: true, contextIsolation: true } });
+  process.env.HOME = execFileSync("node", [resolve("scripts/synthetic-cookie-profile.mjs")], {
+    encoding: "utf8",
+  }).trim();
+  const view = new WebContentsView({
+    webPreferences: { partition: "persist:import-smoke", sandbox: true, contextIsolation: true },
+  });
   await view.webContents.loadURL("about:blank");
   const connection = await openBetterwrightConnection(view.webContents, undefined, [], true);
-  const browser = new BetterWright({ home: join(home, "worker"), provider: connection.provider, hostOwnedTarget: true, vault: false, credentialCapture: false, downloadPolicy: "deny", adBlock: false, parkBackgroundPages: false, policy: new NetworkPolicy({ allowLoopback: true }) });
+  const browser = new BetterWright({
+    home: join(home, "worker"),
+    provider: connection.provider,
+    hostOwnedTarget: true,
+    vault: false,
+    credentialCapture: false,
+    downloadPolicy: "deny",
+    adBlock: false,
+    parkBackgroundPages: false,
+    policy: new NetworkPolicy({ allowLoopback: true }),
+  });
   try {
-    const result = await browser.syncCookies({ source: { browser: "safari", profile: "default" }, windowsAppBound: "disabled", timeoutMs: 30_000, cloudConsent: `cdp:${new URL(connection.provider.cdpUrl).host}` });
+    const result = await browser.syncCookies({
+      source: { browser: "safari", profile: "default" },
+      windowsAppBound: "disabled",
+      timeoutMs: 30_000,
+      cloudConsent: `cdp:${new URL(connection.provider.cdpUrl).host}`,
+    });
     assert.ok(result.ok, "Synthetic native import failed");
     if (!result.ok) return;
     assert.equal(result.synced, 1);
@@ -32,4 +51,10 @@ void (async () => {
     await browser.close();
     view.webContents.close();
   }
-})().then(() => app.exit(0), () => { console.error("Native fixture import smoke failed"); app.exit(1); });
+})().then(
+  () => app.exit(0),
+  () => {
+    console.error("Native fixture import smoke failed");
+    app.exit(1);
+  },
+);

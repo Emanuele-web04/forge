@@ -61,6 +61,10 @@ ipcMain.on("synara-e2e:shell-ready", () => {
   pushState();
 });
 
+ipcMain.on(BROWSER_IPC_CHANNELS.webMcpCompatibilityPolicy, (event) => {
+  event.returnValue = browserManager.isWebMcpCompatibilityAllowed(event.sender.id);
+});
+
 ipcMain.handle(
   "synara-e2e:attach-webview",
   (event, input: { readonly tabId: string; readonly webContentsId: number }) =>

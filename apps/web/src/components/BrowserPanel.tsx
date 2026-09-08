@@ -654,9 +654,11 @@ export function BrowserPanel({
     null;
   const activeTabId = activeTab?.id ?? null;
   const usesNativeRuntime = activeTab?.runtimeSurface === "native";
-  const rendererHasPopup = threadBrowserState?.tabs.some(
-    (tab) => Boolean(tab.openerTabId) && tab.openerTabId === browserWebviewRef.current?.dataset.tabId,
-  ) ?? false;
+  const rendererHasPopup =
+    threadBrowserState?.tabs.some(
+      (tab) =>
+        Boolean(tab.openerTabId) && tab.openerTabId === browserWebviewRef.current?.dataset.tabId,
+    ) ?? false;
   const activeTabInitialUrl = activeTab?.lastCommittedUrl ?? activeTab?.url ?? BROWSER_BLANK_URL;
   activeTabInitialUrlRef.current = activeTabInitialUrl;
   const loading = activeTab?.isLoading ?? false;
@@ -1159,12 +1161,14 @@ export function BrowserPanel({
       }
       const rect = element.getBoundingClientRect();
       const presentation = resolveBrowserRuntimePresentation({
-        native: usesNativeRuntime, floating: isFloatingMode,
-        rect: {x: rect.left, y: rect.top, width: rect.width, height: rect.height},
+        native: usesNativeRuntime,
+        floating: isFloatingMode,
+        rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
         desktopZoom: readDesktopZoomFactor(),
       });
-      const bounds = obscuredByOverlay || rect.width <= 0 || rect.height <= 0 ? null : presentation.bounds;
-      const {surface, pageZoomFactor} = presentation;
+      const bounds =
+        obscuredByOverlay || rect.width <= 0 || rect.height <= 0 ? null : presentation.bounds;
+      const { surface, pageZoomFactor } = presentation;
       const nextKey = bounds
         ? `${surface}:${Math.round(bounds.x)}:${Math.round(bounds.y)}:${Math.round(bounds.width)}:${Math.round(bounds.height)}:zoom-${pageZoomFactor}:preview-${isFloatingMode}`
         : `${surface}:hidden:zoom-${pageZoomFactor}:preview-${isFloatingMode}`;
@@ -1176,7 +1180,14 @@ export function BrowserPanel({
       lastSentBoundsRef.current = nextKey;
       perfCountersRef.current.syncSends += 1;
       void api.browser
-        .setPanelBounds({ threadId, bounds, surface, pageZoomFactor, occluded: obscuredByOverlay, preview: isFloatingMode })
+        .setPanelBounds({
+          threadId,
+          bounds,
+          surface,
+          pageZoomFactor,
+          occluded: obscuredByOverlay,
+          preview: isFloatingMode,
+        })
         .catch(ignoreBrowserBoundsSyncError);
     };
 
@@ -1304,7 +1315,15 @@ export function BrowserPanel({
   ]);
 
   useEffect(() => {
-    if (!api || !isLiveRuntime || !workspaceReady || !isFloatingMode || !usesNativeRuntime || !activeTabId) return;
+    if (
+      !api ||
+      !isLiveRuntime ||
+      !workspaceReady ||
+      !isFloatingMode ||
+      !usesNativeRuntime ||
+      !activeTabId
+    )
+      return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const capture = async () => {
@@ -1321,8 +1340,19 @@ export function BrowserPanel({
       }
     };
     void capture();
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [api, isLiveRuntime, workspaceReady, isFloatingMode, usesNativeRuntime, activeTabId, threadId]);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [
+    api,
+    isLiveRuntime,
+    workspaceReady,
+    isFloatingMode,
+    usesNativeRuntime,
+    activeTabId,
+    threadId,
+  ]);
 
   const onSubmitAddress = useCallback(() => {
     if (!ensureLiveRuntime()) {
@@ -1827,7 +1857,17 @@ export function BrowserPanel({
         ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
-        <BrowserVaultButton destination={activeTab ? { threadId, tabId: activeTab.id, origin: /^https?:\/\//.test(activeTab.url) ? new URL(activeTab.url).origin : null } : undefined} />
+        <BrowserVaultButton
+          destination={
+            activeTab
+              ? {
+                  threadId,
+                  tabId: activeTab.id,
+                  origin: /^https?:\/\//.test(activeTab.url) ? new URL(activeTab.url).origin : null,
+                }
+              : undefined
+          }
+        />
         <BrowserAnnotationButton
           controller={annotationController}
           disabled={

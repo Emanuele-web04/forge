@@ -13,15 +13,37 @@ export interface CdpMessage {
 }
 
 const PAGE_DOMAINS = new Set([
-  "Accessibility", "Animation", "CSS", "DOM", "DOMSnapshot", "Emulation",
-  "Fetch", "Input", "Inspector", "Log", "Network", "Overlay", "Page",
-  "Performance", "Runtime", "Security", "WebMCP",
+  "Accessibility",
+  "Animation",
+  "CSS",
+  "DOM",
+  "DOMSnapshot",
+  "Emulation",
+  "Fetch",
+  "Input",
+  "Inspector",
+  "Log",
+  "Network",
+  "Overlay",
+  "Page",
+  "Performance",
+  "Runtime",
+  "Security",
+  "WebMCP",
 ]);
 const FORBIDDEN_METHODS = new Set([
-  "Page.close", "Page.crash", "Page.setDownloadBehavior",
-  "Network.getAllCookies", "Network.setCookie", "Network.setCookies",
-  "Network.deleteCookies", "Network.clearBrowserCookies", "Network.clearBrowserCache",
-  "Security.setIgnoreCertificateErrors", "Security.setOverrideCertificateErrors", "Security.handleCertificateError",
+  "Page.close",
+  "Page.crash",
+  "Page.setDownloadBehavior",
+  "Network.getAllCookies",
+  "Network.setCookie",
+  "Network.setCookies",
+  "Network.deleteCookies",
+  "Network.clearBrowserCookies",
+  "Network.clearBrowserCache",
+  "Security.setIgnoreCertificateErrors",
+  "Security.setOverrideCertificateErrors",
+  "Security.handleCertificateError",
 ]);
 
 function requireWebUrl(value: unknown): void {
@@ -38,6 +60,10 @@ export class BetterwrightCdpTarget {
   private readonly pageSessions = new Set<string>();
   private readonly childSessions = new Set<string>();
   private readonly pending = new Set<Promise<unknown>>();
+  private endLease!: () => void;
+  private readonly leaseEnded = new Promise<void>((resolve) => {
+    this.endLease = resolve;
+  });
   private readonly keyboardPolicy = new BetterwrightKeyboardPolicy();
   private disposed = false;
   private disposal: Promise<void> | undefined;
@@ -46,8 +72,11 @@ export class BetterwrightCdpTarget {
   constructor(
     private readonly contents: WebContents,
     private readonly emit: (message: CdpMessage | Record<string, unknown>) => void,
-    private readonly diagnostic?: (method: string, outcome: "received" | "completed" | "denied") => void,
-    readonly targetId = randomUUID(),
+    private readonly diagnostic?: (
+      method: string,
+      outcome: "received" | "completed" | "denied",
+    ) => void,
+    readonly targetId: string = randomUUID(),
     private readonly uploadFiles: ReadonlySet<string> = new Set(),
     private readonly backendSessionId?: string,
     private readonly cookieImport = false,
@@ -106,7 +135,10 @@ export class BetterwrightCdpTarget {
 
   async receive(message: CdpMessage): Promise<void> {
     if (!Number.isSafeInteger(message.id) || typeof message.method !== "string") return;
-    const response = { id: message.id, ...(message.sessionId ? { sessionId: message.sessionId } : {}) };
+    const response = {
+      id: message.id,
+      ...(message.sessionId ? { sessionId: message.sessionId } : {}),
+    };
     try {
       this.diagnostic?.(message.method, "received");
       const result = await this.command(message.method, message.params ?? {}, message.sessionId);
@@ -115,26 +147,39 @@ export class BetterwrightCdpTarget {
     } catch {
       this.diagnostic?.(message.method, "denied");
       // CDP errors can echo expressions, headers and secrets. Keep the transport error fixed.
-      this.emit({ ...response, error: { code: -32000, message: "Browser command unavailable for this target lease." } });
+      this.emit({
+        ...response,
+        error: { code: -32000, message: "Browser command unavailable for this target lease." },
+      });
     }
   }
 
   private send(method: string, params: Params, sessionId?: string): Promise<unknown> {
     if (this.disposed) return Promise.reject(new Error("Browser target lease ended."));
-    const operation = this.contents.debugger.sendCommand(method, params, sessionId ?? this.backendSessionId);
+    const operation = Promise.race([
+      this.contents.debugger.sendCommand(method, params, sessionId ?? this.backendSessionId),
+      this.leaseEnded.then(() => {
+        throw new Error("Browser target lease ended.");
+      }),
+    ]);
     this.pending.add(operation);
-    void operation.then(() => this.pending.delete(operation), () => this.pending.delete(operation));
+    void operation.then(
+      () => this.pending.delete(operation),
+      () => this.pending.delete(operation),
+    );
     return operation;
   }
 
   private async command(method: string, params: Params, sessionId?: string): Promise<unknown> {
-    if (this.disposed || this.contents.isDestroyed()) throw new Error("Browser target lease ended.");
+    if (this.disposed || this.contents.isDestroyed())
+      throw new Error("Browser target lease ended.");
     const root = !sessionId || this.browserSessions.has(sessionId);
     if (!root && !this.pageSessions.has(sessionId!) && !this.childSessions.has(sessionId!)) {
       throw new Error("Unknown target session.");
     }
     if (method === "Target.getTargetInfo") {
-      if (params.targetId !== undefined && params.targetId !== this.targetId) throw new Error("Unknown target.");
+      if (params.targetId !== undefined && params.targetId !== this.targetId)
+        throw new Error("Unknown target.");
       return { targetInfo: this.targetInfo() };
     }
     if (root) {
@@ -146,9 +191,14 @@ export class BetterwrightCdpTarget {
         if (params.autoAttach && !this.attached) {
           this.attached = true;
           this.pageSessions.add(this.pageSession);
-          this.emit({ method: "Target.attachedToTarget", params: {
-            sessionId: this.pageSession, targetInfo: this.targetInfo(), waitingForDebugger: false,
-          } });
+          this.emit({
+            method: "Target.attachedToTarget",
+            params: {
+              sessionId: this.pageSession,
+              targetInfo: this.targetInfo(),
+              waitingForDebugger: false,
+            },
+          });
         }
         return {};
       }
@@ -175,10 +225,18 @@ export class BetterwrightCdpTarget {
       throw new Error("Browser-wide command denied.");
     }
     if (method === "Target.setAutoAttach") {
-      return this.send(method, { ...params, flatten: true }, this.childSessions.has(sessionId!) ? sessionId : undefined);
+      return this.send(
+        method,
+        { ...params, flatten: true },
+        this.childSessions.has(sessionId!) ? sessionId : undefined,
+      );
     }
     if (method === "Network.getCookies") {
-      return this.send(method, { urls: [this.contents.getURL()] }, this.childSessions.has(sessionId!) ? sessionId : undefined);
+      return this.send(
+        method,
+        { urls: [this.contents.getURL()] },
+        this.childSessions.has(sessionId!) ? sessionId : undefined,
+      );
     }
     // Only a host-created import worker gets this grant. It never runs model code.
     if (this.cookieImport && ["Network.getAllCookies", "Network.setCookies"].includes(method)) {
@@ -190,8 +248,11 @@ export class BetterwrightCdpTarget {
     if (method === "DOM.setFileInputFiles") {
       // Only private staged files authorized by the host may cross this lease.
       // An empty list clears a file input without granting filesystem access.
-      if (!Array.isArray(params.files) || params.files.length > 512 ||
-        params.files.some((file) => typeof file !== "string" || !this.uploadFiles.has(file))) {
+      if (
+        !Array.isArray(params.files) ||
+        params.files.length > 512 ||
+        params.files.some((file) => typeof file !== "string" || !this.uploadFiles.has(file))
+      ) {
         throw new Error("Upload not authorized for this target lease.");
       }
     }
@@ -199,9 +260,15 @@ export class BetterwrightCdpTarget {
       requireWebUrl(params.url);
     }
     if (method === "Input.dispatchKeyEvent") this.keyboardPolicy.check(params);
-    const releases = betterwrightExpectedInputs(method, params).map((input) => this.expectAgentInput?.(input));
+    const releases = betterwrightExpectedInputs(method, params).map((input) =>
+      this.expectAgentInput?.(input),
+    );
     try {
-      return await this.send(method, params, this.childSessions.has(sessionId!) ? sessionId : undefined);
+      return await this.send(
+        method,
+        params,
+        this.childSessions.has(sessionId!) ? sessionId : undefined,
+      );
     } finally {
       for (const release of releases) release?.();
     }
@@ -216,18 +283,43 @@ export class BetterwrightCdpTarget {
     this.disposed = true;
     this.contents.debugger.removeListener("message", this.onMessage);
     this.contents.debugger.removeListener("detach", this.onDetach);
+    let leaseRevoked = this.contents.isDestroyed() || !this.contents.debugger.isAttached();
     if (!this.contents.isDestroyed() && this.contents.debugger.isAttached()) {
       await Promise.allSettled([
-        ...(cancel ? [
-          this.contents.debugger.sendCommand("Runtime.terminateExecution", {}, this.backendSessionId),
-          this.contents.debugger.sendCommand("Page.stopLoading", {}, this.backendSessionId),
-        ] : []),
+        ...(cancel
+          ? [
+              this.contents.debugger.sendCommand(
+                "Runtime.terminateExecution",
+                {},
+                this.backendSessionId,
+              ),
+              // An idle renderer applies termination to its next script. Consume
+              // that interrupt before releasing the lease, not in the next run.
+              this.contents.debugger.sendCommand(
+                "Runtime.evaluate",
+                { expression: "void 0", silent: true },
+                this.backendSessionId,
+              ),
+              this.contents.debugger.sendCommand("Page.stopLoading", {}, this.backendSessionId),
+            ]
+          : []),
         this.contents.debugger.sendCommand("Fetch.disable", {}, this.backendSessionId),
       ]);
       if (this.backendSessionId) {
-        await this.contents.debugger.sendCommand("Target.detachFromTarget", { sessionId: this.backendSessionId }).catch(() => {});
+        await this.contents.debugger
+          .sendCommand("Target.detachFromTarget", { sessionId: this.backendSessionId })
+          .then(
+            () => {
+              leaseRevoked = true;
+            },
+            () => {},
+          );
       }
     }
+    // Electron can leave awaited Runtime replies pending after a child-session
+    // detach. Only settle them locally once teardown has acknowledged revocation.
+    if (leaseRevoked || this.contents.isDestroyed() || !this.contents.debugger.isAttached())
+      this.endLease();
     await Promise.allSettled([...this.pending]);
     // The manager, annotations and diagnostics share this debugger. Never detach or close it here.
   }

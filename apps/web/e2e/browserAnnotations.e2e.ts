@@ -56,7 +56,9 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
   }
 
   const site = await startVisibleBrowserFixtureSite();
-  const home = mkdtempSync(join(tmpdir(), "synara-browser-annotations-e2e-"));
+  const home = mkdtempSync(
+    join(process.platform === "darwin" ? "/tmp" : tmpdir(), "synara-annotations-"),
+  );
   const workspaceRoot = join(home, "workspace");
   mkdirSync(workspaceRoot);
   const pipePath = join(home, "browser-host.sock");
@@ -140,14 +142,17 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
             globalThis as typeof globalThis & {
               __synaraVisibleBrowserE2E: {
                 browserManager: {
-                  runtimes: Map<string, { webContents: { insertText(text: string): void } }>;
+                  runtimes: Map<
+                    string,
+                    { webContents: { insertText(text: string): Promise<void> } }
+                  >;
                 };
               };
             }
           ).__synaraVisibleBrowserE2E.browserManager;
           const runtime = manager.runtimes.get(`${input.threadId}:${input.tabId}`);
           if (!runtime) throw new Error("Expected the native annotation runtime to be live.");
-          runtime.webContents.insertText(input.text);
+          return runtime.webContents.insertText(input.text);
         },
         { threadId, tabId, text },
       );
@@ -165,9 +170,8 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
       await sendNativeInput({ type: "keyUp", keyCode, modifiers });
     };
 
-    const targetGeometry = await mcp.call("browser_evaluate", {
-      expression:
-        "(() => { const r = document.querySelector('#manual').getBoundingClientRect(); return { x:r.x,y:r.y,width:r.width,height:r.height }; })()",
+    const targetGeometry = await mcp.call("browser_run", {
+      code: "return await page.evaluate(() => { const r = document.querySelector('#manual').getBoundingClientRect(); return { x:r.x,y:r.y,width:r.width,height:r.height }; });",
       idempotencyKey: crypto.randomUUID(),
     });
     const targetRect = targetGeometry.structuredContent.value as {
@@ -176,9 +180,8 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
       width: number;
       height: number;
     };
-    const sensitiveContainerGeometry = await mcp.call("browser_evaluate", {
-      expression:
-        "(() => { const r = document.querySelector('#private-editor-wrap').getBoundingClientRect(); return { x:r.x,y:r.y,width:r.width,height:r.height }; })()",
+    const sensitiveContainerGeometry = await mcp.call("browser_run", {
+      code: "return await page.evaluate(() => { const r = document.querySelector('#private-editor-wrap').getBoundingClientRect(); return { x:r.x,y:r.y,width:r.width,height:r.height }; });",
       idempotencyKey: crypto.randomUUID(),
     });
     const sensitiveContainerRect = sensitiveContainerGeometry.structuredContent.value as {

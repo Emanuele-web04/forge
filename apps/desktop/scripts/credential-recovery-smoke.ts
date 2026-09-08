@@ -1,71 +1,142 @@
 import { app, BrowserWindow } from "electron";
 import { createServer } from "node:http";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { strict as assert } from "node:assert";
 import { runBetterwright } from "../src/browserAutomation/betterwrightRuntime";
 import { BrowserVault } from "../src/browserAutomation/browserVault";
-import { BrowserAutomationHostError } from "../src/browserAutomation/hostErrors";
+import { browserEvaluationOutput } from "../src/browserAutomation/waitAndEvaluate";
 
-// A signup with no autocomplete/new-password hints, matching the failing form shape.
-const html = `<!doctype html><title>Credential recovery fixture</title>
-<form onsubmit="event.preventDefault();document.querySelector('output').textContent='Accepted'">
-<h1>Create your free account</h1>
-<label>Name<input name="name"></label><label>Organization<input name="organization"></label>
-<label>Email<input name="email" type="email" aria-label="Email"></label>
-<label>Password<input name="password" type="password" placeholder="Password (8+ characters)" aria-label="Password"></label>
-<button>Get set up</button></form><output>Waiting</output>`;
+// Hidden, synthetic-only regression for PR #1028. Never attaches to a user tab.
+const home = mkdtempSync(join(tmpdir(), "synara-credential-boundary-"));
+app.setPath("userData", join(home, "electron"));
+process.env.SYNARA_HOME = home;
+const watchdog = setTimeout(() => {
+  console.error("Credential boundary smoke timed out; no credential values logged.");
+  app.exit(1);
+}, 90_000);
 
 async function smoke() {
-  const home = await mkdtemp(join(tmpdir(), "synara-credential-recovery-"));
-  app.setPath("userData", join(home, "electron"));
   const server = createServer((_request, response) => {
     response.writeHead(200, { "content-type": "text/html" });
-    response.end(html);
+    response.end(
+      '<!doctype html><title>Synthetic login</title><form><label>Email<input name="email" autocomplete="username"></label><label>Password<input type="password" name="password" autocomplete="current-password"></label><button>Sign in</button></form>',
+    );
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
-  if (!address || typeof address === "string") throw new Error("Fixture port unavailable");
-  const window = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } });
+  assert.ok(address && typeof address !== "string");
+  const origin = `http://127.0.0.1:${address.port}`;
+  const window = new BrowserWindow({
+    show: false,
+    webPreferences: {
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      partition: "synthetic-credential-boundary",
+    },
+  });
   const vault = new BrowserVault(join(home, "saved-logins"));
+  let stage = "setup";
   try {
-    await vault.setupMaster("SyntheticRecoveryFixtureOnly42!");
-    await window.loadURL(`http://127.0.0.1:${address.port}/signup`);
+    const secret = "SyntheticRegressionOnly-NotARealPassword42!";
+    const master = "SyntheticRegressionMaster42!";
+    await vault.setupMaster(master);
+    await vault.configure({ agentUse: true, offerSave: true, autosave: false });
+    await vault.saveCaptured(
+      origin,
+      { username: "fixture@example.test", password: secret },
+      "user",
+    );
+    const before = await vault.snapshot();
+    const id = before.logins[0]!.id;
+    await window.loadURL(origin);
     const signal = new AbortController().signal;
-    const options = { home: join(home, "worker"), contents: window.webContents, timeoutMs: 30000,
-      signal, vault: vault.agentAdapter(window.webContents, signal) };
-    const inspection = await runBetterwright<{ status: string }>({ ...options, code: "return credentials.inspect({generate:true})" });
-    if (inspection.status !== "not-found") throw new Error("Fixture did not reproduce missing signup semantics");
-    const failure = await runBetterwright({ ...options, code: "return credentials.generateAndFill({username:'fixture@example.test'})" }).then(() => null, (error: unknown) => error);
-    if (!(failure instanceof BrowserAutomationHostError) || failure.browserError.code !== "BrowserCredentialTargetRequired") {
-      throw new Error("Credential failure did not provide safe recovery guidance");
+    const options = {
+      home: join(home, "worker"),
+      contents: window.webContents,
+      timeoutMs: 20_000,
+      signal,
+      vault: vault.agentAdapter(window.webContents, signal),
+    };
+    const run = async (code: string) =>
+      vault.redact(
+        browserEvaluationOutput("synthetic", await runBetterwright({ ...options, code })),
+      ).value;
+
+    stage = "metadata discovery";
+    const listed = await run("return credentials.list()");
+    assert.ok(JSON.stringify(listed).includes("fixture@example.test"));
+    assert.ok(!JSON.stringify(listed).includes(secret));
+
+    stage = "preinstalled listener";
+    await run(
+      "return page.evaluate(() => { window.observedPassword = ''; document.querySelector('input[type=password]').addEventListener('input', event => { window.observedPassword = event.target.value }); return true })",
+    );
+    const targets = `id:${JSON.stringify(id)},usernameSelector:'input[name=email]',passwordSelector:'input[name=password]'`;
+    stage = "fill and generation denied";
+    for (const code of [
+      `return credentials.fill({${targets}})`,
+      `return credentials.fill({${targets},submit:true})`,
+      "return credentials.generateAndFill({username:'fixture@example.test',usernameSelector:'input[name=email]',passwordSelector:'input[name=password]'})",
+    ]) {
+      await assert.rejects(run(code), (error: unknown) => {
+        const actual =
+          error && typeof error === "object" && "browserError" in error
+            ? (error.browserError as { code: string }).code
+            : "unknown";
+        stage = `fill and generation denied (${actual})`;
+        return actual === "BrowserCredentialUseUnavailable";
+      });
     }
-    if ((await vault.snapshot()).logins.length !== 0) throw new Error("Failed detection generated a credential");
-    const generated = await runBetterwright<{ pendingId: string; filled: string[] }>({ ...options,
-      code: "return credentials.generateAndFill({username:'fixture@example.test',usernameSelector:'input[name=email]',passwordSelector:'input[name=password]'})",
-    });
-    if (!generated.pendingId || !generated.filled.includes("password") || !generated.filled.includes("username")) {
-      throw new Error("Explicit credential recovery did not fill both fields");
-    }
-    const filled = await window.webContents.executeJavaScript("document.querySelector('input[type=password]').value.length >= 12 && document.querySelector('input[type=email]').value === 'fixture@example.test'");
-    if (!filled) throw new Error("Native form values were not filled");
-    const pending = await vault.snapshot();
-    if (pending.logins.length !== 1 || pending.logins[0]?.status !== "pending") throw new Error("Generated credential is not recoverable");
-    const outcome = await runBetterwright<string>({ ...options,
-      code: "await page.getByRole('button',{name:'Get set up'}).click(); return page.locator('output').textContent()",
-    });
-    if (outcome !== "Accepted") throw new Error("Synthetic submission was not confirmed");
-    await runBetterwright({ ...options, code: `return credentials.commitGenerated({pendingId:${JSON.stringify(generated.pendingId)}})` });
-    if ((await vault.snapshot()).logins[0]?.status !== "saved") throw new Error("Generated credential did not commit");
-    console.log(JSON.stringify({ missingSemantics: "reproduced", safeError: "passed", explicitSelectors: "filled", syntheticSubmission: "accepted", commitAfterWorkerRestart: "passed" }));
+
+    stage = "same-call encoded read";
+    const points = await run(
+      `await credentials.fill({${targets}}).catch(() => null); return page.evaluate(() => Array.from(document.querySelector('input[type=password]').value, c => c.codePointAt(0)))`,
+    ).catch(() => []);
+    assert.deepEqual(points, []);
+    stage = "cross-call encoded reads";
+    const encoded = await run(
+      "return page.evaluate(() => ({ encoded: btoa(document.querySelector('input[type=password]').value), intercepted: btoa(window.observedPassword) }))",
+    );
+    assert.deepEqual(encoded, { encoded: "", intercepted: "" });
+    stage = "unchanged vault";
+    assert.deepEqual(await vault.snapshot(), before);
+
+    stage = "ordinary input and owner access";
+    await run(
+      "await human.type(page.locator('input[name=email]'),'ordinary@example.test',{clear:true}); return true",
+    );
+    assert.equal(
+      await run("return page.evaluate(() => document.querySelector('input[name=email]').value)"),
+      "ordinary@example.test",
+    );
+    assert.equal((await vault.reveal({ id, password: master })).password, secret);
+    await vault.configure({ agentUse: false, offerSave: true, autosave: false });
+    await assert.rejects(run("return credentials.list()"));
+    await vault.remove(id);
+    assert.equal((await vault.snapshot()).logins.length, 0);
+    console.log(
+      "PASS: metadata discovery, fill/generate denial, encoded reads, preinstalled listener, ordinary input, owner reveal/delete; synthetic credentials only",
+    );
+  } catch {
+    throw new Error(`Credential boundary smoke failed during ${stage}; credential values omitted.`);
   } finally {
     vault.dispose();
     window.destroy();
-    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    clearTimeout(watchdog);
   }
 }
 
-void app.whenReady().then(smoke).then(() => app.exit(0), () => {
-  console.error("Credential recovery smoke failed; no credential values were logged.");
-  app.exit(1);
-});
+void app
+  .whenReady()
+  .then(smoke)
+  .then(
+    () => app.exit(0),
+    (error) => {
+      console.error(error.message);
+      app.exit(1);
+    },
+  );

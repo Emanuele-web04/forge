@@ -12,7 +12,9 @@ export function betterwrightLocator(target: BrowserUploadTarget): string {
     case "text":
     case "label":
     case "placeholder": {
-      const method = { text: "getByText", label: "getByLabel", placeholder: "getByPlaceholder" }[locator.kind];
+      const method = { text: "getByText", label: "getByLabel", placeholder: "getByPlaceholder" }[
+        locator.kind
+      ];
       return `page.${method}(${JSON.stringify(locator.text)},${JSON.stringify({ exact: locator.exact ?? true })})`;
     }
   }

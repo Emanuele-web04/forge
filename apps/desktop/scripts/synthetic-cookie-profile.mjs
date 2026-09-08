@@ -27,5 +27,8 @@ fileHeader.writeUInt32BE(1, 4);
 fileHeader.writeUInt32BE(page.length, 8);
 const directory = join(home, "Library", "Cookies");
 await mkdir(directory, { recursive: true, mode: 0o700 });
-await writeFile(join(directory, "Cookies.binarycookies"), Buffer.concat([fileHeader, page]), { mode: 0o600, flag: "wx" });
+await writeFile(join(directory, "Cookies.binarycookies"), Buffer.concat([fileHeader, page]), {
+  mode: 0o600,
+  flag: "wx",
+});
 console.log(home);

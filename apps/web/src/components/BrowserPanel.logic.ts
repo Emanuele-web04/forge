@@ -30,14 +30,19 @@ export function resolveBrowserRuntimePresentation(input: {
   const { native, floating, rect, desktopZoom } = input;
   const layout = floating ? resolveFloatingBrowserGuestLayout(rect) : null;
   const scale = native && layout ? layout.scale : 1;
-  const bounds = resolveDesktopDipRectFromCssRect(layout ? {
-    x: rect.x + layout.x,
-    y: rect.y + layout.y,
-    width: layout.width * scale,
-    height: layout.height * scale,
-  } : rect, desktopZoom);
+  const bounds = resolveDesktopDipRectFromCssRect(
+    layout
+      ? {
+          x: rect.x + layout.x,
+          y: rect.y + layout.y,
+          width: layout.width * scale,
+          height: layout.height * scale,
+        }
+      : rect,
+    desktopZoom,
+  );
   return {
-    surface: native ? "native" as const : "renderer" as const,
+    surface: native ? ("native" as const) : ("renderer" as const),
     bounds,
     pageZoomFactor: native && floating ? scale * desktopZoom : 1,
   };

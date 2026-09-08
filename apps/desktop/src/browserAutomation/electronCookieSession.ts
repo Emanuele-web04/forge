@@ -3,9 +3,14 @@ import type { CookieSessionBackend } from "./browserSessionRestore";
 
 export function createCookieSessionBackend(partition: string): CookieSessionBackend {
   // This never navigates to a website, joins the UI, or accepts agent commands.
-  const view = new WebContentsView({ webPreferences: {
-    partition, sandbox: true, contextIsolation: true, nodeIntegration: false,
-  } });
+  const view = new WebContentsView({
+    webPreferences: {
+      partition,
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
   const contents = view.webContents;
   contents.debugger.attach("1.3");
   const ready = contents.loadURL("about:blank");
@@ -19,9 +24,14 @@ export function createCookieSessionBackend(partition: string): CookieSessionBack
     },
     async restore(cookies) {
       await ready;
-      if (cookies.length) await view.webContents.debugger.sendCommand("Network.setCookies", { cookies });
+      if (cookies.length)
+        await view.webContents.debugger.sendCommand("Network.setCookies", { cookies });
     },
-    onChange(listener) { contents.session.cookies.on("changed", listener); },
-    dispose() { if (!view.webContents.isDestroyed()) view.webContents.close(); },
+    onChange(listener) {
+      contents.session.cookies.on("changed", listener);
+    },
+    dispose() {
+      if (!view.webContents.isDestroyed()) view.webContents.close();
+    },
   };
 }

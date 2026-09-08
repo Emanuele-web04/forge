@@ -103,9 +103,8 @@ export function registerBrowserIpcHandlers(
 
   ipcMain.removeHandler(BROWSER_IPC_CHANNELS.captureScreenshot);
   ipcMain.removeHandler(BROWSER_IPC_CHANNELS.capturePreview);
-  ipcMain.handle(
-    BROWSER_IPC_CHANNELS.capturePreview,
-    async (_event, input: BrowserTabInput) => browserManager.capturePreview(input),
+  ipcMain.handle(BROWSER_IPC_CHANNELS.capturePreview, async (_event, input: BrowserTabInput) =>
+    browserManager.capturePreview(input),
   );
   ipcMain.handle(
     BROWSER_IPC_CHANNELS.captureScreenshot,

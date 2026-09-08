@@ -42,10 +42,7 @@ import { navigateBrowserHistory, type BrowserHistoryDirection } from "./navigati
 import { captureBrowserScreenshot } from "./screenshotCapture";
 import { withDialogHandling } from "./dialogHandling";
 import { uploadBrowserFiles } from "./workspaceUpload";
-import {
-  browserEvaluationOutput,
-  waitForLoadMilestone,
-} from "./waitAndEvaluate";
+import { browserEvaluationOutput, waitForLoadMilestone } from "./waitAndEvaluate";
 import {
   beginBrowserNavigation,
   getBrowserNavigationTracker,
@@ -340,7 +337,8 @@ export class DesktopBrowserAutomationHost {
     if (
       request.name !== "browser_status" &&
       request.name !== "browser_tabs" &&
-      (this.browserManager.isAnnotationInteractive(request.threadId) || this.browserManager.isHumanBrowserOperationActive())
+      (this.browserManager.isAnnotationInteractive(request.threadId) ||
+        this.browserManager.isHumanBrowserOperationActive())
     ) {
       throw new BrowserAutomationHostError({
         code: "BrowserInterruptedByHuman",
@@ -524,8 +522,16 @@ export class DesktopBrowserAutomationHost {
     try {
       const rawOutput = await raceWithAbort(operation, controller.signal, queuedTimeoutError);
       let output = this.options.vault?.redact(rawOutput) ?? rawOutput;
-      if (request.name === "browser_run" && output && typeof output === "object" && "value" in output) {
-        output = { ...output, serializedByteCount: Buffer.byteLength(JSON.stringify(output.value), "utf8") };
+      if (
+        request.name === "browser_run" &&
+        output &&
+        typeof output === "object" &&
+        "value" in output
+      ) {
+        output = {
+          ...output,
+          serializedByteCount: Buffer.byteLength(JSON.stringify(output.value), "utf8"),
+        };
       }
       try {
         return Schema.decodeUnknownSync(definition.hostOutput as never)(output);
@@ -682,7 +688,10 @@ export class DesktopBrowserAutomationHost {
       tabId: tabId as BrowserTabId,
     });
     try {
-      if (this.browserManager.isHumanBrowserOperationActive() || this.browserManager.getAutomationHumanControlEpoch(threadId) !== epoch) {
+      if (
+        this.browserManager.isHumanBrowserOperationActive() ||
+        this.browserManager.getAutomationHumanControlEpoch(threadId) !== epoch
+      ) {
         interrupt(humanError);
       }
       throwIfAborted(signal);
@@ -1040,10 +1049,7 @@ export class DesktopBrowserAutomationHost {
     }
 
     const runtime = await this.resolveAutomationRuntime(affinity, targetTabId, signal, true);
-    const windowOpen =
-      request.name === "browser_run"
-        ? this.observeWindowOpen(runtime)
-        : null;
+    const windowOpen = request.name === "browser_run" ? this.observeWindowOpen(runtime) : null;
     try {
       return await this.executeVisibleTool(
         request,
@@ -1101,14 +1107,26 @@ export class DesktopBrowserAutomationHost {
               code: (input as BrowserRunInput).code,
               timeoutMs: (input.timeoutMs as number | undefined) ?? 15_000,
               signal,
-              ...(this.options.vault ? { vault: this.options.vault.agentAdapter(runtime.webContents, signal) } : {}),
+              ...(this.options.vault
+                ? { vault: this.options.vault.agentAdapter(runtime.webContents, signal) }
+                : {}),
             });
           } catch (error) {
             throwIfAborted(signal);
             if (error instanceof BrowserAutomationHostError) throw error;
-            browserHostError({ code: "BrowserEvaluationFailed", retryable: false, phase: "evaluate", effectMayHaveCommitted: true });
+            browserHostError({
+              code: "BrowserEvaluationFailed",
+              retryable: false,
+              phase: "evaluate",
+              effectMayHaveCommitted: true,
+            });
           }
-          const correlation = await this.reconcileWindowOpen(windowOpen!, input.timeoutMs as number | undefined, targetTabId, signal);
+          const correlation = await this.reconcileWindowOpen(
+            windowOpen!,
+            input.timeoutMs as number | undefined,
+            targetTabId,
+            signal,
+          );
           openedTabId = correlation.openedTabId;
           oauthPopup = correlation.oauthPopup;
           return browserEvaluationOutput(runtime.tabId, value);

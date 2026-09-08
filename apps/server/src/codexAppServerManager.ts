@@ -438,7 +438,7 @@ Do not search or filter \`ALL_TOOLS\` for browser discovery. Do not rediscover t
 
 Use \`browser_run({code:"..."})\` for one focused browser operation; no multi-action scripts or workflow loops. Return promptly. Use dedicated tools for tab lifecycle, screenshots and authorized workspace uploads.
 
-Login: \`credentials.list()\`, then \`credentials.fill({id,submit:true})\` for an unambiguous origin-matching account. Missing login: ask the human to sign in on the embedded site, never paste a password into chat. Authorized signup: \`credentials.generateAndFill\`, then \`credentials.commitGenerated\` only after verified success; retain uncertain pending credentials. Never read password inputs, return credentials, or reveal/transform secrets. Password retrieval/cookie import are human-only Saved logins UI. Manual input interrupts automation; wait for handoff, never fight it.
+Saved accounts: \`credentials.list()\` and \`credentials.listPending()\` provide origin-scoped metadata only. Password filling, generation and vault changes are unavailable to browser scripts. Ask the human to sign in manually or import a browser session through Saved logins; never ask for passwords in chat or retry credential mutations. Never read password inputs, return credentials, or reveal/transform secrets. Password retrieval/cookie import are human-only Saved logins UI. Manual input interrupts automation; wait for handoff, never fight it.
 
 Use \`Computer Use\` only when the user explicitly asks for it, the task is outside the in-app browser (desktop apps, OS settings, other windows), or the in-app browser cannot complete the task.`;
 

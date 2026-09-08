@@ -83,8 +83,12 @@ export function spawnSourceDesktop({
     const macOSDirectory = dirname(electronPath);
     const contentsDirectory = dirname(macOSDirectory);
     const bundle = dirname(contentsDirectory);
-    if (platform !== "darwin" || basename(macOSDirectory) !== "MacOS" ||
-        basename(contentsDirectory) !== "Contents" || !bundle.endsWith(".app")) {
+    if (
+      platform !== "darwin" ||
+      basename(macOSDirectory) !== "MacOS" ||
+      basename(contentsDirectory) !== "Contents" ||
+      !bundle.endsWith(".app")
+    ) {
       throw new Error("LaunchServices requires a macOS application bundle.");
     }
     // LaunchServices makes the app responsible for TCC access instead of the caller.

@@ -329,10 +329,12 @@ describe("OrchestrationEngine", () => {
     await system.run(system.engine.stop);
 
     await expect(
-      system.run(system.engine.dispatch({
-        ...diagnostic,
-        commandId: CommandId.makeUnsafe("cmd-engine-stopped-diagnostic"),
-      })),
+      system.run(
+        system.engine.dispatch({
+          ...diagnostic,
+          commandId: CommandId.makeUnsafe("cmd-engine-stopped-diagnostic"),
+        }),
+      ),
     ).rejects.toMatchObject({ _tag: "OrchestrationCommandAdmissionError", reason: "stopped" });
 
     await expect(

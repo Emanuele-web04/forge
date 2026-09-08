@@ -7,7 +7,9 @@ import { VaultKeyProtection, type VaultKeyStore } from "./vaultKeyProtection";
 
 const homes: string[] = [];
 const password = "synthetic-master-test-password";
-afterEach(async () => { for (const home of homes.splice(0)) await rm(home, { recursive: true, force: true }); });
+afterEach(async () => {
+  for (const home of homes.splice(0)) await rm(home, { recursive: true, force: true });
+});
 async function directory() {
   const home = await mkdtemp(join(tmpdir(), "synara-vault-key-"));
   homes.push(home);
@@ -44,7 +46,11 @@ describe("vault key protection", () => {
     expect(file).not.toContain(original.toString("base64"));
     expect(file).not.toContain(password);
     const restarted = new VaultKeyProtection(home);
-    expect(await restarted.status()).toEqual({ configured: true, locked: true, osProtected: false });
+    expect(await restarted.status()).toEqual({
+      configured: true,
+      locked: true,
+      osProtected: false,
+    });
     await restarted.authenticate(password);
     expect(await restarted.provide()).toEqual(original);
     const copy = await restarted.provide();
@@ -109,7 +115,9 @@ describe("vault key protection", () => {
     const refused = new VaultKeyProtection(home, store);
     await expect(refused.provide()).rejects.toThrow("could not be verified");
     expect(await readFile(join(home, "vault.key"))).toEqual(mismatched);
-    keys.dispose(); resumed.dispose(); refused.dispose();
+    keys.dispose();
+    resumed.dispose();
+    refused.dispose();
   });
 
   it("refuses corrupt wrapping data without overwriting it or accepting a master password", async () => {
@@ -126,6 +134,7 @@ describe("vault key protection", () => {
     await expect(restarted.provide()).rejects.toThrow("Unlock");
     await expect(restarted.setup(password)).rejects.toThrow();
     expect(await readFile(path, "utf8")).toBe(corrupted);
-    keys.dispose(); restarted.dispose();
+    keys.dispose();
+    restarted.dispose();
   });
 });

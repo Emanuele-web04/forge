@@ -151,7 +151,8 @@ const APP_HTML = `<!doctype html>
         document.body.dataset.dragstart = String(Number(document.body.dataset.dragstart) + 1);
         event.dataTransfer?.setData("text/plain", "synara-drag");
       });
-      dragSource.addEventListener("mousedown", () => {
+      dragSource.addEventListener("mousedown", (event) => {
+        document.body.dataset.dragButtons = String(event.buttons);
         document.body.dataset.dragMousedown = String(Number(document.body.dataset.dragMousedown) + 1);
       });
       dragSource.addEventListener("mousemove", () => {

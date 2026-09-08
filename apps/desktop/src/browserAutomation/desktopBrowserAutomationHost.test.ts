@@ -388,28 +388,56 @@ const createManager = () => {
 };
 
 describe("DesktopBrowserAutomationHost", () => {
-  it.each([45000, 60000])("rejects invalid timeout before running the browser (%s)", async (timeoutMs) => {
-    const { manager } = createManager();
-    const host = new DesktopBrowserAutomationHost(manager);
-    vi.mocked(runBetterwright).mockReset();
-    await expect(host.executeTool({ sessionId: "bounds", provider: "codex", threadId: THREAD_ID,
-      name: "browser_run", arguments: { timeoutMs, code: "return null" },
-    })).rejects.toMatchObject({ browserError: { code: "BrowserInvalidTimeout", effectMayHaveCommitted: false } });
-    expect(runBetterwright).not.toHaveBeenCalled();
-    await host.dispose();
-  });
+  it.each([45000, 60000])(
+    "rejects invalid timeout before running the browser (%s)",
+    async (timeoutMs) => {
+      const { manager } = createManager();
+      const host = new DesktopBrowserAutomationHost(manager);
+      vi.mocked(runBetterwright).mockReset();
+      await expect(
+        host.executeTool({
+          sessionId: "bounds",
+          provider: "codex",
+          threadId: THREAD_ID,
+          name: "browser_run",
+          arguments: { timeoutMs, code: "return null" },
+        }),
+      ).rejects.toMatchObject({
+        browserError: { code: "BrowserInvalidTimeout", effectMayHaveCommitted: false },
+      });
+      expect(runBetterwright).not.toHaveBeenCalled();
+      await host.dispose();
+    },
+  );
 
   it("preserves safe credential recovery guidance from the runtime", async () => {
     const { manager } = createManager();
     const host = new DesktopBrowserAutomationHost(manager);
-    vi.mocked(runBetterwright).mockReset().mockRejectedValueOnce(new BrowserAutomationHostError({
-      code: "BrowserCredentialTargetRequired", phase: "evaluate", retryable: false, effectMayHaveCommitted: true,
-    }));
-    await expect(host.executeTool({ sessionId: "credential-error", provider: "codex", threadId: THREAD_ID,
-      name: "browser_run", arguments: { code: "await credentials.generateAndFill()" },
-    })).rejects.toMatchObject({ browserError: { code: "BrowserCredentialTargetRequired", effectMayHaveCommitted: true,
-      message: expect.stringContaining("passwordSelector"),
-    } });
+    vi.mocked(runBetterwright)
+      .mockReset()
+      .mockRejectedValueOnce(
+        new BrowserAutomationHostError({
+          code: "BrowserCredentialTargetRequired",
+          phase: "evaluate",
+          retryable: false,
+          effectMayHaveCommitted: true,
+        }),
+      );
+    await expect(
+      host.executeTool({
+        sessionId: "credential-error",
+        provider: "codex",
+        threadId: THREAD_ID,
+        name: "browser_run",
+        arguments: { code: "await credentials.generateAndFill()" },
+      }),
+    ).rejects.toMatchObject({
+      browserError: {
+        code: "BrowserCredentialTargetRequired",
+        effectMayHaveCommitted: true,
+        message: expect.stringContaining("sign in manually"),
+      },
+    });
     await host.dispose();
   });
 
@@ -428,9 +456,13 @@ describe("DesktopBrowserAutomationHost", () => {
     expect(result).toMatchObject({ tabId: TAB_ID, value: { answer: 42 }, serializedByteCount: 13 });
     expect(await host.executeTool(request)).toEqual(result);
     expect(runBetterwright).toHaveBeenCalledTimes(1);
-    expect(runBetterwright).toHaveBeenCalledWith(expect.objectContaining({
-      contents: webContents, home: "/isolated/synara/userdata/browser-engine", code: "return {answer: 42}",
-    }));
+    expect(runBetterwright).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contents: webContents,
+        home: "/isolated/synara/userdata/browser-engine",
+        code: "return {answer: 42}",
+      }),
+    );
     expect(raw.trackAutomationDownload).toHaveBeenCalled();
     await host.dispose();
   });
@@ -439,10 +471,20 @@ describe("DesktopBrowserAutomationHost", () => {
     const { manager } = createManager();
     const host = new DesktopBrowserAutomationHost(manager);
     vi.mocked(runBetterwright).mockReset().mockRejectedValueOnce(new Error("private-password"));
-    const request = { sessionId: "batch-errors", provider: "codex", threadId: THREAD_ID, name: "browser_run" as const, arguments: { code: "return null" } };
-    await expect(host.executeTool(request)).rejects.toMatchObject({ browserError: { code: "BrowserEvaluationFailed" } });
+    const request = {
+      sessionId: "batch-errors",
+      provider: "codex",
+      threadId: THREAD_ID,
+      name: "browser_run" as const,
+      arguments: { code: "return null" },
+    };
+    await expect(host.executeTool(request)).rejects.toMatchObject({
+      browserError: { code: "BrowserEvaluationFailed" },
+    });
     vi.mocked(runBetterwright).mockResolvedValueOnce("x".repeat(262_145));
-    await expect(host.executeTool({ ...request, arguments: { code: "return 'large'" } })).rejects.toMatchObject({ browserError: { code: "BrowserEvaluationResultTooLarge" } });
+    await expect(
+      host.executeTool({ ...request, arguments: { code: "return 'large'" } }),
+    ).rejects.toMatchObject({ browserError: { code: "BrowserEvaluationResultTooLarge" } });
     await host.dispose();
   });
 
@@ -1436,9 +1478,6 @@ describe("DesktopBrowserAutomationHost", () => {
     ).resolves.toMatchObject({ activeTabId: TAB_ID });
     panelReveal.resolve();
   });
-
 });
 
-describe("snapshot target validity", () => {
-
-});
+describe("snapshot target validity", () => {});
