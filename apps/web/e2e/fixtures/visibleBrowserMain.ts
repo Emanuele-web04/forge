@@ -103,7 +103,7 @@ Object.assign(globalThis, {
     pipePath,
     setPanelRevealEnabled(enabled: boolean) {
       panelRevealEnabled = enabled;
-      setPanelVisible(enabled);
+      if (!enabled || latestState?.activeTabId) setPanelVisible(enabled);
     },
     setPreviewEnabled(enabled: boolean) {
       previewEnabled = enabled;

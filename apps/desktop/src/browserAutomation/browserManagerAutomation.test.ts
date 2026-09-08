@@ -97,16 +97,19 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     };
     webContentsViewConstructor.mockReturnValueOnce(view);
     const manager = new DesktopBrowserManager();
-    manager.setWindow({
-      contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
-    } as never);
+    const parent = { addChildView: vi.fn(), removeChildView: vi.fn() };
+    manager.setWindow({ contentView: parent } as never);
     try {
       const state = manager.open({ threadId: THREAD_ID, initialUrl: "https://example.test/" });
       const input = { threadId: THREAD_ID, tabId: state.activeTabId! };
       const bounds = { x: 300, y: 200, width: 320, height: 200 };
       manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds, preview: true });
       const loads = contents.loadURL.mock.calls.length;
-      expect(view.setBounds).toHaveBeenLastCalledWith({ ...bounds, x: -10000, y: -10000 });
+      expect(view.setBounds).toHaveBeenLastCalledWith({ ...bounds, x: 0, y: 0 });
+      expect(parent.addChildView).toHaveBeenLastCalledWith(view, 0);
+      expect(parent.removeChildView.mock.invocationCallOrder.at(-1)).toBeLessThan(
+        parent.addChildView.mock.invocationCallOrder.at(-1)!,
+      );
       expect(await manager.capturePreview(input)).toBe(
         `data:image/jpeg;base64,${Buffer.from("thumbnail").toString("base64")}`,
       );
@@ -114,6 +117,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       expect(capturePage).toHaveBeenCalledWith(undefined, { stayHidden: true, stayAwake: true });
       manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
       expect(view.setBounds).toHaveBeenLastCalledWith(bounds);
+      expect(parent.addChildView).toHaveBeenLastCalledWith(view);
       expect(manager.getVisibleAutomationRuntime(input).webContents).toBe(contents);
       expect(contents.loadURL).toHaveBeenCalledTimes(loads);
       expect(await manager.capturePreview(input)).toBeNull();
@@ -1527,11 +1531,16 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     webContentsViewConstructor.mockClear();
     const nativeWebContents = new FakeWebContents();
     const setBounds = vi.fn();
-    webContentsViewConstructor.mockReturnValueOnce({
+    const view = {
       webContents: nativeWebContents,
       setBounds,
-    });
+      setVisible: vi.fn(),
+      setBorderRadius: vi.fn(),
+    };
+    webContentsViewConstructor.mockReturnValueOnce(view);
     const manager = new DesktopBrowserManager();
+    const parent = { addChildView: vi.fn(), removeChildView: vi.fn() };
+    manager.setWindow({ contentView: parent } as never);
     const blank = manager.prepareAutomationTab({ threadId: THREAD_ID, reuse: true });
     const tabId = blank.activeTabId!;
     manager.prepareAutomationNavigation({
@@ -1546,8 +1555,22 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
 
     expect(webContentsViewConstructor).toHaveBeenCalledOnce();
     expect(runtime.webContents).toBe(nativeWebContents);
-    expect(setBounds).toHaveBeenCalledWith({ x: -10_000, y: 0, width: 1_280, height: 800 });
+    expect(setBounds).toHaveBeenCalledWith({ x: 0, y: 0, width: 1_280, height: 800 });
+    expect(parent.addChildView).toHaveBeenLastCalledWith(view, 0);
+    expect(view.setVisible).toHaveBeenLastCalledWith(false);
     expect(manager.getState({ threadId: THREAD_ID }).tabs[0]?.runtimeSurface).toBe("native");
+    manager.setPanelBounds({
+      threadId: THREAD_ID,
+      surface: "native",
+      bounds: { x: 200, y: 50, width: 800, height: 600 },
+    });
+    expect(parent.addChildView).toHaveBeenLastCalledWith(view);
+    manager.hide({ threadId: THREAD_ID });
+    expect(parent.addChildView).toHaveBeenLastCalledWith(view, 0);
+    expect(setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 1_280, height: 800 });
+    expect(parent.removeChildView.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      parent.addChildView.mock.invocationCallOrder.at(-1)!,
+    );
     manager.dispose();
   });
 

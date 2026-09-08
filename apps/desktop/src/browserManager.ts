@@ -168,7 +168,7 @@ interface PendingStatePublication {
 const LIVE_TAB_STATUS: BrowserTabState["status"] = "live";
 const SUSPENDED_TAB_STATUS: BrowserTabState["status"] = "suspended";
 const BACKGROUND_AUTOMATION_BOUNDS: BrowserPanelBounds = {
-  x: -10_000,
+  x: 0,
   y: 0,
   width: BROWSER_AUTOMATION_VIEWPORT_WIDTH,
   height: BROWSER_AUTOMATION_VIEWPORT_HEIGHT,
@@ -2647,12 +2647,9 @@ export class DesktopBrowserManager {
     }
 
     if (this.previewThreadIds.has(runtime.threadId) && runtime.view) {
-      // Keep the same page and viewport alive, but outside native hit testing.
-      // React paints its thumbnail, so dragging never races the native compositor.
+      // React paints the thumbnail; the native page remains hidden from hit testing.
       if (this.attachedRuntimeKey !== runtime.key) this.detachAttachedRuntime();
-      runtime.view.setVisible(true);
-      runtime.view.setBounds({ ...bounds, x: -10000, y: -10000 });
-      this.bringRuntimeViewToFront(runtime);
+      this.parkHiddenRuntime(runtime, bounds);
       this.attachedRuntimeKey = runtime.key;
       this.attachedBoundsSignature = browserPresentationSignature(bounds, pageZoomFactor);
       return;
@@ -2739,15 +2736,26 @@ export class DesktopBrowserManager {
       return;
     }
     const keepRenderingInBackground = hidden && this.automationRuntimeKeys.has(runtime.key);
-    const nativeView = runtime.view as typeof runtime.view & NativeBrowserViewVisibility;
-    nativeView.setVisible?.(!hidden || keepRenderingInBackground);
-    if (hidden) {
-      runtime.view.setBounds(
-        keepRenderingInBackground
-          ? { ...BACKGROUND_AUTOMATION_BOUNDS }
-          : { x: 0, y: 0, width: 0, height: 0 },
-      );
+    if (keepRenderingInBackground) {
+      this.parkHiddenRuntime(runtime, BACKGROUND_AUTOMATION_BOUNDS);
+      return;
     }
+    const nativeView = runtime.view as typeof runtime.view & NativeBrowserViewVisibility;
+    nativeView.setVisible?.(!hidden);
+    if (hidden) {
+      runtime.view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+    }
+  }
+
+  private parkHiddenRuntime(runtime: LiveTabRuntime, bounds: BrowserPanelBounds): void {
+    const window = this.window;
+    if (!window || !runtime.view) return;
+    // A hidden in-bounds view can produce its first capture; an off-window view
+    // may never paint. Hide before attaching or moving to prevent a visible flash.
+    runtime.view.setVisible(false);
+    window.contentView.removeChildView(runtime.view);
+    window.contentView.addChildView(runtime.view, 0);
+    runtime.view.setBounds({ ...bounds, x: 0, y: 0 });
   }
 
   private ensureLiveRuntime(threadId: ThreadId, tabId: string): LiveTabRuntime {
@@ -2850,11 +2858,14 @@ export class DesktopBrowserManager {
       ownsWebContents: true,
       listenerDisposers: [],
     };
-    if (this.automationRuntimeKeys.has(runtime.key)) {
+    if (this.window && !popupOptions?.webContents) {
+      // Size the new blank view before hiding it; initially hidden Electron
+      // views otherwise keep a zero-sized renderer. No site has loaded yet.
+      this.window.contentView.addChildView(view);
       view.setBounds({ ...BACKGROUND_AUTOMATION_BOUNDS });
-      const nativeView = view as typeof view & NativeBrowserViewVisibility;
-      nativeView.setVisible?.(true);
-      this.window?.contentView.addChildView(view);
+    }
+    if (this.window) {
+      this.parkHiddenRuntime(runtime, BACKGROUND_AUTOMATION_BOUNDS);
     }
     this.configureRuntimeWebContents(runtime);
     return runtime;

@@ -393,6 +393,17 @@ test("production MCP controls one persistent Electron page across visibility cha
       );
       await expect(hostComposer).toHaveValue("HOST_SENTINEL");
       expect(await read('document.querySelector("input").value')).toBe("direct-filled");
+      await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.hide());
+      try {
+        const hiddenProof = await mcp.call("browser_screenshot", {
+          kind: "proof",
+          fullPage: false,
+          timeoutMs: 3000,
+        });
+        expect(hiddenProof.content.some((block) => block.type === "image")).toBe(true);
+      } finally {
+        await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.show());
+      }
       await electronApp.evaluate(() => {
         (
           globalThis as typeof globalThis & {
@@ -492,6 +503,122 @@ test("production MCP controls one persistent Electron page across visibility cha
         ),
       ).toBe(0);
     });
+    await test.step("captures proof before the renderer mounts the browser panel", async () => {
+      await electronApp.evaluate(() => {
+        (
+          globalThis as typeof globalThis & {
+            __synaraVisibleBrowserE2E: { setPanelRevealEnabled(enabled: boolean): void };
+          }
+        ).__synaraVisibleBrowserE2E.setPanelRevealEnabled(false);
+      });
+      try {
+        await mcp.call("browser_open", { url: site.appUrl, show: true });
+        const previewPixels = await electronApp.evaluate(async ({ nativeImage }) => {
+          const state = (
+            globalThis as typeof globalThis & {
+              __synaraVisibleBrowserE2E: {
+                threadId: string;
+                setPreviewEnabled(enabled: boolean): void;
+                setPanelRevealEnabled(enabled: boolean): void;
+                browserManager: {
+                  getState(input: { threadId: string }): { activeTabId: string };
+                  capturePreview(input: {
+                    threadId: string;
+                    tabId: string;
+                  }): Promise<string | null>;
+                };
+              };
+            }
+          ).__synaraVisibleBrowserE2E;
+          state.setPreviewEnabled(true);
+          try {
+            const { activeTabId } = state.browserManager.getState({ threadId: state.threadId });
+            const data = await state.browserManager.capturePreview({
+              threadId: state.threadId,
+              tabId: activeTabId,
+            });
+            const image = nativeImage.createFromDataURL(data ?? "");
+            const bitmap = image.toBitmap();
+            let varied = false;
+            for (let offset = 4; offset < bitmap.length; offset += 4) {
+              if (!bitmap.subarray(offset, offset + 4).equals(bitmap.subarray(0, 4))) {
+                varied = true;
+                break;
+              }
+            }
+            return { empty: image.isEmpty(), width: image.getSize().width, varied };
+          } finally {
+            state.setPreviewEnabled(false);
+            state.setPanelRevealEnabled(false);
+          }
+        });
+        expect(previewPixels).toEqual({ empty: false, width: 640, varied: true });
+        await mcp.call("browser_close");
+        for (const fullPage of [true, false]) {
+          await mcp.call("browser_open", { url: site.appUrl, show: true });
+          const layerOrder = await electronApp.evaluate(({ BrowserWindow }) => {
+            const window = BrowserWindow.getAllWindows()[0]!;
+            return {
+              count: window.contentView.children.length,
+              backgroundVisible: window.contentView.children[0]!.getVisible(),
+              backgroundBounds: window.contentView.children[0]!.getBounds(),
+            };
+          });
+          expect(layerOrder.count).toBe(1);
+          expect(layerOrder.backgroundVisible).toBe(false);
+          expect(layerOrder.backgroundBounds).toMatchObject({ x: 0, y: 0 });
+          const viewport = (await read(
+            "({width:innerWidth,height:innerHeight,scale:devicePixelRatio})",
+          )) as { width: number; height: number; scale: number };
+          expect(viewport).toMatchObject({ width: 1280, height: 800 });
+          const proof = await mcp.call("browser_screenshot", {
+            kind: "proof",
+            fullPage,
+            timeoutMs: 3000,
+          });
+          expect(proof.content.some((block) => block.type === "image")).toBe(true);
+          expect(proof.structuredContent.image).toMatchObject({
+            width: 1280 * viewport.scale,
+            height: (fullPage ? 2600 : 800) * viewport.scale,
+          });
+          const pixels = await electronApp.evaluate(({ nativeImage }, artifactPath) => {
+            const image = nativeImage.createFromPath(artifactPath);
+            const bitmap = image.toBitmap();
+            let varied = false;
+            for (let offset = 4; offset < bitmap.length; offset += 4) {
+              if (!bitmap.subarray(offset, offset + 4).equals(bitmap.subarray(0, 4))) {
+                varied = true;
+                break;
+              }
+            }
+            return { empty: image.isEmpty(), varied };
+          }, String(proof.structuredContent.artifactPath));
+          expect(pixels).toEqual({ empty: false, varied: true });
+          expect(
+            await electronApp.evaluate(({ BrowserWindow }) =>
+              BrowserWindow.getAllWindows()[0]!.contentView.children[0]!.getVisible(),
+            ),
+          ).toBe(false);
+          await page.getByLabel("Host composer").click();
+          await page.keyboard.type("hidden-page-safe");
+          await expect(page.getByLabel("Host composer")).toHaveValue(
+            "HOST_SENTINELhidden-page-safe",
+          );
+          await page.getByLabel("Host composer").fill("HOST_SENTINEL");
+          expect(await read('document.querySelector("input").value')).toBe("");
+          await mcp.call("browser_close");
+        }
+      } finally {
+        await electronApp.evaluate(() => {
+          (
+            globalThis as typeof globalThis & {
+              __synaraVisibleBrowserE2E: { setPanelRevealEnabled(enabled: boolean): void };
+            }
+          ).__synaraVisibleBrowserE2E.setPanelRevealEnabled(true);
+        });
+      }
+    });
+
     await test.step("isolates renderer webview input from the host composer", async () => {
       await mcp.call("browser_open", { url: site.appUrl, show: true });
       await electronApp.evaluate(() => {
