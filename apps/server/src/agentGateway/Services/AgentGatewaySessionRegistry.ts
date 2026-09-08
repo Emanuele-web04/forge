@@ -7,7 +7,8 @@ export type AgentGatewayCapability =
   | "automation:write"
   | "diagnostics:read"
   | "browser:control"
-  | "device:control";
+  | "device:control"
+  | "computer:control";
 
 export interface AgentGatewaySessionIdentity {
   readonly sessionKey: string;
@@ -37,7 +38,11 @@ export interface AgentGatewayWriteAuthority {
 }
 
 export interface AgentGatewaySessionRegistryShape {
-  readonly issue: (threadId: ThreadId, provider: ProviderKind) => AgentGatewayIssuedSession;
+  readonly issue: (
+    threadId: ThreadId,
+    provider: ProviderKind,
+    options?: { readonly additionalCapabilities?: readonly AgentGatewayCapability[] },
+  ) => AgentGatewayIssuedSession;
   readonly verify: (token: string) => AgentGatewaySessionIdentity | null;
   readonly bindWriteAuthority: (token: string, turnId: string) => AgentGatewayWriteAuthority | null;
   readonly verifyWriteAuthority: (authority: AgentGatewayWriteAuthority) => boolean;
@@ -50,6 +55,8 @@ export interface AgentGatewaySessionRegistryShape {
    */
   readonly retireWriteAuthority: (token: string, turnId: string) => boolean;
   readonly revoke: (token: string) => void;
+  readonly setComputerControlEnabled?: (threadId: string, enabled: boolean) => void;
+  readonly computerControlProvisioned?: (threadId: string, provider: ProviderKind) => boolean;
 }
 
 export class AgentGatewaySessionRegistry extends ServiceMap.Service<

@@ -1,0 +1,539 @@
+{
+  "mode": "live-provider",
+  "pid": 99565,
+  "nativeBuild": {
+    "source": {
+      "version": "0.24.0",
+      "source": "4b3396d9fe4bd3cf723b0eb8db83c18a8764b520",
+      "sha256": "31790cb49baa206f6455fbc259f8f83ae27e86be908f5c8cac5ec2f8521f8382",
+      "nativeRevision": 1,
+      "patchSha256": "1a3368bfa5f2d3915a8812b099c995eff62b9fb6a6ca5da4f5256501d7f9293b",
+      "rustVersion": "1.97.1"
+    },
+    "preSigningBinarySha256": "a972aa860beb4b9c4572675796ebc6e628dcd80cc0b91269384c4812cc8e2336",
+    "fixtureDriverOverride": false
+  },
+  "calls": [
+    {
+      "at": "2026-09-07T23:21:38.526Z",
+      "error": "Error: Fixture host authority is required.",
+      "effect": "not-dispatched"
+    },
+    {
+      "at": "2026-09-07T23:21:38.527Z",
+      "error": "Error: Fixture refuses desktop overview, clipboard and all other input.",
+      "effect": "not-dispatched"
+    },
+    {
+      "at": "2026-09-07T23:21:38.528Z",
+      "error": "Error: Capture is restricted to the exact owned fixture window.",
+      "effect": "not-dispatched"
+    },
+    {
+      "at": "2026-09-07T23:21:38.528Z",
+      "error": "Error: Only one unmodified background click on the owned counter is admitted.",
+      "effect": "not-dispatched"
+    },
+    {
+      "at": "2026-09-07T23:21:38.528Z",
+      "error": "Error: Fixture refuses desktop overview, clipboard and all other input.",
+      "effect": "not-dispatched"
+    },
+    {
+      "at": "2026-09-07T23:21:38.886Z",
+      "method": "probe",
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:22:19.810Z",
+      "method": "probe",
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:22:43.739Z",
+      "method": "probe",
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:24:40.900Z",
+      "method": "call",
+      "name": "check_permissions",
+      "args": {
+        "prompt": false
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:24:40.915Z",
+      "method": "call",
+      "name": "list_windows",
+      "args": {
+        "pid": 99565
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:24:40.918Z",
+      "method": "call",
+      "name": "get_screen_size",
+      "args": {},
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:24:40.940Z",
+      "method": "call",
+      "name": "list_windows",
+      "args": {
+        "pid": 99565
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:24:41.748Z",
+      "method": "call",
+      "name": "get_window_state",
+      "args": {
+        "pid": 99565,
+        "window_id": 5315,
+        "include_screenshot": true,
+        "include_accessibility_tree": true,
+        "max_elements": 1024,
+        "max_depth": 25,
+        "max_dimension": 1536
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:25:58.618Z",
+      "method": "call",
+      "name": "check_permissions",
+      "args": {
+        "prompt": false
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:25:58.631Z",
+      "method": "call",
+      "name": "list_windows",
+      "args": {
+        "pid": 99565
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:25:58.632Z",
+      "method": "call",
+      "name": "get_screen_size",
+      "args": {},
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:25:58.653Z",
+      "method": "call",
+      "name": "list_windows",
+      "args": {
+        "pid": 99565
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:25:58.686Z",
+      "method": "call",
+      "name": "list_windows",
+      "args": {
+        "pid": 99565
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:25:58.790Z",
+      "method": "call",
+      "name": "get_window_state",
+      "args": {
+        "pid": 99565,
+        "window_id": 5315,
+        "include_accessibility_tree": false,
+        "include_screenshot": true,
+        "max_dimension": 16384
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:26:01.643Z",
+      "method": "call",
+      "name": "click",
+      "args": {
+        "pid": 99565,
+        "window_id": 5315,
+        "delivery_mode": "background",
+        "force_synthetic": true,
+        "count": 1,
+        "x": 280,
+        "y": 410
+      },
+      "ok": true,
+      "result": {
+        "delivery": {
+          "mode": "background"
+        },
+        "effect": "unverifiable",
+        "route": "synthetic_events"
+      }
+    },
+    {
+      "at": "2026-09-07T23:26:01.968Z",
+      "method": "call",
+      "name": "list_windows",
+      "args": {
+        "pid": 99565
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:26:02.075Z",
+      "method": "call",
+      "name": "get_window_state",
+      "args": {
+        "pid": 99565,
+        "window_id": 5315,
+        "include_accessibility_tree": false,
+        "include_screenshot": true,
+        "max_dimension": 1536
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:26:02.079Z",
+      "method": "call",
+      "name": "check_permissions",
+      "args": {
+        "prompt": false
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:26:02.095Z",
+      "method": "call",
+      "name": "list_windows",
+      "args": {
+        "pid": 99565
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:26:02.096Z",
+      "method": "call",
+      "name": "get_screen_size",
+      "args": {},
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:26:14.212Z",
+      "method": "call",
+      "name": "check_permissions",
+      "args": {
+        "prompt": false
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:26:14.228Z",
+      "method": "call",
+      "name": "list_windows",
+      "args": {
+        "pid": 99565
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:26:14.229Z",
+      "method": "call",
+      "name": "get_screen_size",
+      "args": {},
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:26:14.244Z",
+      "method": "call",
+      "name": "list_windows",
+      "args": {
+        "pid": 99565
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:26:14.411Z",
+      "method": "call",
+      "name": "get_window_state",
+      "args": {
+        "pid": 99565,
+        "window_id": 5315,
+        "include_screenshot": true,
+        "include_accessibility_tree": true,
+        "max_elements": 1024,
+        "max_depth": 25,
+        "max_dimension": 1536
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:26:29.216Z",
+      "method": "call",
+      "name": "check_permissions",
+      "args": {
+        "prompt": false
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:26:29.239Z",
+      "method": "call",
+      "name": "list_windows",
+      "args": {
+        "pid": 99565
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:26:29.273Z",
+      "method": "call",
+      "name": "get_screen_size",
+      "args": {},
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:30:37.225Z",
+      "method": "call",
+      "name": "check_permissions",
+      "args": {
+        "prompt": false
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:30:37.246Z",
+      "method": "call",
+      "name": "list_windows",
+      "args": {
+        "pid": 99565
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:30:37.248Z",
+      "method": "call",
+      "name": "get_screen_size",
+      "args": {},
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:30:49.484Z",
+      "method": "call",
+      "name": "check_permissions",
+      "args": {
+        "prompt": false
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:30:49.504Z",
+      "method": "call",
+      "name": "list_windows",
+      "args": {
+        "pid": 99565
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:30:49.506Z",
+      "method": "call",
+      "name": "get_screen_size",
+      "args": {},
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:32:15.620Z",
+      "method": "call",
+      "name": "check_permissions",
+      "args": {
+        "prompt": false
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:32:15.635Z",
+      "method": "call",
+      "name": "list_windows",
+      "args": {
+        "pid": 99565
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:32:15.636Z",
+      "method": "call",
+      "name": "get_screen_size",
+      "args": {},
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:32:15.661Z",
+      "method": "call",
+      "name": "list_windows",
+      "args": {
+        "pid": 99565
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:32:15.811Z",
+      "method": "call",
+      "name": "get_window_state",
+      "args": {
+        "pid": 99565,
+        "window_id": 5315,
+        "include_screenshot": true,
+        "include_accessibility_tree": true,
+        "max_elements": 1024,
+        "max_depth": 25,
+        "max_dimension": 1536
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:33:27.739Z",
+      "method": "call",
+      "name": "check_permissions",
+      "args": {
+        "prompt": false
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:33:27.780Z",
+      "method": "call",
+      "name": "list_windows",
+      "args": {
+        "pid": 99565
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:33:27.782Z",
+      "method": "call",
+      "name": "get_screen_size",
+      "args": {},
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:38:15.603Z",
+      "method": "call",
+      "name": "check_permissions",
+      "args": {
+        "prompt": false
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:38:15.618Z",
+      "method": "call",
+      "name": "list_windows",
+      "args": {
+        "pid": 99565
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:38:15.619Z",
+      "method": "call",
+      "name": "get_screen_size",
+      "args": {},
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:38:30.870Z",
+      "method": "call",
+      "name": "check_permissions",
+      "args": {
+        "prompt": false
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:38:30.891Z",
+      "method": "call",
+      "name": "list_windows",
+      "args": {
+        "pid": 99565
+      },
+      "ok": true
+    },
+    {
+      "at": "2026-09-07T23:38:30.893Z",
+      "method": "call",
+      "name": "get_screen_size",
+      "args": {},
+      "ok": true
+    }
+  ],
+  "nativeSubmissions": 1,
+  "clicks": 1,
+  "permissions": {
+    "accessibility": true,
+    "direct_capture_error": null,
+    "direct_capture_status": "not_checked",
+    "screen_recording": true,
+    "screen_recording_capturable": null,
+    "source": {
+      "attribution": "host",
+      "direct_runtime": false,
+      "disclaim_env": false,
+      "embedded": true,
+      "executable": "/Users/emanueledipietro/Applications/Synara Cua Fixture.app/Contents/Resources/cua-driver/cua-driver",
+      "host_bundle_id": "com.synara.cua-fixture",
+      "note": "Embedded mode: these booleans reflect the HOST app's TCC grant (the driver is a child in the host's responsibility chain). No separate driver grant exists or is needed. If a permission is NOT granted, the host app must request it — the driver never raises its own prompt.",
+      "pid": 99569,
+      "responsible_ppid": 99565
+    }
+  },
+  "target": {
+    "pid": 99565,
+    "windowId": 5315,
+    "id": "cua:99565:5315",
+    "title": "Synara Cua Live Fixture 99565"
+  },
+  "scopePreflight": [
+    {
+      "name": "authority",
+      "passed": true
+    },
+    {
+      "name": "desktop-capture",
+      "passed": true
+    },
+    {
+      "name": "foreign-window",
+      "passed": true
+    },
+    {
+      "name": "foreground-input",
+      "passed": true
+    },
+    {
+      "name": "clipboard",
+      "passed": true
+    }
+  ],
+  "server": {
+    "pid": 99570,
+    "port": 61300,
+    "url": "http://127.0.0.1:61300",
+    "workspace": "/private/tmp/synara-cua-implementation/live-provider-run-2/workspace",
+    "ready": true
+  },
+  "serverExit": {
+    "code": null,
+    "signal": "SIGTERM"
+  }
+}

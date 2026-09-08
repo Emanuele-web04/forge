@@ -1,3 +1,5 @@
+import { CuaDriverHost } from "./cuaDriverHost";
+import { CUA_HOST_SOCKET_ENV } from "@synara/shared/cuaDriverProtocol";
 // FILE: main.ts
 // Purpose: Starts the Electron shell, backend process, native menus, IPC bridges, and updater.
 // Layer: Desktop main process
@@ -55,6 +57,7 @@ import { getMacTrafficLightPosition } from "@synara/shared/desktopChrome";
 import { DEVICE_HELPER_SOURCE_DIR_ENV } from "@synara/shared/deviceHelperCache";
 import {
   SYNARA_DESKTOP_SMOKE_USER_DATA_ENV,
+  SYNARA_DESKTOP_BUNDLE_ID_ENV,
   SYNARA_DESKTOP_UPDATE_CHANNEL,
   SYNARA_SOURCE_DESKTOP_BUILD_MARKER,
   resolveSynaraDesktopFlavor,
@@ -3510,6 +3513,45 @@ function backendNodeArgs(): string[] {
   });
 }
 
+let cuaDriverHost: CuaDriverHost | undefined;
+let cuaHostEndpoint: string | undefined;
+
+async function startCuaHost(): Promise<void> {
+  if (process.platform !== "darwin" || cuaDriverHost) return;
+  const host = new CuaDriverHost({
+    binaryPath: app.isPackaged
+      ? Path.join(process.resourcesPath, "cua-driver", "cua-driver")
+      : Path.join(resolveAppRoot(), "apps/desktop/resources/cua-driver/cua-driver"),
+    bundleId: desktopIdentity.bundleId,
+    capability: DESKTOP_BROWSER_HOST_CAPABILITY,
+    setup: async () => {
+      const trusted = systemPreferences.isTrustedAccessibilityClient(true);
+      await shell.openExternal(
+        trusted
+          ? "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+          : "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+      );
+    },
+    normalizeOverview: (result) => {
+      const image = result.content?.find((part) => part.type === "image" && part.data);
+      if (!image?.data) return result;
+      const native = nativeImage.createFromBuffer(Buffer.from(image.data, "base64"));
+      const size = native.getSize();
+      if (Math.max(size.width, size.height) <= 1536) return result;
+      const ratio = 1536 / Math.max(size.width, size.height);
+      const scaled = native.resize({
+        width: Math.round(size.width * ratio),
+        height: Math.round(size.height * ratio),
+        quality: "best",
+      });
+      image.data = scaled.toPNG().toString("base64");
+      return result;
+    },
+  });
+  cuaHostEndpoint = await host.listen();
+  cuaDriverHost = host;
+}
+
 function backendEnv(): NodeJS.ProcessEnv {
   const servedStaticRoot = resolveServedStaticRoot();
   const migrationSourceDigest = embeddedDesktopMigrationRuntimeSourceDigest();
@@ -3532,6 +3574,8 @@ function backendEnv(): NodeJS.ProcessEnv {
     ...(migrationDivergenceConsent
       ? { [MIGRATION_DIVERGENCE_CONSENT_ENV]: migrationDivergenceConsent }
       : {}),
+    ...(cuaHostEndpoint ? { [CUA_HOST_SOCKET_ENV]: cuaHostEndpoint } : {}),
+    [SYNARA_DESKTOP_BUNDLE_ID_ENV]: desktopIdentity.bundleId,
     SYNARA_MODE: "desktop",
     SYNARA_NO_BROWSER: "1",
     SYNARA_PORT: String(backendPort),
@@ -4029,6 +4073,7 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
   const outputTailDetector = new BackendOutputTailDetector();
   backendListeningDetector = listeningDetector;
   backendProcess = child;
+  cuaDriverHost?.resume();
   let backendSessionClosed = false;
   const closeBackendSession = (details: string) => {
     if (backendSessionClosed) return;
@@ -4121,6 +4166,7 @@ function takeBackendProcessForShutdown(): ChildProcess.ChildProcess | null {
 }
 
 async function stopBackendAndWaitForExit(): Promise<void> {
+  await cuaDriverHost?.suspend();
   const child = takeBackendProcessForShutdown();
   if (!child) return;
   const backendChild = child;
@@ -4159,6 +4205,9 @@ async function stopBackendAndWaitForExit(): Promise<void> {
 }
 
 async function disposeBrowserHostPipeServerForShutdown(reason: string): Promise<void> {
+  await cuaDriverHost?.dispose();
+  cuaDriverHost = undefined;
+  cuaHostEndpoint = undefined;
   const pipeServer = browserHostPipeServer;
   browserHostPipeServer = null;
   if (!pipeServer) return;
@@ -5146,6 +5195,7 @@ async function bootstrap(): Promise<void> {
   } catch (error) {
     console.warn("[Synara browser] Failed to start browser host pipe", error);
   }
+  await startCuaHost();
   startBackend();
   writeDesktopLogHeader("bootstrap backend start requested");
 

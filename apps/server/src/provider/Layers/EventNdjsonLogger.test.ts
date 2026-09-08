@@ -28,6 +28,38 @@ function parseLogLine(line: string) {
 }
 
 describe("EventNdjsonLogger", () => {
+  it.effect("writes image metadata without persisting model image bodies", () =>
+    Effect.gen(function* () {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-provider-image-log-"));
+      try {
+        const logger = yield* makeEventNdjsonLogger(path.join(tempDir, "native.ndjson"), {
+          stream: "native",
+        });
+        assert.isDefined(logger);
+        if (!logger) return;
+        const data = Buffer.alloc(512 * 1024, 123).toString("base64");
+        const image = { type: "image", data, mimeType: "image/png" };
+        yield* logger.write({ content: [image] }, ThreadId.makeUnsafe("image-thread"));
+        yield* logger.close();
+        const line = fs.readFileSync(path.join(tempDir, "image-thread.log"), "utf8").trim();
+        const logged = JSON.parse(parseLogLine(line).payload);
+        assert.isBelow(line.length, 1000);
+        assert.deepEqual(logged.content, [
+          {
+            type: "image",
+            mimeType: "image/png",
+            synaraImageOmitted: true,
+            encodedLength: data.length,
+            byteLength: 512 * 1024,
+          },
+        ]);
+        assert.equal(image.data, data);
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    }),
+  );
+
   it.effect("writes effect-style lines to thread-scoped files", () =>
     Effect.gen(function* () {
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-provider-log-"));

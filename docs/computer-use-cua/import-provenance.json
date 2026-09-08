@@ -1,0 +1,1159 @@
+{
+  "base": "8599826d75d9932e69c301f2441f585da8f211e2",
+  "prHeads": {
+    "820": "3e1512e7841b4f9fa3f19bab33a426035bd11424",
+    "821": "aed8e33894b620872fb3001bc6c6ed730eff07a3",
+    "822": "ebaa1d26be58890860046e7cc35bea465529c407",
+    "1010": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+  },
+  "note": "Selected shared transport, approvals, provider and Computer UI/core foundations. Native Swift/helper provisioning and Linux backends excluded. Files are subsequently adapted for Cua; compare source SHA to distinguish original changes.",
+  "files": [
+    {
+      "status": "M",
+      "file": "apps/server/src/agentGateway/Layers/AgentGateway.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/agentGateway/Layers/AgentGatewayCredentials.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/agentGateway/Layers/AgentGatewaySessionRegistry.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/agentGateway/Layers/AgentGatewaySessionRegistry.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/agentGateway/Services/AgentGatewayCredentials.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/agentGateway/Services/AgentGatewaySessionRegistry.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/agentGateway/approvalGate.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/agentGateway/browserTools.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/agentGateway/computerGuidance.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/agentGateway/computerTools.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/agentGateway/computerTools.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/agentGateway/deviceTools.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/agentGateway/deviceTools.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/agentGateway/mcpTransport.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/agentGateway/mcpTransport.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/agentGateway/protocol.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/agentGateway/sessionLease.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/agentGateway/sessionLease.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/agentGateway/sessionLeaseCallSites.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/agentGateway/toolInput.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/agentGateway/toolRuntime.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/codexAppServerManager.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/codexAppServerManager.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/codexAppServerTransport.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/codexAppServerTransport.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/ComputerApprovalGate.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/ComputerApprovalGate.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/ComputerBackend.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/ComputerManager.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/ComputerManager.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/DesktopOperationQueue.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/DesktopOperationQueue.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/FakeComputerBackend.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/FakeComputerBackend.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/Layers/ComputerLeaseReactor.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/Layers/ComputerLeaseReactor.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/Layers/ComputerService.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/Layers/ComputerService.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/Services/ComputerLeaseReactor.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/Services/ComputerService.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/UnavailableComputerBackend.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/UnavailableComputerBackend.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/computerControlInvariants.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/computerFrameRoute.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/computerFrameRoute.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/computerGeometry.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/computerGeometry.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/computerHealthState.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/computerSetupSignal.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/computerSetupSignal.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/screenshotFrames.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/screenshotFrames.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/scrollCalibration.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/scrollCalibration.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/scrollUnits.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/scrollUnits.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/stillFrameDedupe.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/stillFrameDedupe.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/stillFramePublisher.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/stillFramePublisher.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/uiTreeTargeting.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/uiTreeTargeting.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/uiTreeText.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/utf8Truncation.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/utf8Truncation.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/wsComputerHandlers.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/computer/wsComputerHandlers.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/device/deviceFrameRoute.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/device/deviceFrameTransport.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/device/helperClient.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/device/helperClient.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/device/uiTreeTargeting.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/diagnostics/Layers/ThreadDiagnosticsQuery.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/effectServer.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/externalMcp/Layers/ExternalMcpGateway.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/main.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/orchestration/Layers/ProviderCommandReactor.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/orchestration/decider.computerControl.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/orchestration/decider.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/orchestration/providerRuntimeActivityProjection.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/orchestration/providerRuntimeActivityProjection.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/orchestration/stalePendingInteractions.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/orchestration/startupPendingInteractionReconciliation.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/orchestration/startupTurnReconciliation.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/orchestration/startupTurnReconciliation.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/persistence/Layers/ProjectionPendingInteractions.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/persistence/Services/ProjectionPendingInteractions.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/server/src/pngHeader.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/provider/Layers/AntigravityAdapter.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/provider/Layers/AntigravityAdapter.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/provider/Layers/ClaudeAdapter.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/provider/Layers/ClaudeAdapter.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/provider/Layers/CodexAdapter.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/provider/Layers/CodexAdapter.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/provider/Layers/CursorAdapter.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/provider/Layers/DevinAdapter.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/provider/Layers/DroidAdapter.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/provider/Layers/GrokAdapter.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/provider/Layers/OpenCodeAdapter.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/provider/Layers/OpenCodeAdapter.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/provider/Layers/PiAdapter.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/provider/Layers/ProviderService.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/provider/Layers/ProviderService.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/provider/acp/AcpCoreRuntimeEvents.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/provider/acp/AcpCoreRuntimeEvents.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/serverLayers.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/server/src/wsRpc.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/appSettings.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/appSettings.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/components/BranchToolbar.tsx",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/components/ChatView.logic.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/components/ChatView.logic.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/components/ChatView.tsx",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/components/ComputerPanel.logic.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/components/ComputerPanel.logic.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/components/ComputerPanel.test.tsx",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/components/ComputerPanel.tsx",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/components/SettingsSidebarNav.test.tsx",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/components/SettingsSidebarNav.tsx",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/components/chat/ChatThreadSurfacePrimitives.tsx",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/components/chat/ChatTranscriptPane.tsx",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/components/chat/ComposerComputerControlEffortHint.tsx",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/components/chat/ComposerPendingApprovalPanel.tsx",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/components/chat/ComputerControlDeniedCard.tsx",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/components/chat/ComputerSetupRequiredCard.test.tsx",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/components/chat/ComputerSetupRequiredCard.tsx",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/components/chat/MessagesTimeline.tsx",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/components/chat/ReviewChangesButton.tsx",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "D",
+      "file": "apps/web/src/components/chat/SingleChatSurface.browserOpenRequest.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "D",
+      "file": "apps/web/src/components/chat/SingleChatSurface.deviceOpenRequest.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/components/chat/SingleChatSurface.tsx",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/components/chat/TimelineWorkEntryRow.tsx",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/components/chat/browserPanelOpenRequest.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/components/chat/composerComputerControlHint.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/components/chat/composerComputerControlHint.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/components/chat/composerPickerStyles.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/components/chat/composerTraits.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "D",
+      "file": "apps/web/src/components/chat/devicePaneOpenRequest.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/components/chat/dockPaneOpenRequest.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/components/chat/dockPaneOpenRequest.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/components/chat/rightDockPaneMeta.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/components/chat/rightDockPaneMeta.tsx",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/components/chat/toolCallGroup.logic.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/components/computer/ComputerStatusBadge.tsx",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/components/computer/computerInputQueue.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/components/computer/computerInputQueue.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/components/computer/useComputerImageStream.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/components/computer/useComputerImageStream.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/components/settings/ComputerSettingsPanel.test.tsx",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/components/settings/ComputerSettingsPanel.tsx",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/composerDraftActions.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/composerDraftDomain.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/composerDraftPersistence.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/computerStateStore.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/computerStateStore.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/hooks/useCachedComputerStatus.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/hooks/useComputerDesktopControl.test.tsx",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/hooks/useComputerDesktopControl.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/hooks/useComputerEventBridge.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/hooks/useComputerSupport.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/hooks/useDeviceEventBridge.browser.tsx",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/hooks/useProvisionComputer.test.tsx",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/hooks/useProvisionComputer.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/hooks/useThreadComputerStateSeed.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/lib/binaryFrameSource.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/lib/computerFrameSource.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/lib/computerFrameSource.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/lib/computerProvisionRequest.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/lib/computerProvisioning.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/lib/computerProvisioning.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/lib/computerToolPresentation.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/lib/computerToolPresentation.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/lib/deviceFrameSource.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/lib/disclosureMotion.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/lib/dockPaneActivation.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/lib/icons.tsx",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/lib/serverReactQuery.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "apps/web/src/lib/threadTurnInterrupt.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/lib/toolCallDetails.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/lib/toolCallLabel.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/notifications/taskCompletion.logic.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/pendingInteractionDerivation.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/pendingInteractionDerivation.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/rightDockStore.logic.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/rightDockStore.logic.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/routes/__root.tsx",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/routes/_chat.settings.tsx",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/settingsNavigation.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/settingsSearchIndex.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/workLog.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/wsNativeApi.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "apps/web/src/wsTransport.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "packages/contracts/src/computer.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "packages/contracts/src/computer.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "packages/contracts/src/index.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "packages/contracts/src/ipc.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "packages/contracts/src/orchestration.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "packages/contracts/src/orchestration.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "packages/contracts/src/provider.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "packages/contracts/src/provider.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "packages/contracts/src/providerRuntime.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "packages/contracts/src/rpc.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "packages/contracts/src/rpc.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "packages/contracts/src/ws.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "packages/shared/package.json",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "packages/shared/src/computerFrame.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "packages/shared/src/computerFrame.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "packages/shared/src/computerKeyNames.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "packages/shared/src/computerPermissions.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "packages/shared/src/computerPermissions.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "packages/shared/src/deviceFrame.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "packages/shared/src/frameTransport.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "packages/shared/src/frameTransport.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "packages/shared/src/jsonrpc-stdio.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "packages/shared/src/jsonrpc-stdio.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "packages/shared/src/lengthPrefixedRecords.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "packages/shared/src/lengthPrefixedRecords.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "packages/shared/src/threadSummary.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "M",
+      "file": "packages/shared/src/threadSummary.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "packages/shared/src/uiTreeTargeting.test.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    },
+    {
+      "status": "A",
+      "file": "packages/shared/src/uiTreeTargeting.ts",
+      "source": "d9c1bdab0a5f0cdd51ade75adc62a0c44c473a5a"
+    }
+  ],
+  "refreshes": [
+    {
+      "date": "2026-09-08",
+      "prHeads": {
+        "822": "bf70dfd0e7ee1e512a633da3cc6e814d2f791b0b",
+        "1010": "32d62c28c39229a42f8d9f31b160bf61996e494a"
+      },
+      "strategy": "Selected shared changes adapted to the existing Cua backend, plus integration fixes. Original imports and local changes are preserved.",
+      "selected": [
+        "Diagnostic image retention",
+        "Availability-only frontend subscriptions and hidden frame lifecycle",
+        "Atomic pane clicks and pending input cancellation",
+        "Scoped observation and conditional waits",
+        "Conservative scroll overlap and image measurement",
+        "Recoverable input pause and activity contracts/UI",
+        "State cache cleanup and connection-owned event interests"
+      ],
+      "localAdaptations": [
+        "Cua exact-target read-only readiness and native Space/bounds guards",
+        "AX no-replay and removal of untargeted Safari fallback",
+        "Revocable serialized wait polling and detached-input admission",
+        "Immediate capability revocation and native cleanup acknowledgement retained",
+        "Correct socket lifetime and live-view overflow behavior"
+      ],
+      "excluded": [
+        "Swift production backend and helper provisioning",
+        "Parallel native observation lane",
+        "Capabilities not implemented by Cua"
+      ],
+      "record": "integration-refresh.md"
+    }
+  ]
+}

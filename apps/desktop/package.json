@@ -9,9 +9,10 @@
     "dev:electron": "bun run scripts/dev-electron.mjs",
     "build": "tsdown",
     "start": "bun run scripts/start-electron.mjs",
-    "typecheck": "node ../../node_modules/@typescript/native/bin/tsc --noEmit --tsBuildInfoFile node_modules/.cache/typescript-native.tsbuildinfo",
+    "typecheck": "node ../../node_modules/@typescript/native/bin/tsc --noEmit --tsBuildInfoFile node_modules/.cache/typescript-native.tsbuildinfo && bun run typecheck:fixtures",
+    "typecheck:fixtures": "node ../../node_modules/@typescript/native/bin/tsc --project tsconfig.fixtures.json",
     "typecheck:native": "bun run typecheck",
-    "typecheck:legacy": "tsc --noEmit",
+    "typecheck:legacy": "tsc --noEmit && tsc --project tsconfig.fixtures.json",
     "test": "vitest run --passWithNoTests",
     "smoke-test": "node scripts/smoke-test.mjs"
   },

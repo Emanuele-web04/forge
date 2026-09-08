@@ -11,6 +11,7 @@ import type {
   ModelSelection,
   OrchestrationCommand,
   OrchestrationEvent,
+  ProviderKind,
   ProviderForkThreadResult,
   ProviderRuntimeEvent,
   ProviderSession,
@@ -47,6 +48,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AgentGatewayOperationRepositoryLive } from "../../agentGateway/Layers/AgentGatewayOperationRepository.ts";
 import { AgentGatewayOperationRepository } from "../../agentGateway/Services/AgentGatewayOperationRepository.ts";
+import { makeAgentGatewaySessionRegistry } from "../../agentGateway/Layers/AgentGatewaySessionRegistry.ts";
+import {
+  AgentGatewaySessionRegistry,
+  type AgentGatewaySessionRegistryShape,
+} from "../../agentGateway/Services/AgentGatewaySessionRegistry.ts";
+import { ComputerManager } from "../../computer/ComputerManager.ts";
+import { FakeComputerBackend } from "../../computer/FakeComputerBackend.ts";
+import {
+  ComputerService,
+  type ComputerServiceShape,
+} from "../../computer/Services/ComputerService.ts";
 import { deriveServerPaths, ServerConfig } from "../../config.ts";
 import { TextGenerationError } from "../../git/Errors.ts";
 import {
@@ -221,6 +233,8 @@ describe("ProviderCommandReactor", () => {
     readonly serverSettings?: DeepPartial<ServerSettings>;
     readonly confirmNativeResume?: (resumeCursor: unknown) => boolean;
     readonly generateThreadTitle?: TextGenerationShape["generateThreadTitle"];
+    readonly computerService?: ComputerServiceShape;
+    readonly gatewaySessions?: AgentGatewaySessionRegistryShape;
   }) {
     const now = new Date().toISOString();
     const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "synara-reactor-"));
@@ -576,6 +590,16 @@ describe("ProviderCommandReactor", () => {
       Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
       Layer.provideMerge(TurnCheckpointCoordinatorLive),
       Layer.provideMerge(Layer.succeed(ProviderService, service)),
+      Layer.provideMerge(
+        input?.computerService
+          ? Layer.succeed(ComputerService, input.computerService)
+          : Layer.empty,
+      ),
+      Layer.provideMerge(
+        input?.gatewaySessions
+          ? Layer.succeed(AgentGatewaySessionRegistry, input.gatewaySessions)
+          : Layer.empty,
+      ),
       Layer.provideMerge(
         Layer.succeed(ProviderHealth, {
           getStatuses: Effect.succeed([]),
@@ -4991,6 +5015,58 @@ describe("ProviderCommandReactor", () => {
       threadId: ThreadId.makeUnsafe("thread-1"),
     });
     expect(harness.stopSession.mock.calls.length).toBe(0);
+  });
+
+  it("checks computer capability against the live provider when the projection has no provider name", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const registry = makeAgentGatewaySessionRegistry();
+    registry.issue(threadId, "codex", { additionalCapabilities: ["computer:control"] });
+    const computerControlProvisioned = vi.fn(
+      (id: string, provider: ProviderKind) =>
+        registry.computerControlProvisioned?.(id, provider) ?? false,
+    );
+    const harness = await createHarness({
+      gatewaySessions: { ...registry, computerControlProvisioned },
+    });
+    const now = new Date().toISOString();
+    harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-missing-provider-name"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: null,
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-live-computer-provider"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-live-computer-provider"),
+          role: "user",
+          text: "Continue",
+          attachments: [],
+        },
+        enableComputerControl: true,
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(computerControlProvisioned).toHaveBeenCalledWith(threadId, "codex");
+    expect(harness.startSession).not.toHaveBeenCalled();
   });
 
   it("reacts to thread.turn.start by ensuring session and sending provider turn", async () => {
@@ -11784,6 +11860,77 @@ describe("ProviderCommandReactor", () => {
       threadId: ThreadId.makeUnsafe("thread-1"),
     });
     expect(harness.stopSession).not.toHaveBeenCalled();
+  });
+
+  it("restores computer admission after ordered archive cleanup and before the next provider turn", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const manager = new ComputerManager({ backend: new FakeComputerBackend() });
+    const order: string[] = [];
+    let finishArchive!: () => void;
+    const archiveGate = new Promise<void>((resolve) => {
+      finishArchive = resolve;
+    });
+    const remove = manager.handleThreadRemoved.bind(manager);
+    vi.spyOn(manager, "handleThreadRemoved").mockImplementation(async (id) => {
+      await remove(id);
+      order.push("archive-held");
+      await archiveGate;
+      order.push("archive-finished");
+    });
+    const restore = manager.handleThreadRestored.bind(manager);
+    const restored = vi.spyOn(manager, "handleThreadRestored").mockImplementation(async (id) => {
+      await restore(id);
+      order.push("restored");
+    });
+    try {
+      const harness = await createHarness({
+        computerService: {
+          supported: true,
+          availability: { kind: "available", backend: "fake" },
+          manager,
+        },
+      });
+      harness.sendTurn.mockImplementation(() =>
+        Effect.sync(() => {
+          order.push("sent");
+          return { threadId, turnId: asTurnId("turn-after-computer-restore") };
+        }),
+      );
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.archive",
+          commandId: CommandId.makeUnsafe("cmd-computer-archive-held"),
+          threadId,
+        }),
+      );
+      await waitFor(() => order.includes("archive-held"));
+      await expect(manager.withAgentActivity(threadId, async () => undefined)).rejects.toThrow(
+        "revoked",
+      );
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.unarchive",
+          commandId: CommandId.makeUnsafe("cmd-computer-unarchive-ordered"),
+          threadId,
+        }),
+      );
+      await dispatchHarnessUserTurn(harness, {
+        messageId: "user-after-computer-restore",
+        text: "Continue after unarchive",
+        createdAt: new Date().toISOString(),
+      });
+      expect(restored).not.toHaveBeenCalled();
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      finishArchive();
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      expect(order).toEqual(["archive-held", "archive-finished", "restored", "sent"]);
+      await expect(manager.withAgentActivity(threadId, async () => "allowed")).resolves.toBe(
+        "allowed",
+      );
+    } finally {
+      finishArchive();
+      await manager.dispose();
+    }
   });
 
   it("does not restore pending sidechat context after an explicit session stop", async () => {

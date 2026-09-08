@@ -4,7 +4,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   acquireAgentGatewaySessionLease,
+  AGENT_GATEWAY_NO_CAPABILITIES,
+  agentGatewayCapabilitiesFor,
   cancelAgentGatewayTurn,
+  captureAgentGatewayCapabilityInput,
   releaseAgentGatewaySessionLeaseOnInterrupt,
   startAgentGatewaySessionLeaseExitWatcher,
   withAgentGatewayTurnCancellation,
@@ -24,6 +27,7 @@ describe("AgentGatewaySessionLease", () => {
       },
       ThreadId.makeUnsafe("thread-1"),
       "codex",
+      AGENT_GATEWAY_NO_CAPABILITIES,
     );
 
     await lease?.cancelTurn("turn-exact");
@@ -49,6 +53,7 @@ describe("AgentGatewaySessionLease", () => {
       },
       ThreadId.makeUnsafe("thread-1"),
       "codex",
+      AGENT_GATEWAY_NO_CAPABILITIES,
     );
 
     await lease?.retireTurn("turn-a");
@@ -251,6 +256,7 @@ describe("AgentGatewaySessionLease", () => {
       { connectionForThread, issueStdioBootstrapToken, revokeSessionToken },
       ThreadId.makeUnsafe("thread-1"),
       "cursor",
+      AGENT_GATEWAY_NO_CAPABILITIES,
     );
 
     expect(lease?.connection).toEqual({
@@ -271,6 +277,54 @@ describe("AgentGatewaySessionLease", () => {
     expect(revokeSessionToken).toHaveBeenCalledWith("gateway-token");
   });
 
+  it("derives the computer capability from the session start input", () => {
+    const connectionForThread = vi.fn(() => ({
+      url: "http://127.0.0.1:48123/mcp",
+      bearerToken: "computer-token",
+    }));
+    const lease = acquireAgentGatewaySessionLease(
+      { connectionForThread, revokeSessionToken: vi.fn() },
+      ThreadId.makeUnsafe("thread-computer"),
+      "codex",
+      { enableComputerControl: true },
+    );
+
+    expect(connectionForThread).toHaveBeenCalledWith("thread-computer", "codex", {
+      additionalCapabilities: ["computer:control"],
+    });
+    lease?.release();
+  });
+
+  it.each([
+    { name: "computer control off", input: { enableComputerControl: false } },
+    { name: "computer control unset", input: {} },
+    { name: "no capabilities", input: AGENT_GATEWAY_NO_CAPABILITIES },
+  ])("issues a base credential with no extra capabilities for $name", ({ input }) => {
+    const connectionForThread = vi.fn(() => ({
+      url: "http://127.0.0.1:48123/mcp",
+      bearerToken: "base-token",
+    }));
+    const lease = acquireAgentGatewaySessionLease(
+      { connectionForThread, revokeSessionToken: vi.fn() },
+      ThreadId.makeUnsafe("thread-base"),
+      "codex",
+      input,
+    );
+
+    expect(agentGatewayCapabilitiesFor(input)).toEqual([]);
+    expect(connectionForThread).toHaveBeenCalledWith("thread-base", "codex");
+    lease?.release();
+  });
+
+  it("keeps a captured capability input equivalent to the start input it came from", () => {
+    for (const enableComputerControl of [true, false, undefined]) {
+      const startInput = { enableComputerControl, cwd: "/tmp/project" };
+      expect(agentGatewayCapabilitiesFor(captureAgentGatewayCapabilityInput(startInput))).toEqual(
+        agentGatewayCapabilitiesFor(startInput),
+      );
+    }
+  });
+
   it("keeps replacement runtimes on independent leases", () => {
     let sequence = 0;
     const connectionForThread = vi.fn(() => ({
@@ -281,8 +335,18 @@ describe("AgentGatewaySessionLease", () => {
     const credentials = { connectionForThread, revokeSessionToken };
     const threadId = ThreadId.makeUnsafe("thread-1");
 
-    const previous = acquireAgentGatewaySessionLease(credentials, threadId, "grok");
-    const replacement = acquireAgentGatewaySessionLease(credentials, threadId, "grok");
+    const previous = acquireAgentGatewaySessionLease(
+      credentials,
+      threadId,
+      "grok",
+      AGENT_GATEWAY_NO_CAPABILITIES,
+    );
+    const replacement = acquireAgentGatewaySessionLease(
+      credentials,
+      threadId,
+      "grok",
+      AGENT_GATEWAY_NO_CAPABILITIES,
+    );
 
     previous?.release();
     expect(revokeSessionToken).toHaveBeenLastCalledWith("gateway-token-1");
@@ -295,7 +359,12 @@ describe("AgentGatewaySessionLease", () => {
 
   it("does not acquire a credential when the gateway layer is absent", () => {
     expect(
-      acquireAgentGatewaySessionLease(undefined, ThreadId.makeUnsafe("thread-1"), "droid"),
+      acquireAgentGatewaySessionLease(
+        undefined,
+        ThreadId.makeUnsafe("thread-1"),
+        "droid",
+        AGENT_GATEWAY_NO_CAPABILITIES,
+      ),
     ).toBeUndefined();
   });
 
@@ -313,6 +382,7 @@ describe("AgentGatewaySessionLease", () => {
       },
       ThreadId.makeUnsafe("thread-1"),
       "claudeAgent",
+      AGENT_GATEWAY_NO_CAPABILITIES,
     );
 
     expect(() => lease?.release()).toThrow("revoke failed");
@@ -333,6 +403,7 @@ describe("AgentGatewaySessionLease", () => {
       },
       ThreadId.makeUnsafe("thread-1"),
       "cursor",
+      AGENT_GATEWAY_NO_CAPABILITIES,
     );
 
     await Effect.runPromise(
@@ -376,6 +447,7 @@ describe("AgentGatewaySessionLease", () => {
       },
       ThreadId.makeUnsafe("thread-1"),
       "pi",
+      AGENT_GATEWAY_NO_CAPABILITIES,
     );
 
     await Effect.runPromise(

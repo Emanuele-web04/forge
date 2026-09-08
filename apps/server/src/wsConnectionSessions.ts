@@ -39,6 +39,8 @@ export interface WsConnectionSessionsShape {
   /** Registers the session for the lifetime of the connection scope. */
   readonly register: (session: WsConnectionSession) => Effect.Effect<string, never, Scope.Scope>;
   readonly lookup: (key: string | undefined) => WsConnectionSession | undefined;
+  /** Registers cleanup on a live socket; false means it has already closed. */
+  readonly onClose: (key: string, cleanup: () => void) => boolean;
 }
 
 export class WsConnectionSessions extends ServiceMap.Service<
@@ -47,16 +49,33 @@ export class WsConnectionSessions extends ServiceMap.Service<
 >()("synara/ws/WsConnectionSessions") {}
 
 export const makeWsConnectionSessions = Effect.sync(() => {
-  const sessions = new Map<string, WsConnectionSession>();
+  const sessions = new Map<
+    string,
+    { readonly session: WsConnectionSession; readonly cleanups: Set<() => void> }
+  >();
   return {
     register: (session: WsConnectionSession) =>
       Effect.gen(function* () {
         const key = randomUUID();
-        sessions.set(key, session);
-        yield* Effect.addFinalizer(() => Effect.sync(() => sessions.delete(key)));
+        const cleanups = new Set<() => void>();
+        sessions.set(key, { session, cleanups });
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            sessions.delete(key);
+            for (const cleanup of cleanups) cleanup();
+            cleanups.clear();
+          }),
+        );
         return key;
       }),
-    lookup: (key: string | undefined) => (key === undefined ? undefined : sessions.get(key)),
+    lookup: (key: string | undefined) =>
+      key === undefined ? undefined : sessions.get(key)?.session,
+    onClose: (key: string, cleanup: () => void) => {
+      const connection = sessions.get(key);
+      if (!connection) return false;
+      connection.cleanups.add(cleanup);
+      return true;
+    },
   } satisfies WsConnectionSessionsShape;
 });
 

@@ -1,0 +1,166 @@
+{
+  "date": "2026-09-08",
+  "base": "8599826d75d9932e69c301f2441f585da8f211e2",
+  "upstream": "upstream-heads.json",
+  "runtime": {
+    "node": "26.8.1",
+    "vitest": "4.1.10"
+  },
+  "testScopes": [
+    {
+      "id": "integrated-server",
+      "files": 32,
+      "passed": 412,
+      "log": "integrated-server-tests.log",
+      "scope": "Computer suites, gateway authority/tools, orchestration control, connection sessions and diagnostic retention"
+    },
+    {
+      "id": "runtime-activity-final",
+      "files": 2,
+      "passed": 12,
+      "log": "activity-reactor-tests.log",
+      "overlaps": ["integrated-server"],
+      "note": "Final focused rerun after runtime reactor wiring; not additional independent total"
+    },
+    {
+      "id": "frontend-unit",
+      "files": 9,
+      "passed": 126,
+      "log": "frontend-unit-final.log"
+    },
+    {
+      "id": "frontend-browser",
+      "files": 4,
+      "passed": 9,
+      "log": "frontend-browser-final.log",
+      "scope": "Real headless Chromium with mocked native RPCs"
+    },
+    {
+      "id": "chat-view-browser",
+      "files": 1,
+      "passed": 2,
+      "unselected": 117,
+      "log": "frontend-chat-smoke.log",
+      "scope": "Two selected actual ChatView browser cases; not the full suite"
+    },
+    {
+      "id": "contracts-and-activity",
+      "files": 2,
+      "passed": 21,
+      "log": "contracts-cursor-activity-tests.log",
+      "overlaps": ["integrated-server", "runtime-activity-final"]
+    },
+    {
+      "id": "claude-image-delivery",
+      "files": 1,
+      "passed": 3,
+      "log": "diagnostic-claude-tests.log",
+      "scope": "Selected diagnostic retention/model input regressions"
+    },
+    {
+      "id": "websocket-lifecycle",
+      "files": 1,
+      "passed": 23,
+      "report": "computer-event-interests-report.md",
+      "scope": "Real loopback WebSocket connection lifecycle; companion unit tests included in integrated-server"
+    },
+    {
+      "id": "desktop-host",
+      "files": 1,
+      "passed": 12,
+      "log": "desktop-host-tests.log",
+      "scope": "Temporary local sockets and fake native children; no real desktop input/capture",
+      "note": "Initial sandbox EPERM prevented sockets; the same isolated suite passed with scoped execution permission"
+    },
+    {
+      "id": "packaging-and-frame-transport",
+      "files": 4,
+      "passed": 29,
+      "log": "packaging-transport-tests.log"
+    },
+    {
+      "id": "independent-core-invariants",
+      "files": 1,
+      "passed": 2,
+      "log": "core-audit.log",
+      "report": "core-independent-audit.md"
+    },
+    {
+      "id": "native-revision-2-pure",
+      "passed": 60,
+      "log": "native-pure-tests-final.log",
+      "scope": "Target guards 4, cancellation 5, AX/click/set-value 35, foreground activation/restoration 11, mailbox 1, actual readiness authorization 4; no OS input/capture"
+    }
+  ],
+  "note": "Scopes overlap; no summed total is claimed. All listed passing outcomes are observed in this integration, not copied from upstream PR claims.",
+  "builds": [
+    {
+      "component": "web",
+      "status": "passed",
+      "log": "web-build.log",
+      "command": "node node_modules/vite/bin/vite.js build",
+      "cwd": "apps/web"
+    },
+    {
+      "component": "server",
+      "status": "passed",
+      "log": "server-build.log",
+      "command": "node node_modules/tsdown/dist/run.mjs",
+      "cwd": "apps/server",
+      "assetStaging": "build-assets.json"
+    },
+    {
+      "component": "desktop",
+      "status": "passed",
+      "log": "desktop-build.log",
+      "command": "node node_modules/tsdown/dist/run.mjs",
+      "cwd": "apps/desktop"
+    },
+    {
+      "component": "built-server-dependencies",
+      "status": "passed",
+      "log": "server-runtime-smoke.log",
+      "command": "node dist/runtimeDependencySmoke.mjs",
+      "cwd": "apps/server",
+      "note": "Executed built server imports in the worktree; not a signed installer or ASAR qualification"
+    }
+  ],
+  "measurement": "diagnostic-image-before-after.json",
+  "notRun": [
+    "bun fmt",
+    "bun lint",
+    "bun typecheck",
+    "Fresh native revision 2 signed-GUI actuation and provider round trip",
+    "Long-running comparable RAM/CPU workload",
+    "Production signing/notarization"
+  ],
+  "reviews": [
+    "core-independent-audit.md",
+    "adapter-readiness-independent-review.md",
+    "native-revision2-independent-review.md"
+  ],
+  "finishedAtUtc": "2026-09-08T12:59:49.553Z",
+  "implementationStatus": "Integrated locally; required repository-wide checks and fresh native GUI/RAM qualification remain outstanding",
+  "native": {
+    "revision": 2,
+    "evidence": "native-integration-evidence.json",
+    "provenance": "native-provenance.json",
+    "patchSha256": "58b1953265bbcd892af607ece87b6f9bf484d3c4b7dde0a5a4545f5c9c3516fd",
+    "binarySha256": "b090db4441faacb15b2afd8a3708d15862a3c56491a58c4a46abf0541ad04f3b",
+    "architectures": ["arm64", "x64"],
+    "x64Execution": false,
+    "sourceReconstruction": "native-source-reconstruction.json",
+    "artifactReuse": "native-provision-final.log",
+    "controlPlane": {
+      "passed": 6,
+      "failed": 0,
+      "inputCalls": 0,
+      "captureCalls": 0,
+      "readinessCalls": 1,
+      "log": "native-control-plane-probe.json"
+    }
+  },
+  "sourceIntegrity": "source-integrity.json",
+  "sourceChanges": "source-changes.json",
+  "qualification": "Historical revision 1 live evidence is not re-used as native revision 2 qualification."
+}

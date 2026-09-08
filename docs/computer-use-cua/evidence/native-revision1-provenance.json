@@ -1,0 +1,11 @@
+{
+  "version": "0.24.0",
+  "source": "4b3396d9fe4bd3cf723b0eb8db83c18a8764b520",
+  "nativeRevision": 1,
+  "patchSha256": "1a3368bfa5f2d3915a8812b099c995eff62b9fb6a6ca5da4f5256501d7f9293b",
+  "rustVersion": "1.97.1",
+  "rustcVersion": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "architectures": ["arm64", "x64"],
+  "binarySha256": "a972aa860beb4b9c4572675796ebc6e628dcd80cc0b91269384c4812cc8e2336",
+  "upstreamArchiveSha256": "31790cb49baa206f6455fbc259f8f83ae27e86be908f5c8cac5ec2f8521f8382"
+}

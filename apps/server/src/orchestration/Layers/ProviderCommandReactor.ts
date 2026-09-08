@@ -1,3 +1,5 @@
+import { AgentGatewaySessionRegistry } from "../../agentGateway/Services/AgentGatewaySessionRegistry";
+import { ComputerService } from "../../computer/Services/ComputerService";
 // FILE: ProviderCommandReactor.ts
 // Purpose: Routes orchestration intents into provider sessions and maintains replay-safe context.
 // Layer: Orchestration provider reactor
@@ -668,6 +670,8 @@ const make = Effect.gen(function* () {
   const queuedTurnPromotions = yield* QueuedTurnPromotionRepository;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
+  const computerService = yield* Effect.serviceOption(ComputerService);
+  const gatewaySessions = yield* Effect.serviceOption(AgentGatewaySessionRegistry);
   const providerHealth = yield* ProviderHealth;
   const pendingInteractions = yield* ProjectionPendingInteractionRepository;
   const checkpointStore = yield* CheckpointStore;
@@ -733,6 +737,7 @@ const make = Effect.gen(function* () {
   // projected thread metadata so an option changed mid-turn is still compared
   // against the old subprocess configuration before the next turn starts.
   const threadSessionModelSelections = new Map<string, ModelSelection>();
+  const threadSessionComputerControl = new Map<string, boolean>();
   // Seeded from the engine's in-memory command read model, not a second snapshot query.
   // The engine loads that model once after the projection bootstrap and keeps it current
   // as commands commit, so reading it here is both free and strictly fresher than
@@ -1375,6 +1380,7 @@ const make = Effect.gen(function* () {
     Effect.sync(() => {
       threadProviderOptions.delete(threadId);
       threadSessionModelSelections.delete(threadId);
+      threadSessionComputerControl.delete(threadId);
       const editResendPrefix = `${threadId}:`;
       for (const key of editResendTurnStartKeys) {
         if (key.startsWith(editResendPrefix)) {
@@ -1572,6 +1578,7 @@ const make = Effect.gen(function* () {
     options?: {
       readonly modelSelection?: ModelSelection;
       readonly providerOptions?: ProviderStartOptions;
+      readonly enableComputerControl?: boolean;
       readonly runtimeMode?: RuntimeMode;
       readonly registerPriorTranscriptBootstrapOnFreshStart?: boolean;
     },
@@ -1657,6 +1664,9 @@ const make = Effect.gen(function* () {
       ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
       modelSelection: desiredModelSelection,
       providerOptions: resolvedProviderOptions,
+      ...(options?.enableComputerControl !== undefined
+        ? { enableComputerControl: options.enableComputerControl }
+        : {}),
       runtimeMode: desiredRuntimeMode,
     };
 
@@ -1743,12 +1753,27 @@ const make = Effect.gen(function* () {
               currentProvider === "grok" ||
               currentProvider === "devin") &&
             !Equal.equals(previousModelSelection, requestedModelSelection));
+      const requestedComputerControl = options?.enableComputerControl;
+      // A missing cache entry means the session was started by a dispatch that
+      // carried no computer-control flag, which provisions the default (off), so
+      // compare against `false` rather than treating every explicit request as a
+      // change — the web client sends the flag on every turn, and an unconditional
+      // restart here would tear down each legacy-started session on its first
+      // web turn.
+      const previousComputerControl =
+        Option.isSome(gatewaySessions) && gatewaySessions.value.computerControlProvisioned
+          ? gatewaySessions.value.computerControlProvisioned(threadId, reusableSession.provider)
+          : (threadSessionComputerControl.get(threadId) ?? false);
+      const computerControlChanged =
+        requestedComputerControl !== undefined &&
+        requestedComputerControl !== previousComputerControl;
 
       if (
         !runtimeModeChanged &&
         !providerChanged &&
         !shouldRestartForModelChange &&
-        !shouldRestartForModelSelectionChange
+        !shouldRestartForModelSelectionChange &&
+        !computerControlChanged
       ) {
         return {
           activeSessionBeforeEnsure,
@@ -1759,6 +1784,10 @@ const make = Effect.gen(function* () {
         };
       }
 
+      // A computer-control-only restart keeps the resume cursor: provisioning is
+      // re-derived from the start input on every session start, so the new flag
+      // takes effect on resume and dropping history would lose fidelity for
+      // nothing.
       const resumeCursor =
         providerChanged || shouldRestartForModelChange || runtimeModeChanged
           ? undefined
@@ -1775,6 +1804,7 @@ const make = Effect.gen(function* () {
         modelChanged,
         shouldRestartForModelChange,
         shouldRestartForModelSelectionChange,
+        computerControlChanged,
         hasResumeCursor: resumeCursor !== undefined,
       });
       const restartedOutcome = yield* startProviderSessionWithOutcome(resumeCursor);
@@ -1788,6 +1818,9 @@ const make = Effect.gen(function* () {
         freshSessionContextBootstrapThreadIds.add(threadId);
       }
       threadSessionModelSelections.set(threadId, desiredModelSelection);
+      if (options?.enableComputerControl !== undefined) {
+        threadSessionComputerControl.set(threadId, options.enableComputerControl);
+      }
       yield* Effect.logInfo("provider command reactor restarted provider session", {
         threadId,
         previousSessionId: existingSessionThreadId,
@@ -1823,6 +1856,9 @@ const make = Effect.gen(function* () {
           sidechatContextBootstrapThreadIds.add(threadId);
         }
         threadSessionModelSelections.set(threadId, desiredModelSelection);
+        if (options?.enableComputerControl !== undefined) {
+          threadSessionComputerControl.set(threadId, options.enableComputerControl);
+        }
         const forkedSession =
           (yield* resolveActiveSession(threadId)) ??
           ({
@@ -1917,6 +1953,9 @@ const make = Effect.gen(function* () {
     // restart-necessity checks compare against the live spawn state even when
     // the spawning dispatch carried no explicit model selection.
     threadSessionModelSelections.set(threadId, desiredModelSelection);
+    if (options?.enableComputerControl !== undefined) {
+      threadSessionComputerControl.set(threadId, options.enableComputerControl);
+    }
     yield* bindSessionToThread(startedSession);
     if (!retainContextBootstrapSuppression) {
       suppressContextBootstrapOnNextStartThreadIds.delete(threadId);
@@ -1940,6 +1979,7 @@ const make = Effect.gen(function* () {
     readonly reviewTarget?: ProviderReviewTarget;
     readonly modelSelection?: ModelSelection;
     readonly providerOptions?: ProviderStartOptions;
+    readonly enableComputerControl?: boolean;
     readonly runtimeMode?: RuntimeMode;
     readonly interactionMode?: ProviderInteractionMode;
     readonly dispatchMode?: "queue" | "steer";
@@ -2069,6 +2109,9 @@ const make = Effect.gen(function* () {
     } = yield* ensureSessionForThread(input.threadId, input.createdAt, {
       ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
       ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
+      ...(input.enableComputerControl !== undefined
+        ? { enableComputerControl: input.enableComputerControl }
+        : {}),
       ...(input.runtimeMode !== undefined ? { runtimeMode: input.runtimeMode } : {}),
       ...(registerPriorTranscriptBootstrapOnFreshStart
         ? { registerPriorTranscriptBootstrapOnFreshStart: true }
@@ -2079,6 +2122,9 @@ const make = Effect.gen(function* () {
     }
     if (input.modelSelection !== undefined) {
       threadSessionModelSelections.set(input.threadId, input.modelSelection);
+    }
+    if (input.enableComputerControl !== undefined) {
+      threadSessionComputerControl.set(input.threadId, input.enableComputerControl);
     }
     // Bootstrap prompts wrap the user message in `<latest_user_message>` tags;
     // mentioned-thread context is appended after the assembled provider input
@@ -2425,6 +2471,9 @@ const make = Effect.gen(function* () {
       const ensureSessionForStaleRetry = ensureSessionForThread(input.threadId, input.createdAt, {
         ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
         ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
+        ...(input.enableComputerControl !== undefined
+          ? { enableComputerControl: input.enableComputerControl }
+          : {}),
         ...(input.runtimeMode !== undefined ? { runtimeMode: input.runtimeMode } : {}),
       });
       const replayWithTranscriptBootstrap = (
@@ -3066,6 +3115,9 @@ const make = Effect.gen(function* () {
         ...(event.payload.providerOptions !== undefined
           ? { providerOptions: event.payload.providerOptions }
           : {}),
+        ...(event.payload.enableComputerControl !== undefined
+          ? { enableComputerControl: event.payload.enableComputerControl }
+          : {}),
         ...(event.payload.runtimeMode !== undefined
           ? { runtimeMode: event.payload.runtimeMode }
           : {}),
@@ -3195,6 +3247,9 @@ const make = Effect.gen(function* () {
             : {}),
           ...(nextQueuedTurn.providerOptions !== undefined
             ? { providerOptions: nextQueuedTurn.providerOptions }
+            : {}),
+          ...(nextQueuedTurn.enableComputerControl !== undefined
+            ? { enableComputerControl: nextQueuedTurn.enableComputerControl }
             : {}),
           ...(nextQueuedTurn.reviewTarget !== undefined
             ? { reviewTarget: nextQueuedTurn.reviewTarget }
@@ -4109,6 +4164,9 @@ const make = Effect.gen(function* () {
       ...(payload.providerOptions !== undefined
         ? { providerOptions: payload.providerOptions }
         : {}),
+      ...(payload.enableComputerControl !== undefined
+        ? { enableComputerControl: payload.enableComputerControl }
+        : {}),
       ...(payload.assistantDeliveryMode !== undefined
         ? { assistantDeliveryMode: payload.assistantDeliveryMode }
         : {}),
@@ -4485,6 +4543,10 @@ const make = Effect.gen(function* () {
           threadSessionModelSelections.set(event.payload.threadId, event.payload.modelSelection);
           return;
         case "thread.deleted":
+          if (Option.isSome(computerService))
+            yield* Effect.promise(() =>
+              computerService.value.manager.handleThreadRemoved(event.payload.threadId),
+            );
           // Cancel any queued/promoting turns for the deleted thread BEFORE
           // clearing runtime caches so a concurrent drain cannot resurrect them
           // (see cancelThread). Best-effort: the event stays unclaimed either way.
@@ -4495,6 +4557,10 @@ const make = Effect.gen(function* () {
           yield* clearThreadRuntimeCaches(event.payload.threadId);
           return;
         case "thread.archived":
+          if (Option.isSome(computerService))
+            yield* Effect.promise(() =>
+              computerService.value.manager.handleThreadRemoved(event.payload.threadId),
+            );
           // Archive cleanup shares this durable, sequence-ordered provider
           // source with later turn-start intents. An immediate unarchive/send
           // therefore cannot race an older archive stop against the new turn.
@@ -4503,6 +4569,12 @@ const make = Effect.gen(function* () {
             // Legacy thread.archived events may omit archivedAt; fall back like the projector.
             createdAt: event.payload.archivedAt ?? event.payload.updatedAt ?? event.occurredAt,
           });
+          return;
+        case "thread.unarchived":
+          if (Option.isSome(computerService))
+            yield* Effect.promise(() =>
+              computerService.value.manager.handleThreadRestored(event.payload.threadId),
+            );
           return;
         case "thread.meta-updated": {
           const thread = yield* resolveThread(event.payload.threadId);

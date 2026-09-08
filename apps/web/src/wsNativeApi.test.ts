@@ -142,6 +142,27 @@ afterEach(() => {
 });
 
 describe("wsNativeApi", () => {
+  it("checks paused readiness without dropping immediate control revocation", async () => {
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    requestMock.mockResolvedValue({ inputPause: { windowId: "1357", message: "Input paused" } });
+    await expect(
+      api.computer.getState({ windowId: "1357", includeScreenshot: false }),
+    ).resolves.toMatchObject({ inputPause: { windowId: "1357" } });
+    expect(requestMock).toHaveBeenCalledExactlyOnceWith("computer.getState", {
+      windowId: "1357",
+      includeScreenshot: false,
+    });
+    requestMock.mockClear();
+    requestMock.mockResolvedValue({ enabled: false });
+    await expect(
+      api.computer.setControlEnabled({ threadId: ThreadId.makeUnsafe("thread-1"), enabled: false }),
+    ).resolves.toEqual({ enabled: false });
+    expect(requestMock).toHaveBeenCalledExactlyOnceWith("computer.setControlEnabled", {
+      threadId: "thread-1",
+      enabled: false,
+    });
+  });
   it("delivers and caches valid server.welcome payloads", async () => {
     const { createWsNativeApi, onServerWelcome } = await import("./wsNativeApi");
 

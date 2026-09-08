@@ -1,0 +1,5 @@
+$ node scripts/cli.ts build
+[01:37:54.312] INFO (#1): [cli] Running tsdown...
+[01:37:54.768] INFO (#1): [cli] Bundled iOS Simulator helper sources into dist/device-helper
+[01:37:55.730] INFO (#1): [cli] Applied development icon overrides to dist/client
+[01:37:55.731] INFO (#1): [cli] Bundled web app into dist/client

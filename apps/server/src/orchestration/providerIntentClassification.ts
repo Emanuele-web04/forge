@@ -7,6 +7,7 @@ export type ProviderIntentEvent = Extract<
       | "thread.created"
       | "thread.deleted"
       | "thread.archived"
+      | "thread.unarchived"
       | "thread.meta-updated"
       | "thread.session-set"
       | "thread.runtime-mode-set"
@@ -29,6 +30,7 @@ const PROVIDER_INTENT_EVENT_TYPES = new Set<ProviderIntentEvent["type"]>([
   "thread.created",
   "thread.deleted",
   "thread.archived",
+  "thread.unarchived",
   "thread.meta-updated",
   "thread.session-set",
   "thread.runtime-mode-set",
@@ -57,6 +59,7 @@ export const isProviderIntentEvent = (event: OrchestrationEvent): event is Provi
 export const isReplaySafeClaimedProviderIntent = (event: ProviderIntentEvent): boolean =>
   event.type === "thread.created" ||
   event.type === "thread.archived" ||
+  event.type === "thread.unarchived" ||
   // The claimed handler only performs the idempotent durable enqueue. Queue
   // draining runs after the delivery settles, so replay never repeats provider
   // dispatch as part of this claim.
@@ -65,6 +68,9 @@ export const isReplaySafeClaimedProviderIntent = (event: ProviderIntentEvent): b
 export const isProviderSideEffectIntent = (event: ProviderIntentEvent): boolean =>
   event.type !== "thread.created" &&
   event.type !== "thread.deleted" &&
+  // Restores only the computer manager's local admission state. It is safe to
+  // replay and must not be skipped by an unrelated provider delivery failure.
+  event.type !== "thread.unarchived" &&
   event.type !== "thread.session-set" &&
   event.type !== "thread.turn-queued";
 

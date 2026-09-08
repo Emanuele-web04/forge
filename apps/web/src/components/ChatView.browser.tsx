@@ -10,6 +10,7 @@ import {
   EventId,
   MessageId,
   DEVICE_WS_METHODS,
+  COMPUTER_WS_METHODS,
   ORCHESTRATION_WS_METHODS,
   type OrchestrationReadModel,
   type ProjectId,
@@ -1444,7 +1445,8 @@ const worker = setupWorker(
         // default below answers with an Exit, which a stream RPC reads as the
         // socket dying and answers with a full reconnect. That loops forever
         // and starves the RPCs these tests are actually asserting on.
-        method === DEVICE_WS_METHODS.subscribeEvents
+        method === DEVICE_WS_METHODS.subscribeEvents ||
+        method === COMPUTER_WS_METHODS.subscribeEvents
       ) {
         return;
       }

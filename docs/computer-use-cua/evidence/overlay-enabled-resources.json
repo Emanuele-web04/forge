@@ -1,0 +1,405 @@
+{
+  "capturedAt": "2026-09-07T21:06:21.974Z",
+  "note": "ps samples from the exact fixture host and its child; CPU percentage is the OS estimate, not an isolated benchmark. RSS is not incremental overhead.",
+  "samples": [
+    {
+      "elapsedMs": 32,
+      "processes": [
+        {
+          "pid": 95188,
+          "parentPid": 1,
+          "rssKiB": 201232,
+          "cpuPercent": 10.2,
+          "lifetimeCpuTime": "0:00.51",
+          "role": "electron-main"
+        },
+        {
+          "pid": 95193,
+          "parentPid": 95188,
+          "rssKiB": 281168,
+          "cpuPercent": 114.1,
+          "lifetimeCpuTime": "0:06.43",
+          "role": "cua-driver"
+        }
+      ]
+    },
+    {
+      "elapsedMs": 569,
+      "processes": [
+        {
+          "pid": 95188,
+          "parentPid": 1,
+          "rssKiB": 201248,
+          "cpuPercent": 0.9,
+          "lifetimeCpuTime": "0:00.51",
+          "role": "electron-main"
+        },
+        {
+          "pid": 95193,
+          "parentPid": 95188,
+          "rssKiB": 281168,
+          "cpuPercent": 108.9,
+          "lifetimeCpuTime": "0:07.02",
+          "role": "cua-driver"
+        }
+      ]
+    },
+    {
+      "elapsedMs": 1105,
+      "processes": [
+        {
+          "pid": 95188,
+          "parentPid": 1,
+          "rssKiB": 201248,
+          "cpuPercent": 0.1,
+          "lifetimeCpuTime": "0:00.51",
+          "role": "electron-main"
+        },
+        {
+          "pid": 95193,
+          "parentPid": 95188,
+          "rssKiB": 281168,
+          "cpuPercent": 105.5,
+          "lifetimeCpuTime": "0:07.58",
+          "role": "cua-driver"
+        }
+      ]
+    },
+    {
+      "elapsedMs": 1639,
+      "processes": [
+        {
+          "pid": 95188,
+          "parentPid": 1,
+          "rssKiB": 201248,
+          "cpuPercent": 0.1,
+          "lifetimeCpuTime": "0:00.51",
+          "role": "electron-main"
+        },
+        {
+          "pid": 95193,
+          "parentPid": 95188,
+          "rssKiB": 281184,
+          "cpuPercent": 107.6,
+          "lifetimeCpuTime": "0:08.17",
+          "role": "cua-driver"
+        }
+      ]
+    },
+    {
+      "elapsedMs": 2173,
+      "processes": [
+        {
+          "pid": 95188,
+          "parentPid": 1,
+          "rssKiB": 201248,
+          "cpuPercent": 0,
+          "lifetimeCpuTime": "0:00.51",
+          "role": "electron-main"
+        },
+        {
+          "pid": 95193,
+          "parentPid": 95188,
+          "rssKiB": 281184,
+          "cpuPercent": 105.6,
+          "lifetimeCpuTime": "0:08.73",
+          "role": "cua-driver"
+        }
+      ]
+    },
+    {
+      "elapsedMs": 2708,
+      "processes": [
+        {
+          "pid": 95188,
+          "parentPid": 1,
+          "rssKiB": 201248,
+          "cpuPercent": 1.2,
+          "lifetimeCpuTime": "0:00.52",
+          "role": "electron-main"
+        },
+        {
+          "pid": 95193,
+          "parentPid": 95188,
+          "rssKiB": 283536,
+          "cpuPercent": 109.4,
+          "lifetimeCpuTime": "0:09.31",
+          "role": "cua-driver"
+        }
+      ]
+    },
+    {
+      "elapsedMs": 3242,
+      "processes": [
+        {
+          "pid": 95188,
+          "parentPid": 1,
+          "rssKiB": 203600,
+          "cpuPercent": 4,
+          "lifetimeCpuTime": "0:00.55",
+          "role": "electron-main"
+        },
+        {
+          "pid": 95193,
+          "parentPid": 95188,
+          "rssKiB": 285440,
+          "cpuPercent": 110.6,
+          "lifetimeCpuTime": "0:09.92",
+          "role": "cua-driver"
+        }
+      ]
+    },
+    {
+      "elapsedMs": 3778,
+      "processes": [
+        {
+          "pid": 95188,
+          "parentPid": 1,
+          "rssKiB": 204400,
+          "cpuPercent": 2.1,
+          "lifetimeCpuTime": "0:00.56",
+          "role": "electron-main"
+        },
+        {
+          "pid": 95193,
+          "parentPid": 95188,
+          "rssKiB": 285504,
+          "cpuPercent": 109.5,
+          "lifetimeCpuTime": "0:10.51",
+          "role": "cua-driver"
+        }
+      ]
+    },
+    {
+      "elapsedMs": 4314,
+      "processes": [
+        {
+          "pid": 95188,
+          "parentPid": 1,
+          "rssKiB": 207712,
+          "cpuPercent": 1.3,
+          "lifetimeCpuTime": "0:00.57",
+          "role": "electron-main"
+        },
+        {
+          "pid": 95193,
+          "parentPid": 95188,
+          "rssKiB": 294640,
+          "cpuPercent": 110.6,
+          "lifetimeCpuTime": "0:11.12",
+          "role": "cua-driver"
+        }
+      ]
+    },
+    {
+      "elapsedMs": 4848,
+      "processes": [
+        {
+          "pid": 95188,
+          "parentPid": 1,
+          "rssKiB": 207824,
+          "cpuPercent": 0.5,
+          "lifetimeCpuTime": "0:00.57",
+          "role": "electron-main"
+        },
+        {
+          "pid": 95193,
+          "parentPid": 95188,
+          "rssKiB": 294640,
+          "cpuPercent": 108.9,
+          "lifetimeCpuTime": "0:11.70",
+          "role": "cua-driver"
+        }
+      ]
+    },
+    {
+      "elapsedMs": 5383,
+      "processes": [
+        {
+          "pid": 95188,
+          "parentPid": 1,
+          "rssKiB": 207904,
+          "cpuPercent": 0.4,
+          "lifetimeCpuTime": "0:00.57",
+          "role": "electron-main"
+        },
+        {
+          "pid": 95193,
+          "parentPid": 95188,
+          "rssKiB": 294656,
+          "cpuPercent": 107.6,
+          "lifetimeCpuTime": "0:12.28",
+          "role": "cua-driver"
+        }
+      ]
+    },
+    {
+      "elapsedMs": 5918,
+      "processes": [
+        {
+          "pid": 95188,
+          "parentPid": 1,
+          "rssKiB": 207904,
+          "cpuPercent": 0,
+          "lifetimeCpuTime": "0:00.57",
+          "role": "electron-main"
+        },
+        {
+          "pid": 95193,
+          "parentPid": 95188,
+          "rssKiB": 294656,
+          "cpuPercent": 108.9,
+          "lifetimeCpuTime": "0:12.87",
+          "role": "cua-driver"
+        }
+      ]
+    },
+    {
+      "elapsedMs": 6451,
+      "processes": [
+        {
+          "pid": 95188,
+          "parentPid": 1,
+          "rssKiB": 208256,
+          "cpuPercent": 1.7,
+          "lifetimeCpuTime": "0:00.58",
+          "role": "electron-main"
+        },
+        {
+          "pid": 95193,
+          "parentPid": 95188,
+          "rssKiB": 304944,
+          "cpuPercent": 115.8,
+          "lifetimeCpuTime": "0:13.49",
+          "role": "cua-driver"
+        }
+      ]
+    },
+    {
+      "elapsedMs": 6986,
+      "processes": [
+        {
+          "pid": 95188,
+          "parentPid": 1,
+          "rssKiB": 208256,
+          "cpuPercent": 0.2,
+          "lifetimeCpuTime": "0:00.58",
+          "role": "electron-main"
+        },
+        {
+          "pid": 95193,
+          "parentPid": 95188,
+          "rssKiB": 297760,
+          "cpuPercent": 107.1,
+          "lifetimeCpuTime": "0:14.06",
+          "role": "cua-driver"
+        }
+      ]
+    },
+    {
+      "elapsedMs": 7522,
+      "processes": [
+        {
+          "pid": 95188,
+          "parentPid": 1,
+          "rssKiB": 208256,
+          "cpuPercent": 0,
+          "lifetimeCpuTime": "0:00.58",
+          "role": "electron-main"
+        },
+        {
+          "pid": 95193,
+          "parentPid": 95188,
+          "rssKiB": 297760,
+          "cpuPercent": 109.3,
+          "lifetimeCpuTime": "0:14.64",
+          "role": "cua-driver"
+        }
+      ]
+    },
+    {
+      "elapsedMs": 8057,
+      "processes": [
+        {
+          "pid": 95188,
+          "parentPid": 1,
+          "rssKiB": 208256,
+          "cpuPercent": 0,
+          "lifetimeCpuTime": "0:00.58",
+          "role": "electron-main"
+        },
+        {
+          "pid": 95193,
+          "parentPid": 95188,
+          "rssKiB": 297760,
+          "cpuPercent": 108,
+          "lifetimeCpuTime": "0:15.22",
+          "role": "cua-driver"
+        }
+      ]
+    },
+    {
+      "elapsedMs": 8589,
+      "processes": [
+        {
+          "pid": 95188,
+          "parentPid": 1,
+          "rssKiB": 208128,
+          "cpuPercent": 0,
+          "lifetimeCpuTime": "0:00.58",
+          "role": "electron-main"
+        },
+        {
+          "pid": 95193,
+          "parentPid": 95188,
+          "rssKiB": 297712,
+          "cpuPercent": 109.5,
+          "lifetimeCpuTime": "0:15.79",
+          "role": "cua-driver"
+        }
+      ]
+    },
+    {
+      "elapsedMs": 9122,
+      "processes": [
+        {
+          "pid": 95188,
+          "parentPid": 1,
+          "rssKiB": 208128,
+          "cpuPercent": 0,
+          "lifetimeCpuTime": "0:00.59",
+          "role": "electron-main"
+        },
+        {
+          "pid": 95193,
+          "parentPid": 95188,
+          "rssKiB": 297712,
+          "cpuPercent": 105.8,
+          "lifetimeCpuTime": "0:16.36",
+          "role": "cua-driver"
+        }
+      ]
+    },
+    {
+      "elapsedMs": 9657,
+      "processes": [
+        {
+          "pid": 95188,
+          "parentPid": 1,
+          "rssKiB": 208752,
+          "cpuPercent": 0.6,
+          "lifetimeCpuTime": "0:00.59",
+          "role": "electron-main"
+        },
+        {
+          "pid": 95193,
+          "parentPid": 95188,
+          "rssKiB": 300736,
+          "cpuPercent": 107,
+          "lifetimeCpuTime": "0:16.96",
+          "role": "cua-driver"
+        }
+      ]
+    }
+  ]
+}

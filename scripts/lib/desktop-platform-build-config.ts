@@ -78,12 +78,16 @@ export function createDesktopPlatformBuildConfig(
       notarize: input.signed === true,
       entitlements: MAC_ENTITLEMENTS_PATH,
       entitlementsInherit: MAC_INHERITED_ENTITLEMENTS_PATH,
-      binaries: [MAC_APPSNAP_HELPER_BUNDLE_PATH],
+      binaries: [MAC_APPSNAP_HELPER_BUNDLE_PATH, "Contents/Resources/cua-driver/cua-driver"],
       // The universal build stages the same pre-lipo'd helper in both app trees.
       // @electron/universal needs this pattern to preserve that existing fat binary.
-      x64ArchFiles: MAC_APPSNAP_HELPER_BUNDLE_PATH,
+      x64ArchFiles: "Contents/{Helpers/synara-appsnap-helper,Resources/cua-driver/cua-driver}",
       extendInfo: {
         NSMicrophoneUsageDescription: MICROPHONE_USAGE_DESCRIPTION,
+        NSScreenCaptureUsageDescription:
+          "Synara captures the windows you authorize for Computer use.",
+        NSAccessibilityUsageDescription:
+          "Synara controls the windows you authorize for Computer use.",
       },
     } satisfies Record<string, unknown>;
 
@@ -96,8 +100,9 @@ export function createDesktopPlatformBuildConfig(
         // macOS auto-updates use the separately finalized ZIP artifact.
         writeUpdateInfo: false,
       },
-      files: ["**/*", MAC_APPSNAP_HELPER_ASAR_EXCLUSION],
+      files: ["**/*", MAC_APPSNAP_HELPER_ASAR_EXCLUSION, "!apps/desktop/resources/cua-driver/**"],
       extraFiles: [
+        { from: "apps/desktop/resources/cua-driver", to: "Resources/cua-driver" },
         {
           from: MAC_APPSNAP_HELPER_STAGE_PATH,
           to: "Helpers/synara-appsnap-helper",

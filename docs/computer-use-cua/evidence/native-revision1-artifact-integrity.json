@@ -1,0 +1,18 @@
+[
+  {
+    "case": "native-revision",
+    "passed": true
+  },
+  {
+    "case": "patch-checksum",
+    "passed": true
+  },
+  {
+    "case": "binary-checksum",
+    "passed": true
+  },
+  {
+    "case": "architecture",
+    "passed": true
+  }
+]

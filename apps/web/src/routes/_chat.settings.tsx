@@ -37,6 +37,7 @@ import {
   AppSnapSettingsPanel,
   NotificationsSettingsPanel,
 } from "~/components/settings/DesktopSettingsPanels";
+import { ComputerSettingsPanel } from "~/components/settings/ComputerSettingsPanel";
 import { ModelsSettingsPanel } from "~/components/settings/ModelsSettingsPanel";
 import {
   isProviderInstallSettingsDirty,
@@ -77,6 +78,7 @@ import {
   AutocompleteList,
   AutocompletePopup,
 } from "../components/ui/autocomplete";
+import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { SelectItem } from "../components/ui/select";
@@ -350,6 +352,12 @@ function SettingsRouteView() {
       ? ["AppSnap shortcut"]
       : []),
     ...(settings.appSnapPlaySound !== defaults.appSnapPlaySound ? ["AppSnap capture sound"] : []),
+    ...(settings.allowComputerControlInNewChats !== defaults.allowComputerControlInNewChats
+      ? ["Computer control in new chats"]
+      : []),
+    ...(settings.autoOpenComputerPane !== defaults.autoOpenComputerPane
+      ? ["Computer pane auto-open"]
+      : []),
     ...(settings.enableProviderUpdateChecks !== defaults.enableProviderUpdateChecks
       ? ["Provider update checks"]
       : []),
@@ -1271,8 +1279,13 @@ function SettingsRouteView() {
               {activeSection !== "profile" ? (
                 <div className="mb-8 flex items-start justify-between gap-4">
                   <div className="min-w-0">
-                    <h1 className="text-xl font-medium tracking-tight text-foreground">
+                    <h1 className="flex items-center gap-2 text-xl font-medium tracking-tight text-foreground">
                       {activeSectionItem.label}
+                      {activeSectionItem.badge ? (
+                        <Badge variant="warning" size="lg">
+                          {activeSectionItem.badge}
+                        </Badge>
+                      ) : null}
                     </h1>
                     <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
                       {activeSectionItem.description}
@@ -1303,6 +1316,12 @@ function SettingsRouteView() {
                 />
                 <AppSnapSettingsPanel
                   active={activeSection === "appsnap"}
+                  settings={settings}
+                  defaults={defaults}
+                  updateSettings={updateSettings}
+                />
+                <ComputerSettingsPanel
+                  active={activeSection === "computer"}
                   settings={settings}
                   defaults={defaults}
                   updateSettings={updateSettings}

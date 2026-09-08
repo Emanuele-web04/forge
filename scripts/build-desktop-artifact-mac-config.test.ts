@@ -37,15 +37,29 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.equal(mac.entitlements, MAC_ENTITLEMENTS_PATH);
     assert.equal(mac.entitlementsInherit, MAC_INHERITED_ENTITLEMENTS_PATH);
     assert.equal(MAC_APPSNAP_HELPER_BUNDLE_PATH, "Contents/Helpers/synara-appsnap-helper");
-    assert.deepStrictEqual(mac.binaries, ["Contents/Helpers/synara-appsnap-helper"]);
-    assert.equal(mac.x64ArchFiles, "Contents/Helpers/synara-appsnap-helper");
+    assert.deepStrictEqual(mac.binaries, [
+      "Contents/Helpers/synara-appsnap-helper",
+      "Contents/Resources/cua-driver/cua-driver",
+    ]);
+    assert.equal(
+      mac.x64ArchFiles,
+      "Contents/{Helpers/synara-appsnap-helper,Resources/cua-driver/cua-driver}",
+    );
     assert.equal(
       MAC_APPSNAP_HELPER_STAGE_PATH,
       "apps/desktop/native/appsnap/build/synara-appsnap-helper",
     );
     assert.equal(MAC_APPSNAP_HELPER_ASAR_EXCLUSION, "!apps/desktop/native/appsnap/build/**");
-    assert.deepStrictEqual(config.files, ["**/*", MAC_APPSNAP_HELPER_ASAR_EXCLUSION]);
+    assert.deepStrictEqual(config.files, [
+      "**/*",
+      MAC_APPSNAP_HELPER_ASAR_EXCLUSION,
+      "!apps/desktop/resources/cua-driver/**",
+    ]);
     assert.deepStrictEqual(config.extraFiles, [
+      {
+        from: "apps/desktop/resources/cua-driver",
+        to: "Resources/cua-driver",
+      },
       {
         from: "apps/desktop/native/appsnap/build/synara-appsnap-helper",
         to: "Helpers/synara-appsnap-helper",
@@ -56,7 +70,14 @@ describe("createDesktopPlatformBuildConfig", () => {
       },
     ]);
     assert.equal(extendInfo.NSMicrophoneUsageDescription, MICROPHONE_USAGE_DESCRIPTION);
-    assert.equal(extendInfo.NSScreenCaptureUsageDescription, undefined);
+    assert.equal(
+      extendInfo.NSScreenCaptureUsageDescription,
+      "Synara captures the windows you authorize for Computer use.",
+    );
+    assert.equal(
+      extendInfo.NSAccessibilityUsageDescription,
+      "Synara controls the windows you authorize for Computer use.",
+    );
   });
 
   it("leaves the DMG container unsigned for build-only macOS artifacts", () => {

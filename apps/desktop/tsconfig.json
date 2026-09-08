@@ -5,5 +5,6 @@
     "types": ["node", "electron"],
     "lib": ["ES2023", "DOM", "esnext.disposable"]
   },
-  "include": ["src", "tsdown.config.mts"]
+  "include": ["src", "tsdown.config.mts"],
+  "exclude": ["src/cuaFixtures"]
 }

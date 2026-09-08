@@ -49,6 +49,7 @@ import { CodexJsonlFramer, CodexJsonlWriter } from "./codexAppServerTransport";
 import { ensureIsolatedScratchWorkspace } from "./scratchWorkspaces";
 import { SYNARA_HARNESS_POLICY_MARKER } from "./agentGateway/harnessPolicy.ts";
 import {
+  AGENT_GATEWAY_NO_CAPABILITIES,
   AGENT_GATEWAY_TURN_AUTHORITY_RETIRED,
   acquireAgentGatewaySessionLease,
 } from "./agentGateway/sessionLease.ts";
@@ -549,6 +550,7 @@ describe("Codex app-server teardown", () => {
       },
       threadId,
       "codex",
+      AGENT_GATEWAY_NO_CAPABILITIES,
     );
     const context = {
       gatewaySessionLease,
@@ -619,6 +621,7 @@ describe("Codex app-server teardown", () => {
       },
       threadId,
       "codex",
+      AGENT_GATEWAY_NO_CAPABILITIES,
     );
     const context = {
       gatewaySessionLease,
@@ -1607,9 +1610,17 @@ describe("startSession", () => {
     });
   });
 
-  it("uses an isolated scratch workspace path when no cwd is provided", () => {
-    const cwd = ensureIsolatedScratchWorkspace(asThreadId("thread-1"));
-    expect(cwd).toContain(`${path.sep}synara-codex-workspaces${path.sep}thread-1`);
+  it("creates the isolated scratch workspace inside the configured root", () => {
+    const temporary = mkdtempSync(path.join(os.tmpdir(), "synara-codex-scratch-test-"));
+    try {
+      const workspaceRoot = path.join(temporary, "synara-codex-workspaces");
+      const cwd = ensureIsolatedScratchWorkspace(asThreadId("thread-1"), workspaceRoot);
+      expect(path.dirname(cwd)).toBe(workspaceRoot);
+      expect(path.basename(cwd)).toMatch(/^thread-1-/);
+      expect(lstatSync(cwd).isDirectory()).toBe(true);
+    } finally {
+      rmSync(temporary, { recursive: true, force: true });
+    }
   });
 
   it("reports a missing project working directory instead of a missing Codex CLI", () => {
@@ -1711,6 +1722,7 @@ describe("startSession", () => {
           threadId: asThreadId("thread-1"),
           provider: "codex",
           runtimeMode: "full-access",
+          cwd: process.cwd(),
         }),
       ).rejects.toThrow(
         "Codex CLI v0.36.0 is too old for Synara. Upgrade to v0.37.0 or newer and restart Synara.",
@@ -1755,6 +1767,7 @@ describe("startSession", () => {
           threadId: asThreadId("thread-auto-version"),
           provider: "codex",
           runtimeMode: "auto",
+          cwd: process.cwd(),
         }),
       ).rejects.toThrow("Codex Auto version gate");
       expect(versionCheck).toHaveBeenCalledTimes(1);
@@ -3407,6 +3420,241 @@ describe("respondToRequest", () => {
       context,
       expect.objectContaining({
         id: 101,
+      }),
+    );
+  });
+
+  it("leaves pending MCP tool approvals alone when a command is accepted for the session", async () => {
+    const { manager, context, writeMessage } = createPendingApprovalHarness();
+
+    await handleServerRequestForTest(manager, context, {
+      id: 100,
+      method: "mcpServer/elicitation/request",
+      params: {
+        turnId: "turn_2",
+        mode: "form",
+        message: "Approve this tool call",
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          persist: ["session"],
+          tool_name: "computer_launch_app",
+          tool_params_display: [{ name: "app", value: "kcalc" }],
+        },
+      },
+    });
+
+    const mcpRequest = [...context.pendingApprovals.values()].find(
+      (request) => String(request.method) === "mcpServer/elicitation/request",
+    );
+    if (!mcpRequest) {
+      throw new Error("Expected the MCP tool approval to remain pending.");
+    }
+
+    await manager.respondToRequest(
+      asThreadId("thread_1"),
+      ApprovalRequestId.makeUnsafe("req-approval-1"),
+      "acceptForSession",
+    );
+
+    // The command grant is not a tool grant: the tool approval still waits for its own answer.
+    expect(context.pendingApprovals.has(mcpRequest.requestId)).toBe(true);
+    expect(writeMessage).not.toHaveBeenCalledWith(context, expect.objectContaining({ id: 100 }));
+  });
+
+  it("keeps asking for MCP tool approvals while a command session grant is active", async () => {
+    const { manager, context, writeMessage } = createPendingApprovalHarness();
+
+    await manager.respondToRequest(
+      asThreadId("thread_1"),
+      ApprovalRequestId.makeUnsafe("req-approval-1"),
+      "acceptForSession",
+    );
+    expect(context.sessionApprovalOverride).toBeDefined();
+
+    await handleServerRequestForTest(manager, context, {
+      id: 100,
+      method: "mcpServer/elicitation/request",
+      params: {
+        turnId: "turn_2",
+        mode: "form",
+        message: "Approve this tool call",
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          persist: ["session"],
+          tool_name: "mcp_tool",
+          tool_params_display: [{ name: "app", value: "kcalc" }],
+        },
+      },
+    });
+
+    const mcpRequest = [...context.pendingApprovals.values()].find(
+      (request) => String(request.method) === "mcpServer/elicitation/request",
+    );
+    expect(mcpRequest).toBeDefined();
+    expect(writeMessage).not.toHaveBeenCalledWith(context, expect.objectContaining({ id: 100 }));
+  });
+});
+
+describe("MCP tool call elicitation approvals", () => {
+  const approvalParams = (persist: ReadonlyArray<string> | string = ["session"]) => ({
+    threadId: "provider_parent",
+    turnId: "turn_mcp",
+    serverName: "synara",
+    mode: "form",
+    message: "Allow Synara to launch the calculator?",
+    requestedSchema: { type: "object", properties: {} },
+    _meta: {
+      codex_approval_kind: "mcp_tool_call",
+      persist,
+      tool_name: "computer_launch_app",
+      tool_params: { app: "kcalc" },
+      tool_params_display: [{ name: "app", value: "kcalc", display_name: "app" }],
+    },
+  });
+
+  it("tracks approval elicitations as tool requests and accepts them with the MCP response shape", async () => {
+    const { manager, context, emitEvent, writeMessage } = createCollabNotificationHarness();
+
+    await handleServerRequestForTest(manager, context, {
+      id: 70,
+      method: "mcpServer/elicitation/request",
+      params: approvalParams(),
+    });
+
+    const pendingRequest = Array.from(context.pendingApprovals.values())[0];
+    expect(pendingRequest).toEqual(
+      expect.objectContaining({
+        method: "mcpServer/elicitation/request",
+        requestKind: "tool",
+        mcpSessionPersistenceAdvertised: true,
+      }),
+    );
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "request",
+        requestKind: "tool",
+        payload: expect.objectContaining({
+          _meta: expect.objectContaining({
+            tool_name: "computer_launch_app",
+            tool_params_display: [{ name: "app", value: "kcalc", display_name: "app" }],
+          }),
+        }),
+      }),
+    );
+
+    await manager.respondToRequest(asThreadId("thread_1"), pendingRequest.requestId, "accept");
+
+    expect(writeMessage).toHaveBeenCalledWith(context, {
+      id: 70,
+      result: { action: "accept", content: null, _meta: null },
+    });
+  });
+
+  it("tells the composer when session persistence was not advertised", async () => {
+    const { manager, context, emitEvent } = createCollabNotificationHarness();
+
+    await handleServerRequestForTest(manager, context, {
+      id: 71,
+      method: "mcpServer/elicitation/request",
+      params: approvalParams(["always"]),
+    });
+
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "request",
+        requestKind: "tool",
+        payload: expect.objectContaining({ sessionApprovalAvailable: false }),
+      }),
+    );
+
+    emitEvent.mockClear();
+    await handleServerRequestForTest(manager, context, {
+      id: 72,
+      method: "mcpServer/elicitation/request",
+      params: approvalParams(["session"]),
+    });
+    const [event] = emitEvent.mock.calls.at(-1) ?? [];
+    expect(event).toEqual(expect.objectContaining({ kind: "request", requestKind: "tool" }));
+    expect((event as { payload?: Record<string, unknown> }).payload).not.toHaveProperty(
+      "sessionApprovalAvailable",
+    );
+  });
+
+  it.each([
+    ["acceptForSession", ["session"], { persist: "session" }],
+    ["acceptForSession", ["always"], null],
+    ["acceptForSession", "session", { persist: "session" }],
+  ] as const)(
+    "maps %s with persist=%j to the protocol response",
+    async (decision, persist, meta) => {
+      const { manager, context, writeMessage } = createCollabNotificationHarness();
+
+      await handleServerRequestForTest(manager, context, {
+        id: 71,
+        method: "mcpServer/elicitation/request",
+        params: approvalParams(persist),
+      });
+      const pendingRequest = Array.from(context.pendingApprovals.values())[0];
+      await manager.respondToRequest(asThreadId("thread_1"), pendingRequest.requestId, decision);
+
+      expect(writeMessage).toHaveBeenCalledWith(context, {
+        id: 71,
+        result: { action: "accept", content: null, _meta: meta },
+      });
+    },
+  );
+
+  it.each(["decline", "cancel"] as const)(
+    "maps %s to the matching elicitation action",
+    async (decision) => {
+      const { manager, context, writeMessage } = createCollabNotificationHarness();
+      const interrupt = vi.spyOn(manager, "interruptTurn").mockResolvedValue(undefined);
+
+      await handleServerRequestForTest(manager, context, {
+        id: 72,
+        method: "mcpServer/elicitation/request",
+        params: approvalParams(),
+      });
+      const pendingRequest = Array.from(context.pendingApprovals.values())[0];
+      await manager.respondToRequest(asThreadId("thread_1"), pendingRequest.requestId, decision);
+
+      expect(writeMessage).toHaveBeenCalledWith(context, {
+        id: 72,
+        result: { action: decision, content: null, _meta: null },
+      });
+      if (decision === "cancel")
+        expect(interrupt).toHaveBeenCalledWith("thread_1", "turn_mcp", "provider_parent");
+      else expect(interrupt).not.toHaveBeenCalled();
+    },
+  );
+
+  it("cancels non-approval elicitations and emits a warning instead of an unsupported-request error", async () => {
+    const { manager, context, emitEvent, writeMessage } = createCollabNotificationHarness();
+
+    await handleServerRequestForTest(manager, context, {
+      id: 73,
+      method: "mcpServer/elicitation/request",
+      params: {
+        mode: "url",
+        message: "Authenticate with the MCP server",
+        url: "https://example.test/auth",
+      },
+    });
+
+    expect(context.pendingApprovals.size).toBe(0);
+    expect(writeMessage).toHaveBeenCalledWith(context, {
+      id: 73,
+      result: { action: "cancel", content: null, _meta: null },
+    });
+    expect(writeMessage).not.toHaveBeenCalledWith(
+      context,
+      expect.objectContaining({ error: expect.objectContaining({ code: -32601 }) }),
+    );
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "error",
+        method: "mcpServer/elicitation/request/unrenderable",
+        message: "Synara declined an MCP elicitation it cannot render yet.",
       }),
     );
   });

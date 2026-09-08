@@ -1,0 +1,46 @@
+{
+  "driver": "/Users/emanueledipietro/.codex/worktrees/702b/synara/apps/desktop/resources/cua-driver/cua-driver",
+  "driverPid": 98970,
+  "inputToolsCalled": 0,
+  "readinessToolsCalled": 1,
+  "cases": [
+    {
+      "name": "patched-identity",
+      "passed": true
+    },
+    {
+      "name": "read-only-target-readiness-refusal",
+      "passed": true
+    },
+    {
+      "name": "wrong-generation-refused",
+      "passed": true
+    },
+    {
+      "name": "non-host-peer-refused",
+      "passed": true
+    },
+    {
+      "name": "host-cleanup-acknowledged",
+      "passed": true
+    },
+    {
+      "name": "repeat-cleanup",
+      "passed": true
+    }
+  ],
+  "metadata": {
+    "capability_version": "1",
+    "contract_version": "0.7.0",
+    "driver_version": "0.24.0",
+    "embedded": true,
+    "mcp_protocol_version": "2025-06-18",
+    "pid": 98970,
+    "synara_native_revision": 2,
+    "tools_list_schema_version": "1"
+  },
+  "exit": {
+    "code": 0,
+    "signal": null
+  }
+}

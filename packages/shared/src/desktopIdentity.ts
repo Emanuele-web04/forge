@@ -8,6 +8,8 @@ export const SYNARA_DESKTOP_UPDATE_CHANNEL = "synara";
 export const SYNARA_PRODUCTION_BUNDLE_ID = "com.emanueledipietro.synara";
 export const SYNARA_DEVELOPMENT_BUNDLE_ID = `${SYNARA_PRODUCTION_BUNDLE_ID}.dev`;
 export const SYNARA_CANARY_BUNDLE_ID = `${SYNARA_PRODUCTION_BUNDLE_ID}.canary`;
+/** Display/setup identity of the GUI host; this value does not confer native authority. */
+export const SYNARA_DESKTOP_BUNDLE_ID_ENV = "SYNARA_DESKTOP_BUNDLE_ID";
 export const SYNARA_CANARY_DESKTOP_SCHEME = "synara-canary";
 export const SYNARA_CANARY_DESKTOP_ORIGIN = `${SYNARA_CANARY_DESKTOP_SCHEME}://app`;
 export const SYNARA_CANARY_DESKTOP_ENTRY_URL = `${SYNARA_CANARY_DESKTOP_ORIGIN}/index.html`;

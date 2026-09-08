@@ -1,0 +1,331 @@
+{
+  "source": "Persisted orchestration events from the stopped isolated production server; exact two fixture threads only.",
+  "databaseSha256": "4c6a126d83dbd49db44c192c8fa840cc2ea6de1e04b8ef8fc0247a719ea13bce",
+  "events": [
+    {
+      "sequence": 202,
+      "stream_id": "f0109e57-2158-42f8-9122-94a557e6e1ec",
+      "event_type": "thread.activity-appended",
+      "occurred_at": "2026-09-07T23:24:56.943Z",
+      "payload": {
+        "threadId": "f0109e57-2158-42f8-9122-94a557e6e1ec",
+        "activity": {
+          "id": "06e051cc-db94-43d1-8840-f4f166cab03f",
+          "createdAt": "2026-09-07T23:24:56.943Z",
+          "tone": "approval",
+          "kind": "approval.requested",
+          "summary": "Tool approval requested",
+          "payload": {
+            "requestId": "c0cd2097-3fb4-4526-8530-0989b75df896",
+            "lifecycleGeneration": "058b9a6d-8026-4a60-8b19-bfcf7a4d39e9",
+            "requestKind": "tool",
+            "requestType": "tool_approval",
+            "detail": "Allow the synara MCP server to run tool \"computer_click\"?",
+            "toolParamsDisplay": [
+              {
+                "display_name": "delivery_mode",
+                "name": "delivery_mode",
+                "value": "background"
+              },
+              {
+                "display_name": "include_screenshot",
+                "name": "include_screenshot",
+                "value": "true"
+              },
+              {
+                "display_name": "screenshot_id",
+                "name": "screenshot_id",
+                "value": "shot-1"
+              },
+              {
+                "display_name": "window_id",
+                "name": "window_id",
+                "value": "cua:99565:5315"
+              },
+              {
+                "display_name": "x",
+                "name": "x",
+                "value": "280"
+              },
+              {
+                "display_name": "y",
+                "name": "y",
+                "value": "410"
+              }
+            ]
+          },
+          "turnId": "01a07e2f-9548-7c32-bc3e-30ee48243cad",
+          "sequence": 223
+        }
+      }
+    },
+    {
+      "sequence": 203,
+      "stream_id": "f0109e57-2158-42f8-9122-94a557e6e1ec",
+      "event_type": "thread.approval-response-requested",
+      "occurred_at": "2026-09-07T23:25:58.595Z",
+      "payload": {
+        "threadId": "f0109e57-2158-42f8-9122-94a557e6e1ec",
+        "requestId": "c0cd2097-3fb4-4526-8530-0989b75df896",
+        "lifecycleGeneration": "058b9a6d-8026-4a60-8b19-bfcf7a4d39e9",
+        "decision": "accept",
+        "createdAt": "2026-09-07T23:25:58.595Z"
+      }
+    },
+    {
+      "sequence": 204,
+      "stream_id": "f0109e57-2158-42f8-9122-94a557e6e1ec",
+      "event_type": "thread.activity-appended",
+      "occurred_at": "2026-09-07T23:25:58.606Z",
+      "payload": {
+        "threadId": "f0109e57-2158-42f8-9122-94a557e6e1ec",
+        "activity": {
+          "id": "0bb972ab-8211-4c84-aef0-804aba7ab755",
+          "createdAt": "2026-09-07T23:25:58.606Z",
+          "tone": "approval",
+          "kind": "approval.resolved",
+          "summary": "Approval resolved",
+          "payload": {
+            "requestId": "c0cd2097-3fb4-4526-8530-0989b75df896",
+            "lifecycleGeneration": "058b9a6d-8026-4a60-8b19-bfcf7a4d39e9",
+            "requestKind": "tool",
+            "requestType": "tool_approval",
+            "decision": "accept"
+          },
+          "turnId": "01a07e2f-9548-7c32-bc3e-30ee48243cad",
+          "sequence": 224
+        }
+      }
+    },
+    {
+      "sequence": 205,
+      "stream_id": "f0109e57-2158-42f8-9122-94a557e6e1ec",
+      "event_type": "thread.activity-appended",
+      "occurred_at": "2026-09-07T23:25:58.607Z",
+      "payload": {
+        "threadId": "f0109e57-2158-42f8-9122-94a557e6e1ec",
+        "activity": {
+          "id": "659fcaf3-ffb9-4d8b-b95d-aa8d161bad43",
+          "createdAt": "2026-09-07T23:25:58.607Z",
+          "tone": "approval",
+          "kind": "approval.resolved",
+          "summary": "Approval resolved",
+          "payload": {
+            "lifecycleGeneration": "058b9a6d-8026-4a60-8b19-bfcf7a4d39e9",
+            "requestType": "unknown"
+          },
+          "turnId": null,
+          "sequence": 225
+        }
+      }
+    },
+    {
+      "sequence": 440,
+      "stream_id": "f0109e57-2158-42f8-9122-94a557e6e1ec",
+      "event_type": "thread.activity-appended",
+      "occurred_at": "2026-09-07T23:26:29.207Z",
+      "payload": {
+        "threadId": "f0109e57-2158-42f8-9122-94a557e6e1ec",
+        "activity": {
+          "id": "e281769e-cd23-4aff-8e9c-481e6f35d6bc",
+          "createdAt": "2026-09-07T23:26:29.207Z",
+          "tone": "info",
+          "kind": "turn.completed",
+          "summary": "Turn completed",
+          "payload": {
+            "state": "completed"
+          },
+          "turnId": "01a07e2f-9548-7c32-bc3e-30ee48243cad",
+          "sequence": 478
+        }
+      }
+    },
+    {
+      "sequence": 541,
+      "stream_id": "b0f0d466-8ed6-4b10-a6c6-64206521be84",
+      "event_type": "thread.activity-appended",
+      "occurred_at": "2026-09-07T23:32:25.245Z",
+      "payload": {
+        "threadId": "b0f0d466-8ed6-4b10-a6c6-64206521be84",
+        "activity": {
+          "id": "ee0b165e-604b-4130-ba59-e61934c71334",
+          "createdAt": "2026-09-07T23:32:25.245Z",
+          "tone": "approval",
+          "kind": "approval.requested",
+          "summary": "Tool approval requested",
+          "payload": {
+            "requestId": "53d01c68-3835-4b8f-8213-1b1a03c3fbcb",
+            "lifecycleGeneration": "13958ede-31ca-4bfe-8aa2-c59e9871dec5",
+            "requestKind": "tool",
+            "requestType": "tool_approval",
+            "detail": "Allow the synara MCP server to run tool \"computer_click\"?",
+            "toolParamsDisplay": [
+              {
+                "display_name": "delivery_mode",
+                "name": "delivery_mode",
+                "value": "background"
+              },
+              {
+                "display_name": "include_screenshot",
+                "name": "include_screenshot",
+                "value": "true"
+              },
+              {
+                "display_name": "label",
+                "name": "label",
+                "value": "Click counter: 1"
+              },
+              {
+                "display_name": "role",
+                "name": "role",
+                "value": "AXButton"
+              },
+              {
+                "display_name": "window_id",
+                "name": "window_id",
+                "value": "cua:99565:5315"
+              }
+            ]
+          },
+          "turnId": "01a07e36-97ec-76f1-9f5b-c61d90ffb245",
+          "sequence": 599
+        }
+      }
+    },
+    {
+      "sequence": 542,
+      "stream_id": "b0f0d466-8ed6-4b10-a6c6-64206521be84",
+      "event_type": "thread.approval-response-requested",
+      "occurred_at": "2026-09-07T23:32:56.904Z",
+      "payload": {
+        "threadId": "b0f0d466-8ed6-4b10-a6c6-64206521be84",
+        "requestId": "53d01c68-3835-4b8f-8213-1b1a03c3fbcb",
+        "lifecycleGeneration": "13958ede-31ca-4bfe-8aa2-c59e9871dec5",
+        "decision": "cancel",
+        "createdAt": "2026-09-07T23:32:56.904Z"
+      }
+    },
+    {
+      "sequence": 543,
+      "stream_id": "b0f0d466-8ed6-4b10-a6c6-64206521be84",
+      "event_type": "thread.activity-appended",
+      "occurred_at": "2026-09-07T23:32:56.916Z",
+      "payload": {
+        "threadId": "b0f0d466-8ed6-4b10-a6c6-64206521be84",
+        "activity": {
+          "id": "f4d09012-53f9-4f9b-9800-c7762d1b8c53",
+          "createdAt": "2026-09-07T23:32:56.916Z",
+          "tone": "approval",
+          "kind": "approval.resolved",
+          "summary": "Approval resolved",
+          "payload": {
+            "requestId": "53d01c68-3835-4b8f-8213-1b1a03c3fbcb",
+            "lifecycleGeneration": "13958ede-31ca-4bfe-8aa2-c59e9871dec5",
+            "requestKind": "tool",
+            "requestType": "tool_approval",
+            "decision": "cancel"
+          },
+          "turnId": "01a07e36-97ec-76f1-9f5b-c61d90ffb245",
+          "sequence": 600
+        }
+      }
+    },
+    {
+      "sequence": 544,
+      "stream_id": "b0f0d466-8ed6-4b10-a6c6-64206521be84",
+      "event_type": "thread.activity-appended",
+      "occurred_at": "2026-09-07T23:32:56.917Z",
+      "payload": {
+        "threadId": "b0f0d466-8ed6-4b10-a6c6-64206521be84",
+        "activity": {
+          "id": "ae0c2f06-1db0-4221-8223-aef7f9e50059",
+          "createdAt": "2026-09-07T23:32:56.917Z",
+          "tone": "approval",
+          "kind": "approval.resolved",
+          "summary": "Approval resolved",
+          "payload": {
+            "lifecycleGeneration": "13958ede-31ca-4bfe-8aa2-c59e9871dec5",
+            "requestType": "unknown"
+          },
+          "turnId": null,
+          "sequence": 601
+        }
+      }
+    },
+    {
+      "sequence": 548,
+      "stream_id": "b0f0d466-8ed6-4b10-a6c6-64206521be84",
+      "event_type": "thread.activity-appended",
+      "occurred_at": "2026-09-07T23:32:56.924Z",
+      "payload": {
+        "threadId": "b0f0d466-8ed6-4b10-a6c6-64206521be84",
+        "activity": {
+          "id": "47ce6192-858c-46a8-87ba-ed49a03dda0d",
+          "createdAt": "2026-09-07T23:32:56.924Z",
+          "tone": "info",
+          "kind": "turn.completed",
+          "summary": "Turn interrupted",
+          "payload": {
+            "state": "interrupted"
+          },
+          "turnId": "01a07e36-97ec-76f1-9f5b-c61d90ffb245",
+          "sequence": 607
+        }
+      }
+    }
+  ],
+  "uiObservations": [
+    {
+      "threadId": "f0109e57-2158-42f8-9122-94a557e6e1ec",
+      "title": "Test Computer Synara Fixture 99565",
+      "action": "Clicked the real Approve once button for the displayed background computer_click request.",
+      "before": {
+        "nativeSubmissions": 0,
+        "clicks": 0
+      },
+      "after": {
+        "nativeSubmissions": 1,
+        "clicks": 1
+      },
+      "completed": true
+    },
+    {
+      "threadId": "b0f0d466-8ed6-4b10-a6c6-64206521be84",
+      "title": "Test annullamento approvazione Synara",
+      "action": "Clicked the real Cancel turn button for the displayed background computer_click request.",
+      "before": {
+        "nativeSubmissions": 1,
+        "clicks": 1
+      },
+      "after": {
+        "nativeSubmissions": 1,
+        "clicks": 1
+      },
+      "interrupted": true
+    },
+    {
+      "threadId": "b0f0d466-8ed6-4b10-a6c6-64206521be84",
+      "action": "After the final web rebuild, enabled Computer, reloaded, and inspected the fully hydrated DOM.",
+      "accessibleButtonName": "Ask for approval Computer control is on.",
+      "noNewProviderTurn": true,
+      "screenshotExported": false
+    }
+  ],
+  "teardown": {
+    "fixturePid": 99565,
+    "nativePid": 99569,
+    "serverPid": 99570,
+    "port": 61300,
+    "signalToFixture": "SIGTERM",
+    "launcherExitCode": 0,
+    "processesAbsent": true,
+    "portReleased": true,
+    "nativeForcedKill": false
+  },
+  "limitations": [
+    "Native captures and input were restricted by a fixture-only socket proxy to the exact owned target.",
+    "This proves the real provider, approval UI, gateway and native background click path; the full desktop pane and production signed host lifecycle remain unqualified.",
+    "The UI selected Low effort; provider settings events reported medium. No reasoning-effort propagation claim is made.",
+    "Window focused means agent-selected input target and does not prove OS foreground activation."
+  ]
+}

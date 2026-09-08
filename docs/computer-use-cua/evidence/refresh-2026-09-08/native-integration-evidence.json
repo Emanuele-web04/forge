@@ -1,0 +1,111 @@
+{
+  "nativeRevision": 2,
+  "artifact": {
+    "version": "0.24.0",
+    "source": "4b3396d9fe4bd3cf723b0eb8db83c18a8764b520",
+    "nativeRevision": 2,
+    "patchSha256": "58b1953265bbcd892af607ece87b6f9bf484d3c4b7dde0a5a4545f5c9c3516fd",
+    "rustVersion": "1.97.1",
+    "rustcVersion": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+    "architectures": ["arm64", "x64"],
+    "binarySha256": "b090db4441faacb15b2afd8a3708d15862a3c56491a58c4a46abf0541ad04f3b",
+    "upstreamArchiveSha256": "31790cb49baa206f6455fbc259f8f83ae27e86be908f5c8cac5ec2f8521f8382",
+    "sourceArchiveUrl": "https://api.github.com/repos/trycua/cua/tarball/4b3396d9fe4bd3cf723b0eb8db83c18a8764b520",
+    "sourceArchiveSha256": "ea2422e37e164ac9b5f27100de01b0be5e9232207430118ee0ca9ba941ac1030",
+    "sliceSha256": {
+      "arm64": "f72517846232d0685b2538397fbeabd76a757e6536d10ada0da28bca57925aba",
+      "x64": "5f3325564cb6a58b61bfe596657b44247bbce2838e3494b0b9a6290c65700fbe"
+    },
+    "buildEnvironment": {
+      "developerDir": "/Library/Developer/CommandLineTools",
+      "isolatedToolchain": true,
+      "locked": true,
+      "offline": true
+    }
+  },
+  "verification": {
+    "pureTests": {
+      "passed": 60,
+      "failed": 0,
+      "groups": {
+        "targetAdmission": 4,
+        "heldInputDrain": 5,
+        "axActions": 10,
+        "clickNoReplay": 5,
+        "setValue": 20,
+        "foregroundRestoration": 4,
+        "exactForegroundPostconditions": 7,
+        "cursorMailbox": 1,
+        "readinessAuthorization": 4
+      },
+      "log": "native-pure-tests-final.log"
+    },
+    "nativeBuilds": {
+      "arm64": true,
+      "x64": true,
+      "logs": ["native-build-arm64-final.log", "native-build-x64-final.log"],
+      "upstreamWarning": "Duplicate CoreMediaBridge symbols in upstream apple-cf/screencapturekit bridge archives; linker returned success."
+    },
+    "sourceReconstruction": {
+      "sourceReconstructedFromPatch": true,
+      "filesCompared": 817,
+      "patchSha256": "58b1953265bbcd892af607ece87b6f9bf484d3c4b7dde0a5a4545f5c9c3516fd"
+    },
+    "artifactReuse": true,
+    "probe": {
+      "directory": "/private/tmp/synara-cua-cancel-probe-aCoVzc",
+      "driver": "/Users/emanueledipietro/.codex/worktrees/702b/synara/apps/desktop/resources/cua-driver/cua-driver",
+      "driverPid": 98970,
+      "inputToolsCalled": 0,
+      "readinessToolsCalled": 1,
+      "cases": [
+        {
+          "name": "patched-identity",
+          "passed": true
+        },
+        {
+          "name": "read-only-target-readiness-refusal",
+          "passed": true
+        },
+        {
+          "name": "wrong-generation-refused",
+          "passed": true
+        },
+        {
+          "name": "non-host-peer-refused",
+          "passed": true
+        },
+        {
+          "name": "host-cleanup-acknowledged",
+          "passed": true
+        },
+        {
+          "name": "repeat-cleanup",
+          "passed": true
+        }
+      ],
+      "metadata": {
+        "capability_version": "1",
+        "contract_version": "0.7.0",
+        "driver_version": "0.24.0",
+        "embedded": true,
+        "mcp_protocol_version": "2025-06-18",
+        "pid": 98970,
+        "synara_native_revision": 2,
+        "tools_list_schema_version": "1"
+      },
+      "exit": {
+        "code": 0,
+        "signal": null
+      }
+    },
+    "probeEvidence": "native-control-plane-probe.json"
+  },
+  "limits": [
+    "No native revision 2 GUI/input/capture fixture or RAM soak was run.",
+    "The no-overlay control-plane probe required macOS service access outside the sandbox; initial sandboxed startup returned null NSPasteboard and exited before tools.",
+    "ARM64 tests/probe executed locally; x64 was compiled and included in the universal binary, not executed.",
+    "The admission gate covers the Synara SDK tool path, not the separate upstream interactive worker API.",
+    "Existing upstream private SkyLight/Space APIs remain platform-dependent."
+  ]
+}

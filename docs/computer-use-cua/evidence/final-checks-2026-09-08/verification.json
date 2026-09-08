@@ -1,0 +1,126 @@
+{
+  "completedAtUtc": "2026-09-08T13:24:30.746Z",
+  "status": "passed",
+  "checks": [
+    {
+      "task": "fmt",
+      "startedAt": "2026-09-08T13:19:37.432Z",
+      "finishedAt": "2026-09-08T13:19:38.120Z",
+      "exitCode": 0,
+      "log": "fmt-final.log"
+    },
+    {
+      "task": "lint",
+      "startedAt": "2026-09-08T13:19:38.121Z",
+      "finishedAt": "2026-09-08T13:19:38.290Z",
+      "exitCode": 0,
+      "log": "lint-final.log"
+    },
+    {
+      "task": "typecheck",
+      "startedAt": "2026-09-08T13:20:39.276Z",
+      "finishedAt": "2026-09-08T13:20:43.632Z",
+      "exitCode": 0,
+      "log": "typecheck-final-pass.log"
+    }
+  ],
+  "lint": {
+    "errors": 0,
+    "warnings": 549
+  },
+  "typecheck": {
+    "successfulPackages": 7,
+    "totalPackages": 7,
+    "fixtureCoverage": "All five cuaFixtures TS files checked explicitly under strict inherited settings"
+  },
+  "runtime": "verified-runtime.json",
+  "tests": [
+    {
+      "scope": "combined server",
+      "files": 32,
+      "passed": 421,
+      "log": "server-regressions-final.log"
+    },
+    {
+      "scope": "provider lifecycle",
+      "files": 2,
+      "passed": 6,
+      "unselected": 184,
+      "log": "provider-lifecycle-final.log"
+    },
+    {
+      "scope": "contracts and frame transport",
+      "files": 2,
+      "passed": 22,
+      "log": "contracts-transport-tests.log"
+    },
+    {
+      "scope": "pane cancellation and queue",
+      "files": 2,
+      "passed": 23,
+      "overlaps": "combined server",
+      "log": "pane-cancellation-tests.log"
+    }
+  ],
+  "independentReproduction": {
+    "before": "pane-cancellation-before.json",
+    "after": "pane-cancellation-after.json",
+    "lateInputsBefore": 1,
+    "lateInputsAfter": 0,
+    "cases": ["pane-key", "pane-click"],
+    "nativeInput": false
+  },
+  "builds": [
+    {
+      "component": "web",
+      "passed": true,
+      "log": "web-build-final.log",
+      "command": "node node_modules/vite/bin/vite.js build"
+    },
+    {
+      "component": "server",
+      "passed": true,
+      "log": "server-build-final.log",
+      "command": "bun run build"
+    },
+    {
+      "component": "desktop",
+      "passed": true,
+      "log": "desktop-build-final.log",
+      "command": "bun run build"
+    },
+    {
+      "component": "built-server dependencies",
+      "passed": true,
+      "log": "server-runtime-smoke-final.log",
+      "command": "node dist/runtimeDependencySmoke.mjs"
+    }
+  ],
+  "repairs": [
+    "Carry RPC cancellation into queued and active pane input, and reject detached admission",
+    "Admit durable unarchive restoration in order",
+    "Query capability using actual reusable session provider",
+    "Preserve recursive schema codec and narrowed target types",
+    "Type optional lifecycle values accurately",
+    "Check all desktop fixtures in an explicit strict project",
+    "Regenerate missing ignored marketing documentation index"
+  ],
+  "sourceChanges": "changes-since-integration.json",
+  "comparisons": ["core-comparison.md", "frontend-comparison.md", "native-comparison.md"],
+  "native": {
+    "revision": 2,
+    "patchSha256": "58b1953265bbcd892af607ece87b6f9bf484d3c4b7dde0a5a4545f5c9c3516fd",
+    "binarySha256": "b090db4441faacb15b2afd8a3708d15862a3c56491a58c4a46abf0541ad04f3b",
+    "unchanged": true,
+    "priorVerification": "../refresh-2026-09-08/native-integration-evidence.json"
+  },
+  "limits": [
+    "Lint passes with 549 warnings, not zero warnings",
+    "No full repository test suite was run; recorded test scopes are explicit and can overlap",
+    "Prior 137 frontend, 12 host, 60 native and 6 protocol cases were not all repeated in this follow-up",
+    "No fresh native input/capture or signed provider end-to-end run",
+    "No equivalent-workload native RAM comparison or long-run soak",
+    "Intel slice compiled previously but not executed; production signing/notarization remains separate"
+  ],
+  "upstream": "upstream-heads.json"
+}

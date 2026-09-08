@@ -23,7 +23,7 @@ vi.mock("~/nativeApi", () => ({
   }),
 }));
 
-import { routeSingleDevicePaneOpenRequest } from "~/components/chat/devicePaneOpenRequest";
+import { routeSingleDockPaneOpenRequest } from "~/components/chat/dockPaneOpenRequest";
 import { useDeviceStateStore } from "~/deviceStateStore";
 import { selectRightDockState, useRightDockStore } from "~/rightDockStore";
 import { useDeviceEventBridge, useDevicePaneOpenRequests } from "./useDeviceEventBridge";
@@ -38,11 +38,11 @@ function ChatSurface({ enabled, threadId }: { enabled: boolean; threadId: Thread
   useDevicePaneOpenRequests({
     onOpenPaneRequested: enabled
       ? (event) =>
-          routeSingleDevicePaneOpenRequest({
+          routeSingleDockPaneOpenRequest({
             currentThreadId: threadId,
             requestedThreadId: event.threadId,
-            requestImmediateDeviceHydration: hydrate,
-            openDevicePane: (owner) =>
+            requestImmediateHydration: hydrate,
+            openPane: (owner: ThreadId) =>
               useRightDockStore.getState().openPane(owner, { kind: "device" }),
           })
       : null,

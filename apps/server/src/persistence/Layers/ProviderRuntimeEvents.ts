@@ -2,6 +2,7 @@ import { NonNegativeInt, ProviderRuntimeEvent } from "@synara/contracts";
 import { Effect, Layer, Schema } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { stripDiagnosticImages } from "../../provider/stripDiagnosticImages.ts";
 import {
   PersistenceDecodeError,
   toPersistenceDecodeError,
@@ -92,6 +93,7 @@ export const shrinkRuntimeEventStrings = (value: unknown): unknown => {
 
 const encodePersistableEvent = (event: ProviderRuntimeEvent) =>
   Effect.gen(function* () {
+    event = stripDiagnosticImages(event) as ProviderRuntimeEvent;
     const eventJson = yield* encodeEvent(event).pipe(
       Effect.mapError(toPersistenceDecodeError("ProviderRuntimeEvent.append.encode")),
     );

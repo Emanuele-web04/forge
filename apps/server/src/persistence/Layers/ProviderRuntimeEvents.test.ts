@@ -60,6 +60,46 @@ const readOpenTurnReplayCount = (threadId: string) =>
     return rows.filter((row) => row.event.threadId === threadId).length;
   });
 
+it.effect("journals image metadata and replays it without the model image body", () =>
+  Effect.gen(function* () {
+    const repository = yield* ProviderRuntimeEventRepository;
+    const data = Buffer.alloc(512 * 1024, 123).toString("base64");
+    const image = { type: "image", data, mimeType: "image/png" };
+    const event = {
+      ...runtimeEvent("runtime-event-image", ""),
+      type: "item.completed",
+      itemId: RuntimeItemId.makeUnsafe("runtime-item-image"),
+      payload: { itemType: "mcp_tool_call", status: "completed", data: { content: [image] } },
+      raw: { source: "codex.app-server.notification", payload: { content: [image] } },
+    } satisfies ProviderRuntimeEvent;
+    const stored = yield* repository.append(event);
+    const replay = yield* repository.readAfter({
+      sequenceExclusive: 0,
+      throughSequenceInclusive: stored.sequence,
+      limit: 10,
+    });
+    assert.lengthOf(replay, 1);
+    assert.deepEqual(replay[0]?.event, stored.event);
+    assert.isBelow(JSON.stringify(replay).length, 2000);
+    assert.deepEqual(replay[0]?.event.raw?.payload, {
+      content: [
+        {
+          type: "image",
+          mimeType: "image/png",
+          synaraImageOmitted: true,
+          encodedLength: data.length,
+          byteLength: 512 * 1024,
+        },
+      ],
+    });
+    assert.equal(image.data, data);
+  }).pipe(
+    Effect.provide(
+      ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    ),
+  ),
+);
+
 layer("ProviderRuntimeEventRepository", (it) => {
   it.effect("journals exact events and advances its consumer cursor contiguously", () =>
     Effect.gen(function* () {

@@ -1,0 +1,194 @@
+{
+  "fixtureRevision": 10,
+  "fixture": "Synara Cua Fixture 25728",
+  "pid": 25728,
+  "runtime": {
+    "node": "24.18.1",
+    "acorn": "8.16.0",
+    "ada": "3.4.4",
+    "amaro": "1.1.9",
+    "ares": "1.34.6",
+    "brotli": "1.2.0",
+    "cldr": "48.0",
+    "icu": "78.2",
+    "llhttp": "9.4.3",
+    "merve": "1.2.2",
+    "modules": "148",
+    "napi": "10",
+    "nbytes": "0.1.4",
+    "ncrypto": "0.0.1",
+    "nghttp2": "1.69.0",
+    "nghttp3": "",
+    "ngtcp2": "",
+    "openssl": "0.0.0",
+    "simdjson": "4.6.4",
+    "simdutf": "7.7.0",
+    "sqlite": "3.53.1",
+    "tz": "2025c",
+    "undici": "7.29.0",
+    "unicode": "17.0",
+    "uv": "1.52.1",
+    "uvwasi": "0.0.23",
+    "v8": "15.0.245.28-electron.0",
+    "zlib": "1.3.2.1-motley",
+    "zstd": "1.6.0",
+    "electron": "43.4.1",
+    "chrome": "150.0.7871.224"
+  },
+  "cases": [
+    {
+      "name": "native-input",
+      "status": "not-run",
+      "reason": "Host is missing required macOS grants; no input sent."
+    }
+  ],
+  "measurements": [],
+  "nativeActions": [],
+  "nativeObservations": [],
+  "nativeBuild": {
+    "source": {
+      "version": "0.24.0",
+      "source": "4b3396d9fe4bd3cf723b0eb8db83c18a8764b520",
+      "sha256": "31790cb49baa206f6455fbc259f8f83ae27e86be908f5c8cac5ec2f8521f8382",
+      "nativeRevision": 1,
+      "patchSha256": "1a3368bfa5f2d3915a8812b099c995eff62b9fb6a6ca5da4f5256501d7f9293b",
+      "rustVersion": "1.97.1"
+    },
+    "preSigningBinarySha256": "a972aa860beb4b9c4572675796ebc6e628dcd80cc0b91269384c4812cc8e2336",
+    "fixtureDriverOverride": false
+  },
+  "nativePermissions": {
+    "accessibility": false,
+    "direct_capture_error": null,
+    "direct_capture_status": "not_checked",
+    "screen_recording": false,
+    "screen_recording_capturable": null,
+    "source": {
+      "attribution": "host",
+      "direct_runtime": false,
+      "disclaim_env": false,
+      "embedded": true,
+      "executable": "/Users/emanueledipietro/Applications/Synara Cua Fixture.app/Contents/Resources/cua-driver/cua-driver",
+      "host_bundle_id": "com.synara.cua-fixture",
+      "note": "Embedded mode: these booleans reflect the HOST app's TCC grant (the driver is a child in the host's responsibility chain). No separate driver grant exists or is needed. If a permission is NOT granted, the host app must request it — the driver never raises its own prompt.",
+      "pid": 25738,
+      "responsible_ppid": 25728
+    }
+  },
+  "nativeFixtureWindows": [
+    {
+      "app_name": "Synara Cua Fixture",
+      "bounds": {
+        "height": 220,
+        "width": 320,
+        "x": 760,
+        "y": 100
+      },
+      "current_space_id": 1,
+      "is_on_screen": true,
+      "layer": 0,
+      "on_current_space": true,
+      "pid": 25728,
+      "space_ids": [1],
+      "title": "",
+      "window_id": 5389,
+      "z_index": 277
+    },
+    {
+      "app_name": "Synara Cua Fixture",
+      "bounds": {
+        "height": 33,
+        "width": 1728,
+        "x": 0,
+        "y": 0
+      },
+      "current_space_id": null,
+      "is_on_screen": false,
+      "layer": 0,
+      "on_current_space": null,
+      "pid": 25728,
+      "space_ids": null,
+      "title": "",
+      "window_id": 5387,
+      "z_index": 234
+    },
+    {
+      "app_name": "Synara Cua Fixture",
+      "bounds": {
+        "height": 420,
+        "width": 642,
+        "x": 79,
+        "y": 80
+      },
+      "current_space_id": 1,
+      "is_on_screen": true,
+      "layer": 0,
+      "on_current_space": true,
+      "pid": 25728,
+      "space_ids": [1],
+      "title": "",
+      "window_id": 5388,
+      "z_index": 36
+    },
+    {
+      "app_name": "Synara Cua Fixture",
+      "bounds": {
+        "height": 33,
+        "width": 1728,
+        "x": 0,
+        "y": 0
+      },
+      "current_space_id": null,
+      "is_on_screen": false,
+      "layer": 0,
+      "on_current_space": null,
+      "pid": 25728,
+      "space_ids": null,
+      "title": "",
+      "window_id": 5386,
+      "z_index": 28
+    },
+    {
+      "app_name": "Synara Cua Fixture",
+      "bounds": {
+        "height": 33,
+        "width": 1728,
+        "x": 0,
+        "y": 0
+      },
+      "current_space_id": null,
+      "is_on_screen": false,
+      "layer": 0,
+      "on_current_space": null,
+      "pid": 25728,
+      "space_ids": null,
+      "title": "",
+      "window_id": 5385,
+      "z_index": 21
+    },
+    {
+      "app_name": "Synara Cua Fixture",
+      "bounds": {
+        "height": 33,
+        "width": 1728,
+        "x": 0,
+        "y": 0
+      },
+      "current_space_id": null,
+      "is_on_screen": false,
+      "layer": 0,
+      "on_current_space": null,
+      "pid": 25728,
+      "space_ids": null,
+      "title": "",
+      "window_id": 5384,
+      "z_index": 16
+    }
+  ],
+  "availability": {
+    "kind": "permission-required",
+    "missing": ["accessibility", "screenRecording"],
+    "buildSignature": "unknown",
+    "message": "Enable Accessibility and Screen Recording for Synara in System Settings, then relaunch Synara."
+  }
+}

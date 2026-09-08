@@ -1,0 +1,58 @@
+{
+  "sourceFilesChanged": 72,
+  "whitespace": {
+    "filesChecked": 70,
+    "issues": [],
+    "excluded": [
+      "Unified native patch text uses significant context-prefix spaces; source reconstruction checked separately.",
+      "Fixture probe lacks a captured pre-refresh baseline."
+    ]
+  },
+  "protectedUnchanged": [
+    {
+      "file": "apps/web/src/appSettings.ts",
+      "beforeSha256": "4543b0c66330ff72208e67c8b51cacfa0485fc2b6eaa94020caa65fac0df0627",
+      "afterSha256": "4543b0c66330ff72208e67c8b51cacfa0485fc2b6eaa94020caa65fac0df0627"
+    },
+    {
+      "file": "apps/web/src/routes/_chat.settings.tsx",
+      "beforeSha256": "725d77fd5c9b8e4cdd2c791c5759516a41cecaf9b88ef599d0376cafcabd6b06",
+      "afterSha256": "725d77fd5c9b8e4cdd2c791c5759516a41cecaf9b88ef599d0376cafcabd6b06"
+    },
+    {
+      "file": "apps/web/src/composerDraftActions.ts",
+      "beforeSha256": "05b7bad485f9be949c4133eaba8000f5b53bb7c5d0f152ad6f4cae300a165de1",
+      "afterSha256": "05b7bad485f9be949c4133eaba8000f5b53bb7c5d0f152ad6f4cae300a165de1"
+    },
+    {
+      "file": "apps/web/src/composerDraftPersistence.ts",
+      "beforeSha256": "5af8705103e64d9082d97005ddb9ae1a34d0ac2af247abdad45e4d0b68c79f2e",
+      "afterSha256": "5af8705103e64d9082d97005ddb9ae1a34d0ac2af247abdad45e4d0b68c79f2e"
+    },
+    {
+      "file": "apps/web/src/components/settings/ComputerSettingsPanel.tsx",
+      "beforeSha256": "bf5aff929a38fab951765c77bc93d2651fb562e0b710e5a070430da25c531679",
+      "afterSha256": "bf5aff929a38fab951765c77bc93d2651fb562e0b710e5a070430da25c531679"
+    },
+    {
+      "file": "apps/server/src/agentGateway/Layers/AgentGatewaySessionRegistry.ts",
+      "beforeSha256": "1a974e729337f85c03b8e784b7069fd1d7b7f21664cc9004a1d4ecff661b5e93",
+      "afterSha256": "1a974e729337f85c03b8e784b7069fd1d7b7f21664cc9004a1d4ecff661b5e93"
+    },
+    {
+      "file": "apps/server/src/computer/ComputerApprovalGate.ts",
+      "beforeSha256": "fd381bdd3a1aeb9c9320f838800166bf5a556e4e843fc8ffa6d66992b5770847",
+      "afterSha256": "fd381bdd3a1aeb9c9320f838800166bf5a556e4e843fc8ffa6d66992b5770847"
+    },
+    {
+      "file": "apps/desktop/src/cuaDriverHost.ts",
+      "beforeSha256": "2d53cc7fd2ba4b11c5708d5e803b28fdd7524a9e99b34467390d1e4b6a50f50e",
+      "afterSha256": "2d53cc7fd2ba4b11c5708d5e803b28fdd7524a9e99b34467390d1e4b6a50f50e"
+    },
+    {
+      "file": "apps/desktop/src/main.ts",
+      "beforeSha256": "77f992d427699aee11a480b3b7db004f7f4bcd065ee9fd2c2ddf1ccf95feb52f",
+      "afterSha256": "77f992d427699aee11a480b3b7db004f7f4bcd065ee9fd2c2ddf1ccf95feb52f"
+    }
+  ]
+}

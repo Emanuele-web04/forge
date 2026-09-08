@@ -10,6 +10,7 @@ import {
   WS_PROTOCOL_MAX_REVISION,
   WS_PROTOCOL_MIN_REVISION,
   type AuthSessionId,
+  type ComputerEvent,
   type WsBootstrapNegotiateResult,
 } from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -40,6 +41,7 @@ import {
   type WsConnectionSessionsShape,
 } from "./wsConnectionSessions";
 import { makeCurrentWsFeatureCompatibilitySearchParams } from "./wsCompatibility";
+import { ComputerEventInterests } from "./computer/computerEventInterests";
 
 const PingRpc = Rpc.make("test.ping", {
   payload: Schema.Struct({ label: Schema.String }),
@@ -826,9 +828,20 @@ describe("websocketRpcRouteLayer connection lifecycle", () => {
         attachmentPrincipal: { ownerKind: "session", ownerId: issued.sessionId },
       });
 
+      // A client may read Computer state without ever subscribing to its
+      // event stream. The socket scope must still release the remembered view.
+      const interests = new ComputerEventInterests(server.connectionSessions.onClose);
+      const event = {
+        type: "computer.thread-state",
+        state: { threadId: "state-only-view" },
+      } as ComputerEvent;
+      interests.watch(sessionKey, "state-only-view");
+      expect(interests.accepts(sessionKey, event)).toBe(true);
+
       socket.close();
       await waitForClose(socket);
       await waitForObserved(() => server.connectionSessions.lookup(sessionKey) === undefined);
+      expect(interests.accepts(sessionKey, event)).toBe(false);
     } finally {
       await server.close();
     }

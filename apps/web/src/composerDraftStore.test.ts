@@ -390,6 +390,31 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(useComposerDraftStore.getState().draftsByThreadId[otherThreadId]).toBeUndefined();
   });
 
+  it.each([true, false])(
+    "preserves explicit Computer choice %s when a draft becomes a server thread",
+    (enabled) => {
+      const store = useComposerDraftStore.getState();
+      store.setProjectDraftThreadId(projectId, threadId);
+      store.setPrompt(threadId, "already sent");
+      store.setEnableComputerControl(threadId, enabled);
+
+      markPromotedDraftThreads(new Set([threadId]));
+      finalizePromotedDraftThreads(new Set([threadId]));
+
+      const promoted = useComposerDraftStore.getState();
+      expect(promoted.getDraftThread(threadId)).toBeNull();
+      expect(promoted.draftsByThreadId[threadId]?.prompt).toBe("");
+      expect(promoted.draftsByThreadId[threadId]?.enableComputerControl).toBe(enabled);
+      promoted.finalizePromotedDraftThread(threadId);
+      expect(
+        useComposerDraftStore.getState().draftsByThreadId[threadId]?.enableComputerControl,
+      ).toBe(enabled);
+
+      promoted.clearDraftThread(threadId);
+      expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
+    },
+  );
+
   it("updates branch context on an existing draft thread", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectId, threadId, {

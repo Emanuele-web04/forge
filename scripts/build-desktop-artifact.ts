@@ -1036,6 +1036,15 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* assertPlatformBuildResources(options.platform, stageResourcesDir, options.verbose);
 
   if (options.platform === "mac") {
+    const provisionCua = path.join(repoRoot, "apps/desktop/scripts/provision-cua-driver.mjs");
+    const cuaDestination = path.join(stageResourcesDir, "cua-driver");
+    yield* Effect.log("[desktop-artifact] Verifying and staging pinned Cua Driver...");
+    yield* runCommand(
+      ChildProcess.make({
+        cwd: repoRoot,
+        ...commandOutputOptions(options.verbose),
+      })`node ${provisionCua} --destination ${cuaDestination} --arch ${options.arch}`,
+    );
     yield* stageMacAppSnapHelper(stageAppDir, options.arch, options.verbose);
   }
 

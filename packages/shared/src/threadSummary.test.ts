@@ -18,6 +18,10 @@ describe("approvalRequestKindFromRequestType", () => {
     ["file_read_approval", "file-read"],
     ["file_change_approval", "file-change"],
     ["apply_patch_approval", "file-change"],
+    ["permissions_approval", "permissions"],
+    ["tool_approval", "tool"],
+    // Legacy Claude classification for generic/MCP tool approvals.
+    ["dynamic_tool_call", "tool"],
     ["unknown", null],
     [null, null],
   ] as const)("maps %s to %s", (requestType, expected) => {

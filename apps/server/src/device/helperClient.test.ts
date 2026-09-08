@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { decodeDeviceFrame, encodeDeviceFrame } from "@synara/shared/deviceFrame";
 
@@ -10,6 +10,112 @@ import {
 } from "./helperClient.ts";
 
 const DEVICE = "FAKE-0001";
+
+type ControlRequest = {
+  readonly id: number;
+  readonly method: string;
+  readonly params: Record<string, unknown>;
+};
+
+type ControlResponseHandler = (
+  child: {
+    readonly stdout: { emit: (event: string, ...args: readonly unknown[]) => boolean };
+    emit: (event: string, ...args: readonly unknown[]) => boolean;
+  },
+  request: ControlRequest,
+) => void;
+
+let nextResponseHandler: ControlResponseHandler | undefined;
+
+vi.mock("node:child_process", () => {
+  type Listener = (...args: readonly unknown[]) => void;
+
+  class FakeEventEmitter {
+    private readonly listeners = new Map<string, Set<Listener>>();
+
+    on(event: string, listener: Listener): this {
+      let listeners = this.listeners.get(event);
+      if (!listeners) {
+        listeners = new Set();
+        this.listeners.set(event, listeners);
+      }
+      listeners.add(listener);
+      return this;
+    }
+
+    once(event: string, listener: Listener): this {
+      const wrapped: Listener = (...args) => {
+        this.off(event, wrapped);
+        listener(...args);
+      };
+      return this.on(event, wrapped);
+    }
+
+    off(event: string, listener: Listener): this {
+      this.listeners.get(event)?.delete(listener);
+      return this;
+    }
+
+    emit(event: string, ...args: readonly unknown[]): boolean {
+      const listeners = this.listeners.get(event);
+      if (!listeners) return false;
+      for (const listener of [...listeners]) listener(...args);
+      return true;
+    }
+  }
+
+  class FakeStream extends FakeEventEmitter {
+    setEncoding(_encoding: string): void {}
+  }
+
+  class FakeStdin extends FakeEventEmitter {
+    writable = true;
+
+    constructor(private readonly onRequest: (request: ControlRequest) => void) {
+      super();
+    }
+
+    write(chunk: Uint8Array, callback: (error?: Error | null) => void): boolean {
+      callback();
+      this.onRequest(JSON.parse(Buffer.from(chunk).toString("utf8")) as ControlRequest);
+      return true;
+    }
+
+    end(): void {}
+  }
+
+  class FakeChild extends FakeEventEmitter {
+    readonly stdout = new FakeStream();
+    readonly stderr = new FakeStream();
+    readonly stdin: FakeStdin;
+
+    constructor() {
+      super();
+      this.stdin = new FakeStdin((request) => nextResponseHandler?.(this, request));
+    }
+
+    kill(_signal: NodeJS.Signals): boolean {
+      this.emit("exit", null, "SIGTERM");
+      return true;
+    }
+  }
+
+  return {
+    spawn: () => new FakeChild(),
+  };
+});
+
+afterEach(() => {
+  nextResponseHandler = undefined;
+});
+
+function makeControlClient(handler: ControlResponseHandler, requestTimeoutMs = 100): HelperClient {
+  nextResponseHandler = handler;
+  return new HelperClient({
+    binaryPath: "fake-helper",
+    requestTimeoutMs,
+  });
+}
 
 /**
  * What the helper actually puts on the socket: the contract envelope, wrapped
@@ -102,6 +208,120 @@ describe("helper frame prefix parser", () => {
     prefixOnly.writeUInt32LE(64, 0);
 
     expect(parser.push(prefixOnly)).toHaveLength(0);
+  });
+});
+
+describe("helper stdio control channel", () => {
+  it("correlates responses and maps helper error codes", async () => {
+    const client = makeControlClient((child, request) => {
+      if (request.method === "echo") {
+        setTimeout(
+          () =>
+            child.stdout.emit(
+              "data",
+              Buffer.from(JSON.stringify({ id: request.id, result: request.params.value }) + "\n"),
+            ),
+          Number(request.params.delay),
+        );
+      } else if (request.method === "fail") {
+        child.stdout.emit(
+          "data",
+          Buffer.from(
+            JSON.stringify({ id: request.id, error: { code: 17, message: "helper rejected" } }) +
+              "\n",
+          ),
+        );
+      }
+    });
+    try {
+      const responses = await Promise.all([
+        client.request("echo", { value: "slow", delay: 10 }),
+        client.request("echo", { value: "fast", delay: 0 }),
+      ]);
+      expect(responses).toEqual(["slow", "fast"]);
+      await expect(client.request("fail")).rejects.toMatchObject({
+        code: "helper_17",
+        message: "helper rejected",
+      });
+    } finally {
+      await client.dispose();
+    }
+  });
+
+  it("reports helper_timeout when a control request receives no response", async () => {
+    const client = makeControlClient(() => undefined, 20);
+    try {
+      await expect(client.request("never")).rejects.toMatchObject({ code: "helper_timeout" });
+    } finally {
+      await client.dispose();
+    }
+  });
+
+  it("reports the existing error for an oversized control line", async () => {
+    const client = makeControlClient((child) => {
+      child.stdout.emit("data", Buffer.from("x".repeat(4 * 1024 * 1024 + 1)));
+    });
+    try {
+      await expect(client.request("oversized")).rejects.toMatchObject({
+        code: "helper_protocol_error",
+        message: "Device helper control line exceeded limit",
+      });
+    } finally {
+      await client.dispose();
+    }
+  });
+
+  it("keeps serving requests after an oversized control line", async () => {
+    const client = makeControlClient((child, request) => {
+      if (request.method === "oversized") {
+        child.stdout.emit("data", Buffer.from(`${"x".repeat(4 * 1024 * 1024 + 1)}\n`));
+        return;
+      }
+      child.stdout.emit(
+        "data",
+        Buffer.from(`${JSON.stringify({ id: request.id, result: "ok" })}\n`),
+      );
+    });
+    try {
+      await expect(client.request("oversized")).rejects.toMatchObject({
+        code: "helper_protocol_error",
+      });
+      // A protocol error costs the in-flight response, not the write path: the
+      // helper is still running and the next call has to reach it.
+      await expect(client.request("after")).resolves.toBe("ok");
+    } finally {
+      await client.dispose();
+    }
+  });
+
+  it("ignores an undecodable control line without losing the response beside it", async () => {
+    const client = makeControlClient((child, request) => {
+      child.stdout.emit(
+        "data",
+        Buffer.concat([
+          // Helper diagnostics that are not valid UTF-8, then the real response,
+          // in one read.
+          Buffer.from([0xff, 0xfe, 0x0a]),
+          Buffer.from(`${JSON.stringify({ id: request.id, result: "survived" })}\n`),
+        ]),
+      );
+    });
+    try {
+      await expect(client.request("noisy")).resolves.toBe("survived");
+    } finally {
+      await client.dispose();
+    }
+  });
+
+  it("rejects a pending request when the helper exits", async () => {
+    const client = makeControlClient((child) => {
+      child.emit("exit", 7, null);
+    });
+    try {
+      await expect(client.request("exit")).rejects.toMatchObject({ code: "helper_exited" });
+    } finally {
+      await client.dispose();
+    }
   });
 });
 

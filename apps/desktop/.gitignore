@@ -1,3 +1,5 @@
 dist-electron/
 .electron-runtime/
 native/appsnap/build/
+
+/resources/cua-driver/

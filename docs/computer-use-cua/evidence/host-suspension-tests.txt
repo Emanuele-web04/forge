@@ -1,0 +1,10 @@
+$ vitest run --passWithNoTests src/cuaDriverHost.test.ts
+
+ RUN  v4.1.10 /Users/emanueledipietro/.codex/worktrees/702b/synara/apps/desktop
+
+
+ Test Files  1 passed (1)
+      Tests  12 passed (12)
+   Start at  01:43:55
+   Duration  4.39s (transform 22ms, setup 0ms, import 32ms, tests 4.29s, environment 0ms)
+

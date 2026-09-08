@@ -1,5 +1,7 @@
 import type { ProviderRuntimeEvent } from "@synara/contracts";
 
+import { stripDiagnosticImages } from "./stripDiagnosticImages.ts";
+
 export const PROVIDER_RUNTIME_CALLBACK_BUFFER_MAX_BYTES = 32 * 1024 * 1024;
 export const PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE = 64;
 export const PROVIDER_RUNTIME_INGRESS_EVENT_MAX_BYTES = 512 * 1024;
@@ -27,6 +29,7 @@ function providerRuntimeEventBytes(event: ProviderRuntimeEvent): number {
 export function compactProviderRuntimeEventForIngress(
   event: ProviderRuntimeEvent,
 ): SizedProviderRuntimeEvent {
+  event = stripDiagnosticImages(event) as ProviderRuntimeEvent;
   const originalBytes = providerRuntimeEventBytes(event);
   if (originalBytes <= PROVIDER_RUNTIME_INGRESS_EVENT_MAX_BYTES || event.raw === undefined) {
     return { event, bytes: originalBytes };

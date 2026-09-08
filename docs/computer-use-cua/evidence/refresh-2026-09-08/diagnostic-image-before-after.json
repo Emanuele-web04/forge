@@ -1,0 +1,10 @@
+{
+  "sampleImageBytes": 524288,
+  "beforeIngressBytes": 699469,
+  "afterIngressBytes": 475,
+  "sourceModelImageIntact": true,
+  "sharedReferencesPreserved": true,
+  "unchangedJsonIdempotent": true,
+  "cycleReferencesSanitized": true,
+  "sparseLengthPreserved": true
+}

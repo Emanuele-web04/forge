@@ -1,0 +1,16 @@
+$ vitest run --passWithNoTests src/composerDraftStore.test.ts src/composerDraftStore.persistence.test.ts src/components/ChatView.logic.test.ts
+(node:9427) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+
+ RUN  v4.1.10 /Users/emanueledipietro/.codex/worktrees/702b/synara/apps/web
+
+(node:9430) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:9431) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+ Test Files  3 passed (3)
+      Tests  245 passed (245)
+   Start at  01:34:36
+   Duration  851ms (transform 1.14s, setup 0ms, import 2.15s, tests 44ms, environment 0ms)
+

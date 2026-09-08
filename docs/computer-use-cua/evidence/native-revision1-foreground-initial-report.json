@@ -1,0 +1,2822 @@
+{
+  "fixtureRevision": 9,
+  "fixture": "Synara Cua Fixture 22011",
+  "pid": 22011,
+  "runtime": {
+    "node": "24.18.1",
+    "acorn": "8.16.0",
+    "ada": "3.4.4",
+    "amaro": "1.1.9",
+    "ares": "1.34.6",
+    "brotli": "1.2.0",
+    "cldr": "48.0",
+    "icu": "78.2",
+    "llhttp": "9.4.3",
+    "merve": "1.2.2",
+    "modules": "148",
+    "napi": "10",
+    "nbytes": "0.1.4",
+    "ncrypto": "0.0.1",
+    "nghttp2": "1.69.0",
+    "nghttp3": "",
+    "ngtcp2": "",
+    "openssl": "0.0.0",
+    "simdjson": "4.6.4",
+    "simdutf": "7.7.0",
+    "sqlite": "3.53.1",
+    "tz": "2025c",
+    "undici": "7.29.0",
+    "unicode": "17.0",
+    "uv": "1.52.1",
+    "uvwasi": "0.0.23",
+    "v8": "15.0.245.28-electron.0",
+    "zlib": "1.3.2.1-motley",
+    "zstd": "1.6.0",
+    "electron": "43.4.1",
+    "chrome": "150.0.7871.224"
+  },
+  "cases": [
+    {
+      "name": "one-click-one-effect",
+      "result": {
+        "windowId": "cua:22011:5334",
+        "point": {
+          "x": 208.5546875,
+          "y": 274.484375
+        },
+        "deliveryPath": "cua-synthetic_events-background",
+        "verified": "unverifiable",
+        "effect": "dispatched-unknown"
+      },
+      "appState": {
+        "clicks": 1,
+        "text": "abc",
+        "changes": 0
+      },
+      "status": "passed"
+    },
+    {
+      "name": "identical-text-replacement",
+      "status": "refused",
+      "error": "ComputerBackendError: Background input refused (same_pid_keyboard_ambiguity): pid 22011 owns 1 other eligible top-level window(s); process-scoped key events cannot be proven to reach window 5334 and could mutate a sibling window. Use an exact element action, the page tool for browser content, or delivery_mode:\"foreground\" [effect=not-dispatched; automatic replay is forbidden]",
+      "appState": {
+        "clicks": 1,
+        "text": "abc",
+        "changes": 0
+      }
+    },
+    {
+      "name": "single-window-identical-text",
+      "result": {
+        "windowId": "cua:22011:5334",
+        "deliveryPath": "cua-synthetic_events-background",
+        "verified": "unverifiable",
+        "effect": "dispatched-unknown"
+      },
+      "appState": {
+        "clicks": 1,
+        "text": "abc",
+        "changes": 3,
+        "selectionStart": 3,
+        "selectionEnd": 3
+      },
+      "status": "passed"
+    },
+    {
+      "name": "explicit-foreground-text",
+      "result": {
+        "windowId": "cua:22011:5334",
+        "deliveryPath": "cua-global_input-foreground",
+        "verified": "unverifiable",
+        "effect": "dispatched-unknown"
+      },
+      "actualText": "foreground-ok",
+      "status": "passed"
+    },
+    {
+      "name": "ax-set-value",
+      "result": {
+        "windowId": "cua:22011:5334",
+        "deliveryPath": "cua-accessibility-background",
+        "verified": "unverifiable",
+        "effect": "dispatched-unknown"
+      },
+      "actualText": "fixture-value",
+      "status": "passed"
+    },
+    {
+      "name": "moved-target",
+      "status": "passed",
+      "error": "ComputerBackendError: Window geometry changed since observation; obtain a new screenshot. [effect=not-dispatched; automatic replay is forbidden]",
+      "appState": {
+        "clicks": 1,
+        "text": "fixture-value",
+        "changes": 17
+      }
+    },
+    {
+      "name": "closed-target",
+      "status": "passed",
+      "error": "ComputerBackendError: Background input refused (off_space_or_ax_unresolved): window 5334 is not among the process's current AXWindows (another Space, or its AX surface is unresolved); background input is refused so a sibling window cannot receive it. Observation (capture/list_windows) remains available [effect=not-dispatched; automatic replay is forbidden]"
+    }
+  ],
+  "measurements": [
+    {
+      "name": "window-observation",
+      "milliseconds": 768.706167
+    },
+    {
+      "name": "click",
+      "milliseconds": 2850.1449999999995
+    },
+    {
+      "name": "identical-text",
+      "milliseconds": 21.418666999999914
+    },
+    {
+      "name": "single-window-identical-text",
+      "milliseconds": 1220.7182920000005
+    },
+    {
+      "name": "foreground-text",
+      "milliseconds": 1856.585959
+    },
+    {
+      "name": "semantic-observation",
+      "milliseconds": 154.70529100000022
+    },
+    {
+      "name": "set-value",
+      "milliseconds": 2598.4175419999992
+    }
+  ],
+  "nativeActions": [
+    {
+      "name": "click",
+      "result": {
+        "delivery": {
+          "mode": "background"
+        },
+        "effect": "unverifiable",
+        "route": "synthetic_events"
+      }
+    },
+    {
+      "name": "type_text",
+      "result": {
+        "code": "same_pid_keyboard_ambiguity",
+        "effect": "refused",
+        "escalation": {
+          "reason": "pid 22011 owns 1 other eligible top-level window(s); process-scoped key events cannot be proven to reach window 5334 and could mutate a sibling window. Use an exact element action, the page tool for browser content, or delivery_mode:\"foreground\"",
+          "recommended": "accessibility"
+        },
+        "pid": 22011,
+        "reason": "pid 22011 owns 1 other eligible top-level window(s); process-scoped key events cannot be proven to reach window 5334 and could mutate a sibling window. Use an exact element action, the page tool for browser content, or delivery_mode:\"foreground\"",
+        "window_id": 5334
+      }
+    },
+    {
+      "name": "type_text",
+      "result": {
+        "delivery": {
+          "delivered_count": 3,
+          "mode": "background"
+        },
+        "effect": "unverifiable",
+        "escalation": {
+          "reason": "effect_unconfirmed",
+          "target": "pixel"
+        },
+        "route": "synthetic_events"
+      }
+    },
+    {
+      "name": "type_text",
+      "result": {
+        "delivery": {
+          "delivered_count": 13,
+          "mode": "foreground"
+        },
+        "effect": "unverifiable",
+        "escalation": {
+          "reason": "effect_unconfirmed",
+          "target": "pixel"
+        },
+        "route": "global_input"
+      }
+    },
+    {
+      "name": "set_value",
+      "result": {
+        "delivery": {
+          "mode": "background"
+        },
+        "effect": "unverifiable",
+        "escalation": {
+          "reason": "effect_unconfirmed",
+          "target": "pixel"
+        },
+        "route": "accessibility"
+      }
+    },
+    {
+      "name": "type_text",
+      "result": {
+        "code": "off_space_or_ax_unresolved",
+        "effect": "refused",
+        "escalation": {
+          "reason": "window 5334 is not among the process's current AXWindows (another Space, or its AX surface is unresolved); background input is refused so a sibling window cannot receive it. Observation (capture/list_windows) remains available",
+          "recommended": "foreground"
+        },
+        "pid": 22011,
+        "reason": "window 5334 is not among the process's current AXWindows (another Space, or its AX surface is unresolved); background input is refused so a sibling window cannot receive it. Observation (capture/list_windows) remains available",
+        "window_id": 5334
+      }
+    },
+    {
+      "name": "click",
+      "result": {
+        "delivery": {
+          "mode": "background"
+        },
+        "effect": "unverifiable",
+        "route": "synthetic_events"
+      }
+    },
+    {
+      "name": "type_text",
+      "result": {
+        "code": "same_pid_keyboard_ambiguity",
+        "effect": "refused",
+        "escalation": {
+          "reason": "pid 22138 owns 1 other eligible top-level window(s); process-scoped key events cannot be proven to reach window 5345 and could mutate a sibling window. Use an exact element action, the page tool for browser content, or delivery_mode:\"foreground\"",
+          "recommended": "accessibility"
+        },
+        "pid": 22138,
+        "reason": "pid 22138 owns 1 other eligible top-level window(s); process-scoped key events cannot be proven to reach window 5345 and could mutate a sibling window. Use an exact element action, the page tool for browser content, or delivery_mode:\"foreground\"",
+        "window_id": 5345
+      }
+    },
+    {
+      "name": "type_text",
+      "result": {
+        "delivery": {
+          "delivered_count": 3,
+          "mode": "background"
+        },
+        "effect": "confirmed",
+        "evidence": [
+          {
+            "kind": "value_readback"
+          }
+        ],
+        "route": "synthetic_events"
+      }
+    },
+    {
+      "name": "set_value",
+      "result": {
+        "delivery": {
+          "mode": "background"
+        },
+        "effect": "confirmed",
+        "evidence": [
+          {
+            "kind": "value_readback"
+          }
+        ],
+        "route": "accessibility"
+      }
+    },
+    {
+      "name": "click"
+    },
+    {
+      "name": "type_text"
+    },
+    {
+      "name": "drag"
+    },
+    {
+      "name": "click"
+    },
+    {
+      "name": "click",
+      "result": {
+        "delivery": {
+          "mode": "background"
+        },
+        "effect": "unverifiable",
+        "route": "synthetic_events"
+      }
+    }
+  ],
+  "nativeObservations": [
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 220,
+            "width": 320,
+            "x": 760,
+            "y": 100
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 B",
+          "window_id": 5335,
+          "z_index": 156
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 642,
+            "x": 79,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5334,
+          "z_index": 154
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 220,
+            "width": 320,
+            "x": 760,
+            "y": 100
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 B",
+          "window_id": 5335,
+          "z_index": 156
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 642,
+            "x": 79,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5334,
+          "z_index": 154
+        }
+      ]
+    },
+    {
+      "name": "get_window_state",
+      "pid": 22011,
+      "windowId": 5334,
+      "bounds": {
+        "height": 420,
+        "width": 640,
+        "x": 80,
+        "y": 80
+      }
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 220,
+            "width": 320,
+            "x": 760,
+            "y": 100
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 B",
+          "window_id": 5335,
+          "z_index": 156
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5334,
+          "z_index": 154
+        }
+      ]
+    },
+    {
+      "name": "get_window_state",
+      "pid": 22011,
+      "windowId": 5334,
+      "bounds": {
+        "height": 420,
+        "width": 640,
+        "x": 80,
+        "y": 80
+      }
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 220,
+            "width": 320,
+            "x": 760,
+            "y": 100
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 B",
+          "window_id": 5335,
+          "z_index": 156
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5334,
+          "z_index": 154
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 220,
+            "width": 320,
+            "x": 760,
+            "y": 100
+          },
+          "current_space_id": 1,
+          "is_on_screen": false,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 B",
+          "window_id": 5335,
+          "z_index": 156
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5334,
+          "z_index": 154
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5334,
+          "z_index": 154
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5334,
+          "z_index": 154
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5334,
+          "z_index": 154
+        }
+      ]
+    },
+    {
+      "name": "get_window_state",
+      "pid": 22011,
+      "windowId": 5334,
+      "bounds": {
+        "height": 420,
+        "width": 640,
+        "x": 80,
+        "y": 80
+      }
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5334,
+          "z_index": 154
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 180,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5334,
+          "z_index": 154
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 180,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5334,
+          "z_index": 154
+        }
+      ]
+    },
+    {
+      "name": "get_window_state",
+      "pid": 22011,
+      "windowId": 5334,
+      "bounds": {
+        "height": 420,
+        "width": 640,
+        "x": 180,
+        "y": 80
+      }
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 412,
+            "width": 628,
+            "x": 186,
+            "y": 84
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5334,
+          "z_index": 154
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 100,
+            "y": 565
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22138,
+          "space_ids": [1],
+          "title": "Synara Native Fixture 22138 A",
+          "window_id": 5345,
+          "z_index": 289
+        },
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 720,
+            "y": 565
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22138,
+          "space_ids": [1],
+          "title": "Synara Native Fixture 22138 B",
+          "window_id": 5347,
+          "z_index": 247
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 180,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": false,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5334,
+          "z_index": 154
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 100,
+            "y": 565
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22138,
+          "space_ids": [1],
+          "title": "Synara Native Fixture 22138 A",
+          "window_id": 5345,
+          "z_index": 291
+        },
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 720,
+            "y": 565
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22138,
+          "space_ids": [1],
+          "title": "Synara Native Fixture 22138 B",
+          "window_id": 5347,
+          "z_index": 249
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 180,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": false,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5334,
+          "z_index": 156
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 100,
+            "y": 565
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22138,
+          "space_ids": [1],
+          "title": "Synara Native Fixture 22138 A",
+          "window_id": 5345,
+          "z_index": 291
+        },
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 720,
+            "y": 565
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22138,
+          "space_ids": [1],
+          "title": "Synara Native Fixture 22138 B",
+          "window_id": 5347,
+          "z_index": 249
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 180,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": false,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5334,
+          "z_index": 156
+        }
+      ]
+    },
+    {
+      "name": "get_window_state",
+      "pid": 22138,
+      "windowId": 5345,
+      "bounds": {
+        "height": 352,
+        "width": 540,
+        "x": 100,
+        "y": 565
+      }
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 100,
+            "y": 565
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22138,
+          "space_ids": [1],
+          "title": "Synara Native Fixture 22138 A",
+          "window_id": 5345,
+          "z_index": 292
+        },
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 720,
+            "y": 565
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22138,
+          "space_ids": [1],
+          "title": "Synara Native Fixture 22138 B",
+          "window_id": 5347,
+          "z_index": 250
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 180,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": false,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5334,
+          "z_index": 156
+        }
+      ]
+    },
+    {
+      "name": "get_window_state",
+      "pid": 22138,
+      "windowId": 5345,
+      "bounds": {
+        "height": 352,
+        "width": 540,
+        "x": 100,
+        "y": 565
+      }
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 100,
+            "y": 565
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22138,
+          "space_ids": [1],
+          "title": "Synara Native Fixture 22138 A",
+          "window_id": 5345,
+          "z_index": 291
+        },
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 720,
+            "y": 565
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22138,
+          "space_ids": [1],
+          "title": "Synara Native Fixture 22138 B",
+          "window_id": 5347,
+          "z_index": 249
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 180,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": false,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5334,
+          "z_index": 155
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 100,
+            "y": 565
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22138,
+          "space_ids": [1],
+          "title": "Synara Native Fixture 22138 A",
+          "window_id": 5345,
+          "z_index": 291
+        },
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 720,
+            "y": 565
+          },
+          "current_space_id": null,
+          "is_on_screen": false,
+          "layer": 0,
+          "on_current_space": null,
+          "pid": 22138,
+          "space_ids": null,
+          "title": "Synara Native Fixture 22138 B",
+          "window_id": 5347,
+          "z_index": 249
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 180,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": false,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5334,
+          "z_index": 155
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 100,
+            "y": 565
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22138,
+          "space_ids": [1],
+          "title": "Synara Native Fixture 22138 A",
+          "window_id": 5345,
+          "z_index": 291
+        },
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 720,
+            "y": 565
+          },
+          "current_space_id": null,
+          "is_on_screen": false,
+          "layer": 0,
+          "on_current_space": null,
+          "pid": 22138,
+          "space_ids": null,
+          "title": "Synara Native Fixture 22138 B",
+          "window_id": 5347,
+          "z_index": 249
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 180,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": false,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5334,
+          "z_index": 155
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 100,
+            "y": 565
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22138,
+          "space_ids": [1],
+          "title": "Synara Native Fixture 22138 A",
+          "window_id": 5345,
+          "z_index": 291
+        },
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 720,
+            "y": 565
+          },
+          "current_space_id": null,
+          "is_on_screen": false,
+          "layer": 0,
+          "on_current_space": null,
+          "pid": 22138,
+          "space_ids": null,
+          "title": "Synara Native Fixture 22138 B",
+          "window_id": 5347,
+          "z_index": 249
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 180,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": false,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5334,
+          "z_index": 155
+        }
+      ]
+    },
+    {
+      "name": "get_window_state",
+      "pid": 22138,
+      "windowId": 5345,
+      "bounds": {
+        "height": 352,
+        "width": 540,
+        "x": 100,
+        "y": 565
+      }
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 100,
+            "y": 565
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22138,
+          "space_ids": [1],
+          "title": "Synara Native Fixture 22138 A",
+          "window_id": 5345,
+          "z_index": 291
+        },
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 720,
+            "y": 565
+          },
+          "current_space_id": null,
+          "is_on_screen": false,
+          "layer": 0,
+          "on_current_space": null,
+          "pid": 22138,
+          "space_ids": null,
+          "title": "Synara Native Fixture 22138 B",
+          "window_id": 5347,
+          "z_index": 249
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 180,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": false,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5334,
+          "z_index": 155
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 100,
+            "y": 565
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22138,
+          "space_ids": [1],
+          "title": "Synara Native Fixture 22138 A",
+          "window_id": 5345,
+          "z_index": 291
+        },
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 720,
+            "y": 565
+          },
+          "current_space_id": null,
+          "is_on_screen": false,
+          "layer": 0,
+          "on_current_space": null,
+          "pid": 22138,
+          "space_ids": null,
+          "title": "Synara Native Fixture 22138 B",
+          "window_id": 5347,
+          "z_index": 249
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 180,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": false,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5334,
+          "z_index": 155
+        }
+      ]
+    },
+    {
+      "name": "get_window_state",
+      "pid": 22138,
+      "windowId": 5345,
+      "bounds": {
+        "height": 352,
+        "width": 540,
+        "x": 100,
+        "y": 565
+      }
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 353,
+            "width": 958,
+            "x": 101,
+            "y": 581
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22138,
+          "space_ids": [1],
+          "title": "Synara Native Fixture 22138 A",
+          "window_id": 5345,
+          "z_index": 291
+        },
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 720,
+            "y": 565
+          },
+          "current_space_id": null,
+          "is_on_screen": false,
+          "layer": 0,
+          "on_current_space": null,
+          "pid": 22138,
+          "space_ids": null,
+          "title": "Synara Native Fixture 22138 B",
+          "window_id": 5347,
+          "z_index": 249
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 180,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": false,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5334,
+          "z_index": 155
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 418,
+            "width": 636,
+            "x": 82,
+            "y": 81
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 C",
+          "window_id": 5365,
+          "z_index": 281
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 C",
+          "window_id": 5365,
+          "z_index": 280
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 C",
+          "window_id": 5365,
+          "z_index": 280
+        }
+      ]
+    },
+    {
+      "name": "get_window_state",
+      "pid": 22011,
+      "windowId": 5365,
+      "bounds": {
+        "height": 420,
+        "width": 640,
+        "x": 80,
+        "y": 80
+      }
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 C",
+          "window_id": 5365,
+          "z_index": 280
+        }
+      ]
+    },
+    {
+      "name": "get_window_state",
+      "pid": 22011,
+      "windowId": 5365,
+      "bounds": {
+        "height": 420,
+        "width": 640,
+        "x": 80,
+        "y": 80
+      }
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 C",
+          "window_id": 5365,
+          "z_index": 280
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 C",
+          "window_id": 5365,
+          "z_index": 279
+        }
+      ]
+    },
+    {
+      "name": "get_window_state",
+      "pid": 22011,
+      "windowId": 5365,
+      "bounds": {
+        "height": 420,
+        "width": 640,
+        "x": 80,
+        "y": 80
+      }
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 C",
+          "window_id": 5365,
+          "z_index": 279
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 C",
+          "window_id": 5365,
+          "z_index": 277
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 C",
+          "window_id": 5365,
+          "z_index": 277
+        }
+      ]
+    },
+    {
+      "name": "get_window_state",
+      "pid": 22011,
+      "windowId": 5365,
+      "bounds": {
+        "height": 420,
+        "width": 640,
+        "x": 80,
+        "y": 80
+      }
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 C",
+          "window_id": 5365,
+          "z_index": 277
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 C",
+          "window_id": 5365,
+          "z_index": 277
+        }
+      ]
+    },
+    {
+      "name": "get_window_state",
+      "pid": 22011,
+      "windowId": 5365,
+      "bounds": {
+        "height": 420,
+        "width": 640,
+        "x": 80,
+        "y": 80
+      }
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 C",
+          "window_id": 5365,
+          "z_index": 277
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 C",
+          "window_id": 5365,
+          "z_index": 277
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 C",
+          "window_id": 5365,
+          "z_index": 277
+        }
+      ]
+    },
+    {
+      "name": "get_window_state",
+      "pid": 22011,
+      "windowId": 5365,
+      "bounds": {
+        "height": 420,
+        "width": 640,
+        "x": 80,
+        "y": 80
+      }
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 C",
+          "window_id": 5365,
+          "z_index": 279
+        }
+      ]
+    },
+    {
+      "name": "get_window_state",
+      "pid": 22011,
+      "windowId": 5365,
+      "bounds": {
+        "height": 420,
+        "width": 640,
+        "x": 80,
+        "y": 80
+      }
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": false,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 C",
+          "window_id": 5365,
+          "z_index": 280
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 220,
+            "width": 320,
+            "x": 760,
+            "y": 100
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 B",
+          "window_id": 5377,
+          "z_index": 195
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5376,
+          "z_index": 193
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 220,
+            "width": 320,
+            "x": 760,
+            "y": 100
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 B",
+          "window_id": 5377,
+          "z_index": 195
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5376,
+          "z_index": 193
+        }
+      ]
+    },
+    {
+      "name": "get_window_state",
+      "pid": 22011,
+      "windowId": 5376,
+      "bounds": {
+        "height": 420,
+        "width": 640,
+        "x": 80,
+        "y": 80
+      }
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 220,
+            "width": 320,
+            "x": 760,
+            "y": 100
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 B",
+          "window_id": 5377,
+          "z_index": 196
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5376,
+          "z_index": 194
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 220,
+            "width": 320,
+            "x": 760,
+            "y": 100
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 B",
+          "window_id": 5377,
+          "z_index": 196
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5376,
+          "z_index": 194
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 220,
+            "width": 320,
+            "x": 760,
+            "y": 100
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 B",
+          "window_id": 5377,
+          "z_index": 196
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5376,
+          "z_index": 194
+        }
+      ]
+    },
+    {
+      "name": "get_window_state",
+      "pid": 22011,
+      "windowId": 5376,
+      "bounds": {
+        "height": 420,
+        "width": 640,
+        "x": 80,
+        "y": 80
+      }
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 220,
+            "width": 320,
+            "x": 760,
+            "y": 100
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 B",
+          "window_id": 5377,
+          "z_index": 196
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5376,
+          "z_index": 194
+        }
+      ]
+    },
+    {
+      "name": "get_window_state",
+      "pid": 22011,
+      "windowId": 5376,
+      "bounds": {
+        "height": 420,
+        "width": 640,
+        "x": 80,
+        "y": 80
+      }
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 220,
+            "width": 320,
+            "x": 760,
+            "y": 100
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 B",
+          "window_id": 5377,
+          "z_index": 196
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5376,
+          "z_index": 194
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 220,
+            "width": 320,
+            "x": 760,
+            "y": 100
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 B",
+          "window_id": 5377,
+          "z_index": 196
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5376,
+          "z_index": 194
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 220,
+            "width": 320,
+            "x": 760,
+            "y": 100
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 B",
+          "window_id": 5377,
+          "z_index": 197
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 1,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 22011,
+          "space_ids": [1],
+          "title": "Synara Cua Fixture 22011 A",
+          "window_id": 5376,
+          "z_index": 195
+        }
+      ]
+    }
+  ],
+  "nativeBuild": {
+    "source": {
+      "version": "0.24.0",
+      "source": "4b3396d9fe4bd3cf723b0eb8db83c18a8764b520",
+      "sha256": "31790cb49baa206f6455fbc259f8f83ae27e86be908f5c8cac5ec2f8521f8382",
+      "nativeRevision": 1,
+      "patchSha256": "1a3368bfa5f2d3915a8812b099c995eff62b9fb6a6ca5da4f5256501d7f9293b",
+      "rustVersion": "1.97.1"
+    },
+    "preSigningBinarySha256": "a972aa860beb4b9c4572675796ebc6e628dcd80cc0b91269384c4812cc8e2336",
+    "fixtureDriverOverride": false
+  },
+  "nativePermissions": {
+    "accessibility": true,
+    "direct_capture_error": null,
+    "direct_capture_status": "not_checked",
+    "screen_recording": true,
+    "screen_recording_capturable": null,
+    "source": {
+      "attribution": "host",
+      "direct_runtime": false,
+      "disclaim_env": false,
+      "embedded": true,
+      "executable": "/Users/emanueledipietro/Applications/Synara Cua Fixture.app/Contents/Resources/cua-driver/cua-driver",
+      "host_bundle_id": "com.synara.cua-fixture",
+      "note": "Embedded mode: these booleans reflect the HOST app's TCC grant (the driver is a child in the host's responsibility chain). No separate driver grant exists or is needed. If a permission is NOT granted, the host app must request it — the driver never raises its own prompt.",
+      "pid": 22016,
+      "responsible_ppid": 22011
+    }
+  },
+  "nativeFixtureWindows": [
+    {
+      "app_name": "Synara Cua Fixture",
+      "bounds": {
+        "height": 33,
+        "width": 1728,
+        "x": 0,
+        "y": 0
+      },
+      "current_space_id": null,
+      "is_on_screen": false,
+      "layer": 0,
+      "on_current_space": null,
+      "pid": 22011,
+      "space_ids": null,
+      "title": "",
+      "window_id": 5330,
+      "z_index": 278
+    },
+    {
+      "app_name": "Synara Cua Fixture",
+      "bounds": {
+        "height": 220,
+        "width": 320,
+        "x": 760,
+        "y": 100
+      },
+      "current_space_id": 1,
+      "is_on_screen": true,
+      "layer": 0,
+      "on_current_space": true,
+      "pid": 22011,
+      "space_ids": [1],
+      "title": "Synara Cua Fixture 22011 B",
+      "window_id": 5335,
+      "z_index": 156
+    },
+    {
+      "app_name": "Synara Cua Fixture",
+      "bounds": {
+        "height": 422,
+        "width": 642,
+        "x": 79,
+        "y": 79
+      },
+      "current_space_id": 1,
+      "is_on_screen": true,
+      "layer": 0,
+      "on_current_space": true,
+      "pid": 22011,
+      "space_ids": [1],
+      "title": "Synara Cua Fixture 22011 A",
+      "window_id": 5334,
+      "z_index": 154
+    },
+    {
+      "app_name": "Synara Cua Fixture",
+      "bounds": {
+        "height": 33,
+        "width": 1728,
+        "x": 0,
+        "y": 0
+      },
+      "current_space_id": null,
+      "is_on_screen": false,
+      "layer": 0,
+      "on_current_space": null,
+      "pid": 22011,
+      "space_ids": null,
+      "title": "",
+      "window_id": 5333,
+      "z_index": 152
+    },
+    {
+      "app_name": "Synara Cua Fixture",
+      "bounds": {
+        "height": 33,
+        "width": 1728,
+        "x": 0,
+        "y": 0
+      },
+      "current_space_id": null,
+      "is_on_screen": false,
+      "layer": 0,
+      "on_current_space": null,
+      "pid": 22011,
+      "space_ids": null,
+      "title": "",
+      "window_id": 5332,
+      "z_index": 150
+    },
+    {
+      "app_name": "Synara Cua Fixture",
+      "bounds": {
+        "height": 33,
+        "width": 1728,
+        "x": 0,
+        "y": 0
+      },
+      "current_space_id": null,
+      "is_on_screen": false,
+      "layer": 0,
+      "on_current_space": null,
+      "pid": 22011,
+      "space_ids": null,
+      "title": "",
+      "window_id": 5331,
+      "z_index": 148
+    }
+  ],
+  "availability": {
+    "kind": "available",
+    "backend": "cua"
+  },
+  "target": {
+    "id": "cua:22011:5334",
+    "pid": 22011,
+    "title": "Synara Cua Fixture 22011 A",
+    "siblingId": "cua:22011:5335"
+  },
+  "native": {
+    "target": {
+      "pid": 22138,
+      "windowId": "cua:22138:5345",
+      "title": "Synara Native Fixture 22138 A"
+    },
+    "cases": [
+      {
+        "name": "one-click-one-effect",
+        "result": {
+          "windowId": "cua:22138:5345",
+          "point": {
+            "x": 220,
+            "y": 677
+          },
+          "deliveryPath": "cua-synthetic_events-background",
+          "verified": "unverifiable",
+          "effect": "dispatched-unknown"
+        },
+        "actual": {
+          "visible": true,
+          "minimized": false,
+          "pid": 22138,
+          "title": "Synara Native Fixture 22138 A",
+          "mouseEvents": [
+            {
+              "type": "down",
+              "windowId": 5345,
+              "buttonContains": false,
+              "x": -101,
+              "y": 918
+            },
+            {
+              "buttonContains": false,
+              "y": 918,
+              "type": "up",
+              "x": -101,
+              "windowId": 5345
+            },
+            {
+              "windowId": 5345,
+              "y": 240,
+              "buttonContains": true,
+              "type": "down",
+              "x": 120
+            },
+            {
+              "y": 240,
+              "x": 120,
+              "type": "up",
+              "windowId": 5345,
+              "buttonContains": true
+            }
+          ],
+          "label": "A",
+          "key": true,
+          "edits": 0,
+          "event": "state",
+          "windowId": 5345,
+          "clicks": 1,
+          "text": "abc"
+        },
+        "status": "passed"
+      },
+      {
+        "name": "same-pid-keyboard",
+        "status": "passed-refusal",
+        "error": "ComputerBackendError: Background input refused (same_pid_keyboard_ambiguity): pid 22138 owns 1 other eligible top-level window(s); process-scoped key events cannot be proven to reach window 5345 and could mutate a sibling window. Use an exact element action, the page tool for browser content, or delivery_mode:\"foreground\" [effect=not-dispatched; automatic replay is forbidden]"
+      },
+      {
+        "name": "single-window-identical-text",
+        "result": {
+          "windowId": "cua:22138:5345",
+          "deliveryPath": "cua-synthetic_events-background",
+          "verified": "confirmed",
+          "effect": "verified"
+        },
+        "actual": {
+          "visible": true,
+          "minimized": false,
+          "pid": 22138,
+          "title": "Synara Native Fixture 22138 A",
+          "mouseEvents": [
+            {
+              "type": "down",
+              "windowId": 5345,
+              "buttonContains": false,
+              "x": -101,
+              "y": 918
+            },
+            {
+              "buttonContains": false,
+              "y": 918,
+              "type": "up",
+              "x": -101,
+              "windowId": 5345
+            },
+            {
+              "windowId": 5345,
+              "y": 240,
+              "buttonContains": true,
+              "type": "down",
+              "x": 120
+            },
+            {
+              "y": 240,
+              "x": 120,
+              "type": "up",
+              "windowId": 5345,
+              "buttonContains": true
+            }
+          ],
+          "label": "A",
+          "key": true,
+          "edits": 3,
+          "event": "state",
+          "windowId": 5345,
+          "clicks": 1,
+          "text": "abc"
+        },
+        "status": "passed"
+      },
+      {
+        "name": "ax-set-value",
+        "result": {
+          "windowId": "cua:22138:5345",
+          "deliveryPath": "cua-accessibility-background",
+          "verified": "confirmed",
+          "effect": "verified"
+        },
+        "actual": {
+          "visible": true,
+          "minimized": false,
+          "pid": 22138,
+          "title": "Synara Native Fixture 22138 A",
+          "mouseEvents": [
+            {
+              "type": "down",
+              "windowId": 5345,
+              "buttonContains": false,
+              "x": -101,
+              "y": 918
+            },
+            {
+              "buttonContains": false,
+              "y": 918,
+              "type": "up",
+              "x": -101,
+              "windowId": 5345
+            },
+            {
+              "windowId": 5345,
+              "y": 240,
+              "buttonContains": true,
+              "type": "down",
+              "x": 120
+            },
+            {
+              "y": 240,
+              "x": 120,
+              "type": "up",
+              "windowId": 5345,
+              "buttonContains": true
+            }
+          ],
+          "label": "A",
+          "key": true,
+          "edits": 4,
+          "event": "state",
+          "windowId": 5345,
+          "clicks": 1,
+          "text": "fixture-value"
+        },
+        "status": "passed"
+      },
+      {
+        "name": "minimized-target",
+        "status": "passed",
+        "error": "ComputerBackendError: Window geometry changed since observation; obtain a new screenshot. [effect=not-dispatched; automatic replay is forbidden]"
+      }
+    ],
+    "measurements": [
+      {
+        "name": "observation",
+        "milliseconds": 143.36454199999935
+      },
+      {
+        "name": "click",
+        "milliseconds": 2684.230583999999
+      },
+      {
+        "name": "same-pid-keyboard",
+        "milliseconds": 19.07737499999712
+      },
+      {
+        "name": "identical-text",
+        "milliseconds": 1189.9725419999995
+      },
+      {
+        "name": "set-value",
+        "milliseconds": 2358.761541
+      }
+    ]
+  },
+  "cancellation": {
+    "target": {
+      "id": "cua:22011:5365",
+      "pid": 22011,
+      "title": "Synara Cua Fixture 22011 C"
+    },
+    "cases": [
+      {
+        "name": "cancel-held-click",
+        "status": "passed",
+        "before": {
+          "mouseDown": 1,
+          "mouseUp": 0,
+          "dragged": 0,
+          "keyDown": 0,
+          "keyUp": 0,
+          "text": "",
+          "buttons": 1
+        },
+        "after": {
+          "mouseDown": 1,
+          "mouseUp": 1,
+          "dragged": 0,
+          "keyDown": 0,
+          "keyUp": 0,
+          "text": "",
+          "buttons": 0
+        },
+        "settled": {
+          "mouseDown": 1,
+          "mouseUp": 1,
+          "dragged": 0,
+          "keyDown": 0,
+          "keyUp": 0,
+          "text": "",
+          "buttons": 0
+        },
+        "stopMilliseconds": 1026.1562090000007,
+        "outcome": {
+          "error": "ComputerBackendError: click failed: native_input_cancelled: input delay interrupted [effect=dispatched-unknown; automatic replay is forbidden]"
+        }
+      },
+      {
+        "name": "cancel-typing",
+        "status": "passed",
+        "before": {
+          "mouseDown": 1,
+          "mouseUp": 1,
+          "dragged": 0,
+          "keyDown": 1,
+          "keyUp": 0,
+          "text": "c",
+          "buttons": 0
+        },
+        "after": {
+          "mouseDown": 1,
+          "mouseUp": 1,
+          "dragged": 0,
+          "keyDown": 1,
+          "keyUp": 1,
+          "text": "c",
+          "buttons": 0
+        },
+        "settled": {
+          "mouseDown": 1,
+          "mouseUp": 1,
+          "dragged": 0,
+          "keyDown": 1,
+          "keyUp": 1,
+          "text": "c",
+          "buttons": 0
+        },
+        "stopMilliseconds": 1077.7039159999986,
+        "outcome": {
+          "error": "ComputerBackendError: type_text failed: native_input_cancelled: input delay interrupted [effect=dispatched-unknown; automatic replay is forbidden]"
+        }
+      },
+      {
+        "name": "foreground-cancel-drag",
+        "status": "passed",
+        "before": {
+          "mouseDown": 2,
+          "mouseUp": 1,
+          "dragged": 0,
+          "keyDown": 1,
+          "keyUp": 1,
+          "text": "c",
+          "buttons": 1
+        },
+        "after": {
+          "mouseDown": 2,
+          "mouseUp": 2,
+          "dragged": 0,
+          "keyDown": 1,
+          "keyUp": 1,
+          "text": "c",
+          "buttons": 0
+        },
+        "settled": {
+          "mouseDown": 2,
+          "mouseUp": 2,
+          "dragged": 0,
+          "keyDown": 1,
+          "keyUp": 1,
+          "text": "c",
+          "buttons": 0
+        },
+        "stopMilliseconds": 1937.8432079999984,
+        "outcome": {
+          "error": "ComputerBackendError: drag failed: native_input_cancelled: input delay interrupted [effect=dispatched-unknown; automatic replay is forbidden]"
+        }
+      },
+      {
+        "name": "foreground-cancel-modified-click",
+        "status": "passed",
+        "before": {
+          "mouseDown": 3,
+          "mouseUp": 2,
+          "dragged": 0,
+          "keyDown": 2,
+          "keyUp": 1,
+          "text": "c",
+          "buttons": 1
+        },
+        "after": {
+          "mouseDown": 3,
+          "mouseUp": 3,
+          "dragged": 0,
+          "keyDown": 2,
+          "keyUp": 2,
+          "text": "c",
+          "buttons": 0
+        },
+        "settled": {
+          "mouseDown": 3,
+          "mouseUp": 3,
+          "dragged": 0,
+          "keyDown": 2,
+          "keyUp": 2,
+          "text": "c",
+          "buttons": 0
+        },
+        "stopMilliseconds": 1086.0390830000033,
+        "outcome": {
+          "error": "ComputerBackendError: click failed: native_input_cancelled: input delay interrupted [effect=dispatched-unknown; automatic replay is forbidden]"
+        }
+      }
+    ]
+  },
+  "gateway": {
+    "caller": "controlled-provider-context",
+    "target": {
+      "pid": 22011,
+      "id": "cua:22011:5376",
+      "title": "Synara Cua Fixture 22011 A"
+    },
+    "approvals": [
+      {
+        "name": "computer_type_text",
+        "turnId": "fixture-gateway-22011-turn",
+        "allowed": false
+      }
+    ],
+    "cases": [
+      {
+        "name": "different-window-frame",
+        "status": "passed",
+        "error": "Screenshot and action name different windows."
+      },
+      {
+        "name": "gateway-native-click",
+        "status": "passed",
+        "clicks": 1,
+        "nativeSubmissions": 1,
+        "delivery": {
+          "path": "cua-synthetic_events-background",
+          "verified": "unverifiable",
+          "effect": "dispatched-unknown"
+        },
+        "screenshotWindowId": "cua:22011:5376"
+      },
+      {
+        "name": "foreground-denial-before-native",
+        "status": "passed",
+        "nativeSubmissions": 0
+      },
+      {
+        "name": "off-refuses-native-input",
+        "status": "passed",
+        "nativeSubmissions": 0,
+        "error": "Computer control was revoked for this conversation; no new input may be dispatched."
+      },
+      {
+        "name": "ended-turn-refuses-native-input",
+        "status": "passed",
+        "nativeSubmissions": 0,
+        "error": "The controlled fixture turn ended."
+      }
+    ]
+  },
+  "processMemory": {
+    "rss": 215056384,
+    "heapTotal": 17235968,
+    "heapUsed": 12146960,
+    "external": 6155327,
+    "arrayBuffers": 0
+  }
+}

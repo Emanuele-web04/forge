@@ -31,6 +31,17 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 
 import { decodeDeviceFrame } from "@synara/shared/deviceFrame";
+import {
+  encodeLengthPrefixedRecord,
+  LengthPrefixedRecordError,
+  LengthPrefixedRecordParser,
+} from "@synara/shared/lengthPrefixedRecords";
+import {
+  JsonRpcStdioFramer,
+  JsonRpcStdioRequestRegistry,
+  JsonRpcStdioTransportError,
+  JsonRpcStdioWriter,
+} from "@synara/shared/jsonrpc-stdio";
 
 import type { DeviceStreamFrame } from "./DeviceBackend.ts";
 import { describeSandboxSuspicion, type HelperSandboxCommand } from "./helperSandbox.ts";
@@ -51,11 +62,6 @@ export const HELPER_METHODS = {
   screenshot: "screenshot",
   describeUi: "describe-ui",
 } as const;
-
-/** `u32 little-endian payload length`, then the contract frame envelope. */
-const FRAME_LENGTH_PREFIX_BYTES = 4;
-/** Refuse absurd length prefixes rather than allocating on a desynced stream. */
-const FRAME_MAX_PAYLOAD_BYTES = 8 * 1024 * 1024;
 
 const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_CONTROL_LINE_BYTES = 4 * 1024 * 1024;
@@ -80,12 +86,6 @@ export interface DeviceHelperAttachment {
   readonly scale: number;
   readonly inputAvailable: boolean;
   readonly accessibilityAvailable: boolean;
-}
-
-interface PendingRequest {
-  readonly resolve: (value: unknown) => void;
-  readonly reject: (error: Error) => void;
-  readonly timer: NodeJS.Timeout;
 }
 
 export interface HelperClientOptions {
@@ -138,52 +138,34 @@ function readNumber(record: Record<string, unknown>, key: string, fallback: numb
 }
 
 /**
- * Splits the helper's length-prefixed records out of an arbitrarily chunked
- * byte stream. The payload is passed through as-is: it is already the contract
- * envelope, and re-parsing it here would duplicate `decodeDeviceFrame`.
+ * The helper's length-prefixed frame records, in this module's error type.
+ *
+ * The splitting itself lives in `@synara/shared/lengthPrefixedRecords` so any
+ * other helper framing payloads the same way reuses it; only the failure type
+ * is this module's, because a desynced stream here is a `DeviceHelperError`
+ * the transport already knows how to drop a socket on.
  */
 export class DeviceFramePrefixParser {
-  private buffer: Buffer = Buffer.alloc(0);
+  private readonly parser = new LengthPrefixedRecordParser();
 
   /** Returns every complete payload now available, in order. */
   push(chunk: Uint8Array): readonly Uint8Array[] {
-    this.buffer =
-      this.buffer.byteLength === 0
-        ? Buffer.from(chunk)
-        : Buffer.concat([this.buffer, Buffer.from(chunk)]);
-
-    const payloads: Uint8Array[] = [];
-    while (this.buffer.byteLength >= FRAME_LENGTH_PREFIX_BYTES) {
-      const length = this.buffer.readUInt32LE(0);
-      if (length > FRAME_MAX_PAYLOAD_BYTES) {
+    try {
+      return this.parser.push(chunk);
+    } catch (error) {
+      if (error instanceof LengthPrefixedRecordError) {
         throw new DeviceHelperError(
           "frame_stream_desync",
-          `Helper frame record claims ${length} bytes`,
+          `Helper frame record claims ${error.declaredBytes} bytes`,
         );
       }
-      const total = FRAME_LENGTH_PREFIX_BYTES + length;
-      if (this.buffer.byteLength < total) break;
-      // Copied: the payload outlives this parse and `this.buffer` is reassigned.
-      payloads.push(
-        Uint8Array.prototype.slice.call(
-          this.buffer,
-          FRAME_LENGTH_PREFIX_BYTES,
-          total,
-        ) as Uint8Array,
-      );
-      this.buffer = this.buffer.subarray(total);
+      throw error;
     }
-    return payloads;
   }
 }
 
 /** Frame the way the helper does. Used by the tests. */
-export function encodeFrameRecord(payload: Uint8Array): Buffer {
-  const record = Buffer.alloc(FRAME_LENGTH_PREFIX_BYTES + payload.byteLength);
-  record.writeUInt32LE(payload.byteLength, 0);
-  record.set(payload, FRAME_LENGTH_PREFIX_BYTES);
-  return record;
-}
+export const encodeFrameRecord = encodeLengthPrefixedRecord;
 
 /**
  * Owns one helper process: spawn, JSON-RPC over stdio, and the unix socket the
@@ -191,9 +173,9 @@ export function encodeFrameRecord(payload: Uint8Array): Buffer {
  */
 export class HelperClient {
   private process: ChildProcessWithoutNullStreams | null = null;
-  private stdoutBuffer = "";
-  private nextRequestId = 1;
-  private readonly pending = new Map<number, PendingRequest>();
+  private stdoutFramer: JsonRpcStdioFramer | null = null;
+  private stdinWriter: JsonRpcStdioWriter | null = null;
+  private requestRegistry: JsonRpcStdioRequestRegistry | null = null;
   private readonly requestTimeoutMs: number;
   private stderrTail = "";
   private exited = false;
@@ -228,9 +210,29 @@ export class HelperClient {
     });
     this.process = child;
     this.exited = false;
+    this.stdoutFramer = new JsonRpcStdioFramer(MAX_CONTROL_LINE_BYTES, (error) =>
+      this.handleControlLineError(error),
+    );
+    this.stdinWriter = new JsonRpcStdioWriter(child.stdin);
+    this.requestRegistry = new JsonRpcStdioRequestRegistry({
+      requestTimeoutMs: this.requestTimeoutMs,
+      includeJsonRpcVersion: true,
+      timeoutError: (method) =>
+        new DeviceHelperError(
+          "helper_timeout",
+          `Device helper ${method} timed out.${describeSandboxSuspicion(
+            this.options.launch?.profilePath ?? null,
+          )}`,
+        ),
+      responseError: ({ error }) =>
+        new DeviceHelperError(
+          typeof error.code === "number" ? `helper_${error.code}` : "helper_error",
+          typeof error.message === "string" ? error.message : "Device helper reported an error",
+        ),
+    });
+    this.requestRegistry.processStarted();
 
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => this.consumeStdout(chunk));
+    child.stdout.on("data", (chunk: Buffer) => this.consumeStdout(chunk));
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
       // Keep only a tail: helper diagnostics belong in the failure message but
@@ -258,35 +260,21 @@ export class HelperClient {
       throw new DeviceHelperError("helper_unavailable", "Device helper is not running");
     }
 
-    const id = this.nextRequestId++;
-    const payload = `${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`;
-    return await new Promise<unknown>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        // A denied sandbox rule does not raise: CoreSimulator swallows it and
-        // the helper simply never answers, which is indistinguishable from a
-        // hang. Name the profile here so that is the first thing checked.
-        reject(
-          new DeviceHelperError(
-            "helper_timeout",
-            `Device helper ${method} timed out.${describeSandboxSuspicion(
-              this.options.launch?.profilePath ?? null,
-            )}`,
-          ),
-        );
-      }, this.requestTimeoutMs);
-      // `unref` so a stuck request cannot hold the process open at exit.
-      timer.unref?.();
-      this.pending.set(id, { resolve, reject, timer });
-      child.stdin.write(payload, (error) => {
-        if (!error) return;
-        const request = this.pending.get(id);
-        if (!request) return;
-        this.pending.delete(id);
-        clearTimeout(request.timer);
-        reject(new DeviceHelperError("helper_write_failed", error.message));
-      });
-    });
+    const registry = this.requestRegistry;
+    const writer = this.stdinWriter;
+    if (!registry || !writer) {
+      throw new DeviceHelperError("helper_unavailable", "Device helper transport is not ready");
+    }
+    try {
+      return await registry.request(method, params, (message) => writer.write(message));
+    } catch (error) {
+      if (error instanceof DeviceHelperError) throw error;
+      throw new DeviceHelperError(
+        "helper_write_failed",
+        error instanceof Error ? error.message : String(error),
+        { cause: error },
+      );
+    }
   }
 
   /**
@@ -464,22 +452,42 @@ export class HelperClient {
     if (directory) await rm(directory, { recursive: true, force: true }).catch(() => undefined);
   }
 
-  private consumeStdout(chunk: string): void {
-    this.stdoutBuffer += chunk;
-    if (this.stdoutBuffer.length > MAX_CONTROL_LINE_BYTES) {
-      this.stdoutBuffer = "";
-      this.fail(
-        new DeviceHelperError("helper_protocol_error", "Device helper control line exceeded limit"),
+  private consumeStdout(chunk: Buffer): void {
+    const framer = this.stdoutFramer;
+    if (!framer) return;
+    try {
+      for (const line of framer.push(chunk)) {
+        const trimmed = line.trim();
+        if (trimmed.length > 0) this.handleControlLine(trimmed);
+      }
+    } catch (error) {
+      // Only a push after `close()` reaches here; per-line failures are reported
+      // through `handleControlLineError` and never abort the chunk.
+      const message = error instanceof Error ? error.message : String(error);
+      this.rejectInFlight(
+        new DeviceHelperError("helper_protocol_error", message, { cause: error }),
       );
-      return;
     }
-    let newline = this.stdoutBuffer.indexOf("\n");
-    while (newline !== -1) {
-      const line = this.stdoutBuffer.slice(0, newline).trim();
-      this.stdoutBuffer = this.stdoutBuffer.slice(newline + 1);
-      if (line.length > 0) this.handleControlLine(line);
-      newline = this.stdoutBuffer.indexOf("\n");
-    }
+  }
+
+  /**
+   * A line the framer had to drop. The framer has already resynchronized, so
+   * this only decides how loudly to react.
+   *
+   * Undecodable bytes are ignored exactly like the non-JSON diagnostics the
+   * helper also writes to stdout. An oversized line is louder, because it means
+   * a response we were waiting for is gone: in-flight requests are rejected so
+   * callers fail fast instead of sitting out the full timeout. Neither case
+   * touches the process or the write path — the helper is still there, and the
+   * next request has to be able to reach it.
+   */
+  private handleControlLineError(error: JsonRpcStdioTransportError): void {
+    if (error.reason !== "frame-too-large") return;
+    this.rejectInFlight(
+      new DeviceHelperError("helper_protocol_error", "Device helper control line exceeded limit", {
+        cause: error,
+      }),
+    );
   }
 
   private handleControlLine(line: string): void {
@@ -493,29 +501,42 @@ export class HelperClient {
     const record = asRecord(message);
     // Notifications (`ready`, diagnostics) carry no id and need no reply.
     if (typeof record.id !== "number") return;
-    const request = this.pending.get(record.id);
-    if (!request) return;
-    this.pending.delete(record.id);
-    clearTimeout(request.timer);
-    if (record.error !== undefined && record.error !== null) {
-      const error = asRecord(record.error);
-      request.reject(
-        new DeviceHelperError(
-          typeof error.code === "number" ? `helper_${error.code}` : "helper_error",
-          typeof error.message === "string" ? error.message : "Device helper reported an error",
-        ),
-      );
-      return;
-    }
-    request.resolve(record.result ?? null);
+    const error =
+      record.error === undefined || record.error === null ? undefined : asRecord(record.error);
+    this.requestRegistry?.handleResponse({
+      id: record.id,
+      result: record.result ?? null,
+      ...(error
+        ? {
+            error: {
+              ...(typeof error.code === "number" ? { code: error.code } : {}),
+              ...(typeof error.message === "string" ? { message: error.message } : {}),
+            },
+          }
+        : {}),
+    });
   }
 
-  /** Reject everything in flight; used on exit, spawn failure, and disposal. */
+  /**
+   * Reject everything in flight without ending the transport.
+   *
+   * Used for protocol-level damage, which costs us the responses we were waiting
+   * on but leaves a live helper on the other end of a still-usable stdin.
+   */
+  private rejectInFlight(error: DeviceHelperError): void {
+    this.requestRegistry?.rejectAll(error);
+  }
+
+  /**
+   * Reject everything in flight and close the write path for good; used on exit,
+   * spawn failure, and disposal.
+   *
+   * Closing the writer is irreversible and `start()` will not rebuild it while a
+   * process is set, so this must stay reserved for a helper that is actually
+   * gone.
+   */
   private fail(error: DeviceHelperError): void {
-    for (const [, request] of this.pending) {
-      clearTimeout(request.timer);
-      request.reject(error);
-    }
-    this.pending.clear();
+    this.requestRegistry?.processExited(error);
+    this.stdinWriter?.close(error);
   }
 }

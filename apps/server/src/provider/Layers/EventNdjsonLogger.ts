@@ -11,6 +11,7 @@ import type { ThreadId } from "@synara/contracts";
 import { RotatingFileSink } from "@synara/shared/logging";
 import { Effect, Exit, Logger, Scope } from "effect";
 
+import { stripDiagnosticImages } from "../stripDiagnosticImages.ts";
 import { toSafeThreadAttachmentSegment } from "../../attachmentStore.ts";
 import {
   ensurePrivateDirectorySync,
@@ -82,7 +83,7 @@ function toLogMessage(event: unknown): Effect.Effect<string | undefined> {
   return Effect.gen(function* () {
     const serialized = yield* Effect.sync(() => {
       try {
-        return { ok: true as const, value: JSON.stringify(event) };
+        return { ok: true as const, value: JSON.stringify(stripDiagnosticImages(event)) };
       } catch (error) {
         return { ok: false as const, error };
       }

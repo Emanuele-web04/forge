@@ -4,6 +4,7 @@ import { Layer } from "effect";
 
 import {
   AgentGatewaySessionRegistry,
+  type AgentGatewayCapability,
   type AgentGatewaySessionIdentity,
   type AgentGatewaySessionRegistryShape,
   type AgentGatewayWriteAuthority,
@@ -31,8 +32,28 @@ export function makeAgentGatewaySessionRegistry(options?: {
   const sessions = new Map<string, RegisteredSession>();
   const sessionsByKey = new Map<string, RegisteredSession>();
 
+  const disabledComputerThreads = new Set<string>();
+  const visibleIdentity = (identity: AgentGatewaySessionIdentity): AgentGatewaySessionIdentity =>
+    disabledComputerThreads.has(identity.threadId)
+      ? {
+          ...identity,
+          capabilities: new Set(
+            [...identity.capabilities].filter((capability) => capability !== "computer:control"),
+          ),
+        }
+      : identity;
   return {
-    issue: (threadId, provider) => {
+    setComputerControlEnabled: (threadId, enabled) => {
+      if (enabled) disabledComputerThreads.delete(threadId);
+      else disabledComputerThreads.add(threadId);
+    },
+    computerControlProvisioned: (threadId, provider) => {
+      const candidates = [...sessionsByKey.values()].filter(
+        (row) => row.identity.threadId === threadId && row.identity.provider === provider,
+      );
+      return candidates.at(-1)?.identity.capabilities.has("computer:control") ?? false;
+    },
+    issue: (threadId, provider, issueOptions) => {
       // Every provider runtime owns an independent credential. Replacement
       // runtimes overlap their predecessor during startup, and the outgoing
       // runtime revokes its own token during teardown. Reusing a token here
@@ -45,7 +66,10 @@ export function makeAgentGatewaySessionRegistry(options?: {
         threadId,
         provider,
         issuedAt,
-        capabilities: new Set(PROVIDER_SESSION_CAPABILITIES),
+        capabilities: new Set<AgentGatewayCapability>([
+          ...PROVIDER_SESSION_CAPABILITIES,
+          ...(issueOptions?.additionalCapabilities ?? []),
+        ]),
       };
       const registered: RegisteredSession = {
         identity,
@@ -55,7 +79,10 @@ export function makeAgentGatewaySessionRegistry(options?: {
       sessionsByKey.set(sessionKey, registered);
       return { token, ...identity };
     },
-    verify: (token) => sessions.get(token)?.identity ?? null,
+    verify: (token) => {
+      const identity = sessions.get(token)?.identity;
+      return identity ? visibleIdentity(identity) : null;
+    },
     bindWriteAuthority: (token, turnId) => {
       const registered = sessions.get(token);
       if (!registered || registered.retiredWriteTurnId !== undefined) return null;

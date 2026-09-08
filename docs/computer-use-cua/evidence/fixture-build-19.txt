@@ -1,0 +1,6 @@
+Bundled 197 modules in 24ms
+
+  fixture.cjs  0.81 MB  (entry point)
+
+/private/tmp/synara-cua-implementation/Synara Cua Fixture.app: replacing existing signature
+/private/tmp/synara-cua-implementation/Synara Cua Fixture.app

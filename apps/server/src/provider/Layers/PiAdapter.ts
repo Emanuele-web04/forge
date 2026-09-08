@@ -54,7 +54,9 @@ import {
 import {
   acquireAgentGatewaySessionLease,
   cancelAgentGatewayTurn,
+  captureAgentGatewayCapabilityInput,
   releaseAgentGatewaySessionLeaseOnInterrupt,
+  type AgentGatewayCapabilityInput,
   type AgentGatewaySessionLease,
   withAgentGatewayTurnCancellation,
 } from "../../agentGateway/sessionLease.ts";
@@ -352,6 +354,12 @@ const loadPiCodingAgentModule: () => Promise<PiCodingAgentModule> = lazyModule(
 interface PiSessionContext {
   harnessPolicyDelivered?: boolean;
   readonly gatewayControlAvailable: boolean;
+  /**
+   * Pi rotates its gateway credential when a turn completes, long after the
+   * start input is gone. Keep the shared capability projection so the re-lease
+   * derives from the same facts as the original lease.
+   */
+  readonly gatewayCapabilityInput: AgentGatewayCapabilityInput;
   gatewaySessionLease?: AgentGatewaySessionLease;
   gatewayConnection?: AgentGatewayMcpConnection;
   readonly lifecycleGeneration?: string;
@@ -2088,6 +2096,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               agentGatewayCredentials,
               context.session.threadId,
               PROVIDER,
+              context.gatewayCapabilityInput,
             );
             if (replacementLease) {
               context.gatewaySessionLease = replacementLease;
@@ -2245,6 +2254,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           agentGatewayCredentials,
           input.threadId,
           PROVIDER,
+          input,
         );
         const agentGatewayConnection = agentGatewaySessionLease?.connection;
         const gatewayTools = agentGatewayConnection
@@ -2326,6 +2336,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           ...(resumeCursor ? { resumeCursor } : {}),
         };
         const context: PiSessionContext = {
+          gatewayCapabilityInput: captureAgentGatewayCapabilityInput(input),
           ...(input.lifecycleGeneration !== undefined
             ? { lifecycleGeneration: input.lifecycleGeneration }
             : {}),

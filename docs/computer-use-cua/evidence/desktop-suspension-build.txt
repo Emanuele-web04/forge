@@ -1,0 +1,20 @@
+$ tsdown
+ℹ tsdown v0.20.3 powered by rolldown v1.0.0-rc.3
+ℹ config file: /Users/emanueledipietro/.codex/worktrees/702b/synara/apps/desktop/tsdown.config.mts 
+ℹ entry: src/main.ts
+ℹ tsconfig: tsconfig.json
+ℹ entry: src/preload.ts
+ℹ tsconfig: tsconfig.json
+ℹ entry: src/browserAnnotations/guestPreload.ts
+ℹ tsconfig: tsconfig.json
+ℹ Build start
+ℹ Cleaning 3 files
+ℹ dist-electron/preload.js  16.37 kB │ gzip: 3.44 kB
+ℹ 1 files, total: 16.37 kB
+✔ Build complete in 14ms
+ℹ dist-electron/guestPreload.js  79.10 kB │ gzip: 21.61 kB
+ℹ 1 files, total: 79.10 kB
+✔ Build complete in 16ms
+ℹ dist-electron/main.js  1211.10 kB
+ℹ 1 files, total: 1211.10 kB
+✔ Build complete in 28ms

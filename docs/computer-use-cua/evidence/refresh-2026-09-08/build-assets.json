@@ -1,0 +1,26 @@
+{
+  "method": "Production tsdown bundles plus asset-copy steps equivalent to apps/server/scripts/cli.ts build; invoked through installed Node because Bun is unavailable.",
+  "files": [
+    {
+      "file": "apps/server/dist/index.mjs",
+      "bytes": 4922016
+    },
+    {
+      "file": "apps/server/dist/client/index.html",
+      "bytes": 3350
+    },
+    {
+      "file": "apps/server/dist/device-helper/build.sh",
+      "bytes": 3662
+    },
+    {
+      "file": "apps/desktop/dist-electron/main.js",
+      "bytes": 1211722
+    },
+    {
+      "file": "apps/desktop/dist-electron/preload.js",
+      "bytes": 16372
+    }
+  ],
+  "nativeRevision": 2
+}

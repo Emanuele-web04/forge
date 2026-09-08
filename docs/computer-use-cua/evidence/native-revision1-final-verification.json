@@ -1,0 +1,55 @@
+{
+  "fixtureRevision": 10,
+  "fixtureBuild": 19,
+  "guiPid": 28413,
+  "nativeArtifact": {
+    "source": {
+      "version": "0.24.0",
+      "source": "4b3396d9fe4bd3cf723b0eb8db83c18a8764b520",
+      "sha256": "31790cb49baa206f6455fbc259f8f83ae27e86be908f5c8cac5ec2f8521f8382",
+      "nativeRevision": 1,
+      "patchSha256": "1a3368bfa5f2d3915a8812b099c995eff62b9fb6a6ca5da4f5256501d7f9293b",
+      "rustVersion": "1.97.1"
+    },
+    "preSigningBinarySha256": "a972aa860beb4b9c4572675796ebc6e628dcd80cc0b91269384c4812cc8e2336",
+    "fixtureDriverOverride": false
+  },
+  "fixtureBundleEntrySha256": "444da2fe81bb58e39d6b1f84953cca42fed1f98b7c8f7f0025119c64dfd7dd92",
+  "sources": [
+    {
+      "file": "apps/desktop/src/cuaFixtures/electron.ts",
+      "sha256": "bc7a5fd51d20276414cf386bfa498a4f6f276baf95d759abc6d09202a4cd1ace"
+    },
+    {
+      "file": "apps/desktop/src/cuaFixtures/cancellation.ts",
+      "sha256": "c2acbe9552868fb4d18eb371d74b52e6286cd8fd51c6d4893f753f56dab7ab58"
+    },
+    {
+      "file": "apps/desktop/src/cuaDriverHost.ts",
+      "sha256": "2d53cc7fd2ba4b11c5708d5e803b28fdd7524a9e99b34467390d1e4b6a50f50e"
+    },
+    {
+      "file": "scripts/computer-use-fixtures/sample-resources.mjs",
+      "sha256": "50a4f3f731a6c001dfe8226deeb31682da495d0606c851528137431a3fa1091f"
+    }
+  ],
+  "reportSha256": "f786ab0afb97555c378f0b165f5a971f7cd4d81858a9071808ac9b121b8478ef",
+  "resourceSha256": "3919773f1bdaaef1ee5c9126e01907ffcae9661e23da85dd96ad0b9ef8c1d887",
+  "cases": {
+    "total": 21,
+    "passed": 19,
+    "expectedRefusals": ["identical-text-replacement", "same-pid-keyboard"]
+  },
+  "teardown": {
+    "launcherExitCode": 0,
+    "hostAndNativeProcessesAbsent": true,
+    "forcedNativeKill": false
+  },
+  "notes": [
+    "Run 22 already proved interrupted Shift-click releases; its drag stopped before movement and was not accepted as moving-drag evidence.",
+    "Run 23 refused all input after the fixture signature changed; existing fixture grants were renewed through System Settings.",
+    "Run 24 requires observed drag motion before Stop. The drag returned native_input_cancelled, mouse release was consumed, and movement stopped.",
+    "The run 24 Shift-click raced normal completion while Stop was requested; matching mouse/key releases were still observed. The separate run 22 outcome establishes native cancellation for this same native artifact.",
+    "The final installed fixture includes backend suspension; native artifact identity is unchanged."
+  ]
+}

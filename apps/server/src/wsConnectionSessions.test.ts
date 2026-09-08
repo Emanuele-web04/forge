@@ -50,6 +50,21 @@ describe("WsConnectionSessions", () => {
     await Effect.runPromise(Scope.close(scope, Exit.void));
   });
 
+  it("runs connection cleanup once and rejects registration after close", async () => {
+    const sessions = await Effect.runPromise(makeWsConnectionSessions);
+    const scope = await Effect.runPromise(Scope.make());
+    const key = await Effect.runPromise(Scope.provide(sessions.register(OWNER_SESSION), scope));
+    const completed: string[] = [];
+    const cleanup = () => completed.push("closed");
+    expect(sessions.onClose(key, cleanup)).toBe(true);
+    expect(sessions.onClose(key, cleanup)).toBe(true);
+    await Effect.runPromise(Scope.close(scope, Exit.void));
+    await Effect.runPromise(Scope.close(scope, Exit.void));
+    expect(completed).toEqual(["closed"]);
+    expect(sessions.onClose(key, cleanup)).toBe(false);
+    expect(sessions.onClose("unknown", cleanup)).toBe(false);
+  });
+
   it("provides role and attachment principal to the wrapped effect", async () => {
     const read = Effect.gen(function* () {
       return {

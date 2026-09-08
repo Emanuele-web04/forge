@@ -1,0 +1,363 @@
+[
+  {
+    "file": "apps/desktop/patches/cua-driver/0001-synara-native.patch",
+    "beforeSha256": "1a3368bfa5f2d3915a8812b099c995eff62b9fb6a6ca5da4f5256501d7f9293b",
+    "afterSha256": "58b1953265bbcd892af607ece87b6f9bf484d3c4b7dde0a5a4545f5c9c3516fd"
+  },
+  {
+    "file": "apps/desktop/patches/cua-driver/README.md",
+    "beforeSha256": "5f1574ccc0913c0f10616d26fb65555653a3e97549cb8676c79eab462e95366a",
+    "afterSha256": "3f16e3cbf2137390a4995dbf255aa9b2905b726ac9b9606f6ef39b0b04a64ce6"
+  },
+  {
+    "file": "apps/desktop/src/cuaDriverHost.test.ts",
+    "beforeSha256": "caec1a856611e85e8d01995425eb43d2f7d9143e7a6c85d6f62da64522bc463c",
+    "afterSha256": "b82d3c3605a2e3c66b84490c17e68fa6ba15072b94e35b3cc71d1aa163341d43"
+  },
+  {
+    "file": "apps/server/src/agentGateway/computerTools.test.ts",
+    "beforeSha256": "b5313300b97105d9b2585e96b434cf52c5a066cdb32fbb7c13702cb39494c4ba",
+    "afterSha256": "66b34eb28760c487a24f8e6efb559a4aff8b5cf4f7f103deb1510debfe336131"
+  },
+  {
+    "file": "apps/server/src/agentGateway/computerTools.ts",
+    "beforeSha256": "0f18049ac6a482f8f6e3d3974cc5f3274c218b0b7a05ab6af5ae3074495f0800",
+    "afterSha256": "00a6acf0141f2235de62470136bfffd7fb1a1c7a50096bd53b97596dd67d98ba"
+  },
+  {
+    "file": "apps/server/src/computer/ComputerBackend.ts",
+    "beforeSha256": "00cebd01c74e0511ec838a4dc49928750c19e88069f6405cde94288f106a6d4d",
+    "afterSha256": "bbfc5aa8b69faaa40ff2d986433653fd5592b9c613bfcfc39d8845a8721bf7ba"
+  },
+  {
+    "file": "apps/server/src/computer/ComputerManager.test.ts",
+    "beforeSha256": "5fb14a47ab21c04e5295886e159996e585d6009c76ff1a10228082fdb4a6c6e1",
+    "afterSha256": "1cbb197c9b466ecde9d7da950bbf3ac1989a4977d3303c00be8daf8a1c3fb808"
+  },
+  {
+    "file": "apps/server/src/computer/ComputerManager.ts",
+    "beforeSha256": "6394e96d424f1ee5c418ed6b32aa40b7812d8e459a90fe8d2133e119d2839a66",
+    "afterSha256": "49f54611586edcaf8df0df471f15898d2940bc301213145667ebb484d47560d9"
+  },
+  {
+    "file": "apps/server/src/computer/CuaComputerBackend.test.ts",
+    "beforeSha256": "e826316484e19149d6252f4bc1f6eb580cd3ce3616c84363bc3d9c0260a8c51a",
+    "afterSha256": "33e55727a305cd64fe2782540b7d50c4b3fd249454f65ba7165a102bee65fdec"
+  },
+  {
+    "file": "apps/server/src/computer/CuaComputerBackend.ts",
+    "beforeSha256": "6c95f09f4a0faaf24aa690e573fa3ffa9c411a0211d0b677753bd6e0b98810c2",
+    "afterSha256": "85e51ae00035872769693c85e3f01785235e40df6a987bfb84427b9f9927fe8a"
+  },
+  {
+    "file": "apps/server/src/computer/DesktopOperationQueue.test.ts",
+    "beforeSha256": "d8eec25242406e667c22adfcab4167f7479ab9485997f1c49cdd805409b3a238",
+    "afterSha256": "8a9be928e8e0279eb8244a5b1729eec92f353a19725cfc3ee4e48e28a2834bf7"
+  },
+  {
+    "file": "apps/server/src/computer/DesktopOperationQueue.ts",
+    "beforeSha256": "08c2c2b504b8dfced7af401e1bbd0e2d1ff8810367c1d67c68d4e97873ab7d6f",
+    "afterSha256": "7d53e35f72a10d3065aa7f68830ea64f4742f320c78451134b1416af9fa0ea22"
+  },
+  {
+    "file": "apps/server/src/computer/Layers/ComputerLeaseReactor.test.ts",
+    "beforeSha256": "601a2b03dcb4d7a6b4910802f4fa79d5ba3c2048f1c0ffcdb4fc14e5b486c2a7",
+    "afterSha256": "2344883026d7c02d1ed696b8e147318a6717de7fdb3b1de54727b225cc0cd529"
+  },
+  {
+    "file": "apps/server/src/computer/Layers/ComputerLeaseReactor.ts",
+    "beforeSha256": "3003cdd3b94a55fd428a23a998dcc82609a8df92e06189a73e6c67e8ddc9edd0",
+    "afterSha256": "879e83feb5ee1c9c4f1b28c56e97ea9009f7bc456374c269239b7707943c40ed"
+  },
+  {
+    "file": "apps/server/src/computer/computerEventInterests.test.ts",
+    "beforeSha256": null,
+    "afterSha256": "6264323534e83845f8e00bfca2b6485c5d843b17ddb4cb931f3c3a5605904b0a"
+  },
+  {
+    "file": "apps/server/src/computer/computerEventInterests.ts",
+    "beforeSha256": null,
+    "afterSha256": "bc850ff7f7009755492a267c525dfd158216e71a27ed7022b8d7ad5e5b1e2839"
+  },
+  {
+    "file": "apps/server/src/computer/cursorActivity.test.ts",
+    "beforeSha256": null,
+    "afterSha256": "92da6d0d4e8b9275becbb8df2a08ee820ff470034bca6bdcee4efbc709ceeedc"
+  },
+  {
+    "file": "apps/server/src/computer/cursorActivity.ts",
+    "beforeSha256": null,
+    "afterSha256": "d0443f67a547bc839d5e0f3f7c43dbf4482fde26db925fb1e90ad07e881aad2f"
+  },
+  {
+    "file": "apps/server/src/computer/screenshotFrames.test.ts",
+    "beforeSha256": "dfda8efb89721ecc4d1573140e8e147da4c329f2233b662a31889e0143651197",
+    "afterSha256": "baef0b7b4018cfe30c5cbe220d0c084b1c4507c9c1aaccc32bbf293a75567f2a"
+  },
+  {
+    "file": "apps/server/src/computer/screenshotFrames.ts",
+    "beforeSha256": "42ee0913b0e39512b864dbedb5d983be538e0c51594b58cd39b696e20e80608e",
+    "afterSha256": "b2aa2e8fdc286c891d171d17615518066263bf651809d5944711514ce0c0b8a1"
+  },
+  {
+    "file": "apps/server/src/computer/scrollCalibration.test.ts",
+    "beforeSha256": "913d2e8df8a8e0292dc98876761d7f813943ba9e80d84c6c85b64f83099323d5",
+    "afterSha256": "18747efb348c565f5c85dcb80a0983ecdd15fa07b8314b79a50604e8ea0447d1"
+  },
+  {
+    "file": "apps/server/src/computer/scrollCalibration.ts",
+    "beforeSha256": "dfbf32dd6dc4c8614820bdddbfc338acf832cc5e1d9aa06fb6284297228f0cb0",
+    "afterSha256": "3190fa14c3d062a0572f29d09c6ec1b7bffecdbfbee57a48161357bf82959219"
+  },
+  {
+    "file": "apps/server/src/computer/stillFramePublisher.test.ts",
+    "beforeSha256": "cc461f911f1fe1d0e3a45bbe013d3462de7dce3a4abf5cd2c8d566195e997073",
+    "afterSha256": "ba19632c9a3480e602be9f1d6ab54d5c440ed3e05924842ec73e7d20941730ca"
+  },
+  {
+    "file": "apps/server/src/computer/stillFramePublisher.ts",
+    "beforeSha256": "583dbe57237894426bb4aa2d407befba3e591aefdb18416ae8903374177d2a1a",
+    "afterSha256": "7d3d69737d949adba938a0ba723a801762e28a1fa52eaee7438a78affb40fe14"
+  },
+  {
+    "file": "apps/server/src/computer/waitForControl.test.ts",
+    "beforeSha256": null,
+    "afterSha256": "9f27a77e99186734f50193606f48ff49a756594ef477873f1121aab22cbb7ebb"
+  },
+  {
+    "file": "apps/server/src/computer/waitForControl.ts",
+    "beforeSha256": null,
+    "afterSha256": "13e44ef499a9e3d1ff75ad58bda737ab369f603e40e4761d02c384809fc0cb6b"
+  },
+  {
+    "file": "apps/server/src/computer/waitForWindow.test.ts",
+    "beforeSha256": null,
+    "afterSha256": "6de33cb440e4cc631f3b3fc0af963e09ff8d36636f5b4173d8733e45f86efa3c"
+  },
+  {
+    "file": "apps/server/src/computer/waitForWindow.ts",
+    "beforeSha256": null,
+    "afterSha256": "00a28ae29e4c23138a18c8338a21d4ac3ef32908dd2adfa8c435aa481605fe74"
+  },
+  {
+    "file": "apps/server/src/persistence/Layers/ProviderRuntimeEvents.test.ts",
+    "beforeSha256": "13f1b1871696d9040f92a834a695a7dc07c1d0ccf42dc1ecf6c5a0d9299b4013",
+    "afterSha256": "f92d1233b0311907fed419ea05f94d06bd958077cc14e49d4bfbeedfdc6e3781"
+  },
+  {
+    "file": "apps/server/src/persistence/Layers/ProviderRuntimeEvents.ts",
+    "beforeSha256": "1e265e03b3f6f39017a4e7255fbf4a8d5b1f286883a248616fc03372e9e05bbd",
+    "afterSha256": "ded4e363b97dff1bdd7dd92850f1f825102fef1c2f25ac5a939f889541d0b6a3"
+  },
+  {
+    "file": "apps/server/src/provider/Layers/ClaudeAdapter.test.ts",
+    "beforeSha256": "71440f79b31126e327e8bbf0f5195c0f7c3b0c07b6abb2d76c718f9287dc17c4",
+    "afterSha256": "c598e6fa94d41fa041dea943921ac8ad83c6d9244deb16f2d3fd08905d6e45d9"
+  },
+  {
+    "file": "apps/server/src/provider/Layers/ClaudeAdapter.ts",
+    "beforeSha256": "875112a12e583d3c086ba68c13a780e8c072e46e902ee629bb69c3554763468f",
+    "afterSha256": "fb30aa7310709250d4dfd28fa4ec22b40b3ea2b1438c42ba0b71309979ffab29"
+  },
+  {
+    "file": "apps/server/src/provider/Layers/EventNdjsonLogger.test.ts",
+    "beforeSha256": "3c939061d6bb2dafc57c6cc3e93b00d3bb1eb3d88e4cd2b2af1a963f6ae9103d",
+    "afterSha256": "9559e62c441df382f50720e551e93657d58314f9b2ffd97a7bae19c6684557c3"
+  },
+  {
+    "file": "apps/server/src/provider/Layers/EventNdjsonLogger.ts",
+    "beforeSha256": "12a80d18b71e98345570fecef8ecf7b1180d0ea710d762b7f53f7c8a9f4adfbc",
+    "afterSha256": "96fa6be08c73f5b2ce992e5f90338d82da7f04e40593665e6c21e5d93cb80e50"
+  },
+  {
+    "file": "apps/server/src/provider/providerRuntimeEventIngress.test.ts",
+    "beforeSha256": "d615bc292f520bf667dd9442d5a7bf81877981b42be99828771602f633187ac8",
+    "afterSha256": "aab9522c78b529322ff6bd78e670ff2e31b59bcf16fe353ac9687d0b9fc6d9fe"
+  },
+  {
+    "file": "apps/server/src/provider/providerRuntimeEventIngress.ts",
+    "beforeSha256": "a43e1d8a9eb3fa743c6cd1ffac8214908eb4650730ddc7af119795de161400aa",
+    "afterSha256": "4cc0c0b60cb5e47a63c59007b9dff0e9042af4b342b162e81f6eb1b9ab10e356"
+  },
+  {
+    "file": "apps/server/src/provider/stripDiagnosticImages.test.ts",
+    "beforeSha256": null,
+    "afterSha256": "900008dca6fb1a492ea8305465641bba2f702360d94a1fe5b04319f00d82e8d5"
+  },
+  {
+    "file": "apps/server/src/provider/stripDiagnosticImages.ts",
+    "beforeSha256": null,
+    "afterSha256": "d328c3e36b42cf9814d145866ce630ec0f898a079e0b36b7f9f7e81e8fab2079"
+  },
+  {
+    "file": "apps/server/src/wsConnectionSessions.test.ts",
+    "beforeSha256": "64851ae1812145b4068922cb5c0f0205b92d1e0763fc1a201a491a7b876c3763",
+    "afterSha256": "d655bdc15b6bab0c5893053b9caf8acf2eb1866c4b4018e469db5d46bb1be01d"
+  },
+  {
+    "file": "apps/server/src/wsConnectionSessions.ts",
+    "beforeSha256": "1937172061b508beadd6f6099675b74b7ad637aed25d283c915a10c88488142f",
+    "afterSha256": "f91f0c807e0d50c0cbe3d2261e64c5e81a8e8385581d95f9bdf4315eb01c3178"
+  },
+  {
+    "file": "apps/server/src/wsRpc.connectionLifecycle.test.ts",
+    "beforeSha256": "6a9c87f346722d8726c3cacaea67d77ad626c014b65129e508c3fcebb2f7b3b4",
+    "afterSha256": "4bbc33ecb11ba068841712bcb44c593288895ea3d1c8eeeb07646be67b8ffa54"
+  },
+  {
+    "file": "apps/server/src/wsRpc.ts",
+    "beforeSha256": "8385b0f1728dbd61940acf01b08cd2511beef1f34cdaa69ee6f1dd6f7d62715a",
+    "afterSha256": "035bf5aa231dff9170b0b76b9b8892fb8d6474345e49ef37210bdcddef14bc8f"
+  },
+  {
+    "file": "apps/web/src/components/ChatView.browser.tsx",
+    "beforeSha256": "2a9fdf1285ef0fe0b312aa301041a342a52beaee2e1897abd6f14ce0856d6bbb",
+    "afterSha256": "f3f5d48ab3388fc6cbb733398224eca680a72403ffebd784d40c227440fb6581"
+  },
+  {
+    "file": "apps/web/src/components/ChatView.tsx",
+    "beforeSha256": "c4340c2d7fd3b14c0958eec52bef2adad47f38f414c6f427e993c57c834d0e75",
+    "afterSha256": "26cb0f179960fd26a10897897b269a69fd6a115246f3ea1661810976a4bc91c5"
+  },
+  {
+    "file": "apps/web/src/components/ComputerPanel.browser.tsx",
+    "beforeSha256": null,
+    "afterSha256": "3ba022793daf74b063db2dfd68c2b4a0154dbaaab32247bf21b3610d698cff3b"
+  },
+  {
+    "file": "apps/web/src/components/ComputerPanel.logic.test.ts",
+    "beforeSha256": "9b1fd43ed9a7a2aa88b19c661b074f9b35ee117430a2e1e2fd2817a0034491dc",
+    "afterSha256": "c1186ab26002e0da49cadbd2c7a822cc3ca767bb5c17242591ae6cbc14b99e23"
+  },
+  {
+    "file": "apps/web/src/components/ComputerPanel.logic.ts",
+    "beforeSha256": "b272bbc2b6af313b6f32e76ad5f3713abcf9294647af7163e152e3bb9bf5e340",
+    "afterSha256": "16365f0a9e31befc89dd91c547ebe912e5d64be98f9c658686c630467f652b24"
+  },
+  {
+    "file": "apps/web/src/components/ComputerPanel.test.tsx",
+    "beforeSha256": "7b8abc0f43530ce5bb00340f207aa9f77b9eb36c6db5feac5797550e71e3f953",
+    "afterSha256": "9c32ac1c4b9c12e4ca0240c204827adf4be5cd0678e7f301d704aa9ac2c4bfc3"
+  },
+  {
+    "file": "apps/web/src/components/ComputerPanel.tsx",
+    "beforeSha256": "d644146732fc2faa000e8df98024b4e9921f652a946cdd1a200ade82c7c7e970",
+    "afterSha256": "ef48dbd60ba789ab1f001f0820db3c77487c31523c4d500c65e0adc80e457bdf"
+  },
+  {
+    "file": "apps/web/src/components/EventRouter.browser.tsx",
+    "beforeSha256": "a8c40c70ba6b1a47266ee44d0804ee9c1e8e15bc29698a214d32438778233833",
+    "afterSha256": "cdb4d04e16209f82fdddf75356a3f398e09560bdcf39d1edee350b67341b401a"
+  },
+  {
+    "file": "apps/web/src/components/KeybindingsToast.browser.tsx",
+    "beforeSha256": "67de8fee5e4d6da7e4fd3faeb100b36426315b32ab0e150ebb4453e9bed9461e",
+    "afterSha256": "fff511b183181250d75a2d43fcddbd72a1c16b0832c6fd7bc70339c37c0afe84"
+  },
+  {
+    "file": "apps/web/src/components/computer/ComputerInputPauseNotice.test.tsx",
+    "beforeSha256": null,
+    "afterSha256": "635509870814026ed7473b1f2f5680f2ac48bc8d0f98a56f021253c7bfdf7e94"
+  },
+  {
+    "file": "apps/web/src/components/computer/ComputerInputPauseNotice.tsx",
+    "beforeSha256": null,
+    "afterSha256": "0ecbf717fd0944f6d995afe852deb797d2361342d47e89e49410745d7b3a35d4"
+  },
+  {
+    "file": "apps/web/src/components/computer/ComputerStatusBadge.tsx",
+    "beforeSha256": "56bfe45da01cfacd99bac1f0615257f5822034a9f18a54a24bbcdcc20e5d559c",
+    "afterSha256": "9c462cdd50bcacf81beb9b513a501f908af1c34ddff31c817bd3cc738bb39ae8"
+  },
+  {
+    "file": "apps/web/src/components/computer/computerClickDispatch.test.ts",
+    "beforeSha256": null,
+    "afterSha256": "935a52513b4b73ad2c630017a32407f8e6c6b4ed22f151dbb9fb9ed7754aa801"
+  },
+  {
+    "file": "apps/web/src/components/computer/computerClickDispatch.ts",
+    "beforeSha256": null,
+    "afterSha256": "e665911f367005e56b47e46fe3e025e02557f2149ebd9645feb80b1c84ea1c9d"
+  },
+  {
+    "file": "apps/web/src/components/computer/useComputerImageStream.browser.tsx",
+    "beforeSha256": null,
+    "afterSha256": "2e57570fd9e343d16c6f3991c04a3023cc0af38767044195a6df703510c6d628"
+  },
+  {
+    "file": "apps/web/src/components/computer/useComputerImageStream.ts",
+    "beforeSha256": "509a923152f0e4c9fec56eb761fe8e58ef61e1d27077c792fc3ccc76b159ba4b",
+    "afterSha256": "652d1eb7bfd9ca7845c03eef116b38852169a0234a8bec2d8f3a3010356a0902"
+  },
+  {
+    "file": "apps/web/src/computerStateStore.test.ts",
+    "beforeSha256": "833fc4914180668f7ed0dfc33ae13056aced0d72deab322f86c29429430dd5f8",
+    "afterSha256": "7d6ef0773a300c31cb9c006585f601ce40e9779691c478acdc5c463b7023ae9b"
+  },
+  {
+    "file": "apps/web/src/computerStateStore.ts",
+    "beforeSha256": "f36c223a374da981cf13765bd03dacbd61e9f61fa608e308c233268b4d851fa5",
+    "afterSha256": "4e7ac92687f6f57af864b26e36b5471f06948eb31c28d670fa2fc99cc38b83e7"
+  },
+  {
+    "file": "apps/web/src/hooks/useThreadComputerAvailability.browser.tsx",
+    "beforeSha256": null,
+    "afterSha256": "268c6ad0da7d8719ebf417d6ea1356195898a781ae1f46ca25a16e79408eab90"
+  },
+  {
+    "file": "apps/web/src/hooks/useThreadComputerStateSeed.browser.tsx",
+    "beforeSha256": null,
+    "afterSha256": "799c57f7254866771b9f60db5c33012d11ca07b3c981034519fd5767130f9264"
+  },
+  {
+    "file": "apps/web/src/lib/computerProvisioning.test.ts",
+    "beforeSha256": "af914e40eabfaea2492ca925664fb9fc12aa32a5e730d3e3ee32c3bde1645668",
+    "afterSha256": "9c1a9173f986c81a6a85db7a2c310747aaa588db35a535626fbd271801245641"
+  },
+  {
+    "file": "apps/web/src/lib/computerProvisioning.ts",
+    "beforeSha256": "b89637c757ec8aef1fef31f2bfee03a31660793ac1a96d4a9015f5527ff6c137",
+    "afterSha256": "46331b0871b003eb34ba8608143818751741d7e48359cc470ccc4714af809ab3"
+  },
+  {
+    "file": "apps/web/src/wsNativeApi.test.ts",
+    "beforeSha256": "1adf390f84cc123f34604be439ef31bab27aec83aab8c3a5308ce96e41f873ec",
+    "afterSha256": "5e4e56ff673fc23c817e8bdab17cd23d1d57ac88f10521af50ab7bb5eea2dbd6"
+  },
+  {
+    "file": "apps/web/src/wsNativeApi.ts",
+    "beforeSha256": "b3d95504b8e3a35199ba2f1003070b3d177a9cb1d5575b3a5eabcd9fb1ca2a22",
+    "afterSha256": "c15327089207afa6d2cebd70121858f90970f7e164aa10754a499ff2561d88bd"
+  },
+  {
+    "file": "packages/contracts/src/computer.test.ts",
+    "beforeSha256": "b4108c63f887009436185c05c804e8a7b75d95afa075de5d0dbd10566be3879a",
+    "afterSha256": "b7b0e22cc72f76a38ce08b9c3a4939c33eb49da86c9b9de78fbf103a06cc947a"
+  },
+  {
+    "file": "packages/contracts/src/computer.ts",
+    "beforeSha256": "0f629eb7323ce99808cd220467c20e7204bd3031f329b1cc3b45876f7ea8058e",
+    "afterSha256": "a8bc500674a895308fce13d621bd71d02d833dba49625d697189b8e9d8a00a45"
+  },
+  {
+    "file": "packages/contracts/src/ipc.ts",
+    "beforeSha256": "4971c9d740764e08942c5edfe218a762d274b6461287bb3a1bfa4b6a56e92ba0",
+    "afterSha256": "a0bd17da326495af8668600f8b85ddd93e076476bea898ded45ec54f1fc7ad6a"
+  },
+  {
+    "file": "packages/shared/src/cuaDriverProtocol.ts",
+    "beforeSha256": "8b82841241d68ec511ef1b56051942dc897b09435def61181d61c38af9214a7a",
+    "afterSha256": "d876747656ebc1c6ec698e3ef66e4c7b8fb649a14f4728f642d3b3766ea00665"
+  },
+  {
+    "file": "packages/shared/src/cuaDriverRelease.json",
+    "beforeSha256": "358480fd30f7cbf29e296586adfe17494e9ea5b9a9819b7338963291e3ce513c",
+    "afterSha256": "e2ff13e8e3d976e535b0a67a540f5a147c7bf223b2d62abe3924280459812d92"
+  },
+  {
+    "file": "scripts/computer-use-fixtures/probe-native-cancellation.mjs",
+    "beforeSha256": null,
+    "afterSha256": "c3de9b6b7493e676c23f9b7afb3ead03e1d59ba6ae0f3f3fc2634a2766516da5",
+    "note": "Existing fixture script; pre-refresh copy was not captured. Refresh makes native identity manifest-driven and adds one read-only impossible-target case."
+  }
+]

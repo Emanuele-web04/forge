@@ -1,0 +1,4 @@
+$ node scripts/smoke-test.mjs
+
+Launching Electron smoke test...
+Desktop smoke test passed.

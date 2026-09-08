@@ -1,0 +1,31 @@
+{
+  "recordedAt": "2026-09-08T13:15:53.429Z",
+  "nativeInput": false,
+  "sourceImports": "actual repository handlers, manager, queue; fake backend only",
+  "callerCancellation": "Effect fiber interruption used by the RPC transport; no native app or socket necessary",
+  "sourceHashes": {
+    "apps/server/src/computer/wsComputerHandlers.ts": "fd3e3a701654d78b06c84a0280d5091bf17e6a5ff477b631e8f30ca6e031eb49",
+    "apps/server/src/computer/DesktopOperationQueue.ts": "88abcde587bcbee123d63ab0da7d0606a63e30185d61d4aec0e1551326620beb",
+    "apps/server/src/computer/ComputerManager.ts": "ad70035abf34498407a7231b136c02f771928a9733644dc4fd82124f4677252f"
+  },
+  "results": [
+    {
+      "name": "pane-key",
+      "pendingBeforeInterrupt": true,
+      "interruptWasFailure": true,
+      "before": 0,
+      "afterInterruptBeforeRelease": 0,
+      "afterQueueDrain": 1,
+      "dispatchedAfterCallerCancellation": true
+    },
+    {
+      "name": "pane-click",
+      "pendingBeforeInterrupt": true,
+      "interruptWasFailure": true,
+      "before": 0,
+      "afterInterruptBeforeRelease": 0,
+      "afterQueueDrain": 1,
+      "dispatchedAfterCallerCancellation": true
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+[
+  {
+    "task": "fmt",
+    "startedAt": "2026-09-08T13:19:37.432Z",
+    "finishedAt": "2026-09-08T13:19:38.120Z",
+    "exitCode": 0,
+    "log": "fmt-final.log"
+  },
+  {
+    "task": "lint",
+    "startedAt": "2026-09-08T13:19:38.121Z",
+    "finishedAt": "2026-09-08T13:19:38.290Z",
+    "exitCode": 0,
+    "log": "lint-final.log"
+  },
+  {
+    "task": "typecheck",
+    "startedAt": "2026-09-08T13:20:39.276Z",
+    "finishedAt": "2026-09-08T13:20:43.632Z",
+    "exitCode": 0,
+    "log": "typecheck-final-pass.log"
+  }
+]

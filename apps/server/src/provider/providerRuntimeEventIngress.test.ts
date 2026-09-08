@@ -28,6 +28,24 @@ afterEach(() => {
 });
 
 describe("provider runtime event ingress sizing", () => {
+  it("strips canonical and raw image bodies before sizing without changing model delivery", () => {
+    const data = Buffer.alloc(512 * 1024, 123).toString("base64");
+    const image = { type: "image", data, mimeType: "image/png" };
+    const event: ProviderRuntimeEvent = {
+      ...runtimeDelta({ content: [image] }),
+      type: "item.completed",
+      payload: { itemType: "mcp_tool_call", data: { result: { content: [image] } } },
+    };
+    const stringify = vi.spyOn(JSON, "stringify");
+    const sized = compactProviderRuntimeEventForIngress(event);
+    expect(sized.bytes).toBeLessThan(2000);
+    expect(stringify).toHaveBeenCalledTimes(1);
+    expect(sized.event.raw?.payload).toMatchObject({ content: [{ synaraImageOmitted: true }] });
+    expect(JSON.stringify(sized.event)).not.toContain(data);
+    expect(image.data).toBe(data);
+    expect(sized.bytes).toBe(Buffer.byteLength(JSON.stringify(sized.event), "utf8"));
+  });
+
   it("measures a normal event once and carries its exact byte count", () => {
     const event = runtimeDelta({ delta: "hello" });
     const expectedBytes = Buffer.byteLength(JSON.stringify(event), "utf8");

@@ -27,6 +27,19 @@ export const DISCLOSURE_CONTENT_MOTION_CLASS =
 export const DISCLOSURE_CONTENT_OPEN_CLASS = "translate-y-0 opacity-100";
 export const DISCLOSURE_CONTENT_CLOSED_CLASS = "-translate-y-1 opacity-0 pointer-events-none";
 
+/**
+ * Opacity-only reveal for elements that hold their place in the layout while
+ * they show and hide: overlay hints, status lines, and anything absolutely
+ * positioned, where collapsing the box would move the thing it annotates.
+ * Same duration and curve as the collapsing disclosures.
+ */
+export const DISCLOSURE_FADE_MOTION_CLASS =
+  "transition-opacity duration-220 ease-out motion-reduce:transition-none";
+
+export function disclosureFadeClassName(open: boolean, className?: string) {
+  return cn(DISCLOSURE_FADE_MOTION_CLASS, open ? "opacity-100" : "opacity-0", className);
+}
+
 /** Chevron rotation paired with the shell motion. */
 export const DISCLOSURE_CHEVRON_MOTION_CLASS =
   "size-3.5 shrink-0 text-muted-foreground transition-transform duration-220 ease-out motion-reduce:transition-none";

@@ -4,6 +4,17 @@ import { ThreadId } from "@synara/contracts";
 import { makeAgentGatewaySessionRegistry } from "./AgentGatewaySessionRegistry.ts";
 
 describe("AgentGatewaySessionRegistry", () => {
+  it("revokes current computer calls while keeping actual provider provisioning separate", () => {
+    const registry = makeAgentGatewaySessionRegistry();
+    const thread = ThreadId.makeUnsafe("thread-1");
+    const old = registry.issue(thread, "codex", { additionalCapabilities: ["computer:control"] });
+    registry.setComputerControlEnabled?.(thread, false);
+    assert.isFalse(registry.verify(old.token)?.capabilities.has("computer:control"));
+    assert.isTrue(registry.computerControlProvisioned?.(thread, "codex"));
+    assert.isFalse(registry.computerControlProvisioned?.(thread, "claudeAgent"));
+    registry.issue(thread, "codex");
+    assert.isFalse(registry.computerControlProvisioned?.(thread, "codex"));
+  });
   it("allows independent legitimate sessions for the same thread", () => {
     let nextId = 0;
     const registry = makeAgentGatewaySessionRegistry({ randomId: () => String(++nextId) });
@@ -84,5 +95,16 @@ describe("AgentGatewaySessionRegistry", () => {
     assert.match(issued.token, /^sagw_session_/);
     assert.notProperty(verified, "token");
     assert.notInclude(JSON.stringify(verified), issued.token);
+  });
+
+  it("keeps computer control opt-in instead of adding it to provider defaults", () => {
+    const registry = makeAgentGatewaySessionRegistry({ randomId: () => "computer" });
+    const ordinary = registry.issue(ThreadId.makeUnsafe("thread-1"), "codex");
+    const optedIn = registry.issue(ThreadId.makeUnsafe("thread-2"), "codex", {
+      additionalCapabilities: ["computer:control"],
+    });
+
+    assert.isFalse(ordinary.capabilities.has("computer:control"));
+    assert.isTrue(optedIn.capabilities.has("computer:control"));
   });
 });

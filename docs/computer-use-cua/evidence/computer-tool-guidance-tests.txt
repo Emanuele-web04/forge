@@ -1,0 +1,10 @@
+$ vitest run --maxWorkers=1 --no-file-parallelism src/agentGateway/computerTools.test.ts
+
+ RUN  v4.1.10 /Users/emanueledipietro/.codex/worktrees/702b/synara/apps/server
+
+
+ Test Files  1 passed (1)
+      Tests  83 passed (83)
+   Start at  01:30:05
+   Duration  10.54s (transform 259ms, setup 0ms, import 419ms, tests 10.05s, environment 0ms)
+

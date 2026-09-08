@@ -1,0 +1,4858 @@
+--- a/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
+@@ -143,7 +143,81 @@
+         daemon_tools_list_from(&self.tools_list)
+     }
+ 
+-    pub async fn invoke_raw(&self, name: &str, arguments: Value) -> Result<Value, String> {
++    pub async fn invoke_raw(&self, name: &str, mut arguments: Value) -> Result<Value, String> {
++        #[cfg(target_os = "macos")]
++        let native_target = if matches!(
++            name,
++            "click"
++                | "drag"
++                | "scroll"
++                | "type_text"
++                | "type_text_chars"
++                | "press_key"
++                | "hotkey"
++                | "set_value"
++                | "bring_to_front"
++        ) {
++            let target_args = arguments.clone();
++            match tokio::task::spawn_blocking(move || {
++                platform_macos::input::target_guard::InputTarget::prepare(&target_args)
++            })
++            .await
++            .map_err(|error| error.to_string())?
++            {
++                Ok(target) => Some(target),
++                Err(refusal) => {
++                    return serde_json::to_value(refusal.tool_result())
++                        .map_err(|error| error.to_string())
++                }
++            }
++        } else {
++            None
++        };
++        // This private coordinate-frame precondition is enforced above and
++        // before each native post; the upstream public tool schemas need not
++        // learn a host-only argument.
++        #[cfg(target_os = "macos")]
++        if native_target.is_some() {
++            if let Some(args) = arguments.as_object_mut() {
++                args.remove("expected_window_bounds");
++            }
++        }
++        #[cfg(target_os = "macos")]
++        let _native_input = if matches!(
++            name,
++            "click"
++                | "move_cursor"
++                | "drag"
++                | "scroll"
++                | "type_text"
++                | "type_text_chars"
++                | "press_key"
++                | "hotkey"
++                | "set_value"
++                | "clipboard_read"
++                | "clipboard_write"
++                | "launch_app"
++                | "bring_to_front"
++        ) {
++            Some(
++                match platform_macos::input::cancellation::gate().lease_with_target(native_target) {
++                    Ok(lease) => lease,
++                    Err(error) => {
++                        if let Some(refusal) = error
++                            .downcast_ref::<platform_macos::input::target_guard::TargetRefusal>(
++                        ) {
++                            return serde_json::to_value(refusal.tool_result())
++                                .map_err(|error| error.to_string());
++                        }
++                        return Ok(
++                            json!({"isError":true,"content":[{"type":"text","text":error.to_string()}],"structuredContent":{"effect":"refused","code":"input_admission_closed"}}),
++                        );
++                    }
++                },
++            )
++        } else {
++            None
++        };
+         let _lifecycle = if matches!(name, "start_session" | "end_session") {
+             Some(self.session_lifecycle.lock().await)
+         } else {
+--- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
+@@ -676,12 +676,51 @@
+ }
+ 
+ fn daemon_metadata_response() -> DaemonResponse {
+-    DaemonResponse::ok(
+-        serde_json::to_value(cua_driver_core::daemon::current_daemon_metadata())
+-            .expect("daemon metadata is serializable"),
+-    )
++    let mut metadata = serde_json::to_value(cua_driver_core::daemon::current_daemon_metadata())
++        .expect("daemon metadata is serializable");
++    #[cfg(target_os = "macos")]
++    {
++        metadata["synara_native_revision"] = serde_json::json!(2);
++    }
++    DaemonResponse::ok(metadata)
+ }
+ 
++#[cfg(target_os = "macos")]
++async fn cancel_input_response(request: &DaemonRequest, trusted_host: bool) -> DaemonResponse {
++    if !cua_driver_core::embedded_mode() || !trusted_host {
++        return DaemonResponse::err(
++            "native input cancellation requires the authenticated embedded host",
++            77,
++        );
++    }
++    if request
++        .args
++        .as_ref()
++        .and_then(|args| args.get("expected_pid"))
++        .and_then(serde_json::Value::as_u64)
++        != Some(u64::from(std::process::id()))
++    {
++        return DaemonResponse::err(
++            "native input cancellation requires the exact driver pid",
++            64,
++        );
++    }
++    let pending = tokio::task::spawn_blocking(|| {
++        platform_macos::input::cancellation::gate()
++            .cancel_and_wait(std::time::Duration::from_secs(3))
++    })
++    .await;
++    match pending {
++        Ok(pending) => DaemonResponse::ok(serde_json::json!({
++            "input_admission_closed": true,
++            "cleanup_complete": pending == 0,
++            "pending_input": pending,
++            "pid": std::process::id(),
++        })),
++        Err(error) => DaemonResponse::err(format!("native input cleanup failed: {error}"), 1),
++    }
++}
++
+ fn shutdown_response(request: &DaemonRequest) -> (DaemonResponse, bool) {
+     if request.method == "shutdown" {
+         return (
+@@ -1067,6 +1106,13 @@
+                         ).await;
+ 
+                         match req.method.as_str() {
++                            #[cfg(target_os = "macos")]
++                            "cancel_input" => {
++                                let resp = cancel_input_response(&req, trusted_host_connection).await;
++                                let _ = writer.write_all(
++                                    (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
++                                ).await;
++                            }
+                             "metadata" => {
+                                 let resp = daemon_metadata_response();
+                                 let _ = writer.write_all(
+@@ -1407,6 +1453,27 @@
+         }
+     }
+ 
++    // Host EOF and explicit shutdown must close input admission and let native
++    // owners submit their matching releases before task cancellation can drop
++    // the SDK action lease. Keep the runtime alive if cleanup is still pending.
++    #[cfg(target_os = "macos")]
++    if embedded {
++        loop {
++            let pending = tokio::task::spawn_blocking(|| {
++                platform_macos::input::cancellation::gate()
++                    .cancel_and_wait(std::time::Duration::from_secs(3))
++            })
++            .await?;
++            if pending == 0 {
++                break;
++            }
++            tracing::warn!(
++                pending,
++                "embedded native shutdown is waiting for input cleanup"
++            );
++        }
++    }
++
+     // Accepted connections may still own SDK/session state after the listener
+     // stops. Abort and join them before tearing down the SDK runtime.
+     connection_tasks.shutdown().await;
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/authorization.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/authorization.rs
+@@ -869,6 +869,7 @@
+         | "get_session_state"
+         | "get_agent_cursor_state"
+         | "get_recording_state"
++        | "check_input_ready"
+         | "check_for_update"
+         | "health_report"
+         | "probe" => RiskClass::R0,
+@@ -1162,6 +1163,23 @@
+                 )))
+             }
+         }
++        if tool == "check_input_ready" {
++            // This R0 operation reads only readiness metadata, but an allowed
++            // tool name must not widen a restricted session's window scope.
++            // Native readiness separately proves that this exact PID/window
++            // exists before returning any result; these arguments grant no
++            // input capability or protected-content observation.
++            manifest
++                .authorize_protected_resource(
++                    "private_observation",
++                    &serde_json::json!({
++                        "kind": "window",
++                        "pid": args.get("pid"),
++                        "window_id": args.get("window_id"),
++                    }),
++                )
++                .map_err(crate::policy::AuthorizationError::Denied)?;
++        }
+     }
+     Ok(risk)
+ }
+@@ -1191,6 +1209,7 @@
+             | "bring_to_front"
+             | "get_accessibility_tree"
+             | "get_window_state"
++            | "check_input_ready"
+             | "verify_state"
+             | "page"
+             | "browser_prepare"
+@@ -1517,9 +1536,108 @@
+         assert_eq!(risk.class, RiskClass::R0);
+         assert_eq!(risk.enforcement, RiskEnforcement::MetadataOnly);
+         assert!(!risk.operation_sensitive);
++    }
++
++    fn input_readiness_context(
++        mode: PermissionMode,
++        manifest_yaml: Option<&str>,
++    ) -> std::sync::Arc<crate::session_authorization::EffectiveAuthorizationContext> {
++        use std::io::Write as _;
++        let manifest = manifest_yaml.map(|yaml| {
++            let mut file = tempfile::NamedTempFile::new().unwrap();
++            file.write_all(yaml.as_bytes()).unwrap();
++            std::sync::Arc::new(crate::session_manifest::load_manifest(file.path()).unwrap())
++        });
++        let ceiling = crate::session_authorization::SessionModeCeiling::for_trusted_sessions(
++            [
++                PermissionMode::Standard,
++                PermissionMode::Bounded,
++                PermissionMode::Unrestricted,
++            ],
++            true,
++            std::time::Duration::from_secs(60),
++            std::time::Duration::from_secs(30),
++        )
++        .unwrap();
++        crate::session_authorization::SessionAuthorizationRegistry::with_ceiling(ceiling)
++            .compatibility_context(mode, manifest)
++            .unwrap()
++    }
++
++    #[test]
++    fn input_readiness_is_r0_and_passes_actual_unrestricted_authorization() {
++        let args = serde_json::json!({"pid": 42, "window_id": 7});
++        let advertised = advertised_risk_for("check_input_ready");
++        assert_eq!(advertised.class, RiskClass::R0);
++        assert_eq!(advertised.enforcement, RiskEnforcement::MetadataOnly);
++        assert!(!advertised.operation_sensitive);
++        assert_eq!(classify_tool_call("check_input_ready", &args), advertised);
++        let context = input_readiness_context(PermissionMode::Unrestricted, None);
++        assert_eq!(
++            authorize_tool_call_with_context("check_input_ready", &args, &context).unwrap(),
++            advertised
++        );
++    }
++
++    #[test]
++    fn input_readiness_r0_does_not_bypass_a_restricted_window_grant() {
++        let yaml = "version: 3\nexpires_after: 1h\nidle_timeout: 30m\nallow:\n  tools: [check_input_ready]\nresources:\n  desktop:\n    windows:\n      - pid: 42\n        window_id: 7\n";
++        for mode in [
++            PermissionMode::Standard,
++            PermissionMode::Bounded,
++            PermissionMode::Unrestricted,
++        ] {
++            let context = input_readiness_context(mode, Some(yaml));
++            assert!(authorize_tool_call_with_context(
++                "check_input_ready",
++                &serde_json::json!({"pid": 42, "window_id": 7}),
++                &context,
++            )
++            .is_ok());
++            for (pid, window_id) in [(42, 8), (43, 7)] {
++                let error = authorize_tool_call_with_context(
++                    "check_input_ready",
++                    &serde_json::json!({"pid": pid, "window_id": window_id}),
++                    &context,
++                )
++                .unwrap_err();
++                assert!(error
++                    .to_string()
++                    .contains("outside the capability manifest"));
++            }
++        }
++    }
++
++    #[test]
++    fn input_readiness_r0_does_not_bypass_denied_or_undeclared_tool_rules() {
++        for yaml in [
++            "version: 3\nallow:\n  tools: [health_report]\ndeny:\n  tools: [check_input_ready]\n",
++            "version: 3\nallow:\n  tools: [health_report]\n",
++        ] {
++            let context = input_readiness_context(PermissionMode::Unrestricted, Some(yaml));
++            let error = authorize_tool_call_with_context(
++                "check_input_ready",
++                &serde_json::json!({"pid": 42, "window_id": 7}),
++                &context,
++            )
++            .unwrap_err();
++            assert!(error.to_string().contains("capability manifest"));
++        }
+     }
+ 
+     #[test]
++    fn input_readiness_keeps_the_authorization_process_target_protected() {
++        let context = input_readiness_context(PermissionMode::Unrestricted, None);
++        let error = authorize_tool_call_with_context(
++            "check_input_ready",
++            &serde_json::json!({"pid": std::process::id(), "window_id": 7}),
++            &context,
++        )
++        .unwrap_err();
++        assert!(error.to_string().contains("own authorization process"));
++    }
++
++    #[test]
+     fn history_reads_are_distinct_explicit_history_capabilities() {
+         for (tool, capability) in [
+             ("history_status", "history.status"),
+--- a/libs/cua-driver/rust/crates/platform-macos/src/browser/platform.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/browser/platform.rs
+@@ -280,6 +280,15 @@
+         .any(|token| products.contains(&token))
+ }
+ 
++/// Select the native mouse recipe before dispatch. Electron's name and bundle
++/// identifier may be arbitrary, so confirm its framework when product metadata
++/// does not identify a Chromium browser. This never opens a browser inspector.
++pub(crate) fn is_chromium_process(pid: i32) -> bool {
++    let name = crate::apps::get_app_name_for_pid(pid).unwrap_or_default();
++    let bundle_id = crate::apps::bundle_id_for_pid(pid).unwrap_or_default();
++    is_chromium(&name, &bundle_id) || crate::browser::electron_js::ElectronJs::is_electron(pid)
++}
++
+ fn is_firefox(name: &str, bundle_id: &str) -> bool {
+     format!("{name} {bundle_id}")
+         .to_ascii_lowercase()
+--- a/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs
+@@ -31,7 +31,7 @@
+ 
+ use std::collections::HashMap;
+ use std::ffi::c_void;
+-use std::sync::{Mutex, OnceLock};
++use std::sync::{Arc, Mutex, OnceLock};
+ use std::time::{Duration, Instant};
+ 
+ use cursor_overlay::{
+@@ -697,6 +697,7 @@
+     _win_w: f64,
+     _win_h: f64,
+ ) {
++    let pending_frame = Arc::new(Mutex::new(FrameMailbox::new()));
+     let target_frame_ms = Duration::from_millis(16); // ~60 fps while pixels can change
+     let hover_poll_ms = Duration::from_millis(80);
+     let mut last_tick = Instant::now();
+@@ -898,7 +899,7 @@
+             };
+ 
+             // Convert to CGImage and update layer on the main queue.
+-            dispatch_set_layer_contents(layer_ptr, pixmap);
++            dispatch_set_layer_contents(layer_ptr, pixmap, &pending_frame);
+         }
+ 
+         frame_tick_needed = next_frame_tick_needed;
+@@ -933,17 +934,45 @@
+         && state.core.idle_alpha >= 0.004
+ }
+ 
+-/// Convert a `tiny_skia::Pixmap` to a `CGImage` and set it as the contents
+-/// of the given `CALayer` via `dispatch_async(main_queue, ...)`.
+-fn dispatch_set_layer_contents(layer_ptr: usize, pixmap: tiny_skia::Pixmap) {
+-    // Build the CGImage from the pixmap bytes.
+-    let cg_image_ptr = match pixmap_to_cgimage(&pixmap) {
+-        Some(p) => p,
+-        None => return,
+-    };
++/// One replaceable frame and at most one queued main-thread callback. A busy
++/// AppKit thread must not retain a fullscreen bitmap for every render tick.
++struct FrameMailbox<T> {
++    pending: Option<T>,
++    scheduled: bool,
++}
++
++impl<T> FrameMailbox<T> {
++    fn new() -> Self {
++        Self {
++            pending: None,
++            scheduled: false,
++        }
++    }
++
++    fn submit(&mut self, frame: T) -> bool {
++        self.pending = Some(frame);
++        !std::mem::replace(&mut self.scheduled, true)
++    }
+ 
++    fn take(&mut self) -> Option<T> {
++        self.scheduled = false;
++        self.pending.take()
++    }
++}
++
++/// Present only the newest frame when AppKit is ready. Image creation happens
++/// in that callback, so superseded frames never allocate a second pixel copy.
++fn dispatch_set_layer_contents(
++    layer_ptr: usize,
++    pixmap: tiny_skia::Pixmap,
++    pending: &Arc<Mutex<FrameMailbox<tiny_skia::Pixmap>>>,
++) {
++    if !pending.lock().unwrap().submit(pixmap) {
++        return;
++    }
++
+     // Box the payload for the C callback.
+-    let payload = Box::new((layer_ptr, cg_image_ptr));
++    let payload = Box::new((layer_ptr, Arc::clone(pending)));
+ 
+     // GCD symbols from libdispatch (part of the macOS system library stubs).
+     // `dispatch_get_main_queue()` is an inline C function; the underlying
+@@ -962,7 +991,14 @@
+     }
+ 
+     unsafe extern "C" fn set_contents_cb(ctx: *mut c_void) {
+-        let (layer_ptr, cg_image_ptr): (usize, usize) = *Box::from_raw(ctx as *mut _);
++        let (layer_ptr, pending): (usize, Arc<Mutex<FrameMailbox<tiny_skia::Pixmap>>>) =
++            *Box::from_raw(ctx as *mut _);
++        let Some(pixmap) = pending.lock().unwrap().take() else {
++            return;
++        };
++        let Some(cg_image_ptr) = pixmap_to_cgimage(pixmap) else {
++            return;
++        };
+         let layer = layer_ptr as *mut objc2::runtime::AnyObject;
+         // setContents: expects an `id` (type '@'), not a raw void pointer.
+         // CGImageRef is toll-free bridged to NSObject, so we cast it to *mut AnyObject.
+@@ -1127,14 +1163,13 @@
+ 
+ /// Create a `CGImage` from a `tiny_skia::Pixmap` (premultiplied RGBA).
+ /// Returns a `+1` retained pointer that the caller must release.
+-fn pixmap_to_cgimage(pixmap: &tiny_skia::Pixmap) -> Option<usize> {
++fn pixmap_to_cgimage(pixmap: tiny_skia::Pixmap) -> Option<usize> {
+     let w = pixmap.width() as usize;
+     let h = pixmap.height() as usize;
+     if w == 0 || h == 0 {
+         return None;
+     }
+ 
+-    let data = pixmap.data();
+     let bytes_per_row = w * 4;
+ 
+     // tiny-skia produces premultiplied RGBA with bytes in memory order [R, G, B, A].
+@@ -1180,21 +1215,26 @@
+             ) -> *mut c_void;
+         }
+ 
+-        // Copy the pixel data into a heap Vec; the data provider will own it
+-        // and free it via release_pixel_data when the CGImage is released.
+-        let copied: Vec<u8> = data.to_vec();
+-        let len = copied.len();
+-        let ptr = copied.as_ptr();
+-        // Leak the Vec into a raw Box so we can pass it as the `info` opaque pointer.
+-        let copied_box: *mut Vec<u8> = Box::into_raw(Box::new(copied));
+-
+         let cs = CGColorSpaceCreateDeviceRGB();
++        if cs.is_null() {
++            return None;
++        }
++        // Transfer the existing pixels to CoreGraphics without copying them.
++        let pixels = pixmap.take();
++        let len = pixels.len();
++        let ptr = pixels.as_ptr();
++        let pixels_box: *mut Vec<u8> = Box::into_raw(Box::new(pixels));
+         let provider = CGDataProviderCreateWithData(
+-            copied_box as *mut c_void,
++            pixels_box as *mut c_void,
+             ptr as *const c_void,
+             len,
+-            Some(release_pixel_data), // frees copied_box when provider is released
++            Some(release_pixel_data),
+         );
++        if provider.is_null() {
++            drop(Box::from_raw(pixels_box));
++            CGColorSpaceRelease(cs);
++            return None;
++        }
+         let img = CGImageCreate(
+             w,
+             h,
+@@ -1211,7 +1251,7 @@
+ 
+         CGColorSpaceRelease(cs);
+         CGDataProviderRelease(provider);
+-        // Do NOT drop copied_box here — release_pixel_data owns it now.
++        // release_pixel_data now owns the transferred buffer.
+ 
+         if img.is_null() {
+             None
+@@ -1231,6 +1271,33 @@
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++
++    #[test]
++    fn frame_mailbox_bounds_pending_pixels_and_reschedules_after_consumption() {
++        use std::sync::atomic::{AtomicUsize, Ordering};
++        struct Frame(usize, Arc<AtomicUsize>);
++        impl Drop for Frame {
++            fn drop(&mut self) {
++                self.1.fetch_add(1, Ordering::SeqCst);
++            }
++        }
++        let dropped = Arc::new(AtomicUsize::new(0));
++        let mut mailbox = FrameMailbox::new();
++        for index in 0..1000 {
++            assert_eq!(
++                mailbox.submit(Frame(index, Arc::clone(&dropped))),
++                index == 0
++            );
++        }
++        assert_eq!(dropped.load(Ordering::SeqCst), 999);
++        let frame = mailbox.take().unwrap();
++        assert_eq!(frame.0, 999);
++        assert!(mailbox.take().is_none());
++        assert!(mailbox.submit(Frame(1000, Arc::clone(&dropped))));
++        drop(frame);
++        drop(mailbox);
++        assert_eq!(dropped.load(Ordering::SeqCst), 1001);
++    }
+     use std::collections::HashMap;
+ 
+     #[test]
+--- a/libs/cua-driver/rust/crates/platform-macos/src/input/ax_actions.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/input/ax_actions.rs
+@@ -9,58 +9,196 @@
+     matches!(role, "AXRow" | "AXCell" | "AXListItem" | "AXImage")
+ }
+ 
+-/// Select the nearest list-like element at or above `element_ptr` and confirm
+-/// the write through `AXSelected` read-back.
+-///
+-/// Finder and other AppKit collection views commonly expose an item's label as
+-/// an actionable child (`AXTextField`) while the selectable object is its
+-/// parent `AXRow`. Neither object necessarily advertises `AXPress`, and Finder
+-/// can return `kAXErrorCannotComplete` for a press on the row. A pointer click
+-/// selects that row, so the AX equivalent is to set the row's `AXSelected`
+-/// attribute rather than treating the failed press as terminal.
+-///
+-/// Finder icon views expose each selectable file directly as an `AXImage` with
+-/// an `AXSelected` attribute, so that role is included alongside the standard
+-/// row-like containers. The fallback remains bounded and requires a successful
+-/// `AXSelected=true` read-back, so an arbitrary failed image/button press cannot
+-/// become a claimed success.
+-pub fn select_nearest_container(element_ptr: usize) -> Option<String> {
+-    let mut current = element_ptr as AXUIElementRef;
+-    let mut owns_current = false;
++/// An AX error can be returned after the target processed a mutation. Only
++/// `NotAttempted` permits choosing another ancestor or a different actuator.
++#[derive(Debug, PartialEq, Eq)]
++pub enum SelectionOutcome {
++    NotAttempted,
++    AttemptedConfirmed {
++        role: String,
++    },
++    AttemptedUncertain {
++        role: String,
++        error: AXError,
++        selected: Option<bool>,
++    },
++}
+ 
+-    for _ in 0..MAX_SELECTION_ANCESTORS {
+-        let role = unsafe { copy_string_attr(current, "AXRole") }.unwrap_or_default();
+-        if is_selectable_container_role(&role)
+-            && unsafe { copy_bool_attr(current, "AXSelected") }.is_some()
+-        {
+-            let err = unsafe { set_bool_attr_true(current, "AXSelected") };
+-            if err == kAXErrorSuccess
+-                && unsafe { copy_bool_attr(current, "AXSelected") } == Some(true)
+-            {
+-                if owns_current {
+-                    unsafe { CFRelease(current as CFTypeRef) };
+-                }
+-                return Some(role);
+-            }
++/// Preserve whether a mutation crossed the AX boundary when reporting errors.
++/// A failed preflight is a refusal; a failed AX call may already have acted.
++#[derive(Debug)]
++pub struct AxActionFailure {
++    pub attempted: bool,
++    code: Option<&'static str>,
++    message: String,
++}
++
++impl AxActionFailure {
++    pub fn refused(message: impl Into<String>) -> Self {
++        Self {
++            attempted: false,
++            code: None,
++            message: message.into(),
+         }
++    }
+ 
+-        let parent = unsafe { copy_element_attr(current, "AXParent") };
+-        if owns_current {
+-            unsafe { CFRelease(current as CFTypeRef) };
++    pub fn before_dispatch(error: anyhow::Error) -> Self {
++        Self {
++            attempted: false,
++            code: error
++                .downcast_ref::<super::target_guard::TargetRefusal>()
++                .map(|failure| failure.code),
++            message: error.to_string(),
+         }
+-        let Some(parent) = parent else {
+-            return None;
++    }
++
++    pub fn uncertain(message: impl Into<String>) -> Self {
++        Self {
++            attempted: true,
++            code: None,
++            message: message.into(),
++        }
++    }
++
++    pub fn after_dispatch(error: anyhow::Error) -> Self {
++        Self {
++            attempted: true,
++            code: error
++                .downcast_ref::<Self>()
++                .and_then(|failure| failure.code)
++                .or_else(|| {
++                    error
++                        .downcast_ref::<super::target_guard::TargetRefusal>()
++                        .map(|failure| failure.code)
++                }),
++            message: format!(
++                "{error}; prior input may have acted; observe fresh state and do not replay"
++            ),
++        }
++    }
++}
++
++impl std::fmt::Display for AxActionFailure {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        self.message.fmt(f)
++    }
++}
++
++impl std::error::Error for AxActionFailure {}
++
++pub fn action_failure_result(
++    error: anyhow::Error,
++    label: &str,
++) -> cua_driver_core::protocol::ToolResult {
++    let failure = error.downcast_ref::<AxActionFailure>();
++    let refused = failure.is_some_and(|failure| !failure.attempted);
++    let code = failure
++        .and_then(|failure| failure.code)
++        .unwrap_or(if refused {
++            "ax_action_refused"
++        } else {
++            "ax_action_uncertain"
++        });
++    cua_driver_core::protocol::ToolResult::error(format!("{label}: {error}")).with_structured(
++        serde_json::json!({
++            "verified": false,
++            "effect": if refused { "refused" } else { "unverifiable" },
++            "code": code,
++        }),
++    )
++}
++
++fn select_container_with(
++    role: String,
++    selected: Option<bool>,
++    settable: bool,
++    before_write: impl FnOnce() -> anyhow::Result<()>,
++    write: impl FnOnce() -> AXError,
++    readback: impl FnOnce() -> Option<bool>,
++) -> anyhow::Result<SelectionOutcome> {
++    if !is_selectable_container_role(&role) || selected.is_none() || !settable {
++        return Ok(SelectionOutcome::NotAttempted);
++    }
++    before_write().map_err(AxActionFailure::before_dispatch)?;
++    let error = write();
++    let selected = readback();
++    if error == kAXErrorSuccess && selected == Some(true) {
++        Ok(SelectionOutcome::AttemptedConfirmed { role })
++    } else {
++        Ok(SelectionOutcome::AttemptedUncertain {
++            role,
++            error,
++            selected,
++        })
++    }
++}
++
++fn select_ancestor_with<Element>(
++    mut current: Element,
++    mut attempt: impl FnMut(&Element) -> anyhow::Result<SelectionOutcome>,
++    mut parent: impl FnMut(&Element) -> Option<Element>,
++) -> anyhow::Result<SelectionOutcome> {
++    for _ in 0..MAX_SELECTION_ANCESTORS {
++        match attempt(&current)? {
++            SelectionOutcome::NotAttempted => {}
++            terminal => return Ok(terminal),
++        }
++        let Some(next) = parent(&current) else {
++            break;
+         };
+-        current = parent;
+-        owns_current = true;
++        current = next;
+     }
++    Ok(SelectionOutcome::NotAttempted)
++}
+ 
+-    if owns_current {
+-        unsafe { CFRelease(current as CFTypeRef) };
++struct SelectionElement {
++    ptr: AXUIElementRef,
++    owned: bool,
++}
++
++impl Drop for SelectionElement {
++    fn drop(&mut self) {
++        if self.owned {
++            unsafe { CFRelease(self.ptr as CFTypeRef) };
++        }
+     }
+-    None
+ }
+ 
++/// Select the nearest writable collection item before attempting AXPress.
++/// Read-only capability checks may advance to an ancestor. Once AXSelected is
++/// written, even an AX error or an absent/false read-back is terminal: it is
++/// never permission to mutate another ancestor or submit a pointer click.
++pub fn select_nearest_container(element_ptr: usize) -> anyhow::Result<SelectionOutcome> {
++    select_ancestor_with(
++        SelectionElement {
++            ptr: element_ptr as AXUIElementRef,
++            owned: false,
++        },
++        |element| {
++            let role = unsafe { copy_string_attr(element.ptr, "AXRole") }.unwrap_or_default();
++            let selected = unsafe { copy_bool_attr(element.ptr, "AXSelected") };
++            let settable = is_selectable_container_role(&role)
++                && selected.is_some()
++                && unsafe { is_attribute_settable(element.ptr, "AXSelected") };
++            select_container_with(
++                role,
++                selected,
++                settable,
++                || {
++                    ensure_ax_action_enabled(element.ptr as usize, "AXSelected")?;
++                    crate::input::cancellation::gate().ensure_active()
++                },
++                || unsafe { set_bool_attr_true(element.ptr, "AXSelected") },
++                || unsafe { copy_bool_attr(element.ptr, "AXSelected") },
++            )
++        },
++        |element| {
++            unsafe { copy_element_attr(element.ptr, "AXParent") }
++                .map(|ptr| SelectionElement { ptr, owned: true })
++        },
++    )
++}
++
+ /// Read the selection state of the nearest collection-like element without
+ /// mutating it. This is used to verify a coordinate fallback when AppKit
+ /// exposes `AXSelected` but refuses to set it directly (notably Finder icon
+@@ -201,7 +339,8 @@
+     if enabled == Some(false) {
+         anyhow::bail!(
+             "refusing {action}: the target reports AXEnabled=false. \
+-             Retry this action with delivery_mode:\"foreground\" or call bring_to_front first"
++             An explicitly approved delivery_mode:\"foreground\" action or bring_to_front \
++             may enable it; observe current state before choosing a new action"
+         );
+     }
+     Ok(())
+@@ -220,24 +359,42 @@
+ /// Perform an AX action on a cached element.
+ pub fn perform_ax_action(element_ptr: usize, action: &str) -> anyhow::Result<()> {
+     let ax_action = map_action(action);
+-    ensure_ax_action_enabled(element_ptr, ax_action)?;
+-    let err = unsafe { perform_action(element_ptr as AXUIElementRef, ax_action) };
++    dispatch_ax_action_with(
++        ax_action,
++        || {
++            ensure_ax_action_enabled(element_ptr, ax_action)?;
++            crate::input::cancellation::gate().ensure_active()
++        },
++        || unsafe { perform_action(element_ptr as AXUIElementRef, ax_action) },
++    )
++}
+ 
++fn dispatch_ax_action_with(
++    action: &str,
++    before_dispatch: impl FnOnce() -> anyhow::Result<()>,
++    dispatch: impl FnOnce() -> AXError,
++) -> anyhow::Result<()> {
++    before_dispatch().map_err(AxActionFailure::before_dispatch)?;
++    let err = dispatch();
+     if err == kAXErrorSuccess {
+         Ok(())
+     } else {
+-        anyhow::bail!("AXUIElementPerformAction({action}) failed with error {err}")
++        Err(AxActionFailure::uncertain(format!(
++            "AXUIElementPerformAction({action}) returned {err} after dispatch; \
++             the effect is unknown. Observe fresh state; do not replay this action."
++        ))
++        .into())
+     }
+ }
+ 
+ fn map_action(action: &str) -> &'static str {
+     match action.to_lowercase().as_str() {
+-        "press" | "click" => "AXPress",
+-        "show_menu" | "right_click" | "rightclick" => "AXShowMenu",
+-        "pick" => "AXPick",
+-        "confirm" => "AXConfirm",
+-        "cancel" => "AXCancel",
+-        "open" => "AXOpen",
++        "press" | "click" | "axpress" => "AXPress",
++        "show_menu" | "right_click" | "rightclick" | "axshowmenu" => "AXShowMenu",
++        "pick" | "axpick" => "AXPick",
++        "confirm" | "axconfirm" => "AXConfirm",
++        "cancel" | "axcancel" => "AXCancel",
++        "open" | "axopen" => "AXOpen",
+         _ => "AXPress",
+     }
+ }
+@@ -245,6 +402,7 @@
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    use std::cell::Cell;
+ 
+     #[test]
+     fn disabled_elements_are_refused_before_dispatch() {
+@@ -268,12 +426,181 @@
+         }
+         for role in ["AXButton", "AXTextField", "AXWindow", "AXOutline"] {
+             assert!(!is_selectable_container_role(role), "{role}");
++        }
++    }
++
++    #[test]
++    fn an_attempted_selection_never_visits_another_ancestor() {
++        for (error, selected) in [
++            (kAXErrorSuccess, Some(true)),
++            (kAXErrorSuccess, Some(false)),
++            (kAXErrorSuccess, None),
++            (kAXErrorFailure, Some(true)),
++            (kAXErrorFailure, Some(false)),
++            (-25204, None), // kAXErrorCannotComplete is not proof of no effect.
++        ] {
++            let writes = Cell::new(0);
++            let parent_reads = Cell::new(0);
++            let outcome = select_ancestor_with(
++                0,
++                |_| {
++                    select_container_with(
++                        "AXRow".to_owned(),
++                        Some(false),
++                        true,
++                        || Ok(()),
++                        || {
++                            writes.set(writes.get() + 1);
++                            error
++                        },
++                        || selected,
++                    )
++                },
++                |index| {
++                    parent_reads.set(parent_reads.get() + 1);
++                    Some(index + 1)
++                },
++            )
++            .unwrap();
++            assert_eq!(writes.get(), 1);
++            assert_eq!(parent_reads.get(), 0);
++            if error == kAXErrorSuccess && selected == Some(true) {
++                assert!(matches!(
++                    outcome,
++                    SelectionOutcome::AttemptedConfirmed { .. }
++                ));
++            } else {
++                assert_eq!(
++                    outcome,
++                    SelectionOutcome::AttemptedUncertain {
++                        role: "AXRow".to_owned(),
++                        error,
++                        selected,
++                    }
++                );
++            }
++        }
++    }
++
++    #[test]
++    fn read_only_non_candidates_allow_an_ancestor_before_one_write() {
++        let writes = Cell::new(0);
++        let parent_reads = Cell::new(0);
++        let outcome = select_ancestor_with(
++            0,
++            |index| {
++                select_container_with(
++                    "AXRow".to_owned(),
++                    Some(false),
++                    *index == 1,
++                    || Ok(()),
++                    || {
++                        writes.set(writes.get() + 1);
++                        kAXErrorSuccess
++                    },
++                    || Some(true),
++                )
++            },
++            |index| {
++                parent_reads.set(parent_reads.get() + 1);
++                Some(index + 1)
++            },
++        )
++        .unwrap();
++        assert!(matches!(
++            outcome,
++            SelectionOutcome::AttemptedConfirmed { .. }
++        ));
++        assert_eq!(writes.get(), 1);
++        assert_eq!(parent_reads.get(), 1);
++    }
++
++    #[test]
++    fn selection_preflight_refusal_submits_nothing_and_stops_traversal() {
++        let error = select_ancestor_with(
++            0,
++            |_| {
++                select_container_with(
++                    "AXRow".to_owned(),
++                    Some(false),
++                    true,
++                    || anyhow::bail!("native input admission closed"),
++                    || panic!("refused selection was submitted"),
++                    || panic!("refused selection was read back"),
++                )
++            },
++            |_| -> Option<usize> { panic!("refused selection tried another ancestor") },
++        )
++        .unwrap_err();
++        assert!(!error.downcast_ref::<AxActionFailure>().unwrap().attempted);
++    }
++
++    #[test]
++    fn selection_without_a_writable_candidate_is_not_attempted_and_bounded() {
++        let examined = Cell::new(0);
++        let outcome = select_ancestor_with(
++            0,
++            |_| {
++                examined.set(examined.get() + 1);
++                Ok(SelectionOutcome::NotAttempted)
++            },
++            |index| Some(index + 1),
++        )
++        .unwrap();
++        assert_eq!(examined.get(), MAX_SELECTION_ANCESTORS);
++        assert_eq!(outcome, SelectionOutcome::NotAttempted);
++    }
++
++    #[test]
++    fn ax_dispatch_errors_are_uncertain_after_exactly_one_attempt() {
++        for code in [kAXErrorFailure, kAXErrorInvalidUIElement, -25204] {
++            let dispatches = Cell::new(0);
++            let error = dispatch_ax_action_with(
++                "AXPress",
++                || Ok(()),
++                || {
++                    dispatches.set(dispatches.get() + 1);
++                    code
++                },
++            )
++            .unwrap_err();
++            assert_eq!(dispatches.get(), 1);
++            assert!(error.downcast_ref::<AxActionFailure>().unwrap().attempted);
++            assert!(error.to_string().contains("do not replay"));
+         }
+     }
++
++    #[test]
++    fn ax_dispatch_preflight_refusal_never_calls_the_actuator() {
++        let error = dispatch_ax_action_with(
++            "AXPress",
++            || anyhow::bail!("target is disabled"),
++            || panic!("refused AXPress was submitted"),
++        )
++        .unwrap_err();
++        assert!(!error.downcast_ref::<AxActionFailure>().unwrap().attempted);
++    }
++
++    #[test]
++    fn mapped_ax_actions_retain_the_requested_semantics() {
++        for action in [
++            "AXPress",
++            "AXShowMenu",
++            "AXPick",
++            "AXConfirm",
++            "AXCancel",
++            "AXOpen",
++        ] {
++            assert_eq!(map_action(action), action);
++        }
++    }
+ }
+ 
+ /// Set AXFocused=true on an element (for pre-focusing before key press).
+ pub fn focus_element(element_ptr: usize) -> anyhow::Result<()> {
++    crate::input::cancellation::gate()
++        .check_target()
++        .map_err(AxActionFailure::before_dispatch)?;
+     let err = unsafe { set_bool_attr_true(element_ptr as AXUIElementRef, "AXFocused") };
+     if err == kAXErrorSuccess {
+         Ok(())
+@@ -309,10 +636,16 @@
+ 
+ /// Set the AXValue of an element (for dropdowns, text fields, etc.).
+ pub fn set_ax_value(element_ptr: usize, value: &str) -> anyhow::Result<()> {
++    crate::input::cancellation::gate()
++        .check_target()
++        .map_err(AxActionFailure::before_dispatch)?;
+     let err = unsafe { set_string_attr(element_ptr as AXUIElementRef, "AXValue", value) };
+     if err == kAXErrorSuccess {
+         Ok(())
+     } else {
+-        anyhow::bail!("AXUIElementSetAttributeValue(AXValue) failed with error {err}")
++        Err(AxActionFailure::uncertain(format!(
++            "AXUIElementSetAttributeValue(AXValue) returned {err} after dispatch; do not replay"
++        ))
++        .into())
+     }
+ }
+--- /dev/null
++++ b/libs/cua-driver/rust/crates/platform-macos/src/input/cancellation.rs
+@@ -0,0 +1,298 @@
++//! Retirement of one embedded driver's native input generation. The gate is
++//! irreversible: the host starts a new process only after cleanup and exit.
++//! Native release events stay on their originating thread and are prepared
++//! before posting a down event, so cancellation never has to allocate them.
++
++use std::sync::{Condvar, Mutex, MutexGuard, OnceLock};
++use std::time::{Duration, Instant};
++
++#[derive(Default)]
++struct State {
++    stopped: bool,
++    held: usize,
++    operations: usize,
++    target: Option<super::target_guard::InputTarget>,
++    target_invalidated: bool,
++}
++
++#[derive(Default)]
++pub struct InputGate {
++    state: Mutex<State>,
++    changed: Condvar,
++}
++
++pub fn gate() -> &'static InputGate {
++    static GATE: OnceLock<InputGate> = OnceLock::new();
++    GATE.get_or_init(InputGate::default)
++}
++
++impl InputGate {
++    fn lock(&self) -> MutexGuard<'_, State> {
++        self.state.lock().unwrap_or_else(|error| error.into_inner())
++    }
++
++    pub fn ensure_active(&self) -> anyhow::Result<()> {
++        self.check_target()
++    }
++
++    fn validate_target(state: &mut State) -> anyhow::Result<()> {
++        if state.stopped {
++            anyhow::bail!("native_input_cancelled: driver input generation is retired");
++        }
++        if state.target_invalidated {
++            anyhow::bail!("native_input_target_changed: the active Space changed during input; do not replay this action");
++        }
++        if let Some(target) = &state.target {
++            if let Err(error) = target.verify() {
++                state.target_invalidated = true;
++                return Err(error.into());
++            }
++        }
++        Ok(())
++    }
++
++    pub fn check_target(&self) -> anyhow::Result<()> {
++        Self::validate_target(&mut self.lock())
++    }
++
++    /// A Space change cancels this action, never the reusable input generation.
++    /// The observer only invalidates admission; originating threads own releases.
++    pub fn target_space_changed(&self) {
++        let mut state = self.lock();
++        if state.target.is_some() {
++            state.target_invalidated = true;
++            self.changed.notify_all();
++        }
++    }
++
++    /// Serialize one non-held event with cancellation admission.
++    pub fn post<T>(&self, send: impl FnOnce() -> T) -> anyhow::Result<T> {
++        let mut state = self.lock();
++        Self::validate_target(&mut state)?;
++        Ok(send())
++    }
++
++    /// Covers the complete daemon action, including native focus restoration
++    /// and verification after the last matching up event was submitted.
++    pub fn lease(&self) -> anyhow::Result<InputLease<'_>> {
++        self.lease_with_target(None)
++    }
++
++    pub fn lease_with_target(
++        &self,
++        target: Option<super::target_guard::InputTarget>,
++    ) -> anyhow::Result<InputLease<'_>> {
++        let mut state = self.lock();
++        if state.stopped {
++            anyhow::bail!("native_input_cancelled: action admission is closed");
++        }
++        if state.operations != 0 && (state.target.is_some() || target.is_some()) {
++            anyhow::bail!("native_input_busy: an exact-target action is already active");
++        }
++        if let Some(target) = &target {
++            target.verify()?;
++        }
++        if target.is_some() {
++            state.target = target;
++            state.target_invalidated = false;
++        }
++        state.operations += 1;
++        Ok(InputLease { gate: self })
++    }
++
++    /// `release` must already own everything needed to post the matching up.
++    /// The guard releases on ordinary return, early failure and Rust unwind.
++    pub fn press<R: FnOnce()>(
++        &self,
++        down: impl FnOnce(),
++        release: R,
++    ) -> anyhow::Result<HeldInput<'_, R>> {
++        // Declared before the mutex guard so unwinding unlocks before release.
++        let mut held = HeldInput {
++            gate: self,
++            release: None,
++        };
++        let mut state = self.lock();
++        Self::validate_target(&mut state)?;
++        held.release = Some(release);
++        state.held += 1;
++        down();
++        drop(state);
++        Ok(held)
++    }
++
++    pub fn pause(&self, duration: Duration) -> anyhow::Result<()> {
++        let (mut state, _) = self
++            .changed
++            .wait_timeout_while(self.lock(), duration, |state| {
++                !state.stopped && !state.target_invalidated
++            })
++            .unwrap_or_else(|error| error.into_inner());
++        Self::validate_target(&mut state)
++    }
++
++    /// Waits for registered releases and action contexts, within a bounded
++    /// deadline. A nonzero result is NOT permission to kill or replace us.
++    pub fn cancel_and_wait(&self, timeout: Duration) -> usize {
++        let deadline = Instant::now() + timeout;
++        let mut state = self.lock();
++        state.stopped = true;
++        self.changed.notify_all();
++        while state.held != 0 || state.operations != 0 {
++            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
++                break;
++            };
++            let (next, waited) = self
++                .changed
++                .wait_timeout(state, remaining)
++                .unwrap_or_else(|error| error.into_inner());
++            state = next;
++            if waited.timed_out() {
++                break;
++            }
++        }
++        state.held + state.operations
++    }
++}
++
++pub struct InputLease<'a> {
++    gate: &'a InputGate,
++}
++
++impl Drop for InputLease<'_> {
++    fn drop(&mut self) {
++        let mut state = self.gate.lock();
++        state.operations -= 1;
++        if state.operations == 0 {
++            state.target = None;
++            state.target_invalidated = false;
++        }
++        self.gate.changed.notify_all();
++    }
++}
++
++pub struct HeldInput<'a, R: FnOnce()> {
++    gate: &'a InputGate,
++    release: Option<R>,
++}
++
++impl<R: FnOnce()> Drop for HeldInput<'_, R> {
++    fn drop(&mut self) {
++        if let Some(release) = self.release.take() {
++            let mut state = self.gate.lock();
++            release();
++            state.held -= 1;
++            self.gate.changed.notify_all();
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::sync::{mpsc, Arc};
++
++    #[test]
++    fn target_invalidation_stops_new_events_but_releases_and_next_action_survive() {
++        use std::sync::atomic::{AtomicUsize, Ordering};
++        let gate = InputGate::default();
++        let downs = AtomicUsize::new(0);
++        let ups = AtomicUsize::new(0);
++        let action = gate.lease().unwrap();
++        let held = gate
++            .press(
++                || {
++                    downs.fetch_add(1, Ordering::SeqCst);
++                },
++                || {
++                    ups.fetch_add(1, Ordering::SeqCst);
++                },
++            )
++            .unwrap();
++        // The observer sets exactly this flag on an admitted target action.
++        gate.lock().target_invalidated = true;
++        assert!(gate
++            .post(|| {
++                downs.fetch_add(1, Ordering::SeqCst);
++            })
++            .is_err());
++        assert!(gate.pause(Duration::ZERO).is_err());
++        assert_eq!(ups.load(Ordering::SeqCst), 0);
++        drop(held);
++        assert_eq!(ups.load(Ordering::SeqCst), 1);
++        assert_eq!(downs.load(Ordering::SeqCst), 1);
++        drop(action);
++        let next = gate.lease().unwrap();
++        assert!(gate.post(|| ()).is_ok());
++        drop(next);
++        assert_eq!(gate.cancel_and_wait(Duration::ZERO), 0);
++        assert!(gate.lease().is_err());
++    }
++
++    #[test]
++    fn cancel_wakes_a_held_input_and_waits_for_its_release() {
++        let gate = Arc::new(InputGate::default());
++        let worker_gate = Arc::clone(&gate);
++        let (events, received) = mpsc::channel();
++        let worker = std::thread::spawn(move || {
++            let _held = worker_gate
++                .press(
++                    || events.send("down").unwrap(),
++                    || events.send("up").unwrap(),
++                )
++                .unwrap();
++            assert!(worker_gate.pause(Duration::from_secs(60)).is_err());
++        });
++        assert_eq!(
++            received.recv_timeout(Duration::from_secs(1)).unwrap(),
++            "down"
++        );
++        assert_eq!(gate.cancel_and_wait(Duration::from_secs(1)), 0);
++        assert_eq!(received.try_recv().unwrap(), "up");
++        worker.join().unwrap();
++        assert!(gate.post(|| panic!("cancelled event posted")).is_err());
++        assert!(gate
++            .press(
++                || panic!("cancelled down posted"),
++                || panic!("unowned release")
++            )
++            .is_err());
++    }
++
++    #[test]
++    fn incomplete_release_is_reported_until_the_owner_drains() {
++        let gate = InputGate::default();
++        let mut released = false;
++        let held = gate.press(|| {}, || released = true).unwrap();
++        assert_eq!(gate.cancel_and_wait(Duration::ZERO), 1);
++        drop(held);
++        assert!(released);
++        assert_eq!(gate.cancel_and_wait(Duration::ZERO), 0);
++        assert!(gate.ensure_active().is_err());
++    }
++
++    #[test]
++    fn unwind_submits_the_release_before_cleanup_can_succeed() {
++        let gate = InputGate::default();
++        let mut released = false;
++        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++            let _held = gate.press(|| {}, || released = true).unwrap();
++            panic!("action failed after down");
++        }));
++        assert!(failed.is_err());
++        assert!(released);
++        assert_eq!(gate.cancel_and_wait(Duration::ZERO), 0);
++    }
++
++    #[test]
++    fn cleanup_waits_for_the_action_to_restore_its_native_context() {
++        let gate = InputGate::default();
++        let action = gate.lease().unwrap();
++        let held = gate.press(|| {}, || {}).unwrap();
++        drop(held);
++        assert_eq!(gate.cancel_and_wait(Duration::ZERO), 1);
++        assert!(gate.lease().is_err());
++        drop(action);
++        assert_eq!(gate.cancel_and_wait(Duration::ZERO), 0);
++    }
++}
+--- a/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs
+@@ -30,267 +30,227 @@
+         .is_some_and(is_screen_sharing_bundle_id)
+ }
+ 
+-/// Press and release a single key, delivered to `pid` without stealing focus.
+-pub fn press_key(pid: i32, key: &str, modifiers: &[&str]) -> anyhow::Result<()> {
+-    // Handle "+" / "plus" → Shift+= (US keyboard layout).
+-    if key == "+" || key.to_lowercase() == "plus" {
+-        let flags = modifier_flags(&["shift"]);
+-        let eq_code = key_name_to_code("=")?;
+-        post_key(pid, eq_code, true, modifier_flags(modifiers) | flags)?;
+-        std::thread::sleep(std::time::Duration::from_millis(8));
+-        post_key(pid, eq_code, false, modifier_flags(modifiers) | flags)?;
+-        return Ok(());
++#[derive(Clone, Copy)]
++enum KeyboardRoute {
++    Pid { pid: i32, authenticated: bool },
++    Hid,
++}
++
++impl KeyboardRoute {
++    // Only used inside an admitted down or its already-owned release.
++    fn post(self, event: &CGEvent) {
++        match self {
++            Self::Hid => event.post(core_graphics::event::CGEventTapLocation::HID),
++            Self::Pid {
++                pid,
++                authenticated: true,
++            } => post_keyboard_event(pid, event),
++            Self::Pid {
++                pid,
++                authenticated: false,
++            } => {
++                if !super::skylight::post_to_pid(pid, event.as_ptr().cast(), false) {
++                    event.post_to_pid(pid);
++                }
++            }
++        }
+     }
++}
+ 
+-    let key_code = key_name_to_code(key)?;
+-    let flags = modifier_flags(modifiers);
+-
+-    post_key(pid, key_code, true, flags)?;
+-    std::thread::sleep(std::time::Duration::from_millis(8));
+-    post_key(pid, key_code, false, flags)?;
+-    Ok(())
++struct PreparedKey {
++    down: CGEvent,
++    up: CGEvent,
++    route: KeyboardRoute,
+ }
+ 
+-/// Type a string character-by-character to `pid`.
+-pub fn type_text(pid: i32, text: &str) -> anyhow::Result<()> {
+-    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+-        .map_err(|_| anyhow::anyhow!("CGEventSource::new failed"))?;
++impl PreparedKey {
++    fn new(
++        source: &CGEventSource,
++        code: u16,
++        down_flags: CGEventFlags,
++        up_flags: CGEventFlags,
++        route: KeyboardRoute,
++    ) -> anyhow::Result<Self> {
++        let down = CGEvent::new_keyboard_event(source.clone(), code, true)
++            .map_err(|_| anyhow::anyhow!("CGEvent keyboard down creation failed"))?;
++        let up = CGEvent::new_keyboard_event(source.clone(), code, false)
++            .map_err(|_| anyhow::anyhow!("CGEvent keyboard up creation failed"))?;
++        down.set_flags(down_flags);
++        up.set_flags(up_flags);
++        Ok(Self { down, up, route })
++    }
+ 
+-    for ch in text.chars() {
+-        let ch_str = ch.to_string();
+-        let down = CGEvent::new_keyboard_event(source.clone(), 0, true)
+-            .map_err(|_| anyhow::anyhow!("CGEvent keyboard down failed"))?;
+-        down.set_string(&ch_str);
+-        // Always zero flags: Chrome inspects the flags field to infer modifier
+-        // state; without this, uppercase chars (e.g. 'E') are seen as Shift+e
+-        // and the modifier leaks into the next character (Swift fix: event.flags = []).
+-        down.set_flags(CGEventFlags::CGEventFlagNull);
+-        post_keyboard_event(pid, &down);
+-        std::thread::sleep(std::time::Duration::from_millis(8));
++    fn bare(code: u16) -> anyhow::Result<Self> {
++        Ok(Self {
++            down: create_bare_keyboard_event(code, true)?,
++            up: create_bare_keyboard_event(code, false)?,
++            route: KeyboardRoute::Hid,
++        })
++    }
+ 
+-        let up = CGEvent::new_keyboard_event(source.clone(), 0, false)
+-            .map_err(|_| anyhow::anyhow!("CGEvent keyboard up failed"))?;
+-        up.set_string(&ch_str);
+-        up.set_flags(CGEventFlags::CGEventFlagNull);
+-        post_keyboard_event(pid, &up);
+-        std::thread::sleep(std::time::Duration::from_millis(8));
++    fn hold(self) -> anyhow::Result<super::cancellation::HeldInput<'static, impl FnOnce()>> {
++        let Self { down, up, route } = self;
++        super::cancellation::gate().press(|| route.post(&down), move || route.post(&up))
+     }
+-    Ok(())
++
++    fn pulse(self) -> anyhow::Result<()> {
++        let held = self.hold()?;
++        key_pause(8)?;
++        drop(held);
++        Ok(())
++    }
+ }
+ 
+-/// Type a string character-by-character with an extra `inter_char_delay_ms`
+-/// pause after each character (on top of the internal 8 ms down/up gap).
+-pub fn type_text_with_delay(pid: i32, text: &str, inter_char_delay_ms: u64) -> anyhow::Result<()> {
+-    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+-        .map_err(|_| anyhow::anyhow!("CGEventSource::new failed"))?;
++// Vec normally drops in forward order. Chords must unwind in reverse order.
++struct HeldKeys<T>(Vec<T>);
++impl<T> HeldKeys<T> {
++    fn release(&mut self) -> anyhow::Result<()> {
++        while let Some(key) = self.0.pop() {
++            drop(key);
++            key_pause(8)?;
++        }
++        Ok(())
++    }
++}
++impl<T> Drop for HeldKeys<T> {
++    fn drop(&mut self) {
++        while let Some(key) = self.0.pop() {
++            drop(key);
++        }
++    }
++}
+ 
+-    for ch in text.chars() {
+-        let ch_str = ch.to_string();
+-        let down = CGEvent::new_keyboard_event(source.clone(), 0, true)
+-            .map_err(|_| anyhow::anyhow!("CGEvent keyboard down failed"))?;
+-        down.set_string(&ch_str);
+-        down.set_flags(CGEventFlags::CGEventFlagNull);
+-        post_keyboard_event(pid, &down);
+-        std::thread::sleep(std::time::Duration::from_millis(8));
++fn key_pause(ms: u64) -> anyhow::Result<()> {
++    super::cancellation::gate().pause(std::time::Duration::from_millis(ms))
++}
+ 
+-        let up = CGEvent::new_keyboard_event(source.clone(), 0, false)
+-            .map_err(|_| anyhow::anyhow!("CGEvent keyboard up failed"))?;
+-        up.set_string(&ch_str);
+-        up.set_flags(CGEventFlags::CGEventFlagNull);
+-        post_keyboard_event(pid, &up);
++fn source() -> anyhow::Result<CGEventSource> {
++    CGEventSource::new(CGEventSourceStateID::HIDSystemState)
++        .map_err(|_| anyhow::anyhow!("CGEventSource::new failed"))
++}
+ 
+-        // Additional inter-character delay on top of the 8 ms internal gap.
+-        if inter_char_delay_ms > 0 {
+-            std::thread::sleep(std::time::Duration::from_millis(inter_char_delay_ms));
+-        } else {
+-            std::thread::sleep(std::time::Duration::from_millis(8));
+-        }
+-    }
+-    Ok(())
++fn press_key_routed(
++    pid: i32,
++    key: &str,
++    modifiers: &[&str],
++    authenticated: bool,
++) -> anyhow::Result<()> {
++    let (code, flags) = if key == "+" || key.eq_ignore_ascii_case("plus") {
++        (
++            key_name_to_code("=")?,
++            modifier_flags(modifiers) | modifier_flags(&["shift"]),
++        )
++    } else {
++        (key_name_to_code(key)?, modifier_flags(modifiers))
++    };
++    PreparedKey::new(
++        &source()?,
++        code,
++        flags,
++        flags,
++        KeyboardRoute::Pid { pid, authenticated },
++    )?
++    .pulse()
+ }
+ 
+-/// Send a key combination (hotkey) to `pid`.
++/// Pair each admitted key down with an already-prepared release.
++pub fn press_key(pid: i32, key: &str, modifiers: &[&str]) -> anyhow::Result<()> {
++    press_key_routed(pid, key, modifiers, true)
++}
++
+ pub fn hotkey(pid: i32, key: &str, modifiers: &[&str]) -> anyhow::Result<()> {
+     press_key(pid, key, modifiers)
+ }
+ 
+-/// Send a key combination to `pid` WITHOUT the auth-message envelope.
+-///
+-/// Required for NSMenu key equivalents: with the envelope, SLEventPostToPid
+-/// forks onto a direct-mach path that bypasses IOHIDPostEvent — NSMenu never
+-/// sees those events. Without the envelope the path goes through IOHIDPostEvent
+-/// so NSApplication.sendEvent: dispatches NSMenu key equivalents.
+ pub fn hotkey_no_auth(pid: i32, key: &str, modifiers: &[&str]) -> anyhow::Result<()> {
+-    let key_code = key_name_to_code(key)?;
+-    let flags = modifier_flags(modifiers);
+-    post_key_no_auth(pid, key_code, true, flags)?;
+-    std::thread::sleep(std::time::Duration::from_millis(8));
+-    post_key_no_auth(pid, key_code, false, flags)?;
+-    Ok(())
++    press_key_routed(pid, key, modifiers, false)
+ }
+ 
+-/// Press and release a single key to `pid` WITHOUT the auth-message envelope.
+-/// Works for single keys as well as combinations (same as hotkey_no_auth for single key).
+ pub fn press_key_no_auth(pid: i32, key: &str, modifiers: &[&str]) -> anyhow::Result<()> {
+-    let key_code = key_name_to_code(key)?;
+-    let flags = modifier_flags(modifiers);
+-    post_key_no_auth(pid, key_code, true, flags)?;
+-    std::thread::sleep(std::time::Duration::from_millis(8));
+-    post_key_no_auth(pid, key_code, false, flags)?;
+-    Ok(())
++    press_key_routed(pid, key, modifiers, false)
+ }
+ 
+-/// Press and release one key on the global HID queue.
+-///
+-/// This is reserved for an explicitly approved, bounded foreground assist.
+-/// Callers must prove and temporarily activate the exact target window before
+-/// invoking it; unlike the PID-routed helpers above, the HID queue itself has
+-/// no process addressing.
+-pub fn press_key_global(key: &str, modifiers: &[&str]) -> anyhow::Result<()> {
+-    use core_graphics::event::CGEventTapLocation;
+-
+-    let key_code = key_name_to_code(key)?;
+-    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+-        .map_err(|_| anyhow::anyhow!("CGEventSource::new failed"))?;
+-    let mut active_flags = CGEventFlags::CGEventFlagNull;
+-    let mut pressed_modifiers: Vec<(u16, CGEventFlags)> = Vec::new();
+-
+-    // A flag-only base-key event can leave the HID modifier state latched on
+-    // macOS. Model a physical chord instead: modifier downs in caller order,
+-    // base down/up, then modifier ups in reverse order. This also matches the
+-    // Windows SendInput and Linux XTest implementations.
+-    for modifier in modifiers {
+-        let Some((modifier_code, modifier_flag)) = modifier_key_code_and_flag(modifier) else {
+-            continue;
+-        };
+-        if pressed_modifiers
+-            .iter()
+-            .any(|(pressed_code, _)| *pressed_code == modifier_code)
+-        {
+-            continue;
+-        }
+-        active_flags |= modifier_flag;
+-        if let Err(error) = post_global_key(
++fn type_unicode(text: &str, inter_char_delay_ms: u64, route: KeyboardRoute) -> anyhow::Result<()> {
++    let source = source()?;
++    for ch in text.chars() {
++        super::cancellation::gate().ensure_active()?;
++        let pair = PreparedKey::new(
+             &source,
+-            modifier_code,
+-            true,
+-            active_flags,
+-            CGEventTapLocation::HID,
+-        ) {
+-            release_global_modifiers(
+-                &source,
+-                &pressed_modifiers,
+-                active_flags,
+-                CGEventTapLocation::HID,
+-            );
+-            return Err(error);
+-        }
+-        pressed_modifiers.push((modifier_code, modifier_flag));
+-        std::thread::sleep(std::time::Duration::from_millis(8));
++            0,
++            CGEventFlags::CGEventFlagNull,
++            CGEventFlags::CGEventFlagNull,
++            route,
++        )?;
++        let value = ch.to_string();
++        pair.down.set_string(&value);
++        pair.up.set_string(&value);
++        pair.pulse()?;
++        key_pause(inter_char_delay_ms)?;
+     }
++    Ok(())
++}
+ 
+-    let result = (|| {
+-        post_global_key(
+-            &source,
+-            key_code,
+-            true,
+-            active_flags,
+-            CGEventTapLocation::HID,
+-        )?;
+-        std::thread::sleep(std::time::Duration::from_millis(8));
+-        post_global_key(
+-            &source,
+-            key_code,
+-            false,
+-            active_flags,
+-            CGEventTapLocation::HID,
+-        )
+-    })();
+-
+-    release_global_modifiers(
+-        &source,
+-        &pressed_modifiers,
+-        active_flags,
+-        CGEventTapLocation::HID,
+-    );
+-    result
++pub fn type_text(pid: i32, text: &str) -> anyhow::Result<()> {
++    type_text_with_delay(pid, text, 0)
+ }
+ 
+-/// Hold physical modifier keys on the global HID queue around one pointer
+-/// gesture, then release them in reverse order even when the gesture fails.
+-///
+-/// This is only safe inside an exact-window foreground activation guard. The
+-/// caller receives the live modifier flags so every mouse event in the gesture
+-/// carries the same state as the physical key transitions.
+-pub(super) fn with_global_modifier_keys<T>(
++pub fn type_text_with_delay(pid: i32, text: &str, inter_char_delay_ms: u64) -> anyhow::Result<()> {
++    type_unicode(
++        text,
++        if inter_char_delay_ms == 0 {
++            8
++        } else {
++            inter_char_delay_ms
++        },
++        KeyboardRoute::Pid {
++            pid,
++            authenticated: true,
++        },
++    )
++}
++
++fn with_modifier_keys<T>(
+     modifiers: &[&str],
++    route: KeyboardRoute,
+     gesture: impl FnOnce(CGEventFlags) -> anyhow::Result<T>,
+ ) -> anyhow::Result<T> {
+-    use core_graphics::event::CGEventTapLocation;
+-
+-    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+-        .map_err(|_| anyhow::anyhow!("CGEventSource::new failed"))?;
+-    let mut active_flags = CGEventFlags::CGEventFlagNull;
+-    let mut pressed = Vec::new();
+-
++    let source = source()?;
++    let mut flags = CGEventFlags::CGEventFlagNull;
++    let mut codes = Vec::new();
++    let mut held = HeldKeys(Vec::new());
+     for modifier in modifiers {
+-        let Some((key_code, flag)) = modifier_key_code_and_flag(modifier) else {
++        let Some((code, flag)) = modifier_key_code_and_flag(modifier) else {
+             continue;
+         };
+-        if pressed
+-            .iter()
+-            .any(|(pressed_code, _)| *pressed_code == key_code)
+-        {
++        if codes.contains(&code) {
+             continue;
+         }
+-        active_flags |= flag;
+-        if let Err(error) = post_global_key(
+-            &source,
+-            key_code,
+-            true,
+-            active_flags,
+-            CGEventTapLocation::HID,
+-        ) {
+-            release_global_modifiers(&source, &pressed, active_flags, CGEventTapLocation::HID);
+-            return Err(error);
+-        }
+-        pressed.push((key_code, flag));
+-        std::thread::sleep(std::time::Duration::from_millis(8));
++        let previous = flags;
++        flags |= flag;
++        held.0
++            .push(PreparedKey::new(&source, code, flags, previous, route)?.hold()?);
++        codes.push(code);
++        key_pause(8)?;
+     }
+-
+-    let result = gesture(active_flags);
+-    release_global_modifiers(&source, &pressed, active_flags, CGEventTapLocation::HID);
++    // A modifier-free gesture must still obey cancellation admission.
++    super::cancellation::gate().ensure_active()?;
++    let result = gesture(flags);
++    held.release()?;
+     result
+ }
+ 
+-fn post_global_key(
+-    source: &CGEventSource,
+-    key_code: u16,
+-    key_down: bool,
+-    flags: CGEventFlags,
+-    tap: core_graphics::event::CGEventTapLocation,
+-) -> anyhow::Result<()> {
+-    let event = CGEvent::new_keyboard_event(source.clone(), key_code, key_down)
+-        .map_err(|_| anyhow::anyhow!("CGEvent keyboard event creation failed"))?;
+-    event.set_flags(flags);
+-    event.post(tap);
+-    Ok(())
++pub fn press_key_global(key: &str, modifiers: &[&str]) -> anyhow::Result<()> {
++    let code = key_name_to_code(key)?;
++    with_global_modifier_keys(modifiers, |flags| {
++        PreparedKey::new(&source()?, code, flags, flags, KeyboardRoute::Hid)?.pulse()
++    })
+ }
+ 
+-fn release_global_modifiers(
+-    source: &CGEventSource,
+-    pressed: &[(u16, CGEventFlags)],
+-    mut active_flags: CGEventFlags,
+-    tap: core_graphics::event::CGEventTapLocation,
+-) {
+-    for &(key_code, flag) in pressed.iter().rev() {
+-        active_flags.remove(flag);
+-        if let Ok(event) = CGEvent::new_keyboard_event(source.clone(), key_code, false) {
+-            event.set_flags(active_flags);
+-            event.post(tap);
+-        }
+-        std::thread::sleep(std::time::Duration::from_millis(8));
+-    }
++pub(super) fn with_global_modifier_keys<T>(
++    modifiers: &[&str],
++    gesture: impl FnOnce(CGEventFlags) -> anyhow::Result<T>,
++) -> anyhow::Result<T> {
++    with_modifier_keys(modifiers, KeyboardRoute::Hid, gesture)
+ }
+ 
+ fn modifier_key_code_and_flag(modifier: &str) -> Option<(u16, CGEventFlags)> {
+@@ -312,136 +272,76 @@
+ /// the flagged mouse events with real modifier down/up transitions gives the
+ /// target the same ordered state it receives for a keyboard chord without
+ /// putting those transitions on the global HID queue.
++
+ pub(super) fn with_pid_modifier_keys<T>(
+     pid: i32,
+     modifiers: &[&str],
+     gesture: impl FnOnce() -> anyhow::Result<T>,
+ ) -> anyhow::Result<T> {
+-    let mut active_flags = CGEventFlags::CGEventFlagNull;
+-    let mut pressed = Vec::new();
+-    for modifier in modifiers {
+-        let Some((key_code, flag)) = modifier_key_code_and_flag(modifier) else {
+-            continue;
+-        };
+-        if pressed
+-            .iter()
+-            .any(|(pressed_code, _)| *pressed_code == key_code)
+-        {
+-            continue;
+-        }
+-        active_flags |= flag;
+-        if let Err(error) = post_key(pid, key_code, true, active_flags) {
+-            release_pid_modifiers(pid, &pressed, active_flags);
+-            return Err(error);
+-        }
+-        pressed.push((key_code, flag));
+-        std::thread::sleep(std::time::Duration::from_millis(8));
+-    }
+-
+-    let result = gesture();
+-    release_pid_modifiers(pid, &pressed, active_flags);
+-    result
++    with_modifier_keys(
++        modifiers,
++        KeyboardRoute::Pid {
++            pid,
++            authenticated: true,
++        },
++        |_| gesture(),
++    )
+ }
+ 
+-fn release_pid_modifiers(
+-    pid: i32,
+-    pressed: &[(u16, CGEventFlags)],
+-    mut active_flags: CGEventFlags,
+-) {
+-    for &(key_code, flag) in pressed.iter().rev() {
+-        active_flags.remove(flag);
+-        let _ = post_key(pid, key_code, false, active_flags);
+-        std::thread::sleep(std::time::Duration::from_millis(8));
+-    }
++pub fn type_text_global(text: &str, inter_char_delay_ms: u64) -> anyhow::Result<()> {
++    type_unicode(text, inter_char_delay_ms.max(8), KeyboardRoute::Hid)
+ }
+ 
+-/// Type Unicode text into the frontmost application through the global HID
+-/// queue. This is the desktop-scope counterpart to PID-routed `type_text` and
+-/// mirrors computer-server's frontmost pynput typing behavior.
+-pub fn type_text_global(text: &str, inter_char_delay_ms: u64) -> anyhow::Result<()> {
+-    use core_graphics::event::CGEventTapLocation;
+-
+-    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+-        .map_err(|_| anyhow::anyhow!("CGEventSource::new failed"))?;
+-    for ch in text.chars() {
+-        let value = ch.to_string();
+-        let down = CGEvent::new_keyboard_event(source.clone(), 0, true)
+-            .map_err(|_| anyhow::anyhow!("CGEvent keyboard down failed"))?;
+-        down.set_string(&value);
+-        down.set_flags(CGEventFlags::CGEventFlagNull);
+-        down.post(CGEventTapLocation::HID);
+-        std::thread::sleep(std::time::Duration::from_millis(8));
+-        let up = CGEvent::new_keyboard_event(source.clone(), 0, false)
+-            .map_err(|_| anyhow::anyhow!("CGEvent keyboard up failed"))?;
+-        up.set_string(&value);
+-        up.set_flags(CGEventFlags::CGEventFlagNull);
+-        up.post(CGEventTapLocation::HID);
+-        std::thread::sleep(std::time::Duration::from_millis(inter_char_delay_ms.max(8)));
++fn press_bare_chord(code: u16, modifiers: &[u16]) -> anyhow::Result<()> {
++    let pairs = bare_chord_transitions(code, modifiers)
++        .into_iter()
++        .filter(|(_, down)| *down)
++        .map(|(code, _)| PreparedKey::bare(code))
++        .collect::<anyhow::Result<Vec<_>>>()?;
++    let mut held = HeldKeys(Vec::new());
++    for pair in pairs {
++        held.0.push(pair.hold()?);
++        key_pause(8)?;
+     }
+-    Ok(())
++    held.release()
+ }
+ 
+-/// Type ASCII text through the global HID queue as physical US-keyboard
+-/// transitions.
+-///
+-/// This is reserved for a caller that has guarded the exact target with
+-/// `with_foreground_hid_activation`. Remote-input clients such as Screen
+-/// Sharing forward virtual keycodes and modifier transitions, not the Unicode
+-/// payload carried by keycode 0, so the ordinary text synthesis path cannot be
+-/// used for them.
+ pub fn type_text_physical_global(text: &str, inter_char_delay_ms: u64) -> anyhow::Result<()> {
+-    use core_graphics::event::CGEventTapLocation;
+-
+-    // Validate the complete payload before posting its first event. A string
+-    // containing an unsupported character must fail without partially typing.
+-    let event_groups = text
++    // Validate the whole payload before sending the first physical chord.
++    let groups = text
+         .chars()
+         .map(physical_text_events)
+         .collect::<anyhow::Result<Vec<_>>>()?;
+-    for events in event_groups {
+-        let native_events = events
++    for events in groups {
++        let code = events
+             .iter()
+-            .map(|event| create_bare_keyboard_event(event.key_code, event.key_down))
+-            .collect::<anyhow::Result<Vec<_>>>()?;
+-        for cg_event in native_events {
+-            cg_event.post(CGEventTapLocation::HID);
+-            std::thread::sleep(std::time::Duration::from_millis(8));
+-        }
++            .find(|event| event.event_type == PhysicalEventType::KeyDown)
++            .ok_or_else(|| anyhow::anyhow!("physical text has no base key"))?
++            .key_code;
++        let modifiers = events
++            .iter()
++            .filter(|event| event.event_type == PhysicalEventType::FlagsChanged && event.key_down)
++            .map(|event| event.key_code)
++            .collect::<Vec<_>>();
++        press_bare_chord(code, &modifiers)?;
+         if inter_char_delay_ms > 8 {
+-            std::thread::sleep(std::time::Duration::from_millis(inter_char_delay_ms - 8));
++            key_pause(inter_char_delay_ms - 8)?;
+         }
+     }
+     Ok(())
+ }
+ 
+-/// Send a physical key chord using the exact bare-event sequence documented by
+-/// Apple for `CGEventCreateKeyboardEvent`: NULL source, modifier downs, base
+-/// down/up, then modifier ups in reverse order. No flags, Unicode payload, or
+-/// event-type overrides are applied; CoreGraphics derives those from the
+-/// virtual key transitions and its default source state.
+ pub fn press_key_bare_global(key: &str, modifiers: &[&str]) -> anyhow::Result<()> {
+-    use core_graphics::event::CGEventTapLocation;
+-
+-    let key_code = key_name_to_code(key)?;
+-    let mut modifier_codes = Vec::new();
++    let code = key_name_to_code(key)?;
++    let mut codes = Vec::new();
+     for modifier in modifiers {
+-        let Some((modifier_code, _)) = modifier_key_code_and_flag(modifier) else {
+-            continue;
+-        };
+-        if !modifier_codes.contains(&modifier_code) {
+-            modifier_codes.push(modifier_code);
++        if let Some((code, _)) = modifier_key_code_and_flag(modifier) {
++            if !codes.contains(&code) {
++                codes.push(code);
++            }
+         }
+     }
+-
+-    let events = bare_chord_transitions(key_code, &modifier_codes)
+-        .into_iter()
+-        .map(|(code, down)| create_bare_keyboard_event(code, down))
+-        .collect::<anyhow::Result<Vec<_>>>()?;
+-    for event in events {
+-        event.post(CGEventTapLocation::HID);
+-        std::thread::sleep(std::time::Duration::from_millis(8));
+-    }
+-    Ok(())
++    press_bare_chord(code, &codes)
+ }
+ 
+ fn bare_chord_transitions(key_code: u16, modifier_codes: &[u16]) -> Vec<(u16, bool)> {
+@@ -598,38 +498,6 @@
+     }
+ }
+ 
+-fn post_key(pid: i32, key_code: u16, key_down: bool, flags: CGEventFlags) -> anyhow::Result<()> {
+-    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+-        .map_err(|_| anyhow::anyhow!("CGEventSource::new failed"))?;
+-    let event = CGEvent::new_keyboard_event(source, key_code, key_down)
+-        .map_err(|_| anyhow::anyhow!("CGEvent::new_keyboard_event failed"))?;
+-    // HIDSystemState can inherit physically held modifiers. Always overwrite
+-    // the event flags, including the empty case, so an unrelated Shift/Caps
+-    // state cannot leak into a targeted key press.
+-    event.set_flags(flags);
+-    post_keyboard_event(pid, &event);
+-    Ok(())
+-}
+-
+-fn post_key_no_auth(
+-    pid: i32,
+-    key_code: u16,
+-    key_down: bool,
+-    flags: CGEventFlags,
+-) -> anyhow::Result<()> {
+-    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+-        .map_err(|_| anyhow::anyhow!("CGEventSource::new failed"))?;
+-    let event = CGEvent::new_keyboard_event(source, key_code, key_down)
+-        .map_err(|_| anyhow::anyhow!("CGEvent::new_keyboard_event failed"))?;
+-    event.set_flags(flags);
+-    let event_ptr = event.as_ptr() as *mut std::ffi::c_void;
+-    // attach_auth_message = false → IOHIDPostEvent path → NSMenu fires
+-    if !crate::input::skylight::post_to_pid(pid as libc::pid_t, event_ptr, false) {
+-        event.post_to_pid(pid as libc::pid_t);
+-    }
+-    Ok(())
+-}
+-
+ fn modifier_flags(modifiers: &[&str]) -> CGEventFlags {
+     let mut flags = CGEventFlags::CGEventFlagNull;
+     for m in modifiers {
+--- a/libs/cua-driver/rust/crates/platform-macos/src/input/mod.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/input/mod.rs
+@@ -9,6 +9,8 @@
+ //!    the activity-monitor tickle required for live-input detection.
+ 
+ pub mod ax_actions;
++pub mod cancellation;
++pub mod target_guard;
+ pub mod interactive;
+ pub mod keyboard;
+ pub mod mouse;
+--- a/libs/cua-driver/rust/crates/platform-macos/src/input/mouse.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/input/mouse.rs
+@@ -70,6 +70,23 @@
+     click_at_xy_desktop_inner(x, y, count, button, modifiers, true)
+ }
+ 
++struct CursorRestoration(Option<CGPoint>);
++
++impl Drop for CursorRestoration {
++    fn drop(&mut self) {
++        if let Some(point) = self.0 {
++            let _ = warp_cursor(point);
++        }
++    }
++}
++
++fn warp_cursor(point: CGPoint) -> anyhow::Result<()> {
++    core_graphics::display::CGDisplay::warp_mouse_cursor_position(point)
++        .map_err(|error| anyhow::anyhow!("CGWarpMouseCursorPosition failed: {error:?}"))?;
++    unsafe { CGAssociateMouseAndMouseCursorPosition(true) };
++    Ok(())
++}
++
+ fn click_at_xy_desktop_inner(
+     x: f64,
+     y: f64,
+@@ -78,7 +95,6 @@
+     modifiers: &[&str],
+     preserve_cursor: bool,
+ ) -> anyhow::Result<()> {
+-    use core_graphics::display::CGDisplay;
+     use core_graphics::event::CGEventTapLocation;
+     let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+         .map_err(|_| anyhow::anyhow!("CGEventSource::new failed"))?;
+@@ -114,11 +130,11 @@
+     // cursor, and AppKit hit-tests some clicks against the actual cursor
+     // position, so without the warp the down/up can miss the target. Desktop
+     // scope is the foreground modality, so moving the visible cursor is expected.
+-    let _ = CGDisplay::warp_mouse_cursor_position(point);
+-    // Re-couple cursor + mouse-delta so the synthesized click hit-tests at the
+-    // warped point, not the pre-warp one.
+-    unsafe { CGAssociateMouseAndMouseCursorPosition(true) };
+-    std::thread::sleep(std::time::Duration::from_millis(40));
++    let restore = super::cancellation::gate().post(|| {
++        warp_cursor(point)?;
++        Ok::<_, anyhow::Error>(CursorRestoration(prior))
++    })??;
++    super::cancellation::gate().pause(std::time::Duration::from_millis(40))?;
+     let result = super::keyboard::with_global_modifier_keys(modifiers, |flags| {
+         for pair_index in 0..count.max(1) {
+             let down = CGEvent::new_mouse_event(source.clone(), down_ty, point, btn)
+@@ -128,8 +144,6 @@
+                 core_graphics::event::EventField::MOUSE_EVENT_CLICK_STATE,
+                 (pair_index + 1) as i64,
+             );
+-            down.post(CGEventTapLocation::HID);
+-            std::thread::sleep(std::time::Duration::from_millis(28));
+             let up = CGEvent::new_mouse_event(source.clone(), up_ty, point, btn)
+                 .map_err(|_| anyhow::anyhow!("CGEvent::new_mouse_event(up) failed"))?;
+             up.set_flags(flags);
+@@ -137,9 +151,22 @@
+                 core_graphics::event::EventField::MOUSE_EVENT_CLICK_STATE,
+                 (pair_index + 1) as i64,
+             );
+-            up.post(CGEventTapLocation::HID);
++
++            let held = super::cancellation::gate().press(
++                || {
++                    down.post(CGEventTapLocation::HID);
++                },
++                || {
++                    up.post(CGEventTapLocation::HID);
++                },
++            )?;
++
++            super::cancellation::gate().pause(std::time::Duration::from_millis(28))?;
++
++            drop(held);
++
+             if count > 1 {
+-                std::thread::sleep(std::time::Duration::from_millis(80));
++                super::cancellation::gate().pause(std::time::Duration::from_millis(80))?;
+             }
+         }
+         Ok(())
+@@ -147,21 +174,15 @@
+ 
+     // Let AppKit consume the up event before the pointer is restored. The
+     // exact foreground guard remains active around this entire helper.
+-    std::thread::sleep(std::time::Duration::from_millis(40));
+-    if let Some(prior) = prior {
+-        let _ = CGDisplay::warp_mouse_cursor_position(prior);
+-        unsafe { CGAssociateMouseAndMouseCursorPosition(true) };
+-    }
++    let _ = super::cancellation::gate().pause(std::time::Duration::from_millis(40));
++    drop(restore);
+     result
+ }
+ 
+ /// Move the real hardware cursor to a logical desktop point.
+ pub fn move_cursor_desktop(x: f64, y: f64) -> anyhow::Result<()> {
+-    use core_graphics::display::CGDisplay;
+     let point = CGPoint::new(x, y);
+-    CGDisplay::warp_mouse_cursor_position(point)
+-        .map_err(|error| anyhow::anyhow!("CGWarpMouseCursorPosition failed: {error:?}"))?;
+-    unsafe { CGAssociateMouseAndMouseCursorPosition(true) };
++    super::cancellation::gate().post(|| warp_cursor(point))??;
+     Ok(())
+ }
+ 
+@@ -178,7 +199,7 @@
+     use core_graphics::event::{CGEventTapLocation, ScrollEventUnit};
+ 
+     move_cursor_desktop(x, y)?;
+-    std::thread::sleep(std::time::Duration::from_millis(40));
++    super::cancellation::gate().pause(std::time::Duration::from_millis(40))?;
+     for _ in 0..ticks.max(1) {
+         // AppKit does not reliably consume synthetic LINE-unit events posted
+         // through the global HID queue. pynput's proven macOS desktop path uses
+@@ -201,8 +222,8 @@
+             return Err(anyhow::anyhow!("CGEventCreateScrollWheelEvent2 failed"));
+         }
+         let event = unsafe { CGEvent::from_ptr(event_ref) };
+-        event.post(CGEventTapLocation::HID);
+-        std::thread::sleep(std::time::Duration::from_millis(30));
++        super::cancellation::gate().post(|| event.post(CGEventTapLocation::HID))?;
++        super::cancellation::gate().pause(std::time::Duration::from_millis(30))?;
+     }
+     Ok(())
+ }
+@@ -283,7 +304,7 @@
+         // right point. Without it the synthetic mouseDown on a backgrounded
+         // AppKit control is silently ignored.
+         post_mouse_moved_primer(pid, &source, point, window_local, wid, click_group_id);
+-        std::thread::sleep(std::time::Duration::from_millis(12));
++        super::cancellation::gate().pause(std::time::Duration::from_millis(12))?;
+ 
+         for pair_index in 0..count {
+             let click_state = (pair_index + 1) as i64;
+@@ -299,21 +320,6 @@
+                 down.set_flags(flags);
+             }
+ 
+-            post_mouse_event(
+-                pid,
+-                &down,
+-                window_local,
+-                wid,
+-                click_group_id,
+-                click_state,
+-                0,
+-                3,
+-            );
+-            // 28 ms down→up gap: an NSButton's mouseDown enters a modal
+-            // tracking loop that polls for the matching mouseUp; too tight a
+-            // gap can race the loop's first poll and the click is dropped.
+-            std::thread::sleep(std::time::Duration::from_millis(28));
+-
+             let up = CGEvent::new_mouse_event(
+                 source.clone(),
+                 CGEventType::LeftMouseUp,
+@@ -325,19 +331,42 @@
+                 up.set_flags(flags);
+             }
+ 
+-            post_mouse_event(
+-                pid,
+-                &up,
+-                window_local,
+-                wid,
+-                click_group_id,
+-                click_state,
+-                0,
+-                3,
+-            );
++            let held = super::cancellation::gate().press(
++                || {
++                    post_mouse_event(
++                        pid,
++                        &down,
++                        window_local,
++                        wid,
++                        click_group_id,
++                        click_state,
++                        0,
++                        3,
++                    );
++                },
++                || {
++                    post_mouse_event(
++                        pid,
++                        &up,
++                        window_local,
++                        wid,
++                        click_group_id,
++                        click_state,
++                        0,
++                        3,
++                    );
++                },
++            )?;
+ 
++            // 28 ms down→up gap: an NSButton's mouseDown enters a modal
++            // tracking loop that polls for the matching mouseUp; too tight a
++            // gap can race the loop's first poll and the click is dropped.
++            super::cancellation::gate().pause(std::time::Duration::from_millis(28))?;
++
++            drop(held);
++
+             if count > 1 {
+-                std::thread::sleep(std::time::Duration::from_millis(80));
++                super::cancellation::gate().pause(std::time::Duration::from_millis(80))?;
+             }
+         }
+         Ok(())
+@@ -355,10 +384,23 @@
+ /// Returns whether the private focus-without-raise recipe succeeded. Event
+ /// posting remains best-effort when the private APIs are unavailable.
+ pub fn prepare_background_pixel_click(pid: i32, wid: u32) -> bool {
+-    let activated = crate::input::skylight::activate_without_raise(pid as libc::pid_t, wid);
++    let mut activated = false;
++    if super::cancellation::gate()
++        .post(|| {
++            activated = crate::input::skylight::activate_without_raise(pid as libc::pid_t, wid);
++        })
++        .is_err()
++    {
++        return false;
++    }
+     // Match Swift's settle interval so AppKit updates its active/key-window
+     // routing before the mouseMoved + primer + target stream arrives.
+-    std::thread::sleep(std::time::Duration::from_millis(50));
++    if super::cancellation::gate()
++        .pause(std::time::Duration::from_millis(50))
++        .is_err()
++    {
++        return false;
++    }
+     activated
+ }
+ 
+@@ -406,7 +448,7 @@
+     let win_local = (win_local_x, win_local_y);
+     let off_local = (-1.0_f64, -1.0_f64);
+     let flags = parse_modifier_flags(modifiers);
+-    let click_pairs = count.clamp(1, 2);
++    let click_pairs = count.clamp(1, 3);
+     let window_id = wid as i64;
+ 
+     // All 5 events share the same click-group ID so WindowServer / Chromium
+@@ -440,12 +482,7 @@
+         }
+     };
+ 
+-    // Belt+suspenders: SkyLight path for Chromium/Catalyst + public API for AppKit.
+-    let post = |event: &CGEvent| {
+-        let ptr = event.as_ptr() as *mut std::ffi::c_void;
+-        crate::input::skylight::post_to_pid(pid as libc::pid_t, ptr, false);
+-        event.post_to_pid(pid as libc::pid_t);
+-    };
++    let post = |event: &CGEvent| post_mouse_once(pid, event);
+ 
+     // Step 1: mouseMoved at target (phase=2, clickState=0).
+     let move_event = CGEvent::new_mouse_event(
+@@ -456,8 +493,8 @@
+     )
+     .map_err(|_| anyhow::anyhow!("mouseMoved event creation failed"))?;
+     stamp(&move_event, win_local, 0, 2);
+-    post(&move_event);
+-    std::thread::sleep(std::time::Duration::from_millis(15));
++    super::cancellation::gate().post(|| post(&move_event))?;
++    super::cancellation::gate().pause(std::time::Duration::from_millis(15))?;
+ 
+     // Step 2: off-screen primer click — opens Chromium user-activation gate
+     // at an off-screen coordinate that can't hit any DOM element.
+@@ -469,9 +506,6 @@
+     )
+     .map_err(|_| anyhow::anyhow!("primer down event creation failed"))?;
+     stamp(&primer_down, off_local, 1, 1);
+-    post(&primer_down);
+-    std::thread::sleep(std::time::Duration::from_millis(1));
+-
+     let primer_up = CGEvent::new_mouse_event(
+         source.clone(),
+         CGEventType::LeftMouseUp,
+@@ -480,9 +514,22 @@
+     )
+     .map_err(|_| anyhow::anyhow!("primer up event creation failed"))?;
+     stamp(&primer_up, off_local, 1, 2);
+-    post(&primer_up);
++
++    let held = super::cancellation::gate().press(
++        || {
++            post(&primer_down);
++        },
++        || {
++            post(&primer_up);
++        },
++    )?;
++
++    super::cancellation::gate().pause(std::time::Duration::from_millis(1))?;
++
++    drop(held);
++
+     // ≥1 frame so Chromium sees primer + target as separate gestures, not run-on.
+-    std::thread::sleep(std::time::Duration::from_millis(100));
++    super::cancellation::gate().pause(std::time::Duration::from_millis(100))?;
+ 
+     // Step 3: target click pair(s) with clickState stepped 1→N for double-click
+     // coalescing (Chromium renderer coalesces pairs into dblclick when state=1→2).
+@@ -497,9 +544,6 @@
+         )
+         .map_err(|_| anyhow::anyhow!("target down event creation failed"))?;
+         stamp(&down, win_local, click_state, 3);
+-        post(&down);
+-        std::thread::sleep(std::time::Duration::from_millis(1));
+-
+         let up = CGEvent::new_mouse_event(
+             source.clone(),
+             CGEventType::LeftMouseUp,
+@@ -508,12 +552,24 @@
+         )
+         .map_err(|_| anyhow::anyhow!("target up event creation failed"))?;
+         stamp(&up, win_local, click_state, 3);
+-        post(&up);
+ 
++        let held = super::cancellation::gate().press(
++            || {
++                post(&down);
++            },
++            || {
++                post(&up);
++            },
++        )?;
++
++        super::cancellation::gate().pause(std::time::Duration::from_millis(28))?;
++
++        drop(held);
++
+         if pair_index < click_pairs {
+             // ~80 ms between pairs — under the system double-click threshold,
+             // clear of coalescing back into pair N.
+-            std::thread::sleep(std::time::Duration::from_millis(80));
++            super::cancellation::gate().pause(std::time::Duration::from_millis(80))?;
+         }
+     }
+ 
+@@ -644,18 +700,50 @@
+     if flags != CGEventFlags::CGEventFlagNull {
+         down.set_flags(flags);
+     }
+-    post_mouse_event(
+-        pid,
+-        &down,
+-        from_local,
+-        wid,
+-        click_group_id,
+-        1,
+-        button_number,
+-        0,
+-    );
++    let to_pt = CGPoint::new(to_x, to_y);
++    let up = CGEvent::new_mouse_event(source.clone(), up_type, to_pt, cg_button)
++        .map_err(|_| anyhow::anyhow!("drag mouseUp failed"))?;
++    if flags != CGEventFlags::CGEventFlagNull {
++        up.set_flags(flags);
++    }
++
++    let release_local = std::cell::Cell::new(from_local);
++    set_event_position(&up, from_x, from_y);
++    let held = super::cancellation::gate().press(
++        || {
++            post_mouse_event(
++                pid,
++                &down,
++                from_local,
++                wid,
++                click_group_id,
++                1,
++                button_number,
++                0,
++            );
++        },
++        || {
++            post_mouse_event(
++                pid,
++                &up,
++                release_local.get(),
++                wid,
++                click_group_id,
++                1,
++                button_number,
++                0,
++            );
++            if foreground_release {
++                // A frontmost Chromium surface can consume PID-routed down/move
++                // events yet filter the synthetic release. Re-post only the release
++                // through the HID tap while the foreground assist still holds focus.
++                up.post(CGEventTapLocation::HID);
++            }
++        },
++    )?;
++
+     observe(from_x, from_y);
+-    std::thread::sleep(std::time::Duration::from_millis(16));
++    super::cancellation::gate().pause(std::time::Duration::from_millis(16))?;
+ 
+     // Interpolated drag steps.
+     for i in 1..=steps {
+@@ -671,35 +759,29 @@
+         if flags != CGEventFlags::CGEventFlagNull {
+             drag.set_flags(flags);
+         }
+-        post_mouse_event(pid, &drag, il, wid, click_group_id, 1, button_number, 0);
++        super::cancellation::gate().post(|| {
++            set_event_position(&up, ix, iy);
++            release_local.set(il);
++            post_mouse_event(pid, &drag, il, wid, click_group_id, 1, button_number, 0);
++        })?;
+         observe(ix, iy);
+         if step_delay_ms > 0 {
+-            std::thread::sleep(std::time::Duration::from_millis(step_delay_ms));
++            super::cancellation::gate().pause(std::time::Duration::from_millis(step_delay_ms))?;
+         }
+     }
+ 
+     // MouseUp at end.
+     // Give Chromium one run-loop turn to process the final dragged event at
+     // the drop point before releasing pointer capture.
+-    std::thread::sleep(std::time::Duration::from_millis(50));
+-    let to_pt = CGPoint::new(to_x, to_y);
+-    let up = CGEvent::new_mouse_event(source.clone(), up_type, to_pt, cg_button)
+-        .map_err(|_| anyhow::anyhow!("drag mouseUp failed"))?;
+-    if flags != CGEventFlags::CGEventFlagNull {
+-        up.set_flags(flags);
+-    }
+-    post_mouse_event(pid, &up, to_local, wid, click_group_id, 1, button_number, 0);
+-    if foreground_release {
+-        // A frontmost Chromium surface can consume PID-routed down/move
+-        // events yet filter the synthetic release. Re-post only the release
+-        // through the HID tap while the foreground assist still holds focus.
+-        up.post(CGEventTapLocation::HID);
+-    }
++    super::cancellation::gate().pause(std::time::Duration::from_millis(50))?;
++
++    drop(held);
++
+     // Chromium may process the final pointerup on the next run-loop turn. In
+     // the foreground rung the caller restores the previous app immediately
+     // after this function returns, so let the target consume the release and
+     // complete pointer capture before that restore.
+-    std::thread::sleep(std::time::Duration::from_millis(100));
++    super::cancellation::gate().pause(std::time::Duration::from_millis(100))?;
+ 
+     Ok(())
+ }
+@@ -755,7 +837,6 @@
+ where
+     F: FnMut(f64, f64),
+ {
+-    use core_graphics::display::CGDisplay;
+     use core_graphics::event::CGEventTapLocation;
+ 
+     let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+@@ -793,10 +874,9 @@
+     // Keep WindowServer's hardware cursor and event stream coupled. AppKit
+     // hit-tests some pointer-capture surfaces against the actual cursor even
+     // when the HID event carries an explicit location.
+-    let _ = CGDisplay::warp_mouse_cursor_position(CGPoint::new(from_x, from_y));
+-    unsafe { CGAssociateMouseAndMouseCursorPosition(true) };
++    super::cancellation::gate().post(|| warp_cursor(CGPoint::new(from_x, from_y)))??;
+     observe(from_x, from_y);
+-    std::thread::sleep(std::time::Duration::from_millis(40));
++    super::cancellation::gate().pause(std::time::Duration::from_millis(40))?;
+ 
+     // Prime the renderer's tracking state with a genuine HID mouse move.
+     if let Ok(move_event) = CGEvent::new_mouse_event(
+@@ -805,9 +885,9 @@
+         CGPoint::new(from_x, from_y),
+         cg_button,
+     ) {
+-        post(&move_event);
++        super::cancellation::gate().post(|| post(&move_event))?;
+     }
+-    std::thread::sleep(std::time::Duration::from_millis(30));
++    super::cancellation::gate().pause(std::time::Duration::from_millis(30))?;
+ 
+     let down = CGEvent::new_mouse_event(
+         source.clone(),
+@@ -820,9 +900,25 @@
+         down.set_flags(flags);
+     }
+     down.set_integer_value_field(core_graphics::event::EventField::MOUSE_EVENT_CLICK_STATE, 1);
+-    down.post(CGEventTapLocation::HID);
+-    std::thread::sleep(std::time::Duration::from_millis(16));
++    let up = CGEvent::new_mouse_event(source.clone(), up_type, CGPoint::new(to_x, to_y), cg_button)
++        .map_err(|_| anyhow::anyhow!("foreground drag mouseUp failed"))?;
++    if flags != CGEventFlags::CGEventFlagNull {
++        up.set_flags(flags);
++    }
++    up.set_integer_value_field(core_graphics::event::EventField::MOUSE_EVENT_CLICK_STATE, 1);
++
++    set_event_position(&up, from_x, from_y);
++    let held = super::cancellation::gate().press(
++        || {
++            down.post(CGEventTapLocation::HID);
++        },
++        || {
++            post(&up);
++        },
++    )?;
+ 
++    super::cancellation::gate().pause(std::time::Duration::from_millis(16))?;
++
+     for i in 1..=steps {
+         let t = i as f64 / steps as f64;
+         let x = from_x + (to_x - from_x) * t;
+@@ -834,24 +930,22 @@
+             event.set_flags(flags);
+         }
+         event.set_integer_value_field(core_graphics::event::EventField::MOUSE_EVENT_CLICK_STATE, 1);
+-        post(&event);
++        super::cancellation::gate().post(|| {
++            set_event_position(&up, x, y);
++            post(&event);
++        })?;
+         observe(x, y);
+         if step_delay_ms > 0 {
+-            std::thread::sleep(std::time::Duration::from_millis(step_delay_ms));
++            super::cancellation::gate().pause(std::time::Duration::from_millis(step_delay_ms))?;
+         }
+     }
+ 
+-    let up = CGEvent::new_mouse_event(source, up_type, CGPoint::new(to_x, to_y), cg_button)
+-        .map_err(|_| anyhow::anyhow!("foreground drag mouseUp failed"))?;
+-    if flags != CGEventFlags::CGEventFlagNull {
+-        up.set_flags(flags);
+-    }
+-    up.set_integer_value_field(core_graphics::event::EventField::MOUSE_EVENT_CLICK_STATE, 1);
+-    post(&up);
++    drop(held);
++
+     // The foreground wrapper restores the previous app immediately after this
+     // function returns. Let the target's run loop consume the queued HID
+     // gesture, including pointer-capture release, before that restore happens.
+-    std::thread::sleep(std::time::Duration::from_millis(100));
++    super::cancellation::gate().pause(std::time::Duration::from_millis(100))?;
+     Ok(())
+ }
+ 
+@@ -907,9 +1001,6 @@
+     if flags != CGEventFlags::CGEventFlagNull {
+         down.set_flags(flags);
+     }
+-    post_mouse_event(pid, &down, window_local, None, None, 1, 2, 3);
+-    std::thread::sleep(std::time::Duration::from_millis(16));
+-
+     let up = CGEvent::new_mouse_event(
+         source,
+         CGEventType::OtherMouseUp,
+@@ -920,8 +1011,20 @@
+     if flags != CGEventFlags::CGEventFlagNull {
+         up.set_flags(flags);
+     }
+-    post_mouse_event(pid, &up, window_local, None, None, 1, 2, 3);
+ 
++    let held = super::cancellation::gate().press(
++        || {
++            post_mouse_event(pid, &down, window_local, None, None, 1, 2, 3);
++        },
++        || {
++            post_mouse_event(pid, &up, window_local, None, None, 1, 2, 3);
++        },
++    )?;
++
++    super::cancellation::gate().pause(std::time::Duration::from_millis(16))?;
++
++    drop(held);
++
+     Ok(())
+ }
+ 
+@@ -976,7 +1079,7 @@
+     // Prime cursor-tracking state at the target so AppKit hit-tests the
+     // right-down at the right NSView (same rationale as the left path).
+     post_mouse_moved_primer(pid, &source, point, window_local, wid, click_group_id);
+-    std::thread::sleep(std::time::Duration::from_millis(12));
++    super::cancellation::gate().pause(std::time::Duration::from_millis(12))?;
+ 
+     let down = CGEvent::new_mouse_event(
+         source.clone(),
+@@ -990,9 +1093,6 @@
+     }
+     // button_number = 1 (right). Stamping 0 here routes the event as a left
+     // button-number on the receiving side even though the type is rightMouseDown.
+-    post_mouse_event(pid, &down, window_local, wid, click_group_id, 1, 1, 3);
+-    std::thread::sleep(std::time::Duration::from_millis(28));
+-
+     let up = CGEvent::new_mouse_event(
+         source,
+         CGEventType::RightMouseUp,
+@@ -1003,20 +1103,29 @@
+     if flags != CGEventFlags::CGEventFlagNull {
+         up.set_flags(flags);
+     }
+-    post_mouse_event(pid, &up, window_local, wid, click_group_id, 1, 1, 3);
++
++    let held = super::cancellation::gate().press(
++        || {
++            post_mouse_event(pid, &down, window_local, wid, click_group_id, 1, 1, 3);
++        },
++        || {
++            post_mouse_event(pid, &up, window_local, wid, click_group_id, 1, 1, 3);
++        },
++    )?;
+ 
++    super::cancellation::gate().pause(std::time::Duration::from_millis(28))?;
++
++    drop(held);
++
+     Ok(())
+ }
+ 
+ /// Post a mouse event to `pid`.
+ ///
+-/// Matches Swift's `MouseInput.postBoth(_:toPid:)`:
+-/// - Fires `SLEventPostToPid` (SkyLight path — reaches backgrounded Chromium/Catalyst).
+-/// - Also fires `CGEvent::post_to_pid` (public path — lands on AppKit targets where
+-///   SkyLight mouse delivery drops).
++/// Submit once through the resolved native PID queue. Posting through both
++/// SkyLight and CoreGraphics delivers duplicate down/up events. The public
++/// queue is used only when the private symbol is absent and nothing was sent.
+ ///
+-/// Both are always posted in sequence regardless of whether the other succeeded.
+-///
+ /// Field stamps applied (always):
+ /// - f40 = `pid`  (Chromium's synthetic-event filter)
+ /// - `CGEventSetWindowLocation` = window-local point (if provided)
+@@ -1070,13 +1179,14 @@
+     // Always stamp f40 = target pid (Chromium synthetic-event filter).
+     crate::input::skylight::set_integer_field(event_ptr, 40, pid as i64);
+ 
+-    // SkyLight path: activity-monitor tickle → reaches Catalyst/Chromium.
+-    // Mouse events skip the auth-message envelope (Swift: attachAuthMessage: false).
+-    crate::input::skylight::post_to_pid(pid as libc::pid_t, event_ptr, false);
++    post_mouse_once(pid, event);
++}
+ 
+-    // Public path: delivers to AppKit targets where SkyLight mouse drops.
+-    // Belt+suspenders — both fire unconditionally (matches Swift `postBoth`).
+-    event.post_to_pid(pid as libc::pid_t);
++fn post_mouse_once(pid: i32, event: &CGEvent) {
++    let event_ptr = event.as_ptr() as *mut std::ffi::c_void;
++    if !crate::input::skylight::post_to_pid(pid as libc::pid_t, event_ptr, false) {
++        event.post_to_pid(pid as libc::pid_t);
++    }
+ }
+ 
+ /// Post a stamped `mouseMoved` to `pid` at `point` before a down/up pair.
+@@ -1104,7 +1214,9 @@
+         point,
+         CGMouseButton::Left,
+     ) {
+-        post_mouse_event(pid, &mv, window_local, wid, click_group_id, 0, 0, 3);
++        let _ = super::cancellation::gate().post(|| {
++            post_mouse_event(pid, &mv, window_local, wid, click_group_id, 0, 0, 3);
++        });
+     }
+ }
+ 
+@@ -1171,7 +1283,7 @@
+                 .subsec_nanos() as i64,
+         ),
+     );
+-    std::thread::sleep(std::time::Duration::from_millis(12));
++    super::cancellation::gate().pause(std::time::Duration::from_millis(12))?;
+ 
+     for _ in 0..ticks.max(1) {
+         // Fresh source per event, matching the click primitives.
+@@ -1210,10 +1322,9 @@
+ 
+         // Belt+suspenders post: SkyLight reaches backgrounded Chromium/Catalyst;
+         // the public path lands on AppKit/WKWebView. Mouse-class → no auth envelope.
+-        crate::input::skylight::post_to_pid(pid as libc::pid_t, event_ptr, false);
+-        event.post_to_pid(pid as libc::pid_t);
++        super::cancellation::gate().post(|| post_mouse_once(pid, &event))?;
+ 
+-        std::thread::sleep(std::time::Duration::from_millis(30));
++        super::cancellation::gate().pause(std::time::Duration::from_millis(30))?;
+     }
+     Ok(())
+ }
+@@ -1241,3 +1352,7 @@
+     }
+     flags
+ }
++
++fn set_event_position(event: &CGEvent, x: f64, y: f64) {
++    unsafe { CGEventSetLocation(event.as_ptr().cast(), x, y) };
++}
+--- a/libs/cua-driver/rust/crates/platform-macos/src/input/skylight.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/input/skylight.rs
+@@ -612,7 +612,9 @@
+ 
+     // kCPSNoWindows = 0x400. Supplying the exact target window still makes
+     // that window's process frontmost while avoiding a broad all-window raise.
+-    unsafe { set_front(target_psn.as_ptr() as *const c_void, target_wid, 0x400) == 0 }
++    super::cancellation::gate()
++        .post(|| unsafe { set_front(target_psn.as_ptr() as *const c_void, target_wid, 0x400) == 0 })
++        .unwrap_or(false)
+ }
+ 
+ fn make_key_window_record(window_id: u32, event_kind: u8) -> [u8; 0xF8] {
+@@ -648,16 +650,36 @@
+ 
+     // kCPSUserGenerated = 0x200. Unlike kCPSNoWindows, this permits AppKit to
+     // establish the requested native key window before it validates NSMenu.
+-    if unsafe { set_front(target_psn.as_ptr() as *const c_void, target_wid, 0x200) } != 0 {
++    if !super::cancellation::gate()
++        .post(|| unsafe { set_front(target_psn.as_ptr() as *const c_void, target_wid, 0x200) == 0 })
++        .unwrap_or(false)
++    {
+         return false;
+     }
+     for event_kind in [0x01, 0x02] {
+         let record = make_key_window_record(target_wid, event_kind);
+-        if unsafe { post(target_psn.as_ptr() as *const c_void, record.as_ptr()) } != 0 {
++        if !super::cancellation::gate()
++            .post(|| unsafe { post(target_psn.as_ptr() as *const c_void, record.as_ptr()) == 0 })
++            .unwrap_or(false)
++        {
+             return false;
+         }
+     }
+     true
++}
++
++/// Restore focus on success, error and unwind without re-entering admission.
++fn with_restoration<T>(restore: impl FnOnce(), body: impl FnOnce() -> T) -> T {
++    struct Restore<F: FnOnce()>(Option<F>);
++    impl<F: FnOnce()> Drop for Restore<F> {
++        fn drop(&mut self) {
++            if let Some(restore) = self.0.take() {
++                restore();
++            }
++        }
++    }
++    let _restore = Restore(Some(restore));
++    body()
+ }
+ 
+ /// Tool-agnostic foreground-assist: briefly front `window_id`, wait for the
+@@ -700,6 +722,7 @@
+         Some(f) => f,
+         None => {
+             // SPIs unavailable — run body anyway without activation.
++            super::cancellation::gate().check_target()?;
+             body()?;
+             return Ok(false);
+         }
+@@ -712,26 +735,28 @@
+ 
+     let mut target_psn = [0u8; 8];
+     if !get_process_psn_for_window(target_wid, target_pid, &mut target_psn) {
++        super::cancellation::gate().check_target()?;
+         body()?;
+         return Ok(false);
+     }
+ 
+-    unsafe { set_front(target_psn.as_ptr() as *const c_void, target_wid, 0x400) };
+-    // `set_front` moves WindowServer's front process but does not make the
+-    // target's NSWindow key, and AppKit installs a first responder only for a
+-    // key window. Without this the app is "frontmost" to WindowServer while
+-    // remaining, from AppKit's point of view, unfocused — so the AXFocused
+-    // write in the body has no responder chain to attach to.
+-    make_exact_window_key(target_pid, target_wid);
+-    await_window_focused(target_pid, target_wid);
+-
+-    let result = body();
+-
+-    if prev_ok {
+-        unsafe { set_front(prev_psn.as_ptr() as *const c_void, 0, 0x400) };
+-    }
+-
+-    result?;
++    super::cancellation::gate()
++        .post(|| unsafe { set_front(target_psn.as_ptr() as *const c_void, target_wid, 0x400) })?;
++    // Once activation was submitted, every exit restores the previous process.
++    // Target invalidation stops new actuation but must not block cleanup.
++    with_restoration(
++        || {
++            if prev_ok {
++                unsafe { set_front(prev_psn.as_ptr() as *const c_void, 0, 0x400) };
++            }
++        },
++        || {
++            make_exact_window_key(target_pid, target_wid);
++            await_window_focused(target_pid, target_wid)?;
++            super::cancellation::gate().check_target()?;
++            body()
++        },
++    )?;
+     Ok(true)
+ }
+ 
+@@ -760,16 +785,17 @@
+ /// A `false` return is not fatal: the caller proceeds with delivery regardless,
+ /// because a target that never reports focus is exactly the case the pre-existing
+ /// best-effort contract already covered.
+-fn await_window_focused(pid: libc::pid_t, window_id: u32) -> bool {
++fn await_window_focused(pid: libc::pid_t, window_id: u32) -> anyhow::Result<bool> {
+     let deadline = std::time::Instant::now() + ACTIVATION_WAIT_TIMEOUT;
+     loop {
++        super::cancellation::gate().check_target()?;
+         if crate::ax::bindings::focused_window_id_of_pid(pid) == Some(window_id) {
+-            return true;
++            return Ok(true);
+         }
+         if std::time::Instant::now() >= deadline {
+-            return false;
++            return Ok(false);
+         }
+-        std::thread::sleep(ACTIVATION_POLL_INTERVAL);
++        super::cancellation::gate().pause(ACTIVATION_POLL_INTERVAL)?;
+     }
+ }
+ 
+@@ -806,30 +832,35 @@
+         // renderer focus even though WindowServer keeps the app frontmost.
+         // The AX window proof lets us deliver directly without weakening the
+         // exact-window guard or disturbing the current key target.
++        super::cancellation::gate().check_target()?;
+         return action();
+     }
+ 
+-    let activated = unsafe { set_front(target_psn.as_ptr() as *const c_void, target_wid, 0x400) };
+-    if activated != 0 {
+-        anyhow::bail!("WindowServer rejected foreground HID activation");
+-    }
+-
+-    make_exact_window_key(target_pid, target_wid);
+-    if !await_window_focused(target_pid, target_wid) {
+-        if prev_ok {
+-            unsafe { set_front(prev_psn.as_ptr() as *const c_void, 0, 0x400) };
+-        }
+-        anyhow::bail!("exact target window did not become focused for foreground HID delivery");
+-    }
+-
+-    let result = action();
+-    std::thread::sleep(std::time::Duration::from_millis(40));
+-
+-    if prev_ok {
+-        unsafe { set_front(prev_psn.as_ptr() as *const c_void, 0, 0x400) };
+-    }
+-
+-    result
++    let activated = super::cancellation::gate()
++        .post(|| unsafe { set_front(target_psn.as_ptr() as *const c_void, target_wid, 0x400) })?;
++    with_restoration(
++        || {
++            if prev_ok {
++                unsafe { set_front(prev_psn.as_ptr() as *const c_void, 0, 0x400) };
++            }
++        },
++        || {
++            if activated != 0 {
++                anyhow::bail!("WindowServer rejected foreground HID activation");
++            }
++            make_exact_window_key(target_pid, target_wid);
++            if !await_window_focused(target_pid, target_wid)? {
++                anyhow::bail!(
++                    "exact target window did not become focused for foreground HID delivery"
++                );
++            }
++            super::cancellation::gate().check_target()?;
++            let result = action();
++            // Settling and restoring are cleanup; neither is target admission.
++            std::thread::sleep(std::time::Duration::from_millis(40));
++            result
++        },
++    )
+ }
+ 
+ fn preserves_exact_existing_focus(
+@@ -861,6 +892,7 @@
+         Some(f) => f,
+         None => {
+             // SPIs unavailable — run action anyway without activation.
++            super::cancellation::gate().check_target()?;
+             action()?;
+             return Ok(false);
+         }
+@@ -876,30 +908,53 @@
+     let mut target_psn = [0u8; 8];
+     let target_ok = get_process_psn_for_window(target_wid, target_pid, &mut target_psn);
+     if !target_ok {
++        super::cancellation::gate().check_target()?;
+         action()?;
+         return Ok(false);
+     }
+ 
+     // Make target WindowServer-frontmost (kCPSNoWindows = 0x400).
+-    unsafe { set_front(target_psn.as_ptr() as *const c_void, target_wid, 0x400) };
++    super::cancellation::gate()
++        .post(|| unsafe { set_front(target_psn.as_ptr() as *const c_void, target_wid, 0x400) })?;
+ 
+-    // Run action then restore — even if action fails.
+-    let result = action();
+-
+-    // Restore prior frontmost (windowID=0, options=0x400).
+-    if prev_ok {
+-        unsafe { set_front(prev_psn.as_ptr() as *const c_void, 0, 0x400) };
+-    }
+-
+-    result?;
++    // Restore even if a Space change invalidates the target before the action.
++    with_restoration(
++        || {
++            if prev_ok {
++                unsafe { set_front(prev_psn.as_ptr() as *const c_void, 0, 0x400) };
++            }
++        },
++        || {
++            super::cancellation::gate()
++                .check_target()
++                .and_then(|()| action())
++        },
++    )?;
+     Ok(true)
+ }
+ 
+ #[cfg(test)]
+ mod tests {
+-    use super::{make_key_window_record, preserves_exact_existing_focus};
++    use super::{make_key_window_record, preserves_exact_existing_focus, with_restoration};
+ 
+     #[test]
++    fn foreground_restoration_runs_on_success_failure_and_unwind() {
++        use std::cell::Cell;
++        let restores = Cell::new(0);
++        let restore = || restores.set(restores.get() + 1);
++        assert_eq!(with_restoration(restore, || Ok::<_, &str>(7)), Ok(7));
++        assert_eq!(
++            with_restoration(restore, || Err::<(), _>("target invalidated")),
++            Err("target invalidated")
++        );
++        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++            with_restoration(restore, || panic!("action unwound"));
++        }));
++        assert!(unwind.is_err());
++        assert_eq!(restores.get(), 3);
++    }
++
++    #[test]
+     fn make_key_records_address_only_the_exact_window() {
+         let press = make_key_window_record(0x7856_3412, 0x01);
+         let release = make_key_window_record(0x7856_3412, 0x02);
+--- /dev/null
++++ b/libs/cua-driver/rust/crates/platform-macos/src/input/target_guard.rs
+@@ -0,0 +1,329 @@
++//! Read-only, exact-window input admission. A Space change invalidates only the
++//! current action; held releases and the generation's cleanup barrier survive.
++
++use crate::windows::{WindowBounds, WindowInfo};
++use cua_driver_core::protocol::ToolResult;
++use serde::Deserialize;
++use serde_json::{json, Value};
++use std::sync::{
++    atomic::{AtomicU64, Ordering},
++    Once,
++};
++
++static SPACE_EPOCH: AtomicU64 = AtomicU64::new(0);
++
++#[derive(Clone, Debug, Deserialize)]
++#[serde(deny_unknown_fields)]
++pub struct ExpectedBounds {
++    x: f64,
++    y: f64,
++    width: f64,
++    height: f64,
++}
++impl ExpectedBounds {
++    fn valid(&self) -> bool {
++        [self.x, self.y, self.width, self.height]
++            .iter()
++            .all(|v| v.is_finite())
++            && self.width > 0.0
++            && self.height > 0.0
++    }
++    fn matches(&self, actual: &WindowBounds) -> bool {
++        self.x == actual.x
++            && self.y == actual.y
++            && self.width == actual.width
++            && self.height == actual.height
++    }
++}
++
++#[derive(Clone, Debug)]
++pub struct TargetRefusal {
++    pub code: &'static str,
++    pub reason: String,
++    pub pid: i32,
++    pub window_id: u32,
++}
++impl TargetRefusal {
++    fn new(code: &'static str, reason: impl Into<String>, pid: i32, window_id: u32) -> Self {
++        Self {
++            code,
++            reason: reason.into(),
++            pid,
++            window_id,
++        }
++    }
++    pub fn tool_result(&self) -> ToolResult {
++        ToolResult::error(format!(
++            "Input target refused ({}): {}",
++            self.code, self.reason
++        ))
++        .with_structured(json!({"ready":false,"effect":"refused","code":self.code,
++                "reason":self.reason,"pid":self.pid,"window_id":self.window_id}))
++    }
++}
++impl std::fmt::Display for TargetRefusal {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        write!(f, "{}: {}", self.code, self.reason)
++    }
++}
++impl std::error::Error for TargetRefusal {}
++
++#[derive(Clone, Debug)]
++pub struct InputTarget {
++    pub pid: i32,
++    pub window_id: u32,
++    expected: Option<ExpectedBounds>,
++    space_epoch: u64,
++    current_space: Option<u64>,
++}
++impl InputTarget {
++    fn parse(args: &Value) -> Result<Self, TargetRefusal> {
++        let pid = args
++            .get("pid")
++            .and_then(Value::as_i64)
++            .and_then(|pid| i32::try_from(pid).ok())
++            .filter(|pid| *pid > 0);
++        let window_id = args
++            .get("window_id")
++            .and_then(Value::as_u64)
++            .and_then(|wid| u32::try_from(wid).ok())
++            .filter(|wid| *wid > 0);
++        let (pid, window_id) = match (pid, window_id) {
++            (Some(pid), Some(wid)) => (pid, wid),
++            _ => {
++                return Err(TargetRefusal::new(
++                    "stale_target",
++                    "An exact positive pid and window_id are required.",
++                    pid.unwrap_or(0),
++                    window_id.unwrap_or(0),
++                ))
++            }
++        };
++        let expected = args.get("expected_window_bounds").map(|value| {
++            serde_json::from_value::<ExpectedBounds>(value.clone()).ok()
++                .filter(ExpectedBounds::valid).ok_or_else(|| TargetRefusal::new(
++                    "stale_geometry", "expected_window_bounds must contain finite x/y and positive width/height.", pid, window_id))
++        }).transpose()?;
++        Ok(Self {
++            pid,
++            window_id,
++            expected,
++            space_epoch: SPACE_EPOCH.load(Ordering::Acquire),
++            current_space: None,
++        })
++    }
++
++    pub fn prepare(args: &Value) -> Result<Self, TargetRefusal> {
++        install_space_observer();
++        let mut target = Self::parse(args)?;
++        let window = current_window(target.window_id);
++        target.verify_snapshot(window.as_ref(), SPACE_EPOCH.load(Ordering::Acquire))?;
++        target.current_space = window.and_then(|window| window.current_space_id);
++        Ok(target)
++    }
++
++    pub fn verify(&self) -> Result<(), TargetRefusal> {
++        self.verify_snapshot(
++            current_window(self.window_id).as_ref(),
++            SPACE_EPOCH.load(Ordering::Acquire),
++        )
++    }
++
++    fn verify_snapshot(
++        &self,
++        window: Option<&WindowInfo>,
++        epoch: u64,
++    ) -> Result<(), TargetRefusal> {
++        let refuse = |code, reason| TargetRefusal::new(code, reason, self.pid, self.window_id);
++        if epoch != self.space_epoch {
++            return Err(refuse("target_not_on_active_space", "The active Space changed during this action; observe the target before continuing."));
++        }
++        let Some(window) =
++            window.filter(|window| window.pid == self.pid && window.window_id == self.window_id)
++        else {
++            return Err(refuse(
++                "stale_target",
++                "The exact window closed or changed owner.",
++            ));
++        };
++        if window.on_current_space == Some(false) {
++            return Err(refuse(
++                "target_not_on_active_space",
++                "The target window is on another Space.",
++            ));
++        }
++        if !window.is_on_screen || window.bounds.width <= 0.0 || window.bounds.height <= 0.0 {
++            return Err(refuse(
++                "input_target_unavailable",
++                "The target window is hidden, minimized or unavailable for input.",
++            ));
++        }
++        if let Some(space) = self.current_space {
++            if window.current_space_id != Some(space) {
++                return Err(refuse(
++                    "target_not_on_active_space",
++                    "The target display's active Space changed during this action.",
++                ));
++            }
++        }
++        if self
++            .expected
++            .as_ref()
++            .is_some_and(|expected| !expected.matches(&window.bounds))
++        {
++            return Err(refuse(
++                "stale_geometry",
++                "The target bounds differ from the observed coordinate frame.",
++            ));
++        }
++        Ok(())
++    }
++}
++
++fn current_window(window_id: u32) -> Option<WindowInfo> {
++    // kCGWindowListOptionIncludingWindow obtains only this window's metadata;
++    // no capture, AX mutation, activation or full-desktop enumeration is needed.
++    crate::windows::input_window_info_by_id(window_id)
++}
++
++pub fn readiness(args: &Value) -> ToolResult {
++    match InputTarget::prepare(args) {
++        Ok(target) => ToolResult::text("The exact window is ready for input on the current Space.")
++            .with_structured(json!({"ready":true,"pid":target.pid,"window_id":target.window_id})),
++        Err(refusal) => refusal.tool_result(),
++    }
++}
++
++fn install_space_observer() {
++    static ONCE: Once = Once::new();
++    ONCE.call_once(|| {
++        use block2::RcBlock;
++        use objc2_app_kit::{NSWorkspace, NSWorkspaceActiveSpaceDidChangeNotification};
++        use objc2_foundation::{NSNotification, NSOperationQueue};
++        use std::ptr::NonNull;
++        let workspace = unsafe { NSWorkspace::sharedWorkspace() };
++        let center = unsafe { workspace.notificationCenter() };
++        let queue = unsafe { NSOperationQueue::new() };
++        unsafe { queue.setMaxConcurrentOperationCount(1) };
++        let block = RcBlock::new(|_: NonNull<NSNotification>| {
++            SPACE_EPOCH.fetch_add(1, Ordering::AcqRel);
++            super::cancellation::gate().target_space_changed();
++        });
++        let token = unsafe {
++            center.addObserverForName_object_queue_usingBlock(
++                Some(NSWorkspaceActiveSpaceDidChangeNotification),
++                None,
++                Some(&queue),
++                &block,
++            )
++        };
++        // Process-lifetime observer, matching the existing activation observer.
++        std::mem::forget(token);
++        std::mem::forget(queue);
++    });
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    fn window() -> WindowInfo {
++        WindowInfo {
++            window_id: 7,
++            pid: 42,
++            app_name: "fixture".into(),
++            title: "fixture".into(),
++            bounds: WindowBounds {
++                x: -500.0,
++                y: 30.0,
++                width: 400.0,
++                height: 300.0,
++            },
++            layer: 0,
++            z_index: 0,
++            is_on_screen: true,
++            current_space_id: Some(9),
++            on_current_space: Some(true),
++            space_ids: Some(vec![9]),
++        }
++    }
++    fn target() -> InputTarget {
++        let mut target = InputTarget::parse(&json!({"pid":42,"window_id":7,"expected_window_bounds":{"x":-500,"y":30,"width":400,"height":300}})).unwrap();
++        target.space_epoch = 4;
++        target.current_space = Some(9);
++        target
++    }
++    #[test]
++    fn exact_identity_and_frame_are_required_before_input() {
++        let target = target();
++        let mut actual = window();
++        assert!(target.verify_snapshot(Some(&actual), 4).is_ok());
++        actual.pid = 43;
++        assert_eq!(
++            target.verify_snapshot(Some(&actual), 4).unwrap_err().code,
++            "stale_target"
++        );
++        actual = window();
++        actual.bounds.x += 1.0;
++        assert_eq!(
++            target.verify_snapshot(Some(&actual), 4).unwrap_err().code,
++            "stale_geometry"
++        );
++        assert_eq!(
++            target.verify_snapshot(None, 4).unwrap_err().code,
++            "stale_target"
++        );
++    }
++    #[test]
++    fn space_epoch_invalidates_even_if_the_window_returns_to_the_same_space() {
++        let target = target();
++        let actual = window();
++        assert_eq!(
++            target.verify_snapshot(Some(&actual), 5).unwrap_err().code,
++            "target_not_on_active_space"
++        );
++        let mut next = target.clone();
++        next.space_epoch = 5;
++        assert!(next.verify_snapshot(Some(&actual), 5).is_ok());
++    }
++    #[test]
++    fn fresh_space_visibility_and_display_membership_are_checked() {
++        let target = target();
++        let mut actual = window();
++        actual.on_current_space = Some(false);
++        assert_eq!(
++            target.verify_snapshot(Some(&actual), 4).unwrap_err().code,
++            "target_not_on_active_space"
++        );
++        actual = window();
++        actual.is_on_screen = false;
++        assert_eq!(
++            target.verify_snapshot(Some(&actual), 4).unwrap_err().code,
++            "input_target_unavailable"
++        );
++        actual = window();
++        actual.current_space_id = Some(10);
++        assert_eq!(
++            target.verify_snapshot(Some(&actual), 4).unwrap_err().code,
++            "target_not_on_active_space"
++        );
++    }
++    #[test]
++    fn malformed_bounds_and_ambiguous_identity_fail_closed() {
++        for args in [
++            json!({"pid":42}),
++            json!({"pid":-1,"window_id":7}),
++            json!({"pid":42,"window_id":0}),
++        ] {
++            assert_eq!(InputTarget::parse(&args).unwrap_err().code, "stale_target");
++        }
++        let args = json!({"pid":42,"window_id":7,"expected_window_bounds":{"x":0,"y":0,"width":0,"height":50}});
++        assert_eq!(
++            InputTarget::parse(&args).unwrap_err().code,
++            "stale_geometry"
++        );
++        let refused = target().verify_snapshot(None, 4).unwrap_err().tool_result();
++        let value = serde_json::to_value(refused).unwrap();
++        assert_eq!(value["structuredContent"]["effect"], "refused");
++        assert_eq!(value["structuredContent"]["ready"], false);
++    }
++}
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/bring_to_front.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/bring_to_front.rs
+@@ -161,11 +161,11 @@
+ 
+ /// Best-effort completion of the one exact-window request. This addresses only
+ /// the requested AX window; it never orders every window owned by the process.
+-fn raise_exact_ax_window(pid: i32, window_id: u32) -> bool {
++fn raise_exact_ax_window(pid: i32, window_id: u32) -> anyhow::Result<bool> {
+     unsafe {
+         let app = AXUIElementCreateApplication(pid);
+         if app.is_null() {
+-            return false;
++            return Ok(false);
+         }
+         let mut target = None;
+         for window in copy_ax_windows(app) {
+@@ -177,13 +177,17 @@
+         }
+         CFRelease(app as CFTypeRef);
+         let Some(target) = target else {
+-            return false;
++            return Ok(false);
+         };
+-        let raised = perform_action(target, "AXRaise") == 0;
+-        let main = set_bool_attr_true(target, "AXMain") == 0;
+-        let focused = set_bool_attr_true(target, "AXFocused") == 0;
++        let result = (|| {
++            let gate = crate::input::cancellation::gate();
++            let raised = gate.post(|| perform_action(target, "AXRaise") == 0)?;
++            let main = gate.post(|| set_bool_attr_true(target, "AXMain") == 0)?;
++            let focused = gate.post(|| set_bool_attr_true(target, "AXFocused") == 0)?;
++            Ok(raised || main || focused)
++        })();
+         CFRelease(target as CFTypeRef);
+-        raised || main || focused
++        result
+     }
+ }
+ 
+@@ -339,22 +343,36 @@
+                 }));
+             }
+ 
+-            // The persistent kCPSNoWindows request owns process activation
+-            // without broadly ordering every application window. The separate
+-            // kCPSUserGenerated sequence then makes only the requested window
+-            // native-key. Pair both with public Cocoa activation and re-assert
+-            // only the exact AX window below; the three independent
+-            // postconditions remain authoritative over every request receipt.
+-            let skylight_process_accepted =
+-                crate::input::skylight::set_front_process_persistently(pid, window_id);
+-            let skylight_exact_accepted =
+-                crate::input::skylight::make_exact_window_key(pid, window_id);
+-            let cocoa_accepted = unsafe {
+-                app.activateWithOptions(
+-                    NSApplicationActivationOptions::NSApplicationActivateAllWindows,
+-                )
++            // Keep every foreground request bound to the admitted exact target.
++            // Any error here can follow an accepted activation, so never report
++            // a pre-dispatch refusal or invite replay from this sequence.
++            let requests = (|| -> anyhow::Result<(bool, bool, bool, bool)> {
++                let gate = crate::input::cancellation::gate();
++                let process =
++                    crate::input::skylight::set_front_process_persistently(pid, window_id);
++                gate.check_target()?;
++                let exact = crate::input::skylight::make_exact_window_key(pid, window_id);
++                let cocoa = gate.post(|| unsafe {
++                    app.activateWithOptions(NSApplicationActivationOptions::empty())
++                })?;
++                let ax = raise_exact_ax_window(pid, window_id)?;
++                Ok((process, exact, cocoa, ax))
++            })();
++            let (
++                skylight_process_accepted,
++                skylight_exact_accepted,
++                cocoa_accepted,
++                ax_window_requested,
++            ) = match requests {
++                Ok(requests) => requests,
++                Err(error) => {
++                    return ToolResult::error(format!("bring_to_front interrupted: {error}"))
++                        .with_structured(
++                            json!({"effect":"unverifiable", "pid":pid, "window_id":window_id,
++                            "code":"bring_to_front_interrupted", "activated":false}),
++                        )
++                }
+             };
+-            let ax_window_requested = raise_exact_ax_window(pid, window_id);
+             let path = match (
+                 skylight_process_accepted,
+                 skylight_exact_accepted,
+@@ -385,8 +403,11 @@
+             );
+         }
+ 
+-        let request_accepted = unsafe {
++        let request_accepted = match crate::input::cancellation::gate().post(|| unsafe {
+             app.activateWithOptions(NSApplicationActivationOptions::NSApplicationActivateAllWindows)
++        }) {
++            Ok(accepted) => accepted,
++            Err(error) => return ToolResult::error(format!("bring_to_front interrupted: {error}")),
+         };
+         let deadline = Instant::now() + VERIFY_TIMEOUT;
+         let activated = loop {
+--- /dev/null
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/check_input_ready.rs
+@@ -0,0 +1,33 @@
++use async_trait::async_trait;
++use cua_driver_core::{
++    protocol::ToolResult,
++    tool::{Tool, ToolDef},
++};
++use serde_json::Value;
++
++pub struct CheckInputReadyTool;
++static DEF: std::sync::OnceLock<ToolDef> = std::sync::OnceLock::new();
++#[async_trait]
++impl Tool for CheckInputReadyTool {
++    fn def(&self) -> &ToolDef {
++        DEF.get_or_init(|| ToolDef {
++            name: "check_input_ready".into(),
++            description: "Read-only exact-window input readiness. Checks owner, active Space, visibility and optional observed bounds. Never captures, activates, moves or sends input.".into(),
++            input_schema: serde_json::json!({"type":"object","required":["pid","window_id"],"properties":{
++                "pid":{"type":"integer","minimum":1},"window_id":{"type":"integer","minimum":1},
++                "expected_window_bounds":{"type":"object","required":["x","y","width","height"],"properties":{
++                    "x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number","exclusiveMinimum":0},"height":{"type":"number","exclusiveMinimum":0}},"additionalProperties":false}},"additionalProperties":false}),
++            read_only: true, destructive: false, idempotent: true, open_world: false,
++        })
++    }
++    async fn invoke(&self, args: Value) -> ToolResult {
++        match tokio::task::spawn_blocking(move || crate::input::target_guard::readiness(&args))
++            .await
++        {
++            Ok(result) => result,
++            Err(error) => {
++                ToolResult::error(format!("Input readiness could not be checked: {error}"))
++            }
++        }
++    }
++}
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs
+@@ -26,11 +26,12 @@
+ use crate::apps;
+ use crate::ax::bindings::{
+     copy_action_names, copy_children, copy_string_attr, element_at_screen_position,
+-    element_screen_rect, kAXErrorSuccess, AXUIElementPerformAction, AXUIElementRef,
++    element_screen_rect, AXUIElementRef,
+ };
+ use crate::focus_guard;
++use crate::input::ax_actions::{AxActionFailure, SelectionOutcome};
+ use crate::window_change_detector::WindowChangeDetector;
+-use core_foundation::base::{CFRelease, TCFType};
++use core_foundation::base::CFRelease;
+ 
+ use super::ToolState;
+ 
+@@ -159,6 +160,7 @@
+             // cua_driver_core::tool_schema.)
+             "required": [],
+             "properties": {
++                "force_synthetic": { "type": "boolean", "default": false, "description": "For coordinate clicks, select the native mouse-event route before dispatch instead of the AX hit-test shortcut. Exact-window and delivery-mode admission still apply; this does not authorize foreground input or retry." },
+                 "session": { "type": "string", "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session." },
+                 "pid":           { "type": "integer", "description": "Target process ID." },
+                 "window_id":     { "type": "integer", "description": "Target window ID. Required for element_index. Optional when element_token is supplied (the token carries it)." },
+@@ -398,6 +400,10 @@
+             button_str
+         };
+         let count = args.u64_or("count", 1) as usize;
++        let force_synthetic = args
++            .get("force_synthetic")
++            .and_then(Value::as_bool)
++            .unwrap_or(false);
+         let from_zoom = args.bool_or("from_zoom", false);
+         let debug_image_out = args.opt_str("debug_image_out");
+         let modifiers: Vec<String> = args.str_array("modifier");
+@@ -548,11 +554,9 @@
+                     .update_position(&cursor_key, cx, cy);
+             }
+ 
+-            // Finder icon/list items can expose a readable AXSelected state
+-            // while refusing both AXSelected writes and AXPress. Resolve a
+-            // verified coordinate frame only for those collection-like
+-            // elements so perform_ax_click can cross that one failed semantic
+-            // rung internally and confirm the result by AX read-back.
++            // A read-only AX capability check may find no writable selection
++            // target. Resolve a verified coordinate frame for that case only:
++            // a submitted semantic mutation never permits a second actuator.
+             let selection_candidate = if effective_action == "press" {
+                 tokio::task::spawn_blocking(move || {
+                     crate::input::ax_actions::nearest_container_selection_state(element_ptr)
+@@ -706,15 +710,9 @@
+                         tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+                     }
+                     msg.push_str(&changes.result_suffix());
+-                    // AX dispatch went through, but AXPerformAction returning
+-                    // success does not confirm the on-screen effect (many elements
+-                    // no-op silently). A click is never driver-verifiable (no
+-                    // read-back) → verified:false stays for back-compat. The
+-                    // tri-state `effect` is the richer signal:
+-                    //   * suspected_noop — the element didn't advertise the action,
+-                    //     so the press likely did nothing → cross to vision/pixel.
+-                    //   * unverifiable — dispatched fine, driver just can't confirm;
+-                    //     the caller verifies via screenshot.
++                    // AX returning success does not confirm the on-screen
++                    // effect. An unadvertised but submitted action remains
++                    // uncertain; it is never evidence authorizing a replay.
+                     let mut structured = serde_json::json!({
+                         "path": if selection_via_pixel {
+                             if fronted { "cgevent_fg" } else { "cgevent" }
+@@ -726,8 +724,6 @@
+                         "verified": selection_verified,
+                         "effect": if selection_verified {
+                             "confirmed"
+-                        } else if suspected_noop {
+-                            "suspected_noop"
+                         } else {
+                             "unverifiable"
+                         },
+@@ -738,18 +734,12 @@
+                         ]);
+                     }
+                     if suspected_noop {
+-                        structured["escalation"] = serde_json::json!({
+-                            "recommended": "px",
+-                            "reason": "element does not advertise this action — the \
+-                                       AX press likely no-op'd. Do an element px \
+-                                       action: click by pixel (x,y) off the \
+-                                       screenshot from get_window_state."
+-                        });
++                        structured["observation_required"] = serde_json::json!(true);
+                     }
+                     ToolResult::text(msg).with_structured(structured)
+                 }
+-                Ok(Err(e)) => ToolResult::error(format!("AX action failed: {e}")),
+-                Err(e) => ToolResult::error(format!("Task error: {e}")),
++                Ok(Err(e)) => ax_click_failure_after_preparation(e, foreground),
++                Err(e) => ax_click_failure(e.into()),
+             }
+         } else if let (Some(mut cx), Some(mut cy)) = (x, y) {
+             // ── Pixel path ─────────────────────────────────────────────────
+@@ -892,6 +882,7 @@
+             // targeting (PX) orthogonal to delivery (AX) and avoids making a
+             // Chromium/AppKit window key merely to satisfy first-mouse rules.
+             if !delivery_mode.is_foreground()
++                && !force_synthetic
+                 && window_id.is_some()
+                 && button_str == "left"
+                 && count == 1
+@@ -913,14 +904,18 @@
+                         return Ok(false);
+                     }
+                     let delivered = if focus_only {
+-                        crate::input::ax_actions::focus_element(element as usize).is_ok()
++                        crate::input::cancellation::gate()
++                            .ensure_active()
++                            .map_err(AxActionFailure::before_dispatch)
++                            .map_err(anyhow::Error::from)
++                            .and_then(|()| {
++                                crate::input::ax_actions::focus_element(element as usize)
++                            })
+                     } else {
+-                        let press = core_foundation::string::CFString::new("AXPress");
+-                        AXUIElementPerformAction(element, press.as_concrete_TypeRef())
+-                            == kAXErrorSuccess
++                        crate::input::ax_actions::perform_ax_action(element as usize, "press")
+                     };
+                     CFRelease(element as _);
+-                    Ok(delivered)
++                    delivered.map(|()| true)
+                 })
+                 .await;
+                 match ax_result {
+@@ -943,13 +938,9 @@
+                             "code": "background_unavailable"
+                         }));
+                     }
+-                    Ok(Err(error)) if focus_only => {
+-                        return ToolResult::error(format!("Background PX focus failed: {error}"))
+-                            .with_structured(serde_json::json!({
+-                                "code": "background_unavailable"
+-                            }));
+-                    }
+-                    _ => {}
++                    Ok(Ok(false)) => {}
++                    Ok(Err(error)) => return ax_click_failure(error),
++                    Err(error) => return ax_click_failure(error.into()),
+                 }
+             }
+ 
+@@ -1034,6 +1025,8 @@
+             );
+ 
+             let mods_owned = modifiers.clone();
++            let chromium_mouse =
++                force_synthetic && crate::browser::platform::is_chromium_process(pid);
+             // Surface 5: route to the right/middle CGEvent primitives when
+             // button != left. Left-button path stays on the existing Chromium-
+             // routed `click_at_xy_with_window_local` for back-compat.
+@@ -1084,7 +1077,7 @@
+                                     // and Chromium-specific fields (f40, f51, f58, f91, f92) onto events
+                                     // for better backgrounded-target delivery.
+                                     if let Some(wid) = window_id {
+-                                        if fg {
++                                        if fg || (force_synthetic && !chromium_mouse) {
+                                             return crate::input::mouse::click_at_xy_with_window_local(
+                                                 pid, screen_x, screen_y,
+                                                 win_local_x, win_local_y,
+@@ -1192,15 +1185,26 @@
+ }
+ 
+ // ── AX click implementation (blocking) ───────────────────────────────────────
++
++fn ax_click_failure(error: anyhow::Error) -> ToolResult {
++    crate::input::ax_actions::action_failure_result(error, "AX action failed")
++}
++
++fn ax_click_failure_after_preparation(error: anyhow::Error, foreground: bool) -> ToolResult {
++    // Foreground assistance may already have changed native focus even when
++    // the following semantic actuator refuses admission.
++    ax_click_failure(if foreground {
++        AxActionFailure::after_dispatch(error).into()
++    } else {
++        error
++    })
++}
+ 
+ /// Returns `(summary_text, needs_webkit_delay, suspected_noop,
+ /// selection_verified, selection_via_pixel)`.
+ ///
+-/// `suspected_noop` is true when the element did not advertise the action we
+-/// dispatched — AXUIElementPerformAction returns success regardless, so this is
+-/// the driver's only signal that the press likely did nothing. The caller turns
+-/// it into `effect: "suspected_noop"` + an escalation hint so the agent crosses
+-/// to the vision/pixel path instead of trusting a hollow success.
++/// `suspected_noop` reports that the dispatched action was not advertised.
++/// The effect remains uncertain and requires observation, never a replay.
+ fn perform_ax_click(
+     element_ptr: usize,
+     idx: usize,
+@@ -1219,7 +1223,8 @@
+     // enable menu items that were disabled in the cached snapshot, while a
+     // background transition can disable them after that snapshot. macOS may
+     // otherwise return success for a disabled action that did nothing.
+-    crate::input::ax_actions::ensure_ax_action_enabled(element_ptr, ax_action)?;
++    crate::input::ax_actions::ensure_ax_action_enabled(element_ptr, ax_action)
++        .map_err(AxActionFailure::before_dispatch)?;
+ 
+     // Capture advertised actions BEFORE dispatching so we can detect silent no-ops
+     // (AX returns success even when the element doesn't advertise the action).
+@@ -1234,19 +1239,35 @@
+     // or forcing the caller onto a less stable pixel coordinate.
+     if ax_action == "AXPress" && !advertised.iter().any(|action| action == ax_action) {
+         if modifiers.is_empty() {
+-            if let Some(selected_role) =
+-                crate::input::ax_actions::select_nearest_container(element_ptr)
+-            {
+-                return Ok((
+-                    format!(
+-                        "✅ Selected nearest {selected_role} for [{idx}] {role} \"{title}\"; \
+-                         confirmed AXSelected=true."
+-                    ),
+-                    false,
+-                    false,
+-                    true,
+-                    false,
+-                ));
++            match crate::input::ax_actions::select_nearest_container(element_ptr)? {
++                SelectionOutcome::NotAttempted => {}
++                SelectionOutcome::AttemptedConfirmed {
++                    role: selected_role,
++                } => {
++                    return Ok((
++                        format!(
++                            "✅ Selected nearest {selected_role} for [{idx}] {role} \"{title}\"; \
++                             confirmed AXSelected=true."
++                        ),
++                        false,
++                        false,
++                        true,
++                        false,
++                    ));
++                }
++                SelectionOutcome::AttemptedUncertain {
++                    role: selected_role,
++                    error,
++                    selected,
++                } => {
++                    return Err(AxActionFailure::uncertain(format!(
++                        "AXSelected write for nearest {selected_role} of [{idx}] returned \
++                         {error}, read-back={selected:?}; the effect is unknown. \
++                         No further selection, press or pointer click was submitted. \
++                         Observe fresh state; do not replay this action."
++                    ))
++                    .into());
++                }
+             }
+         }
+ 
+@@ -1256,7 +1277,10 @@
+         ) {
+             let selected_role = selection.role().to_owned();
+             let Some((before, _)) = selection.observe() else {
+-                anyhow::bail!("selection target stopped exposing AXSelected before delivery");
++                return Err(AxActionFailure::refused(
++                    "selection target stopped exposing AXSelected before delivery",
++                )
++                .into());
+             };
+             let modifier_refs: Vec<&str> = modifiers.iter().map(String::as_str).collect();
+             if foreground && !modifier_refs.is_empty() {
+@@ -1332,41 +1356,21 @@
+             if modifiers.is_empty() {
+                 anyhow::bail!(
+                     "coordinate click did not produce a stable AXSelected transition; \
+-                     last_readback={last_observation:?}; retry after a fresh snapshot"
++                     last_readback={last_observation:?}; observe fresh state; do not replay"
+                 );
+             }
+             anyhow::bail!(
+                 "foreground modified coordinate click did not produce a stable AXSelected \
+                  transition while preserving the prior selection; \
+                  before_selected={before}, last_readback={last_observation:?}; \
+-                 take a fresh snapshot before retrying"
++                 observe fresh state; do not replay"
+             );
+         }
+     }
+ 
+-    let err = unsafe { crate::ax::bindings::perform_action(element, ax_action) };
+-    if err != crate::ax::bindings::kAXErrorSuccess {
+-        // Some collection rows claim a click-like action but Finder returns
+-        // kAXErrorCannotComplete. Use the same verified selection fallback
+-        // before surfacing the dispatch error.
+-        if ax_action == "AXPress" && modifiers.is_empty() {
+-            if let Some(selected_role) =
+-                crate::input::ax_actions::select_nearest_container(element_ptr)
+-            {
+-                return Ok((
+-                    format!(
+-                        "✅ Selected nearest {selected_role} for [{idx}] {role} \"{title}\" \
+-                         after AXPress returned {err}; confirmed AXSelected=true."
+-                    ),
+-                    false,
+-                    false,
+-                    true,
+-                    false,
+-                ));
+-            }
+-        }
+-        anyhow::bail!("AXUIElementPerformAction({ax_action}) returned {err}");
+-    }
++    // AX may report an error after the target acted. This is the final actuator
++    // for this call: no selection or pointer fallback may follow the attempt.
++    crate::input::ax_actions::perform_ax_action(element_ptr, ax_action)?;
+ 
+     let mut summary = format!("✅ Performed {ax_action} on [{idx}] {role} \"{title}\".");
+ 
+@@ -1420,7 +1424,7 @@
+         };
+         summary.push_str(&format!(
+             "\n⚠️ Element does not advertise {ax_action} (actions: {adv_list}). \
+-             Action may have been a no-op."
++             Its effect is unknown. Observe fresh state; do not replay this action."
+         ));
+     }
+ 
+@@ -1454,9 +1458,50 @@
+ 
+ #[cfg(test)]
+ mod selection_fallback_tests {
+-    use super::selection_readback_confirms;
++    use super::{
++        ax_click_failure, ax_click_failure_after_preparation, selection_readback_confirms,
++        AxActionFailure,
++    };
++
++    #[test]
++    fn refusal_after_foreground_preparation_is_uncertain() {
++        let result = ax_click_failure_after_preparation(
++            AxActionFailure::refused("disabled target").into(),
++            true,
++        );
++        assert_eq!(result.structured_content.unwrap()["effect"], "unverifiable");
++    }
++
++    #[test]
++    fn semantic_admission_refusals_report_no_dispatch() {
++        let result = ax_click_failure(AxActionFailure::refused("disabled target").into());
++        assert_eq!(result.is_error, Some(true));
++        let details = result.structured_content.unwrap();
++        assert_eq!(details["effect"], "refused");
++        assert_eq!(details["verified"], false);
++    }
+ 
+     #[test]
++    fn attempted_and_unclassified_failures_never_claim_no_dispatch() {
++        for error in [
++            anyhow::Error::from(AxActionFailure::uncertain(
++                "AXPress returned CannotComplete",
++            )),
++            anyhow::Error::from(AxActionFailure::uncertain(
++                "AXSelected read-back is unavailable",
++            )),
++            anyhow::anyhow!("blocking task failed at an unknown dispatch point"),
++        ] {
++            let result = ax_click_failure(error);
++            assert_eq!(result.is_error, Some(true));
++            let details = result.structured_content.unwrap();
++            assert_eq!(details["effect"], "unverifiable");
++            assert_eq!(details["verified"], false);
++            assert!(details.get("escalation").is_none());
++        }
++    }
++
++    #[test]
+     fn plain_click_requires_selected_readback() {
+         assert!(selection_readback_confirms(false, true, false, true));
+         assert!(selection_readback_confirms(true, true, false, true));
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
+@@ -24,6 +24,7 @@
+ // etc.) live elsewhere under CuaDriverCore::Capture and are reached
+ // through GetWindowStateTool.
+ mod check_permissions;
++mod check_input_ready;
+ mod cursor_tools;
+ mod get_accessibility_tree;
+ mod get_config;
+@@ -957,6 +958,7 @@
+     // register the MCP server under the `cua-computer-use` name, which is what
+     // triggers Claude Code's computer-use beta-tool injection (see cli.rs).
+     let _ = compat;
++    registry.register(Box::new(check_input_ready::CheckInputReadyTool));
+     registry.register(Box::new(get_screen_size::GetScreenSizeTool));
+     registry.register(Box::new(get_desktop_state::GetDesktopStateTool));
+     registry.register(Box::new(get_cursor_position::GetCursorPositionTool));
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/set_value.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/set_value.rs
+@@ -4,9 +4,8 @@
+ //!
+ //! * **AXPopUpButton**: Find the child option whose AXTitle or AXValue matches
+ //!   `value` (case-insensitive) and AXPress it directly.  The native macOS popup
+-//!   menu is never opened, so focus is never stolen.  Falls back to Safari
+-//!   `osascript do JavaScript` for WebKit `<select>` elements that expose no AX
+-//!   children when the popup is closed.
++//!   menu is never opened. A popup without an exact AX child is refused; it
++//!   never mutates an unrelated frontmost browser document.
+ //!
+ //! * **Everything else**: Write `AXValue` directly (sliders, steppers, native
+ //!   text fields that expose a settable AXValue).
+@@ -21,10 +20,11 @@
+ 
+ use crate::apps;
+ use crate::ax::bindings::{
+-    copy_children, copy_number_attr, copy_string_attr, kAXErrorSuccess, perform_action,
+-    set_number_attr, set_string_attr, AXUIElementRef,
++    copy_action_names, copy_children, copy_number_attr, copy_string_attr, is_attribute_settable,
++    kAXErrorSuccess, perform_action, set_number_attr, set_string_attr, AXError, AXUIElementRef,
+ };
+ use crate::focus_guard;
++use crate::input::ax_actions::{action_failure_result, AxActionFailure};
+ use crate::window_change_detector::WindowChangeDetector;
+ use core_foundation::base::CFRelease;
+ 
+@@ -50,12 +50,14 @@
+              \n\
+              - **AXPopUpButton / select dropdown**: finds the child option whose \
+              title or value matches `value` (case-insensitive) and AXPresses it \
+-             directly — the native macOS popup menu is never opened, so focus \
+-             is never stolen. Use this for HTML <select> elements in Safari or \
+-             any native NSPopUpButton.\n\
++             directly. Requires a matching AX child in the exact target; a \
++             popup with no AX children is refused.\n\
+              \n\
+              - **All other elements**: writes AXValue directly (sliders, steppers, \
+-             date pickers, native text fields that expose settable AXValue).\n\
++             date pickers, native text fields that expose settable AXValue). \
++             Unsettable numeric controls may use advertised stepping actions. \
++             The route is selected before dispatch; an uncertain effect never \
++             permits another write or a fallback.\n\
+              \n\
+              For free-form text entry into web inputs, prefer `type_text_chars` \
+              which synthesises key events — AXValue writes are ignored by WebKit."
+@@ -75,14 +77,14 @@
+                 "snapshot_id": cua_driver_core::tool_schema::snapshot_id_schema(),
+                 "value": {
+                     "type": "string",
+-                    "description": "New value. AX will coerce to the element's native type."
++                    "description": "New value. Numeric controls require a finite number; text preserves the exact string."
+                 }
+             },
+             "additionalProperties": false
+         }),
+         read_only:   false,
+         destructive: true,
+-        idempotent:  true,
++        idempotent:  false,
+         open_world:  true,
+     })
+ }
+@@ -217,7 +219,7 @@
+             "set_value.AXValue",
+             || async move {
+                 tokio::task::spawn_blocking(move || {
+-                    set_value_blocking(element_ptr, element_index, pid, &value)
++                    set_value_blocking(element_ptr, element_index, &value)
+                 })
+                 .await
+             },
+@@ -238,18 +240,16 @@
+                     "verified": verified,
+                     "effect": if verified { "confirmed" } else { "unverifiable" },
+                 });
++                if verified {
++                    structured["evidence"] = serde_json::json!([{ "kind": "value_readback" }]);
++                }
+                 if ax_echo_surface {
+-                    structured["escalation"] = serde_json::json!({
+-                        "recommended": "px",
+-                        "reason": "AXValue read-back is not trusted for web content. Verify \
+-                                   through the renderer; use browser page tools for a tab or \
+-                                   manipulate the control through its pixel action."
+-                    });
++                    structured["observation_required"] = serde_json::json!(true);
+                 }
+                 ToolResult::text(msg).with_structured(structured)
+             }
+-            Ok(Err(e)) => ToolResult::error(format!("set_value failed: {e}")),
+-            Err(e) => ToolResult::error(format!("Task error: {e}")),
++            Ok(Err(e)) => action_failure_result(e, "set_value failed"),
++            Err(e) => action_failure_result(e.into(), "set_value task failed"),
+         }
+     }
+ }
+@@ -292,10 +292,95 @@
+     }
+ }
+ 
++#[derive(Debug, PartialEq)]
++enum ValueRoute {
++    String,
++    Number(f64),
++    Steps { initial: f64, target: f64 },
++}
++
++/// Choose exactly one actuator from read-only facts, never from a write error.
++fn choose_value_route(
++    role: &str,
++    current_number: Option<f64>,
++    settable: bool,
++    increment: bool,
++    decrement: bool,
++    requested: &str,
++) -> anyhow::Result<ValueRoute> {
++    let is_text = matches!(
++        role,
++        "AXTextField" | "AXTextArea" | "AXSearchField" | "AXComboBox"
++    );
++    let is_numeric = !is_text
++        && (current_number.is_some() || matches!(role, "AXSlider" | "AXStepper" | "AXIncrementor"));
++    if !is_numeric {
++        return if settable {
++            Ok(ValueRoute::String)
++        } else {
++            Err(AxActionFailure::refused(
++                "AXValue is not writable and no numeric stepping route is available",
++            )
++            .into())
++        };
++    }
++    let target = requested
++        .trim()
++        .parse::<f64>()
++        .ok()
++        .filter(|number| number.is_finite())
++        .ok_or_else(|| AxActionFailure::refused("numeric AXValue requires a finite number"))?;
++    if settable {
++        return Ok(ValueRoute::Number(target));
++    }
++    let initial = current_number
++        .filter(|number| number.is_finite())
++        .ok_or_else(|| {
++            AxActionFailure::refused("numeric stepping requires a readable finite AXValue")
++        })?;
++    if numbers_match(initial, target)
++        || (initial < target && increment)
++        || (initial > target && decrement)
++    {
++        Ok(ValueRoute::Steps { initial, target })
++    } else {
++        Err(AxActionFailure::refused(
++            "numeric target does not advertise the required stepping action",
++        )
++        .into())
++    }
++}
++
++fn write_value_with(
++    route: &ValueRoute,
++    before_write: impl FnOnce() -> anyhow::Result<()>,
++    number_write: impl FnOnce(f64) -> AXError,
++    string_write: impl FnOnce() -> AXError,
++) -> anyhow::Result<()> {
++    if matches!(route, ValueRoute::Steps { .. }) {
++        return Err(
++            AxActionFailure::refused("stepping route cannot issue an AXValue write").into(),
++        );
++    }
++    before_write().map_err(AxActionFailure::before_dispatch)?;
++    let error = match route {
++        ValueRoute::Number(value) => number_write(*value),
++        ValueRoute::String => string_write(),
++        ValueRoute::Steps { .. } => unreachable!("stepping refused before any write"),
++    };
++    if error != kAXErrorSuccess {
++        return Err(AxActionFailure::uncertain(format!(
++            "AXValue write returned {error} after dispatch; no alternate write or stepping \
++             was submitted. Observe fresh state; do not replay."
++        ))
++        .into());
++    }
++    Ok(())
++}
++
+ fn set_value_blocking(
+     element_ptr: usize,
+     element_index: usize,
+-    pid: i32,
+     value: &str,
+ ) -> anyhow::Result<SetValueOutcome> {
+     let element = element_ptr as AXUIElementRef;
+@@ -305,7 +390,7 @@
+     if role == "AXPopUpButton" {
+         let element_title = unsafe { copy_string_attr(element, "AXTitle") }.unwrap_or_default();
+         // Menu-item selection, not an AXValue write — no read-back to report.
+-        select_popup_option(element, element_index, pid, value, &element_title).map(|detail| {
++        select_popup_option(element, element_index, value, &element_title).map(|detail| {
+             SetValueOutcome {
+                 detail,
+                 verified: None,
+@@ -313,68 +398,77 @@
+             }
+         })
+     } else {
+-        // Default path: write AXValue directly. Numeric controls (AXSlider /
+-        // AXStepper) reject a CFString with -25201 and need a CFNumber; text
+-        // fields take a CFString. Try numeric first when the value parses as a
+-        // number, then fall back to a string write.
+-        // Numeric target carried through so we can step toward it if the
+-        // direct writes are rejected (SwiftUI AXSlider rejects every AXValue
+-        // write with -25200 yet exposes a readable AXValue + increment/decrement
+-        // actions).
+-        let numeric_target = value.trim().parse::<f64>().ok();
+-        // Read the value before writing so an unchanged field can be reported as
+-        // idempotent rather than silently indistinguishable from a fresh write.
+-        let before = unsafe { copy_string_attr(element, "AXValue") };
+-        let err = match numeric_target {
+-            Some(n) => {
+-                let e = unsafe { set_number_attr(element, "AXValue", n) };
+-                if e == kAXErrorSuccess {
+-                    e
+-                } else {
+-                    unsafe { set_string_attr(element, "AXValue", value) }
+-                }
++        let current_number = unsafe { copy_number_attr(element, "AXValue") };
++        let actions = unsafe { copy_action_names(element) };
++        let route = choose_value_route(
++            &role,
++            current_number,
++            unsafe { is_attribute_settable(element, "AXValue") },
++            actions.iter().any(|action| action == "AXIncrement"),
++            actions.iter().any(|action| action == "AXDecrement"),
++            value,
++        )?;
++        let numeric = !matches!(route, ValueRoute::String);
++        let before = if numeric {
++            current_number.map(|number| number.to_string())
++        } else {
++            unsafe { copy_string_attr(element, "AXValue") }
++        };
++        let stepped = match &route {
++            ValueRoute::Steps { initial, target } => {
++                step_to_value_with(
++                    *initial,
++                    *target,
++                    || {
++                        crate::input::ax_actions::ensure_ax_action_enabled(
++                            element_ptr,
++                            "numeric stepping",
++                        )?;
++                        crate::input::cancellation::gate().check_target()
++                    },
++                    |action| unsafe { perform_action(element, action) },
++                    || unsafe { copy_number_attr(element, "AXValue") },
++                )?;
++                true
+             }
+-            None => unsafe { set_string_attr(element, "AXValue", value) },
++            _ => {
++                write_value_with(
++                    &route,
++                    || {
++                        crate::input::ax_actions::ensure_ax_action_enabled(element_ptr, "AXValue")?;
++                        crate::input::cancellation::gate().check_target()
++                    },
++                    |number| unsafe { set_number_attr(element, "AXValue", number) },
++                    || unsafe { set_string_attr(element, "AXValue", value) },
++                )?;
++                false
++            }
+         };
+-        if err == kAXErrorSuccess {
+-            let after = unsafe { copy_string_attr(element, "AXValue") };
+-            let (verified, changed) = classify_write(
+-                before.as_deref(),
+-                after.as_deref(),
+-                value,
+-                numeric_target.is_some(),
+-            );
+-            let suffix = match (verified, changed) {
+-                (Some(true), Some(false)) => " Value already matched; write was idempotent.",
+-                (Some(true), _) => "",
+-                (Some(false), _) => " Read-back did not confirm the value; verify via screenshot.",
+-                (None, _) => " Value is not readable through AX; could not confirm.",
+-            };
+-            Ok(SetValueOutcome {
+-                detail: format!("✅ Set AXValue on [{element_index}] {role}.{suffix}"),
+-                verified,
+-                changed,
+-            })
+-        } else if let Some(target) = numeric_target {
+-            // Both direct writes failed for a numeric target — fall back to
+-            // stepping the control via AXIncrement / AXDecrement actions.
+-            if step_to_value(element, target) {
+-                let after = unsafe { copy_string_attr(element, "AXValue") };
+-                let (verified, changed) =
+-                    classify_write(before.as_deref(), after.as_deref(), value, true);
+-                Ok(SetValueOutcome {
+-                    detail: format!(
+-                        "✅ Set AXValue on [{element_index}] {role} via AXIncrement/AXDecrement stepping."
+-                    ),
+-                    verified,
+-                    changed,
+-                })
+-            } else {
+-                anyhow::bail!("AXUIElementSetAttributeValue(AXValue) failed with error {err}")
++        let after = if numeric {
++            unsafe { copy_number_attr(element, "AXValue") }.map(|number| number.to_string())
++        } else {
++            unsafe { copy_string_attr(element, "AXValue") }
++        };
++        let (verified, changed) =
++            classify_write(before.as_deref(), after.as_deref(), value, numeric);
++        let suffix = match (verified, changed) {
++            (Some(true), Some(false)) => " Value already matched.",
++            (Some(true), _) => "",
++            (Some(false), _) => {
++                " Read-back did not confirm the value; observe fresh state; do not replay."
+             }
++            (None, _) => " Value is not readable through AX; observe fresh state; do not replay.",
++        };
++        let route_label = if stepped {
++            " via AXIncrement/AXDecrement stepping"
+         } else {
+-            anyhow::bail!("AXUIElementSetAttributeValue(AXValue) failed with error {err}")
+-        }
++            ""
++        };
++        Ok(SetValueOutcome {
++            detail: format!("✅ Set AXValue on [{element_index}] {role}{route_label}.{suffix}"),
++            verified,
++            changed,
++        })
+     }
+ }
+ 
+@@ -410,10 +504,7 @@
+             observed.trim().parse::<f64>(),
+             expected.trim().parse::<f64>(),
+         ) {
+-            (Ok(a), Ok(b)) => {
+-                let scale = a.abs().max(b.abs()).max(1.0);
+-                (a - b).abs() <= 1e-9 * scale
+-            }
++            (Ok(a), Ok(b)) => numbers_match(a, b),
+             _ => false,
+         }
+     };
+@@ -422,63 +513,74 @@
+     (Some(verified), changed)
+ }
+ 
+-// ── AXIncrement / AXDecrement stepping fallback ──────────────────────────────
++fn numbers_match(left: f64, right: f64) -> bool {
++    left.is_finite()
++        && right.is_finite()
++        && (left - right).abs() <= 1e-9 * left.abs().max(right.abs()).max(1.0)
++}
+ 
+-/// Step a numeric control toward `target` using its `AXIncrement` /
+-/// `AXDecrement` actions. Used only when direct `AXValue` writes are rejected
+-/// (notably SwiftUI's `AXSlider`, which exposes a readable-but-unsettable
+-/// `AXValue` plus increment/decrement actions).
+-///
+-/// Returns `true` once the control's value lands within half of the last
+-/// observed step of `target`, `false` if it can't be read or can't be moved.
+-fn step_to_value(element: AXUIElementRef, target: f64) -> bool {
+-    // Can't target precisely without feedback — bail if AXValue is unreadable.
+-    let mut current = match unsafe { copy_number_attr(element, "AXValue") } {
+-        Some(v) => v,
+-        None => return false,
+-    };
++// ── Read-only-selected AXIncrement / AXDecrement route ──────────────────────
+ 
+-    // Half of the last observed step. Start near-zero so we never declare the
+-    // target "reached" before performing (and observing) a real
+-    // AXIncrement/AXDecrement — otherwise a slider at 0.0 targeting 0.5 would
+-    // report success without ever moving. The radius widens only after we learn
+-    // the control's actual step size from an observed value change.
+-    let mut step_radius = f64::EPSILON;
+-
+-    // Hard cap to prevent runaway on a control that never quite converges.
+-    for _ in 0..500 {
+-        if (current - target).abs() <= step_radius {
+-            return true;
++/// Every next step requires a successful AX result and observed progress from
++/// the preceding step. An error, missing read-back, no movement, wrong direction
++/// or overshoot ends the action. No write fallback or corrective replay follows.
++fn step_to_value_with(
++    mut current: f64,
++    target: f64,
++    mut before_step: impl FnMut() -> anyhow::Result<()>,
++    mut dispatch: impl FnMut(&str) -> AXError,
++    mut readback: impl FnMut() -> Option<f64>,
++) -> anyhow::Result<f64> {
++    if !current.is_finite() || !target.is_finite() {
++        return Err(AxActionFailure::refused("numeric stepping requires finite values").into());
++    }
++    for attempts in 0..500 {
++        if numbers_match(current, target) {
++            return Ok(current);
+         }
+-
++        before_step().map_err(|error| {
++            if attempts == 0 {
++                AxActionFailure::before_dispatch(error)
++            } else {
++                AxActionFailure::after_dispatch(error)
++            }
++        })?;
+         let action = if current < target {
+             "AXIncrement"
+         } else {
+             "AXDecrement"
+         };
+-        let _ = unsafe { perform_action(element, action) };
+-
+-        let next = match unsafe { copy_number_attr(element, "AXValue") } {
+-            Some(v) => v,
+-            None => return false,
+-        };
+-
+-        // The action didn't move the value — the control can't be stepped (or
+-        // has hit a min/max bound short of target). Stop to avoid looping.
+-        if next == current {
+-            return false;
++        let error = dispatch(action);
++        if error != kAXErrorSuccess {
++            return Err(AxActionFailure::uncertain(format!(
++                "{action} returned {error} after dispatch; no further step was submitted. \
++                 Observe fresh state; do not replay."
++            ))
++            .into());
+         }
+-
+-        // Refine the stop threshold to half of the actual step the control took.
+-        let step = (next - current).abs();
+-        if step > 0.0 {
+-            step_radius = step / 2.0;
++        let next = readback()
++            .filter(|number| number.is_finite())
++            .ok_or_else(|| {
++                AxActionFailure::uncertain("numeric step has no finite read-back; do not replay")
++            })?;
++        if numbers_match(next, target) {
++            return Ok(next);
+         }
++        if numbers_match(next, current)
++            || (next - current).signum() != (target - current).signum()
++            || (target - next).signum() != (target - current).signum()
++        {
++            return Err(AxActionFailure::uncertain(format!(
++                "numeric step did not prove progress toward the target \
++                 (before={current}, after={next}, target={target}); do not replay"
++            ))
++            .into());
++        }
+         current = next;
+     }
+-
+-    // Exhausted the iteration cap without converging.
+-    (current - target).abs() <= step_radius
++    Err(AxActionFailure::uncertain(
++        "numeric stepping reached its bounded limit without proving the requested value; do not replay"
++    ).into())
+ }
+ 
+ // ── AXPopUpButton path ───────────────────────────────────────────────────────
+@@ -486,199 +588,258 @@
+ fn select_popup_option(
+     element: AXUIElementRef,
+     element_index: usize,
+-    pid: i32,
+     value: &str,
+     element_title: &str,
+ ) -> anyhow::Result<String> {
+     let children = unsafe { copy_children(element) };
+-
+-    if !children.is_empty() {
+-        // Strategy 1: AX children (native AppKit NSPopUpButton).
+-        let value_lower = value.to_lowercase();
+-        let mut matched_idx: Option<usize> = None;
+-        let mut available: Vec<String> = Vec::with_capacity(children.len());
+-
+-        for (i, &child) in children.iter().enumerate() {
+-            let child_title = unsafe { copy_string_attr(child, "AXTitle") }.unwrap_or_default();
+-            let child_value = unsafe { copy_string_attr(child, "AXValue") }.unwrap_or_default();
+-            available.push(child_title.clone());
+-            if child_title.to_lowercase() == value_lower
+-                || child_value.to_lowercase() == value_lower
+-            {
+-                matched_idx = Some(i);
+-                break;
+-            }
++    if children.is_empty() {
++        return Err(AxActionFailure::refused(format!(
++            "AXPopUpButton [{element_index}] '{element_title}' has no exact AX child; \
++             no mutation was submitted. An untargeted browser-document fallback is forbidden."
++        ))
++        .into());
++    }
++    let value_lower = value.to_lowercase();
++    let mut matched = None;
++    let mut available = Vec::with_capacity(children.len());
++    for &child in &children {
++        let title = unsafe { copy_string_attr(child, "AXTitle") }.unwrap_or_default();
++        let child_value = unsafe { copy_string_attr(child, "AXValue") }.unwrap_or_default();
++        available.push(title.clone());
++        if title.to_lowercase() == value_lower || child_value.to_lowercase() == value_lower {
++            matched = Some((child, title));
++            break;
+         }
+-
+-        let result = if let Some(i) = matched_idx {
+-            let child = children[i];
+-            let opt_title =
+-                unsafe { copy_string_attr(child, "AXTitle") }.unwrap_or_else(|| value.to_string());
+-            let err = unsafe { perform_action(child, "AXPress") };
+-            if err == kAXErrorSuccess {
+-                Ok(format!(
+-                    "✅ Selected '{opt_title}' in AXPopUpButton [{element_index}] \
+-                     \"{element_title}\" via AX child AXPress."
+-                ))
+-            } else {
+-                anyhow::bail!("AXPress on child option failed with error {err}")
+-            }
+-        } else {
+-            let avail = available
+-                .iter()
+-                .map(|t| format!("\"{t}\""))
+-                .collect::<Vec<_>>()
+-                .join(", ");
+-            anyhow::bail!(
+-                "No AX child matching '{value}' in AXPopUpButton [{element_index}] \
+-                 \"{element_title}\". Available: [{avail}]"
++    }
++    // Keep every retained child alive through the action and release it on all
++    // ordinary outcomes, including a preflight refusal or an uncertain AX error.
++    let result = if let Some((child, title)) = matched {
++        crate::input::ax_actions::perform_ax_action(child as usize, "press").map(|()| {
++            format!(
++                "📨 Submitted AXPress for '{title}' in AXPopUpButton [{element_index}] \
++                 '{element_title}'; observe the selection to confirm it."
+             )
+-        };
++        })
++    } else {
++        Err(AxActionFailure::refused(format!(
++            "No exact AX child matching '{value}' in AXPopUpButton [{element_index}] \
++             '{element_title}'. Available: {available:?}"
++        ))
++        .into())
++    };
++    for child in children {
++        unsafe { CFRelease(child as _) };
++    }
++    result
++}
+ 
+-        // Release children (copy_children retains each one).
+-        for &child in &children {
+-            unsafe {
+-                CFRelease(child as _);
++#[cfg(test)]
++mod tests {
++    use super::{
++        apply_surface_trust, apply_verification_label, choose_value_route, classify_write,
++        kAXErrorSuccess, step_to_value_with, write_value_with, AxActionFailure, SetValueOutcome,
++        ValueRoute,
++    };
++    use std::cell::Cell;
++
++    #[test]
++    fn read_only_facts_select_one_typed_write_route() {
++        assert_eq!(
++            choose_value_route("AXTextField", None, true, false, false, "007").unwrap(),
++            ValueRoute::String
++        );
++        assert_eq!(
++            choose_value_route("AXTextArea", Some(5.0), true, true, true, "007").unwrap(),
++            ValueRoute::String
++        );
++        assert_eq!(
++            choose_value_route("AXSlider", Some(5.0), true, true, true, "7").unwrap(),
++            ValueRoute::Number(7.0)
++        );
++        assert_eq!(
++            choose_value_route("AXUnknown", Some(5.0), true, false, false, "7").unwrap(),
++            ValueRoute::Number(7.0)
++        );
++        assert_eq!(
++            choose_value_route("AXSlider", Some(5.0), false, true, true, "7").unwrap(),
++            ValueRoute::Steps {
++                initial: 5.0,
++                target: 7.0
+             }
++        );
++    }
++
++    #[test]
++    fn unknown_unsettable_or_nonfinite_numeric_routes_refuse_before_dispatch() {
++        for result in [
++            choose_value_route("AXSlider", None, false, true, true, "7"),
++            choose_value_route("AXSlider", Some(5.0), false, false, true, "7"),
++            choose_value_route("AXTextField", None, false, true, true, "7"),
++            choose_value_route("AXSlider", Some(5.0), true, true, true, "NaN"),
++            choose_value_route("AXSlider", Some(5.0), true, true, true, "inf"),
++        ] {
++            assert!(
++                !result
++                    .unwrap_err()
++                    .downcast_ref::<AxActionFailure>()
++                    .unwrap()
++                    .attempted
++            );
+         }
++    }
+ 
+-        return result;
++    #[test]
++    fn a_failed_numeric_write_never_falls_back_to_string_or_steps() {
++        let writes = Cell::new(0);
++        let error = write_value_with(
++            &ValueRoute::Number(7.0),
++            || Ok(()),
++            |number| {
++                assert_eq!(number, 7.0);
++                writes.set(writes.get() + 1);
++                -25204
++            },
++            || panic!("numeric write replayed as a string"),
++        )
++        .unwrap_err();
++        assert_eq!(writes.get(), 1);
++        assert!(error.downcast_ref::<AxActionFailure>().unwrap().attempted);
+     }
+ 
+-    // Strategy 2: Safari/WebKit — no AX children when popup is closed.
+-    // Use osascript do JavaScript to set the <select> element's DOM value.
+-    let app_name = crate::apps::get_app_name_for_pid(pid).unwrap_or_default();
++    #[test]
++    fn numeric_text_has_only_one_string_write_and_no_numeric_attempt() {
++        let writes = Cell::new(0);
++        let route = choose_value_route("AXTextField", None, true, false, false, "007").unwrap();
++        write_value_with(
++            &route,
++            || Ok(()),
++            |_| panic!("text was rewritten as a number"),
++            || {
++                writes.set(writes.get() + 1);
++                kAXErrorSuccess
++            },
++        )
++        .unwrap();
++        assert_eq!(writes.get(), 1);
++    }
+ 
+-    if app_name != "Safari" {
+-        anyhow::bail!(
+-            "AXPopUpButton [{element_index}] '{element_title}' has no AX children and \
+-             target is '{app_name}' (not Safari) — no fallback available."
++    #[test]
++    fn cancelled_value_write_never_calls_an_actuator() {
++        let error = write_value_with(
++            &ValueRoute::Number(7.0),
++            || anyhow::bail!("cancelled"),
++            |_| panic!("refused numeric write"),
++            || panic!("refused string write"),
+         )
++        .unwrap_err();
++        assert!(!error.downcast_ref::<AxActionFailure>().unwrap().attempted);
+     }
+ 
+-    set_select_via_js(element_index, element_title, value)
+-}
++    #[test]
++    fn a_failed_numeric_step_stops_after_one_attempt() {
++        let steps = Cell::new(0);
++        let error = step_to_value_with(
++            0.0,
++            3.0,
++            || Ok(()),
++            |_| {
++                steps.set(steps.get() + 1);
++                -25204
++            },
++            || panic!("failed step was treated as successful"),
++        )
++        .unwrap_err();
++        assert_eq!(steps.get(), 1);
++        assert!(error.downcast_ref::<AxActionFailure>().unwrap().attempted);
++    }
+ 
+-// ── Safari JavaScript fallback ───────────────────────────────────────────────
+-
+-/// Set an HTML `<select>` value in Safari via `osascript do JavaScript`.
+-/// Searches all `<select>` elements for an `<option>` whose text or value matches
+-/// `value` (case-insensitive), then sets it and dispatches a `change` event.
+-fn set_select_via_js(
+-    element_index: usize,
+-    element_title: &str,
+-    value: &str,
+-) -> anyhow::Result<String> {
+-    // Percent-encode the lowercased value using only unreserved URL characters
+-    // as the allowed set, matching the Swift reference's percent-encoding approach.
+-    // This makes the string safe to embed in both a JS single-quoted string
+-    // (via decodeURIComponent) and an AppleScript double-quoted string.
+-    let v_low = value.to_lowercase();
+-    let v_encoded = percent_encode_unreserved(&v_low);
+-
+-    // JavaScript that matches the Swift reference verbatim.
+-    let js = format!(
+-        "(function(){{\
+-         var v=decodeURIComponent('{v_encoded}');\
+-         var ss=document.querySelectorAll('select'),opts=[];\
+-         for(var i=0;i<ss.length;i++){{\
+-         for(var j=0;j<ss[i].options.length;j++){{\
+-         var t=ss[i].options[j].text.toLowerCase(),\
+-         u=ss[i].options[j].value.toLowerCase();\
+-         opts.push(t+'|'+u);\
+-         if(t===v||u===v){{\
+-         ss[i].value=ss[i].options[j].value;\
+-         ss[i].dispatchEvent(new Event('change',{{bubbles:true}}));\
+-         return 'SET:'+ss[i].value;}}}}\
+-         }}return 'NOTFOUND:'+opts.join(',');\
+-         }})()"
+-    );
+-
+-    let apple_script =
+-        format!("tell application \"Safari\" to do JavaScript \"{js}\" in front document");
+-
+-    // Spawn osascript with a 10-second deadline. A stuck Safari permission
+-    // prompt or unresponsive renderer can cause wait() to block indefinitely,
+-    // which would stall the MCP tool handler permanently.
+-    let mut child = std::process::Command::new("osascript")
+-        .arg("-e")
+-        .arg(&apple_script)
+-        .stdout(std::process::Stdio::piped())
+-        .stderr(std::process::Stdio::piped())
+-        .spawn()
+-        .map_err(|e| anyhow::anyhow!("osascript launch failed: {e}"))?;
+-
+-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+-    loop {
+-        match child.try_wait() {
+-            Ok(Some(_)) => break,
+-            Ok(None) => {
+-                if std::time::Instant::now() >= deadline {
+-                    let _ = child.kill();
+-                    anyhow::bail!("osascript timed out after 10 seconds");
+-                }
+-                std::thread::sleep(std::time::Duration::from_millis(50));
+-            }
+-            Err(e) => anyhow::bail!("osascript wait error: {e}"),
++    #[test]
++    fn uncertain_step_readbacks_stop_before_another_action() {
++        for readback in [None, Some(f64::NAN), Some(0.0), Some(-1.0), Some(4.0)] {
++            let steps = Cell::new(0);
++            let error = step_to_value_with(
++                0.0,
++                3.0,
++                || Ok(()),
++                |_| {
++                    steps.set(steps.get() + 1);
++                    kAXErrorSuccess
++                },
++                || readback,
++            )
++            .unwrap_err();
++            assert_eq!(steps.get(), 1);
++            assert!(error.downcast_ref::<AxActionFailure>().unwrap().attempted);
+         }
+     }
+-    let out = child
+-        .wait_with_output()
+-        .map_err(|e| anyhow::anyhow!("osascript output error: {e}"))?;
+ 
+-    let raw = String::from_utf8_lossy(&out.stdout).trim().to_string();
+-
+-    if let Some(dom_val) = raw.strip_prefix("SET:") {
+-        Ok(format!(
+-            "✅ Set select [{element_index}] '{element_title}' to '{value}' via \
+-             Safari JavaScript (DOM value: \"{dom_val}\")."
+-        ))
+-    } else if let Some(available) = raw.strip_prefix("NOTFOUND:") {
+-        anyhow::bail!(
+-            "No <option> matching '{value}' found in any <select>. \
+-             Available (text|value): {available}"
++    #[test]
++    fn every_subsequent_step_requires_observed_progress() {
++        let current = Cell::new(0.0);
++        let steps = Cell::new(0);
++        let checks = Cell::new(0);
++        let result = step_to_value_with(
++            0.0,
++            3.0,
++            || {
++                checks.set(checks.get() + 1);
++                Ok(())
++            },
++            |action| {
++                assert_eq!(action, "AXIncrement");
++                current.set(current.get() + 1.0);
++                steps.set(steps.get() + 1);
++                kAXErrorSuccess
++            },
++            || Some(current.get()),
+         )
+-    } else if raw.is_empty() && !out.status.success() {
+-        let err_text = String::from_utf8_lossy(&out.stderr);
+-        anyhow::bail!("osascript failed: {}", err_text.trim())
+-    } else {
+-        anyhow::bail!(
+-            "JavaScript returned unexpected output: {}",
+-            &raw[..raw.len().min(200)]
+-        )
++        .unwrap();
++        assert_eq!(result, 3.0);
++        assert_eq!(steps.get(), 3);
++        assert_eq!(checks.get(), 3);
+     }
+-}
+ 
+-// ── Percent-encoding helper ──────────────────────────────────────────────────
+-
+-/// Percent-encode a string, leaving only unreserved URL characters (`-._~` +
+-/// alphanumerics) unencoded.  Matches the Swift reference's approach.
+-fn percent_encode_unreserved(s: &str) -> String {
+-    let mut out = String::with_capacity(s.len() * 3);
+-    for b in s.bytes() {
+-        if b.is_ascii_alphanumeric() || b == b'-' || b == b'.' || b == b'_' || b == b'~' {
+-            out.push(b as char);
+-        } else {
+-            out.push('%');
+-            out.push(hex_digit(b >> 4));
+-            out.push(hex_digit(b & 0xF));
+-        }
++    #[test]
++    fn cancellation_after_a_verified_step_remains_an_uncertain_action() {
++        let steps = Cell::new(0);
++        let error = step_to_value_with(
++            0.0,
++            3.0,
++            || {
++                if steps.get() > 0 {
++                    anyhow::bail!("Space changed")
++                }
++                Ok(())
++            },
++            |_| {
++                steps.set(steps.get() + 1);
++                kAXErrorSuccess
++            },
++            || Some(1.0),
++        )
++        .unwrap_err();
++        assert_eq!(steps.get(), 1);
++        assert!(error.downcast_ref::<AxActionFailure>().unwrap().attempted);
+     }
+-    out
+-}
+ 
+-fn hex_digit(n: u8) -> char {
+-    match n {
+-        0..=9 => (b'0' + n) as char,
+-        10..=15 => (b'A' + n - 10) as char,
+-        _ => '0',
++    #[test]
++    fn stepping_remains_bounded_without_claiming_approximate_success() {
++        let steps = Cell::new(0);
++        let error = step_to_value_with(
++            0.0,
++            1000.0,
++            || Ok(()),
++            |_| {
++                steps.set(steps.get() + 1);
++                kAXErrorSuccess
++            },
++            || Some(f64::from(steps.get())),
++        )
++        .unwrap_err();
++        assert_eq!(steps.get(), 500);
++        assert!(error.downcast_ref::<AxActionFailure>().unwrap().attempted);
+     }
+-}
+ 
+-#[cfg(test)]
+-mod tests {
+-    use super::{apply_surface_trust, apply_verification_label, classify_write, SetValueOutcome};
+-
+     #[test]
+     fn unreadable_value_reports_neither_verified_nor_changed() {
+         // AXValue is not exposed: the write can be neither confirmed nor denied,
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs
+@@ -90,6 +90,7 @@
+             "type": "object",
+             "required": ["text"],
+             "properties": {
++                "force_synthetic": { "type": "boolean", "default": false, "description": "Select native key events before dispatch instead of AXSelectedText. Exact-window keyboard admission remains required; this does not authorize foreground input or retry." },
+                 "session": { "type": "string", "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session." },
+                 "pid":  { "type": "integer", "description": "Target process ID." },
+                 "text": { "type": "string",  "description": "Text to insert at the target's cursor." },
+@@ -369,7 +370,11 @@
+         // AX value-set is silently dropped — see crate::terminal docs.
+         // Skip the AX path entirely so the caller never sees the
+         // "success but nothing typed" symptom.
+-        let is_terminal_target = crate::terminal::is_terminal_pid(pid);
++        let key_events_only = crate::terminal::is_terminal_pid(pid)
++            || args
++                .get("force_synthetic")
++                .and_then(Value::as_bool)
++                .unwrap_or(false);
+ 
+         let blocking_policy = keyboard_policy.clone();
+         let result = focus_guard::with_focus_suppressed(
+@@ -383,7 +388,7 @@
+                         &text_clone,
+                         element_ptr,
+                         delay_ms,
+-                        is_terminal_target,
++                        key_events_only,
+                         delivery_mode,
+                         window_id,
+                         blocking_policy,
+@@ -1107,7 +1112,7 @@
+     text: &str,
+     element_ptr_and_idx: Option<(usize, Option<usize>)>,
+     delay_ms: u64,
+-    is_terminal_target: bool,
++    key_events_only: bool,
+     delivery_mode: super::DeliveryMode,
+     window_id: Option<u32>,
+     keyboard_policy: BackgroundKeyboardPolicy,
+@@ -1217,7 +1222,7 @@
+     }
+ 
+     // --- Background rung 0: terminal emulator → CGEvent only (AX is dropped). ---
+-    if is_terminal_target {
++    if key_events_only {
+         // A terminal insert has no semantic AX rung: when the exact-target
+         // decision restricted this request to semantic-only, there is nothing
+         // safe to run — refuse before posting anything.
+--- a/libs/cua-driver/rust/crates/platform-macos/src/windows.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/windows.rs
+@@ -108,6 +108,14 @@
+ }
+ 
+ fn enumerate_windows(options: u32, layers: LayerFilter) -> WindowEnumeration {
++    enumerate_window_metadata(options, kCGNullWindowID, layers)
++}
++
++fn enumerate_window_metadata(
++    options: u32,
++    relative_to_window: u32,
++    layers: LayerFilter,
++) -> WindowEnumeration {
+     use core_foundation::{
+         array::CFArray,
+         base::{CFGetTypeID, CFTypeRef, TCFType},
+@@ -125,7 +133,7 @@
+         .as_ref()
+         .and_then(|query| query.current_space_id());
+ 
+-    let raw_ref = unsafe { CGWindowListCopyWindowInfo(options, kCGNullWindowID) };
++    let raw_ref = unsafe { CGWindowListCopyWindowInfo(options, relative_to_window) };
+     if raw_ref.is_null() {
+         return WindowEnumeration {
+             windows: vec![],
+@@ -326,6 +334,19 @@
+ ///
+ /// Returns `None` only when WindowServer has no record of the id at all —
+ /// which is precisely the "closed or fabricated window_id" signal callers need.
++/// Exact layer-0 metadata and Space membership for input admission, without capture.
++pub(crate) fn input_window_info_by_id(window_id: u32) -> Option<WindowInfo> {
++    const INCLUDING_WINDOW: u32 = 8;
++    enumerate_window_metadata(
++        INCLUDING_WINDOW | kCGWindowListExcludeDesktopElements,
++        window_id,
++        LayerFilter::ZeroOnly,
++    )
++    .windows
++    .into_iter()
++    .find(|window| window.window_id == window_id)
++}
++
+ pub fn window_info_by_id(window_id: u32) -> Option<WindowInfo> {
+     all_windows_any_layer()
+         .into_iter()

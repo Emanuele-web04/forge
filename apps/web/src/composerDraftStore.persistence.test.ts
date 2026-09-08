@@ -1,7 +1,10 @@
 import { OrchestrationProposedPlanId, ProjectId, ThreadId } from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { partializeComposerDraftStoreState, useComposerDraftStore } from "./composerDraftStore";
-import { normalizeCurrentPersistedComposerDraftStoreState } from "./composerDraftPersistence";
+import {
+  normalizeCurrentPersistedComposerDraftStoreState,
+  toHydratedThreadDraft,
+} from "./composerDraftPersistence";
 import {
   makeImage,
   makeQueuedChatTurn,
@@ -21,6 +24,23 @@ import {
 } from "./lib/terminalContext";
 
 describe("composerDraftStore persisted-state hydration", () => {
+  it.each([true, false])(
+    "restores a Computer-only choice of %s after serialization and hydration",
+    (enabled) => {
+      resetComposerDraftStore();
+      const threadId = ThreadId.makeUnsafe("thread-computer-choice");
+      useComposerDraftStore.getState().setEnableComputerControl(threadId, enabled);
+
+      const serialized = JSON.stringify(
+        partializeComposerDraftStoreState(useComposerDraftStore.getState()),
+      );
+      const restored = normalizeCurrentPersistedComposerDraftStoreState(JSON.parse(serialized));
+      const draft = restored.draftsByThreadId[threadId];
+      expect(draft?.enableComputerControl).toBe(enabled);
+      expect(toHydratedThreadDraft(threadId, draft!).enableComputerControl).toBe(enabled);
+    },
+  );
+
   it("normalizes null and empty persisted states", () => {
     const emptyState = {
       draftsByThreadId: {},

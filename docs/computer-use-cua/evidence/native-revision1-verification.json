@@ -1,0 +1,123 @@
+[
+  {
+    "file": "server-integration-tests.log",
+    "sha256": "4dffe3d7befdac4a2d9f09e3495a7bdd9f0ed5531fe75037a3e0923feb35b8fa",
+    "summary": [" Test Files  45 passed (45)", "      Tests  887 passed | 2 skipped (889)"]
+  },
+  {
+    "file": "host-tests-2.log",
+    "sha256": "89a37b357619b5514cf614d0b8c9ef81f4dad0c7c7ee465a1582ae38bde950dc",
+    "summary": [" Test Files  1 passed (1)", "      Tests  10 passed (10)"]
+  },
+  {
+    "file": "packaging-tests.log",
+    "sha256": "bd664e5af833eff05981fd130949fc028053deed043fa0bc7fff63cae7f6ae4b",
+    "summary": [" Test Files  1 passed (1)", "      Tests  8 passed (8)"]
+  },
+  {
+    "file": "desktop-build-final.log",
+    "sha256": "47a716494094e5032fb16c16ca80fb467671940ee0140b13566560c9bea227b2",
+    "summary": ["✔ Build complete in 35ms", "✔ Build complete in 36ms", "✔ Build complete in 45ms"]
+  },
+  {
+    "file": "server-build-final.log",
+    "sha256": "039a84fbc49d49675e7a1b59d223e846765c5db2e8fc8ca9d985f3dc15c7f209",
+    "summary": ["[01:04:31.772] INFO (#1): [cli] Bundled web app into dist/client"]
+  },
+  {
+    "file": "desktop-smoke-final.log",
+    "sha256": "407a4c39d209c2db888e7d1ab29b6b9beaaa3defdbae058668ce0b32748e1d3c",
+    "summary": ["Desktop smoke test passed."],
+    "artifact": "desktop-smoke-final.txt"
+  },
+  {
+    "file": "computer-promotion-tests.log",
+    "sha256": "b314c01d45b9ad207adb2a837a37d70049c9e1d07020ece329241c833c31288f",
+    "summary": [
+      "3 files passed; 245 tests passed, including explicit true/false promotion and persistence."
+    ],
+    "artifact": "computer-promotion-tests.txt"
+  },
+  {
+    "file": "computer-tool-guidance-tests.log",
+    "sha256": "54ec7e76a40c1179c8ac374d40b58b0b4a181f011fc55421dd8cb7134ea87c57",
+    "summary": ["1 file passed; 83 tests passed after focus-semantics guidance clarification."],
+    "artifact": "computer-tool-guidance-tests.txt"
+  },
+  {
+    "file": "web-promotion-build.log",
+    "sha256": "436dd8541502866d1d7b5d929927c35a3e3ee04fc8190fdc00f069f16b6bffa5",
+    "summary": ["Web production build passed; existing chunk-size and Browserslist warnings."],
+    "artifact": "web-promotion-build.txt"
+  },
+  {
+    "file": "server-live-final-build.log",
+    "sha256": "3e5a0891f1c87c47614f2a6db0b62e5fc4396e61376c797c915f09b78355aebb",
+    "summary": ["Server production build passed; final web bundle copied into dist/client."],
+    "artifact": "server-live-final-build.txt"
+  },
+  {
+    "file": "host-suspension-tests.log",
+    "artifact": "host-suspension-tests.txt",
+    "sha256": "9b98a38dddc6a62fdbb943d606fd2454cd294022f06283237abda336e370cb41",
+    "summary": [
+      "12 host tests passed, including late shutdown requests and failed-cleanup barriers."
+    ],
+    "sources": [
+      {
+        "file": "apps/desktop/src/cuaDriverHost.ts",
+        "sha256": "2d53cc7fd2ba4b11c5708d5e803b28fdd7524a9e99b34467390d1e4b6a50f50e"
+      },
+      {
+        "file": "apps/desktop/src/cuaDriverHost.test.ts",
+        "sha256": "caec1a856611e85e8d01995425eb43d2f7d9143e7a6c85d6f62da64522bc463c"
+      },
+      {
+        "file": "apps/desktop/src/main.ts",
+        "sha256": "77f992d427699aee11a480b3b7db004f7f4bcd065ee9fd2c2ddf1ccf95feb52f"
+      }
+    ]
+  },
+  {
+    "file": "desktop-suspension-build.log",
+    "artifact": "desktop-suspension-build.txt",
+    "sha256": "6b16786a5f4c93f643217226b204c712dc676b2cadbc9b40254f54941ac462d8",
+    "summary": ["Desktop production bundle built successfully after host suspension integration."],
+    "sources": [
+      {
+        "file": "apps/desktop/src/cuaDriverHost.ts",
+        "sha256": "2d53cc7fd2ba4b11c5708d5e803b28fdd7524a9e99b34467390d1e4b6a50f50e"
+      },
+      {
+        "file": "apps/desktop/src/cuaDriverHost.test.ts",
+        "sha256": "caec1a856611e85e8d01995425eb43d2f7d9143e7a6c85d6f62da64522bc463c"
+      },
+      {
+        "file": "apps/desktop/src/main.ts",
+        "sha256": "77f992d427699aee11a480b3b7db004f7f4bcd065ee9fd2c2ddf1ccf95feb52f"
+      }
+    ]
+  },
+  {
+    "file": "desktop-suspension-smoke.log",
+    "artifact": "desktop-suspension-smoke.txt",
+    "sha256": "407a4c39d209c2db888e7d1ab29b6b9beaaa3defdbae058668ce0b32748e1d3c",
+    "summary": [
+      "Source desktop startup and shutdown passed with an isolated empty profile; no provider turn or native input."
+    ],
+    "sources": [
+      {
+        "file": "apps/desktop/src/cuaDriverHost.ts",
+        "sha256": "2d53cc7fd2ba4b11c5708d5e803b28fdd7524a9e99b34467390d1e4b6a50f50e"
+      },
+      {
+        "file": "apps/desktop/src/cuaDriverHost.test.ts",
+        "sha256": "caec1a856611e85e8d01995425eb43d2f7d9143e7a6c85d6f62da64522bc463c"
+      },
+      {
+        "file": "apps/desktop/src/main.ts",
+        "sha256": "77f992d427699aee11a480b3b7db004f7f4bcd065ee9fd2c2ddf1ccf95feb52f"
+      }
+    ]
+  }
+]

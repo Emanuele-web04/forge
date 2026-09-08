@@ -346,6 +346,7 @@ function makeToolContext(): ToolContext {
       turnId: "device-e2e-turn",
     },
     callerThreadId: THREAD_ID,
+    callerThreadLabel: null,
     callerSessionKey: "device-e2e",
     callerProvider: "claudeAgent",
     callerCapabilities: new Set(["device:control"]),
