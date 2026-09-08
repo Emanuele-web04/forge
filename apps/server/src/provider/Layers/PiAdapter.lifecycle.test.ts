@@ -512,8 +512,12 @@ function gatewayCredentials() {
     verifyWriteAuthority: () => false,
     registerInFlightRequest: () => () => undefined,
     cancelInFlightRequests: () => ({ count: 0, settled: Promise.resolve() }),
-    cancelSessionTurnRequests: vi.fn(async (_token: string, _turnId: string) => undefined),
-    retireSessionTurn: vi.fn(async (_token: string, _turnId: string) => undefined),
+    cancelSessionTurnRequests: vi.fn<AgentGatewayCredentialsShape["cancelSessionTurnRequests"]>(
+      () => Promise.resolve(),
+    ),
+    retireSessionTurn: vi.fn<AgentGatewayCredentialsShape["retireSessionTurn"]>(() =>
+      Promise.resolve(),
+    ),
     revokeSessionToken: vi.fn((_token: string) => undefined),
     connectionForThread: vi.fn(() => ({
       url: "http://127.0.0.1:3773/mcp",
