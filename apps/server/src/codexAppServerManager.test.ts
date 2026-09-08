@@ -597,7 +597,7 @@ describe("Codex app-server teardown", () => {
     expect(manager.hasSession(threadId)).toBe(false);
   });
 
-  it("releases the session lease once when the app-server exits spontaneously", () => {
+  it("releases the session lease once when the app-server exits spontaneously", async () => {
     class FakeCodexChild extends EventEmitter {
       readonly pid = 5252;
       exitCode: number | null = null;
@@ -607,7 +607,12 @@ describe("Codex app-server teardown", () => {
       readonly stderr = new PassThrough();
     }
     const child = new FakeCodexChild();
-    const manager = new CodexAppServerManager();
+    const teardownProcessTree = vi.fn(async () => ({
+      escalated: false,
+      signalErrors: [],
+      capturedBeforeRootExit: false,
+    }));
+    const manager = new CodexAppServerManager(undefined, { teardownProcessTree });
     const threadId = asThreadId("thread-codex-spontaneous-exit");
     const revokeSessionToken = vi.fn();
     const gatewaySessionLease = acquireAgentGatewaySessionLease(
@@ -651,11 +656,14 @@ describe("Codex app-server teardown", () => {
     internals.sessions.set(threadId, context);
     internals.attachProcessListeners(context);
 
+    child.exitCode = 1;
     child.emit("exit", 1, null);
     child.emit("exit", 1, null);
 
     expect(revokeSessionToken).toHaveBeenCalledOnce();
     expect(manager.hasSession(threadId)).toBe(false);
+    await vi.waitFor(() => expect(internals.sessions.has(threadId)).toBe(false));
+    expect(teardownProcessTree).toHaveBeenCalledOnce();
   });
 });
 

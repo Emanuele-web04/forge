@@ -23,6 +23,7 @@ import {
   type CodexAppServerSendTurnInput,
 } from "../../codexAppServerManager.ts";
 import { ServerConfig } from "../../config.ts";
+import { CodexSessionStartError } from "../../codexErrorClassification.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import { CodexAdapter } from "../Services/CodexAdapter.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
@@ -175,8 +176,43 @@ const validationLayer = it.layer(
 );
 
 validationLayer("CodexAdapterLive validation", (it) => {
+  it.effect(
+    "preserves startup cleanup evidence without reclassifying unknown process failures",
+    () =>
+      Effect.gen(function* () {
+        const adapter = yield* CodexAdapter;
+        for (const cause of [
+          new CodexSessionStartError("Codex stdout closed during initialization."),
+          new Error("Failed to prove Codex app-server process-tree exit."),
+        ]) {
+          validationManager.startSessionImpl.mockRejectedValueOnce(cause);
+          const result = yield* adapter
+            .startSession({
+              provider: "codex",
+              threadId: asThreadId("thread-start-failed"),
+              runtimeMode: "full-access",
+            })
+            .pipe(Effect.result);
+
+          assert.equal(result._tag, "Failure");
+          if (result._tag !== "Failure") throw new Error("Expected startup failure");
+          assert.equal(result.failure._tag, "ProviderAdapterProcessError");
+          if (result.failure._tag !== "ProviderAdapterProcessError") {
+            throw new Error("Expected process failure");
+          }
+          assert.equal(
+            result.failure.reason,
+            cause instanceof CodexSessionStartError ? "startup-failed" : undefined,
+          );
+          assert.equal(result.failure.cause, cause);
+          assert.equal(result.failure.detail, cause.message);
+        }
+      }),
+  );
+
   it.effect("returns validation error for non-codex provider on startSession", () =>
     Effect.gen(function* () {
+      validationManager.startSessionImpl.mockClear();
       const adapter = yield* CodexAdapter;
       const result = yield* adapter
         .startSession({

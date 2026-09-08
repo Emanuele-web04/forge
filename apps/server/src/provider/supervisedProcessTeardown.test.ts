@@ -30,38 +30,106 @@ function deferred<T>() {
 }
 
 describe("teardownProviderProcessTree", () => {
-  it("does not signal a root that exited during the initial snapshot", async () => {
-    const tree: CapturedProcessTree = { descendants: [], captureComplete: true };
-    const captureStarted = deferred<void>();
-    const capturedTree = deferred<CapturedProcessTree>();
-    const rootExit = deferred<void>();
-    const signals: Array<{ signal: TerminalKillSignal; includeRootTree: boolean | undefined }> = [];
-    const clock = deterministicClock();
+  it.each(["linux", "win32"] as const)(
+    "does not certify cleanup when the OS root is gone before its exit notification on %s",
+    async (platform) => {
+      const rootExit = deferred<void>();
+      const tree: CapturedProcessTree = { descendants: [], captureComplete: true };
+      const result = await teardownProviderProcessTree(
+        { rootPid: 91, rootExited: rootExit.promise },
+        {
+          platform,
+          isRootRunning: async () => false,
+          processTreeKiller: {
+            capture: () => tree,
+            inspect: () => ({ verified: true, survivors: [] }),
+            signal: () => rootExit.resolve(undefined),
+          },
+          ...deterministicClock(),
+        },
+      );
+      expect(result.capturedBeforeRootExit).toBe(false);
+    },
+  );
 
-    const teardown = teardownProviderProcessTree(
-      { rootPid: 91, rootExited: rootExit.promise, termGraceMs: 5, forceExitMs: 5, pollMs: 1 },
+  it("does not certify cleanup if the native liveness probe fails", async () => {
+    const rootExit = deferred<void>();
+    const result = await teardownProviderProcessTree(
+      { rootPid: 91, rootExited: rootExit.promise },
       {
-        platform: "win32",
-        captureProcessTree: async () => {
-          captureStarted.resolve(undefined);
-          return capturedTree.promise;
+        isRootRunning: async () => {
+          throw new Error("process table unavailable");
         },
-        inspectProcessTree: async () => ({ verified: true, survivors: [] }),
         processTreeKiller: {
-          capture: () => tree,
-          signal: ({ signal, includeRootTree }) => signals.push({ signal, includeRootTree }),
+          capture: () => ({ descendants: [], captureComplete: true }),
+          inspect: () => ({ verified: true, survivors: [] }),
+          signal: () => rootExit.resolve(undefined),
         },
-        ...clock,
+        ...deterministicClock(),
       },
     );
+    expect(result.capturedBeforeRootExit).toBe(false);
+  });
 
-    await captureStarted.promise;
-    rootExit.resolve(undefined);
-    await Promise.resolve();
-    capturedTree.resolve(tree);
+  it.each(["linux", "win32"] as const)(
+    "does not certify a pre-exit capture when the root exits during the initial snapshot on %s",
+    async (platform) => {
+      const tree: CapturedProcessTree = { descendants: [], captureComplete: true };
+      const captureStarted = deferred<void>();
+      const capturedTree = deferred<CapturedProcessTree>();
+      const rootExit = deferred<void>();
+      const signals: Array<{ signal: TerminalKillSignal; includeRootTree: boolean | undefined }> =
+        [];
+      const clock = deterministicClock();
 
-    await expect(teardown).resolves.toEqual({ escalated: false, signalErrors: [] });
-    expect(signals).toEqual([{ signal: "SIGTERM", includeRootTree: false }]);
+      const teardown = teardownProviderProcessTree(
+        { rootPid: 91, rootExited: rootExit.promise, termGraceMs: 5, forceExitMs: 5, pollMs: 1 },
+        {
+          platform,
+          captureProcessTree: async () => {
+            captureStarted.resolve(undefined);
+            return capturedTree.promise;
+          },
+          inspectProcessTree: async () => ({ verified: true, survivors: [] }),
+          processTreeKiller: {
+            capture: () => tree,
+            signal: ({ signal, includeRootTree }) => signals.push({ signal, includeRootTree }),
+          },
+          ...clock,
+        },
+      );
+
+      await captureStarted.promise;
+      rootExit.resolve(undefined);
+      await Promise.resolve();
+      capturedTree.resolve(tree);
+
+      await expect(teardown).resolves.toEqual({
+        escalated: false,
+        signalErrors: [],
+        capturedBeforeRootExit: false,
+      });
+      expect(signals).toEqual([{ signal: "SIGTERM", includeRootTree: false }]);
+    },
+  );
+
+  it("does not certify an empty PPID snapshot collected after root exit", async () => {
+    // An orphan can still run under init even though PPID traversal from the
+    // former provider root returns an empty, complete snapshot.
+    const tree: CapturedProcessTree = { descendants: [], captureComplete: true };
+    const result = await teardownProviderProcessTree(
+      { rootPid: 91, rootExited: Promise.resolve() },
+      {
+        platform: "linux",
+        processTreeKiller: {
+          capture: () => tree,
+          inspect: () => ({ verified: true, survivors: [] }),
+          signal: () => undefined,
+        },
+        ...deterministicClock(),
+      },
+    );
+    expect(result.capturedBeforeRootExit).toBe(false);
   });
 
   it("escalates ignored TERM and returns only after root and descendants prove exit", async () => {
@@ -92,11 +160,12 @@ describe("teardownProviderProcessTree", () => {
       teardownProviderProcessTree(
         { rootPid: 101, rootExited, termGraceMs: 10, forceExitMs: 10, pollMs: 5 },
         {
+          isRootRunning: async () => true,
           processTreeKiller,
           ...clock,
         },
       ),
-    ).resolves.toEqual({ escalated: true, signalErrors: [] });
+    ).resolves.toEqual({ escalated: true, signalErrors: [], capturedBeforeRootExit: true });
     expect(signals).toEqual([
       { signal: "SIGTERM", includeRootTree: true },
       { signal: "SIGKILL", includeRootTree: true },
@@ -132,11 +201,12 @@ describe("teardownProviderProcessTree", () => {
       teardownProviderProcessTree(
         { rootPid: 201, rootExited, termGraceMs: 10, forceExitMs: 10, pollMs: 5 },
         {
+          isRootRunning: async () => true,
           processTreeKiller,
           ...clock,
         },
       ),
-    ).resolves.toEqual({ escalated: true, signalErrors: [] });
+    ).resolves.toEqual({ escalated: true, signalErrors: [], capturedBeforeRootExit: true });
     expect(signals.at(-1)).toEqual({ signal: "SIGKILL", includeRootTree: false });
   });
 
@@ -186,6 +256,7 @@ describe("teardownProviderProcessTree", () => {
         { rootPid: 801, rootExited, termGraceMs: 5, forceExitMs: 5, pollMs: 5 },
         {
           platform: "win32",
+          isRootRunning: async () => true,
           processTreeKiller,
           captureProcessTree: async () => tree,
           inspectProcessTree: async () => ({
@@ -197,7 +268,7 @@ describe("teardownProviderProcessTree", () => {
           ...clock,
         },
       ),
-    ).resolves.toEqual({ escalated: true, signalErrors: [] });
+    ).resolves.toEqual({ escalated: true, signalErrors: [], capturedBeforeRootExit: true });
 
     expect(signals.at(-1)).toEqual({
       signal: "SIGKILL",
@@ -405,7 +476,7 @@ describe("teardownProviderProcessTree", () => {
           },
         },
       ),
-    ).resolves.toEqual({ escalated: false, signalErrors: [] });
+    ).resolves.toEqual({ escalated: false, signalErrors: [], capturedBeforeRootExit: false });
     expect(signals).toEqual(["SIGTERM"]);
   });
 

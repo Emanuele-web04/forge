@@ -1,6 +1,11 @@
 // FILE: codexErrorClassification.ts
 // Purpose: Centralizes Codex runtime error classification shared across manager and adapter layers.
-// Exports: helpers for non-fatal Codex error messages that should remain warnings
+// Exports: startup failure evidence and helpers for non-fatal Codex error messages
+
+/** Startup failed before a turn could be sent, and process cleanup completed. */
+export class CodexSessionStartError extends Error {
+  override readonly name = "CodexSessionStartError";
+}
 
 const NON_FATAL_CODEX_ERROR_SNIPPETS = [
   "write_stdin failed: stdin is closed for this session",
