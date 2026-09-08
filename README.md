@@ -155,3 +155,5 @@ Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening a pull request. For a r
 ## License
 
 Synara is licensed under the [MIT License](./LICENSE).
+
+Third-party attributions live in [ATTRIBUTION.md](./ATTRIBUTION.md).
