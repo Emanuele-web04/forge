@@ -1,5 +1,5 @@
 import type { ServerAgentProviderUsage } from "@synara/contracts";
-import { Effect } from "effect";
+import { Duration, Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
 import type { ToolContext } from "./toolRuntime";
@@ -92,5 +92,41 @@ describe("makeAgentGatewayUsageTools", () => {
 
     expect(requestedProvider).toBeUndefined();
     expect(resultJson(result).usage).toEqual([usage]);
+  });
+
+  it("returns timed-out unavailable usage when the caller load stalls", async () => {
+    const [tool] = makeAgentGatewayUsageTools({
+      loadProviderUsage: () => Effect.never,
+      timeout: Duration.millis(10),
+    });
+
+    const result = await Effect.runPromise(tool!.handler({}, context));
+    const timedOut = resultJson(result).usage as Record<string, unknown>;
+
+    expect(timedOut.provider).toBe("codex");
+    expect(timedOut.availability).toBe("unavailable");
+    expect(timedOut.unavailableReason).toBe("timed-out");
+    expect(timedOut.quotaWindows).toEqual([]);
+  });
+
+  it("returns an error result when the list load stalls", async () => {
+    const tools = makeAgentGatewayUsageTools({
+      loadProviderUsage: () => Effect.never,
+      timeout: Duration.millis(10),
+    });
+
+    const result = await Effect.runPromise(tools[1]!.handler({}, context));
+
+    expect(result.isError).toBe(true);
+  });
+
+  it("returns an error result when the load fails", async () => {
+    const [tool] = makeAgentGatewayUsageTools({
+      loadProviderUsage: () => Effect.fail(new Error("boom")),
+    });
+
+    const result = await Effect.runPromise(tool!.handler({}, context));
+
+    expect(result.isError).toBe(true);
   });
 });

@@ -144,7 +144,9 @@ export function summarizeProviderUsageForAgent(input: {
       remainingPercent: Math.max(0, Math.min(100, 100 - limit.usedPercent)),
     };
   });
-  const availableCount = quotaWindows.filter((window) => window.availability === "available").length;
+  const availableCount = quotaWindows.filter(
+    (window) => window.availability === "available",
+  ).length;
   if (availableCount === 0) {
     return {
       provider: input.provider,
