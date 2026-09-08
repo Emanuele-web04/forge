@@ -191,6 +191,16 @@ import {
   ServerConfig,
   ServerConfigStreamEvent,
   ServerDiagnosticsResult,
+  ResourceCancelDiskScanResult,
+  ResourceCleanWorkspacesInput,
+  ResourceCleanWorkspacesResult,
+  ResourceDiskUsageReport,
+  ResourceGetSnapshotResult,
+  ResourceKillAllSessionsResult,
+  ResourceKillSessionInput,
+  ResourceKillSessionResult,
+  ResourceRestartDaemonResult,
+  ResourceScanDiskInput,
   ServerGenerateAutomationIntentInput,
   ServerGenerateAutomationIntentResult,
   ServerGenerateThreadRecapInput,
@@ -1057,6 +1067,48 @@ export const WsServerGetDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetDiagnostic
   error: WsRpcError,
 });
 
+export const WsResourceGetSnapshotRpc = Rpc.make(WS_METHODS.resourceGetSnapshot, {
+  payload: Schema.Struct({}),
+  success: ResourceGetSnapshotResult,
+  error: WsRpcError,
+});
+
+export const WsResourceKillSessionRpc = Rpc.make(WS_METHODS.resourceKillSession, {
+  payload: ResourceKillSessionInput,
+  success: ResourceKillSessionResult,
+  error: WsRpcError,
+});
+
+export const WsResourceKillAllSessionsRpc = Rpc.make(WS_METHODS.resourceKillAllSessions, {
+  payload: Schema.Struct({}),
+  success: ResourceKillAllSessionsResult,
+  error: WsRpcError,
+});
+
+export const WsResourceCleanWorkspacesRpc = Rpc.make(WS_METHODS.resourceCleanWorkspaces, {
+  payload: ResourceCleanWorkspacesInput,
+  success: ResourceCleanWorkspacesResult,
+  error: WsRpcError,
+});
+
+export const WsResourceScanDiskRpc = Rpc.make(WS_METHODS.resourceScanDisk, {
+  payload: ResourceScanDiskInput,
+  success: ResourceDiskUsageReport,
+  error: WsRpcError,
+});
+
+export const WsResourceCancelDiskScanRpc = Rpc.make(WS_METHODS.resourceCancelDiskScan, {
+  payload: Schema.Struct({}),
+  success: ResourceCancelDiskScanResult,
+  error: WsRpcError,
+});
+
+export const WsResourceRestartDaemonRpc = Rpc.make(WS_METHODS.resourceRestartDaemon, {
+  payload: Schema.Struct({}),
+  success: ResourceRestartDaemonResult,
+  error: WsRpcError,
+});
+
 export const WsServerPrewarmVoiceRpc = Rpc.make(WS_METHODS.serverPrewarmVoice, {
   payload: ServerVoicePrewarmInput,
   success: ServerVoicePrewarmResult,
@@ -1343,6 +1395,13 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsStatsGetProfileStatsRpc,
   WsStatsGetProfileTokenStatsRpc,
   WsServerGetDiagnosticsRpc,
+  WsResourceGetSnapshotRpc,
+  WsResourceKillSessionRpc,
+  WsResourceKillAllSessionsRpc,
+  WsResourceCleanWorkspacesRpc,
+  WsResourceScanDiskRpc,
+  WsResourceCancelDiskScanRpc,
+  WsResourceRestartDaemonRpc,
   WsServerPrewarmVoiceRpc,
   WsServerTranscribeVoiceRpc,
   WsServerGenerateThreadRecapRpc,

@@ -173,6 +173,16 @@ import type { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from
 import type {
   ServerConfig,
   ServerDiagnosticsResult,
+  ResourceCancelDiskScanResult,
+  ResourceCleanWorkspacesInput,
+  ResourceCleanWorkspacesResult,
+  ResourceDiskUsageReport,
+  ResourceGetSnapshotResult,
+  ResourceKillAllSessionsResult,
+  ResourceKillSessionInput,
+  ResourceKillSessionResult,
+  ResourceRestartDaemonResult,
+  ResourceScanDiskInput,
   ServerGenerateAutomationIntentInput,
   ServerGenerateAutomationIntentResult,
   ServerGenerateThreadRecapInput,
@@ -833,6 +843,15 @@ export interface NativeApi {
       input: ServerListProviderUsageInput,
     ) => Promise<ServerListProviderUsageResult>;
     getDiagnostics: () => Promise<ServerDiagnosticsResult>;
+    getResourceSnapshot: () => Promise<ResourceGetSnapshotResult>;
+    killResourceSession: (input: ResourceKillSessionInput) => Promise<ResourceKillSessionResult>;
+    killAllResourceSessions: () => Promise<ResourceKillAllSessionsResult>;
+    cleanResourceWorkspaces: (
+      input: ResourceCleanWorkspacesInput,
+    ) => Promise<ResourceCleanWorkspacesResult>;
+    scanResourceDisk: (input: ResourceScanDiskInput) => Promise<ResourceDiskUsageReport>;
+    cancelResourceDiskScan: () => Promise<ResourceCancelDiskScanResult>;
+    restartResourceDaemon: () => Promise<ResourceRestartDaemonResult>;
     generateThreadRecap: (
       input: ServerGenerateThreadRecapInput,
     ) => Promise<ServerGenerateThreadRecapResult>;

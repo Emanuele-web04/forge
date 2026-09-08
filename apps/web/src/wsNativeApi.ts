@@ -709,6 +709,15 @@ export function createWsNativeApi(): NativeApi {
         transport.request(WS_METHODS.serverGetProviderUsageSnapshot, input),
       listProviderUsage: (input) => transport.request(WS_METHODS.serverListProviderUsage, input),
       getDiagnostics: () => transport.request(WS_METHODS.serverGetDiagnostics),
+      getResourceSnapshot: () => transport.request(WS_METHODS.resourceGetSnapshot),
+      killResourceSession: (input) => transport.request(WS_METHODS.resourceKillSession, input),
+      killAllResourceSessions: () => transport.request(WS_METHODS.resourceKillAllSessions),
+      cleanResourceWorkspaces: (input) =>
+        transport.request(WS_METHODS.resourceCleanWorkspaces, input, { timeoutMs: null }),
+      scanResourceDisk: (input) =>
+        transport.request(WS_METHODS.resourceScanDisk, input, { timeoutMs: null }),
+      cancelResourceDiskScan: () => transport.request(WS_METHODS.resourceCancelDiskScan),
+      restartResourceDaemon: () => transport.request(WS_METHODS.resourceRestartDaemon),
       generateThreadRecap: (input) =>
         transport.request(WS_METHODS.serverGenerateThreadRecap, input, {
           timeoutMs: null,

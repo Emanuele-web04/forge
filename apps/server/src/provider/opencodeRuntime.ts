@@ -49,6 +49,7 @@ import {
   teardownEffectProcessTree,
   teardownProviderProcessTree,
 } from "./supervisedProcessTeardown.ts";
+import { registerProviderProcess } from "../providerProcessRegistry.ts";
 import { isWindowsShellCommandMissingResult } from "../shell-command-detection.ts";
 
 const DEFAULT_OPENCODE_SERVER_TIMEOUT_MS = 20_000;
@@ -82,6 +83,8 @@ export const OPENCODE_CLI_SPEC: OpenCodeCompatibleCliSpec = {
 export interface OpenCodeServerProcess {
   readonly url: string;
   readonly exitCode: Effect.Effect<number, never>;
+  /** OS pid of the managed server, for resource attribution. Null when unreadable. */
+  readonly pid: number | null;
 }
 
 export interface OpenCodeServerConnection {
@@ -1063,8 +1066,20 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
           });
         }
 
+        // Pooled servers are shared across threads, so they register without
+        // owners and land in the resource manager's Providers/Shared bucket
+        // instead of orphan. Stale entries prune lazily by liveness checks.
+        // Effect's ChildProcess exposes pid synchronously (absent when the
+        // spawn failed before fork).
+        const rawPid: unknown = child.pid;
+        const pid = typeof rawPid === "number" ? rawPid : null;
+        if (pid !== null) {
+          registerProviderProcess({ pid, provider: cliSpec.displayName });
+        }
+
         return {
           url: readyOption.value,
+          pid,
           exitCode: child.exitCode.pipe(
             Effect.map(Number),
             Effect.orElseSucceed(() => 0),
