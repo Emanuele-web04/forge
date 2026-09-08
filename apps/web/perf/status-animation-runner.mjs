@@ -53,9 +53,9 @@ const app = await _electron.launch({
   args: [entry],
   env: { ...process.env, ELECTRON_RUN_AS_NODE: "" },
 });
-const page = await app.firstWindow();
 const samples = [];
 try {
+  const page = await app.firstWindow();
   for (let repeat = 0; repeat < 3; repeat++) {
     for (const variant of repeat % 2 ? ["optimized", "baseline"] : ["baseline", "optimized"]) {
       await page.goto(pathToFileURL(fixture).href);
