@@ -28,7 +28,11 @@ import {
   sendEffectRpcExit,
   type EffectRpcWebSocketClient,
 } from "../test/effectRpcWebSocketMock";
-import { createBrowserTestServerConfig, createFullscreenTestHost } from "../test/browserHarness";
+import {
+  createBrowserTestServerConfig,
+  createBrowserTestServerSettings,
+  createFullscreenTestHost,
+} from "../test/browserHarness";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
 
 const THREAD_ID = "thread-kb-toast-test" as ThreadId;
@@ -169,6 +173,9 @@ function resolveWsRpc(tag: string): unknown {
   }
   if (tag === ORCHESTRATION_WS_METHODS.getSnapshot) {
     return fixture.snapshot;
+  }
+  if (tag === WS_METHODS.serverGetSettings) {
+    return createBrowserTestServerSettings(NOW_ISO);
   }
   if (tag === WS_METHODS.serverGetConfig) {
     return fixture.serverConfig;

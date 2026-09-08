@@ -254,6 +254,8 @@ const PersistedHiddenModels = Schema.Array(
 
 export const AppSettingsSchema = Schema.Struct({
   claudeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  // Server-backed first-run marker; see ServerSettings.onboardingCompletedAt.
+  onboardingCompletedAt: Schema.NullOr(Schema.String).pipe(withDefaults((): string | null => null)),
   uiDensity: UiDensity.pipe(withDefaults(() => DEFAULT_UI_DENSITY)),
   chatWidth: ChatWidthMode.pipe(withDefaults(() => DEFAULT_CHAT_WIDTH)),
   chatFontSizePx: Schema.Number.pipe(withDefaults(() => DEFAULT_CHAT_FONT_SIZE_PX)),
@@ -700,6 +702,7 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     disabledProviders: getServerDisabledProviders(settings),
     textGenerationProvider: settings.textGenerationModelSelection.provider,
     textGenerationModel: settings.textGenerationModelSelection.model,
+    onboardingCompletedAt: settings.onboardingCompletedAt ?? null,
   };
 }
 
@@ -777,6 +780,9 @@ export function appSettingsPatchToServerSettingsPatch(
   }
   if (patch.defaultThreadEnvMode === "local" || patch.defaultThreadEnvMode === "worktree") {
     serverPatch.defaultThreadEnvMode = patch.defaultThreadEnvMode;
+  }
+  if (hasOwn(patch, "onboardingCompletedAt")) {
+    serverPatch.onboardingCompletedAt = patch.onboardingCompletedAt ?? null;
   }
   if (hasOwn(patch, "textGenerationModel") || hasOwn(patch, "textGenerationProvider")) {
     const model = patch.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
@@ -1476,12 +1482,21 @@ export function useAppSettings() {
   };
 
   const resetSettings = async (): Promise<void> => {
-    setSettings(DEFAULT_APP_SETTINGS);
+    // "Restore defaults" resets preferences, not lifecycle markers: clearing the
+    // onboarding completion timestamp would replay the first-run tour on the next launch.
+    const { onboardingCompletedAt: _keepOnboardingCompletedAt, ...resettableDefaults } = defaults;
+    setSettings((prev) => ({
+      ...DEFAULT_APP_SETTINGS,
+      onboardingCompletedAt: prev.onboardingCompletedAt,
+    }));
     await enqueueServerSettingsMutation(async () => {
       const currentServerSettings =
         queryClient.getQueryData<ServerSettingsView>(serverQueryKeys.settings()) ??
         serverSettingsQuery.data;
-      const serverPatch = appSettingsPatchToServerSettingsPatch(defaults, currentServerSettings);
+      const serverPatch = appSettingsPatchToServerSettingsPatch(
+        resettableDefaults,
+        currentServerSettings,
+      );
       const providerSettingsChanged = Boolean(
         serverPatch.providers && Object.keys(serverPatch.providers).length > 0,
       );
