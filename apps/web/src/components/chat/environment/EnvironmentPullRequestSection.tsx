@@ -431,21 +431,38 @@ export function EnvironmentPullRequestSection({
       });
   };
 
+  const actionPending = actionMutation.isPending;
   const detail = detailQuery.data ?? null;
   const stackAssessment = detail?.stack ? assessPullRequestStack(detail.stack) : null;
+  // Merge is gated on the detail query: the git snapshot knows nothing about allowed merge
+  // methods, stack state, or review blockers, so offering Merge before detail resolves could
+  // send an action GitHub rejects. Until then the entry stays disabled with a status hint.
   const allowedMergeMethods: PullRequestMergeMethod[] = detail
     ? (["merge", "squash", "rebase"] as const).filter((method) => detail.mergeCapabilities[method])
-    : ["merge", "squash", "rebase"];
+    : [];
   // Local snapshot facts first (draft, conflicts) so the reason shows before detail loads.
   const mergeBlocker = displayPr.isDraft
     ? "Mark the pull request ready for review before merging"
     : displayPr.mergeability === "conflicting"
       ? "Resolve merge conflicts before merging"
       : detail
-        ? pullRequestMergeBlocker(detail, stackAssessment)
+        ? (pullRequestMergeBlocker(detail, stackAssessment) ??
+          (allowedMergeMethods.length === 0
+            ? "No merge method is allowed for this repository"
+            : null))
         : null;
+  const mergeDetailStatus: "ready" | "loading" | "error" =
+    mergeBlocker !== null || detail ? "ready" : detailQuery.isError ? "error" : "loading";
+  const mergeDisabled = actionPending || mergeBlocker !== null || mergeDetailStatus !== "ready";
+  const mergeTrailing =
+    mergeBlocker !== null
+      ? "Blocked"
+      : mergeDetailStatus === "loading"
+        ? "Loading…"
+        : mergeDetailStatus === "error"
+          ? "Unavailable"
+          : null;
   const canRunActions = actionInput !== null && settledState === null;
-  const actionPending = actionMutation.isPending;
   const repairDisabled = loading || failed || !activeThreadId || repairs.total === 0;
   const stateLabel = settledState
     ? settledState === "merged"
@@ -669,7 +686,13 @@ export function EnvironmentPullRequestSection({
 
               {canRunActions ? (
                 <MenuSub keepOpenOnFocusOut>
-                  <MenuSubTrigger disabled={actionPending || mergeBlocker !== null}>
+                  <MenuSubTrigger
+                    disabled={mergeDisabled}
+                    title={
+                      mergeBlocker ??
+                      (detailQuery.error instanceof Error ? detailQuery.error.message : undefined)
+                    }
+                  >
                     <MenuRowLabel
                       icon={<GitMergeIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
                       label={
@@ -677,7 +700,7 @@ export function EnvironmentPullRequestSection({
                           ? "Merging…"
                           : "Merge"
                       }
-                      trailing={mergeBlocker ? "Blocked" : null}
+                      trailing={mergeTrailing}
                     />
                   </MenuSubTrigger>
                   <ComposerPickerMenuSubPopup className="w-56 min-w-56">
@@ -803,7 +826,10 @@ export function EnvironmentPullRequestSection({
               onClick={() => {
                 const method = confirmMerge;
                 setConfirmMerge(null);
-                if (method) runAction("merge", method);
+                // Re-check against the loaded capabilities: the dialog may outlive a refetch.
+                if (method && detail && allowedMergeMethods.includes(method)) {
+                  runAction("merge", method);
+                }
               }}
             >
               {detail?.stack ? "Merge stack" : "Merge"}
