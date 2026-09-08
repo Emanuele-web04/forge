@@ -87,6 +87,54 @@ describe("AcpCoreRuntimeEvents", () => {
     });
   });
 
+  // An approval whose request type has no renderable kind never reaches the user,
+  // so every remaining ACP tool kind has to land on the canonical tool approval.
+  it.each(["search", "fetch", "think", "other", "unknown"] as const)(
+    "maps the %s ACP permission kind to a canonical tool approval",
+    (kind) => {
+      const stamp = { eventId: "event-kind" as never, createdAt: "2026-03-27T00:00:00.000Z" };
+      const permissionRequest = {
+        kind,
+        detail: "run the tool",
+        toolCall: {
+          toolCallId: "tool-kind",
+          kind,
+          status: "pending" as const,
+          detail: "run the tool",
+          data: { toolCallId: "tool-kind", kind },
+        },
+      };
+
+      expect(
+        makeAcpRequestOpenedEvent({
+          stamp,
+          provider: "cursor",
+          threadId: "thread-kind" as never,
+          turnId: TurnId.makeUnsafe("turn-kind"),
+          requestId: RuntimeRequestId.makeUnsafe("request-kind"),
+          permissionRequest,
+          detail: "run the tool",
+          args: {},
+          source: "acp.jsonrpc",
+          method: "session/request_permission",
+          rawPayload: {},
+        }),
+      ).toMatchObject({ payload: { requestType: "tool_approval" } });
+
+      expect(
+        makeAcpRequestResolvedEvent({
+          stamp,
+          provider: "cursor",
+          threadId: "thread-kind" as never,
+          turnId: TurnId.makeUnsafe("turn-kind"),
+          requestId: RuntimeRequestId.makeUnsafe("request-kind"),
+          permissionRequest,
+          decision: "accept",
+        }),
+      ).toMatchObject({ payload: { requestType: "tool_approval" } });
+    },
+  );
+
   it("maps ACP core plan, tool-call, and content updates", () => {
     const stamp = { eventId: "event-1" as never, createdAt: "2026-03-27T00:00:00.000Z" };
     const turnId = TurnId.makeUnsafe("turn-1");

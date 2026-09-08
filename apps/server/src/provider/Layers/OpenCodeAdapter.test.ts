@@ -4045,6 +4045,78 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(runtime.permissionReplyCalls).toEqual([]);
   });
 
+  // Permissions outside bash/read/edit used to be classified as "unknown", which
+  // maps to no approval kind: the card never rendered and the turn hung forever.
+  it("classifies non-file, non-command OpenCode permissions as tool approvals", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    }) as unknown as {
+      event: {
+        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
+      };
+    };
+    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-tool-permission"),
+          runtimeMode: "approval-required",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: asThreadId("thread-tool-permission"),
+          input: "hello",
+          attachments: [],
+          modelSelection: {
+            provider: "opencode",
+            model: "openai/gpt-5.4",
+          },
+        });
+
+        eventQueue.push({
+          id: "evt-permission-asked-tool",
+          type: "permission.asked",
+          properties: {
+            id: "permission-tool-1",
+            sessionID: "opencode-session-1",
+            permission: "webfetch",
+            patterns: ["https://example.com"],
+            metadata: {},
+            always: [],
+          },
+        });
+
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+        return events;
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result[3]).toMatchObject({
+      type: "request.opened",
+      payload: { requestType: "tool_approval" },
+    });
+  });
+
   it("confirms a human permission reply from permission.list and continues the same turn", async () => {
     const eventQueue = createSubscribedEventQueue();
     let replySubmitted = false;

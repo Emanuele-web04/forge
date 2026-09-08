@@ -7,7 +7,7 @@
 import type { ToolLifecycleItemType } from "@synara/contracts";
 import { stripTrailingToolExitCode as stripTrailingExitCode } from "@synara/shared/toolOutputSummary";
 
-type WorkLogRequestKind = "command" | "file-read" | "file-change" | "permissions";
+type WorkLogRequestKind = "command" | "file-read" | "file-change" | "permissions" | "tool";
 
 export interface WorkLogToolOutputDetails {
   output?: string;

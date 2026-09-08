@@ -32,7 +32,7 @@ export function makeAgentGatewaySessionRegistry(options?: {
   const sessionsByKey = new Map<string, RegisteredSession>();
 
   return {
-    issue: (threadId, provider) => {
+    issue: (threadId, provider, issueOptions) => {
       // Every provider runtime owns an independent credential. Replacement
       // runtimes overlap their predecessor during startup, and the outgoing
       // runtime revokes its own token during teardown. Reusing a token here
@@ -45,7 +45,10 @@ export function makeAgentGatewaySessionRegistry(options?: {
         threadId,
         provider,
         issuedAt,
-        capabilities: new Set(PROVIDER_SESSION_CAPABILITIES),
+        capabilities: new Set([
+          ...PROVIDER_SESSION_CAPABILITIES,
+          ...(issueOptions?.additionalCapabilities ?? []),
+        ]),
       };
       const registered: RegisteredSession = {
         identity,

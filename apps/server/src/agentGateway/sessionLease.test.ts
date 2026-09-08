@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   acquireAgentGatewaySessionLease,
+  AGENT_GATEWAY_NO_CAPABILITIES,
   cancelAgentGatewayTurn,
   releaseAgentGatewaySessionLeaseOnInterrupt,
   startAgentGatewaySessionLeaseExitWatcher,
@@ -24,6 +25,7 @@ describe("AgentGatewaySessionLease", () => {
       },
       ThreadId.makeUnsafe("thread-1"),
       "codex",
+      AGENT_GATEWAY_NO_CAPABILITIES,
     );
 
     await lease?.cancelTurn("turn-exact");
@@ -49,6 +51,7 @@ describe("AgentGatewaySessionLease", () => {
       },
       ThreadId.makeUnsafe("thread-1"),
       "codex",
+      AGENT_GATEWAY_NO_CAPABILITIES,
     );
 
     await lease?.retireTurn("turn-a");
@@ -251,6 +254,7 @@ describe("AgentGatewaySessionLease", () => {
       { connectionForThread, issueStdioBootstrapToken, revokeSessionToken },
       ThreadId.makeUnsafe("thread-1"),
       "cursor",
+      AGENT_GATEWAY_NO_CAPABILITIES,
     );
 
     expect(lease?.connection).toEqual({
@@ -281,8 +285,18 @@ describe("AgentGatewaySessionLease", () => {
     const credentials = { connectionForThread, revokeSessionToken };
     const threadId = ThreadId.makeUnsafe("thread-1");
 
-    const previous = acquireAgentGatewaySessionLease(credentials, threadId, "grok");
-    const replacement = acquireAgentGatewaySessionLease(credentials, threadId, "grok");
+    const previous = acquireAgentGatewaySessionLease(
+      credentials,
+      threadId,
+      "grok",
+      AGENT_GATEWAY_NO_CAPABILITIES,
+    );
+    const replacement = acquireAgentGatewaySessionLease(
+      credentials,
+      threadId,
+      "grok",
+      AGENT_GATEWAY_NO_CAPABILITIES,
+    );
 
     previous?.release();
     expect(revokeSessionToken).toHaveBeenLastCalledWith("gateway-token-1");
@@ -295,7 +309,12 @@ describe("AgentGatewaySessionLease", () => {
 
   it("does not acquire a credential when the gateway layer is absent", () => {
     expect(
-      acquireAgentGatewaySessionLease(undefined, ThreadId.makeUnsafe("thread-1"), "droid"),
+      acquireAgentGatewaySessionLease(
+        undefined,
+        ThreadId.makeUnsafe("thread-1"),
+        "droid",
+        AGENT_GATEWAY_NO_CAPABILITIES,
+      ),
     ).toBeUndefined();
   });
 
@@ -313,6 +332,7 @@ describe("AgentGatewaySessionLease", () => {
       },
       ThreadId.makeUnsafe("thread-1"),
       "claudeAgent",
+      AGENT_GATEWAY_NO_CAPABILITIES,
     );
 
     expect(() => lease?.release()).toThrow("revoke failed");
@@ -333,6 +353,7 @@ describe("AgentGatewaySessionLease", () => {
       },
       ThreadId.makeUnsafe("thread-1"),
       "cursor",
+      AGENT_GATEWAY_NO_CAPABILITIES,
     );
 
     await Effect.runPromise(
@@ -376,6 +397,7 @@ describe("AgentGatewaySessionLease", () => {
       },
       ThreadId.makeUnsafe("thread-1"),
       "pi",
+      AGENT_GATEWAY_NO_CAPABILITIES,
     );
 
     await Effect.runPromise(

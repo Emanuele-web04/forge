@@ -2051,7 +2051,14 @@ function extractToolName(payload: Record<string, unknown> | null): string | null
   const data = asRecord(payload?.data);
   const item = asRecord(data?.item);
   const itemInput = asRecord(item?.input);
-  const candidates = [data?.toolName, data?.tool, item?.toolName, item?.name, itemInput?.toolName];
+  const candidates = [
+    payload?.toolName,
+    data?.toolName,
+    data?.tool,
+    item?.toolName,
+    item?.name,
+    itemInput?.toolName,
+  ];
   for (const candidate of candidates) {
     const normalized = asTrimmedString(candidate);
     if (normalized) {
@@ -2115,7 +2122,8 @@ function extractWorkLogRequestKind(
     payload?.requestKind === "command" ||
     payload?.requestKind === "file-read" ||
     payload?.requestKind === "file-change" ||
-    payload?.requestKind === "permissions"
+    payload?.requestKind === "permissions" ||
+    payload?.requestKind === "tool"
   ) {
     return payload.requestKind;
   }
