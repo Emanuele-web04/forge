@@ -21,6 +21,19 @@ import {
 } from "./lib/terminalContext";
 
 describe("composerDraftStore persisted-state hydration", () => {
+  it.each([true, false])(
+    "persists a computer-control-only preference (%s) across reloads",
+    (enabled) => {
+      resetComposerDraftStore();
+      const threadId = ThreadId.makeUnsafe("computer-preference");
+      useComposerDraftStore.getState().setEnableComputerControl(threadId, enabled);
+      const persisted = partializeComposerDraftStoreState(useComposerDraftStore.getState());
+      const hydrated = normalizeCurrentPersistedComposerDraftStoreState(persisted);
+      expect(hydrated.draftsByThreadId[threadId]?.enableComputerControl).toBe(enabled);
+      resetComposerDraftStore();
+    },
+  );
+
   it("normalizes null and empty persisted states", () => {
     const emptyState = {
       draftsByThreadId: {},

@@ -16,6 +16,7 @@ import {
   GitPullRequestIcon,
   GlobeIcon,
   InfoIcon,
+  MonitorIcon,
   SidechatIcon,
   TerminalIcon,
 } from "~/lib/icons";
@@ -39,6 +40,7 @@ export const RIGHT_DOCK_PANE_META: Record<RightDockPaneKind, RightDockPaneMeta> 
   // in later, but the only backend today is the iOS Simulator, so that is what
   // the label says.
   device: { label: "iOS Simulator", Icon: DeviceMobileIcon },
+  computer: { label: "Computer", Icon: MonitorIcon },
   diff: { label: "Diff", Icon: DiffIcon },
   explorer: { label: "Explorer", Icon: FoldersIcon },
   file: { label: "File", Icon: FileIcon },
@@ -73,6 +75,7 @@ const RIGHT_DOCK_LAUNCHER_ORDER: readonly RightDockPaneKind[] = [
   "explorer",
   "sidechat",
   "device",
+  "computer",
   "git",
 ];
 

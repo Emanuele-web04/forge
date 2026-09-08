@@ -20,6 +20,8 @@ release/
 /.synara/
 /.synara-*/
 .idea/
+.claude/worktrees/
+__pycache__/
 apps/web/.playwright
 apps/web/playwright-report
 apps/web/test-results
@@ -40,3 +42,8 @@ __screenshots__/
 /browser-sidebar-comment-preload.js.map
 /preload.js.map
 /bootstrap.js.map
+
+# Prebuilt KWin plugin binaries, downloaded from the KWin Plugin Prebuilds
+# workflow into the directory the server reads at install time. Built artifacts,
+# never sources.
+apps/server/native/computer-use-kwin/prebuilt/

@@ -586,3 +586,34 @@ retentionLayer("ProviderRuntimeEventRepository retention", (it) => {
     }),
   );
 });
+
+it.layer(ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)))(
+  "image journal",
+  (it) => {
+    it.effect("journals image metadata without retaining screenshot bodies", () =>
+      Effect.gen(function* () {
+        const repository = yield* ProviderRuntimeEventRepository;
+        const data = Buffer.alloc(500 * 1024).toString("base64");
+        const event: ProviderRuntimeEvent = {
+          ...runtimeEvent("runtime-image", ""),
+          type: "item.completed",
+          payload: {
+            itemType: "mcp_tool_call",
+            data: { result: { content: [{ type: "image", data, mimeType: "image/png" }] } },
+          },
+        };
+        const saved = yield* repository.append(event);
+        const rows = yield* repository.readAfter({
+          sequenceExclusive: 0,
+          throughSequenceInclusive: saved.sequence,
+          limit: 10,
+        });
+        const json = JSON.stringify(rows[0]?.event);
+        assert.isBelow(json.length, 2000);
+        assert.include(json, '"byteLength":512000');
+        assert.notInclude(json, data);
+        assert.include(JSON.stringify(event), data);
+      }),
+    );
+  },
+);

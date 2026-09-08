@@ -9,6 +9,7 @@ import { type KeyboardEvent as ReactKeyboardEvent, useState } from "react";
 
 import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
+import { Badge } from "./ui/badge";
 import { SearchInput } from "./ui/search-input";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
 import {
@@ -20,6 +21,7 @@ import {
   rankSettingsSearchEntries,
   settingsSearchEntryTarget,
   settingsSectionLabel,
+  type SettingsSearchContext,
   type SettingsSearchEntry,
 } from "../settingsSearchIndex";
 import {
@@ -87,12 +89,23 @@ export function SettingsSidebarNav(props: {
   activeSection: SettingsSectionId;
   onBack: () => void;
   onSelectSection: (section: SettingsSectionId, options?: { target?: string }) => void;
+  /**
+   * Which conditionally-rendered rows exist on this machine, so the search
+   * cannot offer a row the panel does not draw. Passed in rather than read here:
+   * this component is a pure nav, and the one fact it needs is owned by a
+   * surface that already has it.
+   */
+  searchContext?: SettingsSearchContext | undefined;
 }) {
   const { onSelectSection } = props;
   const [query, setQuery] = useState("");
   const trimmedQuery = query.trim();
   const isSearching = trimmedQuery.length > 0;
-  const results = rankSettingsSearchEntries(trimmedQuery, SETTINGS_SEARCH_RESULTS_LIMIT);
+  const results = rankSettingsSearchEntries(
+    trimmedQuery,
+    SETTINGS_SEARCH_RESULTS_LIMIT,
+    props.searchContext,
+  );
 
   const handleSelectResult = (entry: SettingsSearchEntry) => {
     const target = settingsSearchEntryTarget(entry);
@@ -204,6 +217,11 @@ export function SettingsSidebarNav(props: {
                           <span className={SETTINGS_SIDEBAR_ITEM_LABEL_CLASS_NAME}>
                             {item.label}
                           </span>
+                          {item.badge ? (
+                            <Badge variant="warning" size="sm" className="ml-auto">
+                              {item.badge}
+                            </Badge>
+                          ) : null}
                         </button>
                       </li>
                     );
