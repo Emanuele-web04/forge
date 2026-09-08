@@ -12,8 +12,8 @@ Credit is not a license notice. If you copy code or prose, carry the upstream no
 
 ## Adapted work (license notice required)
 
-| Project | Author   | Source                           | License | Used in + How                                                                                                                                                                                                         |
-| ------- | -------- | -------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Project | Author   | Source                           | License | Used in + How                                                                                                                                                                                                                    |
+| ------- | -------- | -------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | mind    | Da7-Tech | https://github.com/Da7-Tech/mind | MIT     | Mind memory feature (PR #909, which supersedes closed #863/#899/#900): memory tables, scoring constants, and standing-order prose; upstream snapshot 2026-09-04. Adapted: scoring constants, near-verbatim standing-order prose. |
 
 ### License notice for mind
