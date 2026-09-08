@@ -1898,6 +1898,8 @@ const make = Effect.gen(function* () {
   >();
   const bufferedTextSpilledByMessageKey = new Set<string>();
 
+  const firstOutputRecorded = new Set<string>();
+
   const processRuntimeEvent = (event: ProviderRuntimeEvent, runtimeSequence: number) =>
     Effect.gen(function* () {
       const now = event.createdAt;
@@ -2342,6 +2344,43 @@ const make = Effect.gen(function* () {
             runtimeMode: inferredRuntimeMode,
             createdAt: now,
           });
+        }
+      }
+
+      // Record one real model-output arrival per turn, including reasoning.
+      // Receipt lookup makes replay/restart idempotent without overwriting the first timestamp.
+      if (
+        event.type === "content.delta" &&
+        event.turnId &&
+        event.payload.delta.length > 0 &&
+        ["assistant_text", "reasoning_text", "reasoning_summary_text"].includes(
+          event.payload.streamKind,
+        )
+      ) {
+        const key = `provider:first-output:${thread.id}:${event.turnId}`;
+        if (!firstOutputRecorded.has(key)) {
+          const commandId = CommandId.makeUnsafe(key);
+          const receipt = yield* commandReceipts.getByCommandId({ commandId });
+          if (Option.isNone(receipt)) {
+            yield* orchestrationEngine.dispatch({
+              type: "thread.activity.append",
+              commandId,
+              threadId: thread.id,
+              activity: {
+                id: EventId.makeUnsafe(key),
+                turnId: toTurnId(event.turnId) ?? null,
+                kind: "provider.first-output",
+                tone: "info",
+                summary: "First model output",
+                createdAt: event.createdAt,
+                payload: { streamKind: event.payload.streamKind },
+              },
+              createdAt: event.createdAt,
+            });
+          }
+          firstOutputRecorded.add(key);
+          if (firstOutputRecorded.size > 10000)
+            firstOutputRecorded.delete(firstOutputRecorded.values().next().value!);
         }
       }
 

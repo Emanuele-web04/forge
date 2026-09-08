@@ -1,3 +1,4 @@
+import { deriveConversationUsage } from "~/lib/messageUsage";
 import {
   type AutomationDefinition,
   type AutomationSchedule,
@@ -1974,6 +1975,11 @@ export default function ChatView({
   const activeLatestTurnState = activeLatestTurn?.state ?? null;
   const activeLatestTurnCompletedAt = activeLatestTurn?.completedAt ?? null;
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
+  const usageMessages = activeThread?.messages ?? EMPTY_MESSAGES;
+  const { byTurnId: usageByTurnId, cumulative: conversationUsage } = useMemo(
+    () => deriveConversationUsage(threadActivities, usageMessages),
+    [threadActivities, usageMessages],
+  );
   const hasLiveTurnTail = hasLiveTurnTailWork({
     latestTurn: activeLatestTurn,
     messages: activeThread?.messages ?? EMPTY_MESSAGES,
@@ -12102,30 +12108,19 @@ export default function ChatView({
                     <div
                       data-chat-composer-actions="right"
                       className={cn(
-                        "flex items-center gap-2",
-                        isVoiceRecording || isVoiceTranscribing ? "min-w-0 flex-1" : "shrink-0",
+                        "flex min-w-0 flex-wrap items-center justify-end gap-2",
+                        isVoiceRecording || isVoiceTranscribing ? "min-w-0 flex-1" : "min-w-0",
                       )}
                     >
                       {!isVoiceRecording &&
                       !isVoiceTranscribing &&
-                      runtimeUsageContextWindow &&
-                      composerFooterControlsPlan.showContextMeter ? (
+                      (runtimeUsageContextWindow || conversationUsage.length > 0) ? (
                         <ContextWindowMeter
+                          provider={selectedProvider}
                           usage={runtimeUsageContextWindow}
-                          {...(activeCumulativeCostUsd != null
-                            ? { cumulativeCostUsd: activeCumulativeCostUsd }
-                            : {})}
-                          {...(contextWindowSelectionStatus.activeLabel !== undefined
-                            ? {
-                                activeWindowLabel: contextWindowSelectionStatus.activeLabel,
-                              }
-                            : {})}
-                          {...(contextWindowSelectionStatus.pendingSelectedLabel !== undefined
-                            ? {
-                                pendingWindowLabel:
-                                  contextWindowSelectionStatus.pendingSelectedLabel,
-                              }
-                            : {})}
+                          sessionUsage={conversationUsage}
+                          activeWindowLabel={contextWindowSelectionStatus.activeLabel}
+                          pendingWindowLabel={contextWindowSelectionStatus.pendingSelectedLabel}
                         />
                       ) : null}
                       {!isVoiceRecording && !isVoiceTranscribing ? composerPickerControls : null}
@@ -12601,6 +12596,7 @@ export default function ChatView({
               <div className="flex min-h-0 flex-1 flex-col">
                 <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
                   <ChatTranscriptPane
+                    usageByTurnId={usageByTurnId}
                     activeThreadId={activeThread.id}
                     activeTurnId={activeTurnIdForTranscript}
                     agentActivityDetail={openAgentActivityDetail}

@@ -21,7 +21,10 @@ function asContextWindowPercent(value: unknown): number | null {
 }
 
 type NullableContextWindowUsage = {
-  readonly [Key in keyof ThreadTokenUsageSnapshot]: undefined extends ThreadTokenUsageSnapshot[Key]
+  readonly [Key in keyof Omit<
+    ThreadTokenUsageSnapshot,
+    "cumulativeUsage"
+  >]: undefined extends ThreadTokenUsageSnapshot[Key]
     ? Exclude<ThreadTokenUsageSnapshot[Key], undefined> | null
     : ThreadTokenUsageSnapshot[Key];
 };

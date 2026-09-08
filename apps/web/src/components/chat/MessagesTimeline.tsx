@@ -83,6 +83,8 @@ import { InlineSlashCommandChip } from "./InlineSlashCommandChip";
 import { InlineAgentChip } from "./InlineAgentChip";
 import { EditedFileRow } from "./EditedFileRow";
 import { MessageActionButton, MESSAGE_ACTION_ICON_CLASS_NAME } from "./MessageActionButton";
+import type { MessageUsageMetric } from "~/lib/messageUsage";
+import { MessageUsage } from "./MessageUsage";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { AssistantSelectionsSummaryChip } from "./AssistantSelectionsSummaryChip";
 import { FileAttachmentChip } from "./FileAttachmentChip";
@@ -473,6 +475,7 @@ interface MessagesTimelineProps {
   forkSource?: ForkSourceReference | null;
   /** Marks the transcript as a temporary chat so user bubbles render the dashed primary outline. */
   isTemporaryThread?: boolean;
+  usageByTurnId?: ReadonlyMap<TurnId, readonly MessageUsageMetric[]> | undefined;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   nowIso?: string;
@@ -563,6 +566,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   forkSource: forkSourceProp,
   isTemporaryThread: isTemporaryThreadProp,
   timelineEntries,
+  usageByTurnId,
   turnDiffSummaryByAssistantMessageId,
   nowIso,
   expandedWorkGroups,
@@ -950,6 +954,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       submittingEditedUserMessageId,
       threadMarkersByMessageId,
       toolGroupSummaryOverrides,
+      usageByTurnId,
     }),
     [
       crossTaskOrigin,
@@ -969,6 +974,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       submittingEditedUserMessageId,
       threadMarkersByMessageId,
       toolGroupSummaryOverrides,
+      usageByTurnId,
     ],
   );
   // Latest rows kept in a ref so the imperative scroll controller can look up a message's
@@ -1951,6 +1957,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           // signal (see deriveTerminalAssistantMessageIds).
           const isTerminalAssistantMessage =
             row.showAssistantCopyButton && !row.assistantTurnInProgress;
+          const messageUsage =
+            isTerminalAssistantMessage && row.message.turnId
+              ? usageByTurnId?.get(row.message.turnId)
+              : undefined;
           const goalAchievement =
             isTerminalAssistantMessage && row.message.turnId
               ? (goalAchievementByTurnId.get(row.message.turnId) ?? null)
@@ -2559,6 +2569,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     ) : null}
                   </div>
                 )}
+                {messageUsage ? <MessageUsage metrics={messageUsage} /> : null}
               </div>
             </>
           );

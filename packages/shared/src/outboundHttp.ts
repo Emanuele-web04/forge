@@ -8,6 +8,7 @@ import * as Dns from "node:dns/promises";
 import * as Http from "node:http";
 import * as Https from "node:https";
 import * as Net from "node:net";
+import { HttpsProxyAgent } from "https-proxy-agent";
 
 import {
   assertExactLoopbackIpAddress,
@@ -57,6 +58,8 @@ export interface OutboundHttpPolicy {
 }
 
 export interface OutboundHttpRequest {
+  /** Trusted local system proxy; origin allowlists and TLS remain enforced. */
+  readonly localProxyUrl?: string;
   readonly policy: OutboundHttpPolicy;
   readonly url: string | URL;
   readonly method?: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -333,6 +336,7 @@ export function invokePinnedDnsLookup(
 }
 
 async function requestHop(input: {
+  readonly localProxyUrl?: string | undefined;
   readonly url: URL;
   readonly method: string;
   readonly headers: Headers;
@@ -349,6 +353,22 @@ async function requestHop(input: {
     input.signal,
   );
 
+  let proxyAgent: HttpsProxyAgent<string> | undefined;
+  if (input.localProxyUrl && input.url.protocol === "https:") {
+    const proxy = new URL(input.localProxyUrl);
+    if (proxy.protocol !== "http:" || proxy.username || proxy.password) {
+      throw new OutboundHttpError(
+        "request",
+        "Only an unauthenticated local HTTP proxy is supported.",
+      );
+    }
+    assertExactLoopbackIpAddress(proxy.hostname);
+    proxyAgent = new HttpsProxyAgent(proxy);
+    // The user's trusted proxy resolves the allowlisted origin. Passing the
+    // locally resolved IP breaks hostname-based routing and proxy DNS policies.
+    // TLS still verifies the original hostname; redirects retain the same policy.
+  }
+
   return await new Promise<OutboundHttpResponse>((resolve, reject) => {
     let settled = false;
     const settle = (result: OutboundHttpResponse | Error) => {
@@ -361,6 +381,7 @@ async function requestHop(input: {
     const request = transport.request(
       input.url,
       {
+        ...(proxyAgent ? { agent: proxyAgent } : {}),
         method: input.method,
         headers: requestHeaders(input.headers),
         signal: input.signal,
@@ -505,6 +526,7 @@ export class OutboundHttpClient {
           url,
           method,
           headers,
+          localProxyUrl: input.localProxyUrl,
           ...(body ? { body } : {}),
           maxResponseBytes: policy.maxResponseBytes,
           requirePublicAddress: policy.requirePublicAddress ?? true,

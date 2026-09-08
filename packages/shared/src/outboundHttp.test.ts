@@ -155,3 +155,15 @@ describe("loopback HTTP transport", () => {
     }
   });
 });
+
+it("never accepts a remote or authenticated local proxy", async () => {
+  for (const localProxyUrl of [
+    "http://8.8.8.8:8080",
+    "http://user:pass@127.0.0.1:8080",
+    "https://127.0.0.1:8080",
+  ]) {
+    await expect(
+      outboundHttp.request({ url: "https://127.0.0.1:443", policy: policyFor(443), localProxyUrl }),
+    ).rejects.toThrow();
+  }
+});

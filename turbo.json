@@ -25,6 +25,16 @@
     "SYNARA_HOST",
     "SYNARA_AUTO_BOOTSTRAP_PROJECT_FROM_CWD"
   ],
+  "globalPassThroughEnv": [
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "no_proxy"
+  ],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],

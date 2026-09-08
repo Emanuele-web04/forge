@@ -99,6 +99,7 @@ interface ChatTranscriptPaneProps {
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   scrollButtonVisible: boolean;
   terminalWorkspaceTerminalTabActive: boolean;
+  usageByTurnId?: ComponentProps<typeof MessagesTimeline>["usageByTurnId"];
   timelineEntries: ComponentProps<typeof MessagesTimeline>["timelineEntries"];
   timestampFormat: TimestampFormat;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
@@ -174,6 +175,7 @@ export function ChatTranscriptPane({
   revertTurnCountByUserMessageId,
   scrollButtonVisible,
   terminalWorkspaceTerminalTabActive,
+  usageByTurnId,
   timelineEntries,
   timestampFormat,
   turnDiffSummaryByAssistantMessageId,
@@ -240,6 +242,7 @@ export function ChatTranscriptPane({
           />
         ) : (
           <MessagesTimeline
+            usageByTurnId={usageByTurnId}
             key={activeThreadId}
             hasMessages={hasMessages}
             isWorking={isWorking}

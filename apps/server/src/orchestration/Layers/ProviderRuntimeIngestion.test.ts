@@ -361,6 +361,33 @@ describe("ProviderRuntimeIngestion", () => {
     };
   }
 
+  it("records thinking arrival once before later assistant text", async () => {
+    const harness = await createHarness();
+    const base = {
+      provider: "codex" as const,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("first-output-turn"),
+    };
+    for (const [index, streamKind] of (["reasoning_text", "assistant_text"] as const).entries()) {
+      harness.emit({
+        ...base,
+        type: "content.delta",
+        eventId: asEventId(`first-output-${index}`),
+        createdAt: `2026-07-14T00:00:0${index + 1}.000Z`,
+        payload: { streamKind, delta: "Readable output" },
+      });
+    }
+    const thread = await waitForThread(harness.engine, (thread) =>
+      thread.messages.some((message) => message.text.includes("Readable output")),
+    );
+    const markers = thread.activities.filter(
+      (activity) => activity.kind === "provider.first-output",
+    );
+    expect(markers).toHaveLength(1);
+    expect(markers[0]?.createdAt).toBe("2026-07-14T00:00:01.000Z");
+    expect(markers[0]?.payload).toMatchObject({ streamKind: "reasoning_text" });
+  });
+
   it("REL-01C gate: replays output persisted before subscription without duplicate acceptance", async () => {
     const harness = await createHarness({ startIngestion: false });
     const event: ProviderRuntimeEvent = {
