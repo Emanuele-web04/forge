@@ -123,6 +123,59 @@ describe("selectLinuxBackend", () => {
     ).resolves.toMatchObject({ choice: "nested-window", forced: false });
   });
 
+  it("picks the Hyprland backend when a live Hyprland session owns the environment", async () => {
+    const selection = await selectLinuxBackend({
+      env: { HYPRLAND_INSTANCE_SIGNATURE: "abc123" },
+      busNameHasOwner: GNOME_HOST,
+      hyprlandSessionPresent: () => true,
+    });
+
+    expect(selection).toMatchObject({ choice: "hyprland", forced: false });
+    expect(selection.reason).toContain("real desktop");
+  });
+
+  it("puts Hyprland detection ahead of the KWin bus probe", async () => {
+    // The decisive case: a stray kwin_wayland (a nested or headless test
+    // compositor) can own org.kde.KWin on the session bus of a machine whose
+    // human is sitting at a Hyprland desktop. The inherited instance signature
+    // is direct evidence of that desktop and must win.
+    let asked = 0;
+    const selection = await selectLinuxBackend({
+      env: {},
+      busNameHasOwner: (name) => {
+        asked += 1;
+        return KDE_HOST(name);
+      },
+      hyprlandSessionPresent: () => true,
+    });
+
+    expect(selection.choice).toBe("hyprland");
+    expect(asked).toBe(0);
+  });
+
+  it("does not detect Hyprland from the signature alone without a live socket", async () => {
+    // The env var survives into terminals that outlive a crashed compositor
+    // and into sessions this process spawned itself; the socket is the
+    // liveness check, and without it the ordinary resolution continues.
+    await expect(
+      selectLinuxBackend({
+        env: { HYPRLAND_INSTANCE_SIGNATURE: "stale" },
+        busNameHasOwner: KDE_HOST,
+        hyprlandSessionPresent: () => false,
+      }),
+    ).resolves.toMatchObject({ choice: "kwin" });
+  });
+
+  it("honors SYNARA_COMPUTER_BACKEND=hyprland ahead of detection", async () => {
+    const selection = await selectLinuxBackend({
+      env: { SYNARA_COMPUTER_BACKEND: "hyprland" },
+      busNameHasOwner: KDE_HOST,
+      hyprlandSessionPresent: () => false,
+    });
+
+    expect(selection).toMatchObject({ choice: "hyprland", forced: true });
+  });
+
   it("gives the agent its own desktop when the session bus cannot answer at all", async () => {
     // A headless host or a service unit has no ambient bus. The KWin plugin
     // is unreachable without one, while the nested session starts its own, so
@@ -149,5 +202,6 @@ describe("nestedModeForChoice", () => {
     expect(nestedModeForChoice("nested")).toBe("virtual");
     expect(nestedModeForChoice("nested-window")).toBe("window");
     expect(nestedModeForChoice("kwin")).toBeUndefined();
+    expect(nestedModeForChoice("hyprland")).toBeUndefined();
   });
 });

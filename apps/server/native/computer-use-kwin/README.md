@@ -64,7 +64,8 @@ reason `request`, `idle-timeout`, or `user-release`.
 `axis(d horizontal, d vertical) -> b` takes desktop pixels, not wheel notches,
 which is the unit the whole computer-use stack speaks; positive is right and
 down. The plugin converts to the wheel's own units on the way out, at 80 content
-pixels per notch, and the continuous half goes out at libinput's 15 units per notch.
+pixels per notch — the same constant the Hyprland plugin uses — so a client that reads only the discrete half of a wheel event still
+moves, and the continuous half goes out at libinput's 15 units per notch.
 
 `setAgentName(name)` sets the text on the cursor's name badge and always returns
 `true`; an empty string clears it back to `Agent`. The plugin has no way to know

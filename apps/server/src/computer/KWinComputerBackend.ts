@@ -164,8 +164,6 @@ const PLUGIN_BUILD_TIMEOUT_MS = 10 * 60 * 1_000;
 const execFileAsync = promisify(execFile);
 const MAX_PLUGIN_ID = /^SynaraComputerUsePlugin(?:V(\d+))?$/;
 const INSTALLED_PLUGIN_FILE = /^(SynaraComputerUsePluginV(\d+))\.so$/;
-/** Names this backend in a capture failure, which reaches a tool call verbatim. */
-const CAPTURE_SOURCE = "Synara KWin capture";
 /** Shifts every coordinate in an AT-SPI tree, preserving shape and identity. */
 function shiftTree(tree: AtspiWindowTree, dx: number, dy: number): AtspiWindowTree {
   const shiftNode = (node: AtspiRawNode): AtspiRawNode => ({
@@ -214,6 +212,17 @@ export interface KWinDbusConnectContext {
 
 export interface KWinComputerBackendOptions {
   readonly computerId?: string;
+  /**
+   * Names the compositor integration in user-facing runtime messages ("KWin").
+   * The Hyprland backend reuses this whole engine against the same plugin
+   * D-Bus surface, and a failure card must never blame the wrong compositor.
+   */
+  readonly integrationName?: string;
+  /**
+   * The "build it yourself" pointer in provisioning failures, as a repo path
+   * the user can run. Defaults to the KWin install script.
+   */
+  readonly installHint?: string;
   readonly dbus?: KWinComputerDbus;
   readonly dbusFactory?: (context: KWinDbusConnectContext) => Promise<KWinComputerDbus>;
   /**
@@ -301,8 +310,14 @@ export interface KWinComputerBackendOptions {
 export class KWinComputerBackend implements ComputerBackend {
   readonly computerId: ComputerId;
 
+  protected readonly integrationName: string;
   /** What an empty availability or health message degrades to. */
-  private readonly failureFallbackMessage = "The Synara KWin backend failed without a message.";
+  protected get failureFallbackMessage(): string {
+    return `The Synara ${this.integrationName} backend failed without a message.`;
+  }
+  protected readonly installHint: string;
+  /** Names this backend in a capture failure, which reaches a tool call verbatim. */
+  private readonly captureSource: string;
   private readonly platform: string;
   private readonly sessionType: string;
   private readonly visibleDesktop: boolean;
@@ -380,6 +395,9 @@ export class KWinComputerBackend implements ComputerBackend {
 
   constructor(options: KWinComputerBackendOptions = {}) {
     this.computerId = (options.computerId ?? DEFAULT_COMPUTER_ID) as ComputerId;
+    this.integrationName = options.integrationName ?? "KWin";
+    this.installHint = options.installHint ?? INSTALL_SCRIPT_PATH;
+    this.captureSource = `Synara ${this.integrationName} capture`;
     this.platform = options.platform ?? process.platform;
     this.sessionType =
       options.sessionType ??
@@ -576,7 +594,9 @@ export class KWinComputerBackend implements ComputerBackend {
       const plugin = await this.ensurePlugin({ start: false });
       const health = parseHealth(await plugin.healthJson());
       if (!health.ok) {
-        throw new ComputerBackendError("Synara KWin computer-use health check failed.");
+        throw new ComputerBackendError(
+          `Synara ${this.integrationName} computer-use health check failed.`,
+        );
       }
       this.pluginHealth = health;
       this.publishHealth();
@@ -727,8 +747,9 @@ export class KWinComputerBackend implements ComputerBackend {
       // it. Swallowing this is what made buried clicks look like dead buttons.
       if (!isUnknownMethodDbusError(error)) throw error;
       throw new ComputerBackendError(
-        "The loaded Synara KWin plugin has no raiseWindow, so windows cannot be raised above " +
-          `what covers them. Build, install, and load the current plugin with ${INSTALL_SCRIPT_PATH}.`,
+        `The loaded Synara ${this.integrationName} plugin has no raiseWindow, so windows cannot ` +
+          "be raised above what covers them. Build, install, and load the current plugin with " +
+          `${this.installHint}.`,
       );
     }
   }
@@ -958,7 +979,7 @@ export class KWinComputerBackend implements ComputerBackend {
       };
     }
     throw new ComputerBackendError(
-      `KWin computer action ${JSON.stringify(action)} has no safe input mapping.`,
+      `${this.integrationName} computer action ${JSON.stringify(action)} has no safe input mapping.`,
     );
   }
 
@@ -1002,7 +1023,9 @@ export class KWinComputerBackend implements ComputerBackend {
   ): Promise<Uint8Array> {
     const plugin = await this.ensurePlugin();
     if (this.pluginHealth?.capture !== true) {
-      throw new ComputerBackendError("The loaded Synara KWin plugin has no capture support.");
+      throw new ComputerBackendError(
+        `The loaded Synara ${this.integrationName} plugin has no capture support.`,
+      );
     }
     return readByteArray(
       await this.enqueueCapture(() =>
@@ -1020,7 +1043,9 @@ export class KWinComputerBackend implements ComputerBackend {
   ): Promise<Uint8Array> {
     const plugin = await this.ensurePlugin();
     if (this.pluginHealth?.capture !== true) {
-      throw new ComputerBackendError("The loaded Synara KWin plugin has no capture support.");
+      throw new ComputerBackendError(
+        `The loaded Synara ${this.integrationName} plugin has no capture support.`,
+      );
     }
     return readByteArray(
       await this.enqueueCapture(() =>
@@ -1138,7 +1163,8 @@ export class KWinComputerBackend implements ComputerBackend {
   }
 
   private async ensureConnectedPlugin(automatic: boolean): Promise<KWinComputerPluginApi> {
-    if (this.disposed) throw new ComputerBackendError("KWin computer backend is disposed.");
+    if (this.disposed)
+      throw new ComputerBackendError(`${this.integrationName} computer backend is disposed.`);
     const connected = this.connectedPlugin();
     if (connected) return connected;
     if (this.connectPromise) return this.connectPromise;
@@ -1165,14 +1191,17 @@ export class KWinComputerBackend implements ComputerBackend {
   }
 
   private async startPlugin(plugin: KWinComputerPluginApi): Promise<void> {
-    if (this.disposed) throw new ComputerBackendError("KWin computer backend is disposed.");
+    if (this.disposed)
+      throw new ComputerBackendError(`${this.integrationName} computer backend is disposed.`);
     if (this.pluginHealth?.running === true) return;
     if (this.startPromise) return this.startPromise;
     this.startPromise = (async () => {
       try {
         const started = readBoolean(await plugin.start());
         if (!started) {
-          throw new ComputerBackendError("Synara KWin computer-use plugin failed to start.");
+          throw new ComputerBackendError(
+            `Synara ${this.integrationName} computer-use plugin failed to start.`,
+          );
         }
         // A plugin build without setIdleTimeout keeps its own default deadline,
         // so an older loaded plugin must not fail the session.
@@ -1184,7 +1213,9 @@ export class KWinComputerBackend implements ComputerBackend {
         await this.pushDrivingAgent(plugin);
         const runningHealth = parseHealth(await plugin.healthJson());
         if (!runningHealth.ok || !runningHealth.running) {
-          throw new ComputerBackendError("Synara KWin computer-use plugin is not running.");
+          throw new ComputerBackendError(
+            `Synara ${this.integrationName} computer-use plugin is not running.`,
+          );
         }
         this.pluginHealth = runningHealth;
         this.publishHealth();
@@ -1256,7 +1287,7 @@ export class KWinComputerBackend implements ComputerBackend {
         throw new ComputerBackendError(
           "No SynaraComputerUsePluginVn is installed, and installing one failed: " +
             `${describeErrorMessage(error, "the installer gave no reason")}. ` +
-            `You can build and install it yourself with ${INSTALL_SCRIPT_PATH}.`,
+            `You can build and install it yourself with ${this.installHint}.`,
         );
       });
       // An install the running compositor cannot see yet needs the user to log
@@ -1394,7 +1425,7 @@ export class KWinComputerBackend implements ComputerBackend {
    * installer stamp and the KWin binary can supply it, and always point at the
    * rebuild, because this message is all the availability card can show.
    */
-  private async describeLoadRefusal(pluginId: string): Promise<string> {
+  protected async describeLoadRefusal(pluginId: string): Promise<string> {
     const mismatch = await this.readKwinVersionMismatch();
     const cause = mismatch
       ? `it was built for KWin ${mismatch.builtFor}, but KWin ${mismatch.running} is running`
@@ -1432,10 +1463,13 @@ export class KWinComputerBackend implements ComputerBackend {
   ): Promise<KWinComputerPluginApi> {
     if (this.disposed) {
       await plugin.stop().catch(() => undefined);
-      throw new ComputerBackendError("KWin computer backend is disposed.");
+      throw new ComputerBackendError(`${this.integrationName} computer backend is disposed.`);
     }
     const health = parseHealth(await plugin.healthJson());
-    if (!health.ok) throw new ComputerBackendError("Synara KWin computer-use health check failed.");
+    if (!health.ok)
+      throw new ComputerBackendError(
+        `Synara ${this.integrationName} computer-use health check failed.`,
+      );
     this.plugin = plugin;
     this.pluginId = pluginId;
     this.pluginHealth = health;
@@ -1662,7 +1696,7 @@ export class KWinComputerBackend implements ComputerBackend {
       bytes,
       region,
       capturedAt: new Date(this.now()).toISOString(),
-      source: CAPTURE_SOURCE,
+      source: this.captureSource,
     });
   }
 
@@ -1726,7 +1760,7 @@ export class KWinComputerBackend implements ComputerBackend {
       // Cheap header read, kept for the same reason the screenshot path has it:
       // a payload that is not a PNG must fail here rather than in a decoder in
       // the browser, where the only symptom is a blank pane.
-      readPngDimensions(data, { source: CAPTURE_SOURCE });
+      readPngDimensions(data, { source: this.captureSource });
       if (this.streamListener !== listener) return;
       const frame = {
         sequence: this.nextSequence++,
@@ -1768,7 +1802,7 @@ export class KWinComputerBackend implements ComputerBackend {
     if (await this.restartAfterExternalStop()) {
       if (readBoolean(await this.pluginValue(invoke))) return;
     }
-    throw new ComputerBackendError(`Synara KWin plugin rejected ${operation}.`, {
+    throw new ComputerBackendError(`Synara ${this.integrationName} plugin rejected ${operation}.`, {
       retryable: true,
       rejectedOperation: operation,
     });
@@ -1810,7 +1844,8 @@ export class KWinComputerBackend implements ComputerBackend {
   }
 
   private throwIfDisposed(): void {
-    if (this.disposed) throw new ComputerBackendError("KWin computer backend is disposed.");
+    if (this.disposed)
+      throw new ComputerBackendError(`${this.integrationName} computer backend is disposed.`);
   }
 
   /** The live plugin, or undefined while the connection must be re-established. */

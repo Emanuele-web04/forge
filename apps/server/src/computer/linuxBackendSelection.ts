@@ -3,8 +3,8 @@
  *
  * One rule outranks everything here: **the agent never drives the seat the
  * human is sitting at.** Every backend this module can resolve gives the agent
- * a seat of its own — a compositor plugin's dedicated seat on a KDE session,
- * or a private nested compositor everywhere else. There is
+ * a seat of its own — a compositor plugin's dedicated seat on a KDE or
+ * Hyprland session, or a private nested compositor everywhere else. There is
  * no shared-seat backend: anything that attached virtual devices to the
  * human's own `wl_seat` would move their real cursor, so no such backend
  * exists in the tree to be selected, forced, or fallen back to.
@@ -24,11 +24,12 @@
  * and a user can override, and on a KDE session started from a tty it is often
  * simply absent.
  */
+import { hyprlandSessionPresent } from "./hyprctl.ts";
 import { KWIN_SERVICE } from "./kwinDbus.ts";
 import { nestedSessionMode, type NestedSessionMode } from "./nestedKWinSession.ts";
 
 /** Every backend `SYNARA_COMPUTER_BACKEND` can name, in the plan's spelling. */
-export const LINUX_BACKEND_CHOICES = ["kwin", "nested", "nested-window"] as const;
+export const LINUX_BACKEND_CHOICES = ["kwin", "hyprland", "nested", "nested-window"] as const;
 export type LinuxBackendChoice = (typeof LINUX_BACKEND_CHOICES)[number];
 
 export interface LinuxBackendSelection {
@@ -87,6 +88,12 @@ export interface LinuxBackendSelectionDependencies {
    * unreachable, which the caller distinguishes from an unowned name.
    */
   readonly busNameHasOwner: (name: string) => Promise<boolean>;
+  /**
+   * Whether this process is inside a live Hyprland session — the instance
+   * signature plus its runtime socket. Injectable because the default reads
+   * the filesystem.
+   */
+  readonly hyprlandSessionPresent?: (env: NodeJS.ProcessEnv) => boolean;
 }
 
 /**
@@ -113,6 +120,22 @@ export async function selectLinuxBackend(
       choice: nested === "window" ? "nested-window" : "nested",
       forced: false,
       reason: `SYNARA_COMPUTER_NESTED=${env.SYNARA_COMPUTER_NESTED} asked for a private compositor this process owns.`,
+    };
+  }
+
+  // Hyprland is detected before the KWin bus probe on purpose: a stray
+  // process owning `org.kde.KWin` on the session bus — a nested or headless
+  // kwin_wayland someone launched for testing — must not misroute a desktop
+  // the human is actually sitting at, and the Hyprland check is direct
+  // evidence of that desktop (this process inherited its instance signature,
+  // and the instance's socket is live).
+  if ((dependencies.hyprlandSessionPresent ?? hyprlandSessionPresent)(env)) {
+    return {
+      choice: "hyprland",
+      forced: false,
+      reason:
+        "A live Hyprland session owns this environment (instance signature with a live socket), " +
+        "so the Hyprland plugin backend drives the real desktop with the agent's own seat.",
     };
   }
 

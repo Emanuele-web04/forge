@@ -102,8 +102,9 @@ export interface KWinComputerDbusOptions {
 }
 
 /**
- * The session bus itself and the Synara plugin proxy on it. The KWin host adds
- * KWin's D-Bus plugin manager on top.
+ * The half of a plugin-host connection that is the same for every compositor:
+ * the session bus itself and the Synara plugin proxy on it. The KWin host adds
+ * KWin's D-Bus plugin manager on top; the Hyprland host adds `hyprctl`.
  */
 export interface ComputerSessionBus {
   /** Resolves a proxy object, with the shared connection-level timeout. */

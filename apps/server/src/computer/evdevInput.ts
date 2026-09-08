@@ -2,9 +2,9 @@
  * The Linux evdev key/button tables and the US-QWERTY mapping onto them.
  *
  * Nothing here is compositor-specific: evdev codes are the kernel's, and every
- * injection path Synara has — the KWin plugin's D-Bus API — takes the same
- * codes. A further backend reuses these tables verbatim rather than restating
- * them.
+ * injection path Synara has — the KWin plugin's D-Bus API and its Hyprland
+ * twin — takes the same codes. A further backend reuses these tables verbatim
+ * rather than restating them.
  */
 
 /** Linux input-event codes used by every evdev-shaped injection API. */

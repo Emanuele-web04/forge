@@ -10,8 +10,8 @@
  * down. Getting any of it wrong strands a modifier held on the user's real
  * keyboard, which is the worst failure mode this feature has.
  *
- * The transport is a sink the caller supplies, so the KWin plugin's D-Bus
- * calls go through the same sequencing.
+ * The transport is a sink the caller supplies, so the KWin and Hyprland
+ * plugins' D-Bus calls go through the same sequencing.
  */
 import type { ComputerPoint } from "@synara/contracts";
 

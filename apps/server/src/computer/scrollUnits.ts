@@ -2,10 +2,10 @@
  * The pixel↔notch boundary for anything whose wheel speaks whole notches.
  *
  * Everything above the backends — the tool surface, the pane, every `scroll`
- * call — speaks logical pixels. The KWin plugin takes pixels directly and
- * converts at the last moment (value120). This module holds the constant it
- * converts with and the truncate-and-carry semantics for any path that has to
- * convert on this side,
+ * call — speaks logical pixels. The compositor plugins take pixels directly
+ * and convert at the last moment (value120 in KWin, discrete steps in
+ * Hyprland). This module holds the constant they convert with and the
+ * truncate-and-carry semantics for any path that has to convert on this side,
  * because one scroll must mean one thing on every desktop.
  */
 
@@ -14,7 +14,7 @@
  *
  * The pixels are *content* pixels: what a page actually moves when a physical
  * wheel clicks once. That is a toolkit decision, not a protocol one. Measured
- * in Firefox, which moves 85.5 px per notch (GDK's 1.5 units × three lines
+ * on Hyprland, Firefox moves 85.5 px per notch (GDK's 1.5 units × three lines
  * of 19 px); Chromium's Wayland path works out to about 80 (1.5 × its 53 px
  * wheel delta); Qt and terminals do three lines, nearer 60. This is a nominal
  * figure close to the browsers, which is where the agent scrolls most, and the
@@ -31,7 +31,9 @@
  * continuous axis value as notches × 15 on their own.
  *
  * Keep in sync with `s_scrollPixelsPerNotch` in
- * apps/server/native/computer-use-kwin/synaracomputeruseplugin.cpp.
+ * apps/server/native/computer-use-kwin/synaracomputeruseplugin.cpp and
+ * `SCROLL_PIXELS_PER_NOTCH` in
+ * apps/server/native/computer-use-hyprland/synarahyprlandplugin.cpp.
  */
 export const SCROLL_STEP_PX = 80;
 
