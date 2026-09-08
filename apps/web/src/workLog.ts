@@ -1458,10 +1458,9 @@ function linkBackgroundTaskRows(
         },
       };
     }
-    const { toolStatus: _toolStatus, ...inactiveEntry } = entry;
     return {
-      ...inactiveEntry,
-      ...(link.settled.state === "paused" ? {} : { toolStatus: link.settled.state }),
+      ...entry,
+      toolStatus: link.settled.state,
       liveActivity: {
         state: link.settled.state,
         label,
