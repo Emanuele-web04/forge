@@ -31,12 +31,13 @@ let latestState: ThreadBrowserState | null = null;
 let shellReady = false;
 let panelRevealEnabled = true;
 let previewEnabled = false;
+let surface: "native" | "renderer" = "native";
 const annotationEvents: BrowserAnnotationEvent[] = [];
 const rendererLifecycleHide = createBrowserPanelHideScheduler();
 function setPanelVisible(visible: boolean): void {
   browserManager.setPanelBounds({
     threadId,
-    surface: "native",
+    surface,
     preview: previewEnabled,
     bounds: visible ? { x: 0, y: 34, width: 1_000, height: 726 } : null,
   });
@@ -106,6 +107,10 @@ Object.assign(globalThis, {
     },
     setPreviewEnabled(enabled: boolean) {
       previewEnabled = enabled;
+      setPanelVisible(true);
+    },
+    setSurface(value: "native" | "renderer") {
+      surface = value;
       setPanelVisible(true);
     },
   },

@@ -26,6 +26,7 @@ function fixture(
     isDestroyed: () => false,
     getURL: () => "https://fixture.example/",
     getTitle: () => "Fixture",
+    getType: vi.fn(() => "browserView"),
     close: vi.fn(),
     focus: vi.fn(() => {
       focusState.current = contents as unknown as WebContents;
@@ -46,6 +47,50 @@ function fixture(
 }
 
 describe("Betterwright target boundary", () => {
+  it("drains pending renderer focus and skips input after cancellation", async () => {
+    const f = fixture([], "backend");
+    f.contents.getType.mockReturnValue("webview");
+    let focused!: (value: boolean) => void;
+    const host = {
+      isDestroyed: () => false,
+      executeJavaScript: vi
+        .fn()
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              focused = resolve;
+            }),
+        )
+        .mockResolvedValue(undefined),
+    };
+    Object.assign(f.contents, { id: 42, hostWebContents: host });
+    await f.target.receive({
+      id: 1,
+      method: "Target.attachToTarget",
+      params: { targetId: f.target.targetId },
+    });
+    const sessionId = (f.messages[0]!.result as { sessionId: string }).sessionId;
+    const input = f.target.receive({
+      id: 2,
+      sessionId,
+      method: "Input.insertText",
+      params: { text: "must-not-type" },
+    });
+    await vi.waitFor(() => expect(focused).toBeTypeOf("function"));
+    let drained = false;
+    const disposal = f.target.dispose(false).then(() => {
+      drained = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(drained).toBe(false);
+    focused(true);
+    await Promise.all([input, disposal]);
+    expect(host.executeJavaScript).toHaveBeenCalledTimes(2);
+    expect(
+      f.debuggerApi.sendCommand.mock.calls.some(([method]) => method.startsWith("Input.")),
+    ).toBe(false);
+  });
+
   it.each([false, true])(
     "serializes native focus across targets and skips revoked queued work (%s)",
     async (cancelQueued) => {

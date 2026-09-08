@@ -492,6 +492,36 @@ test("production MCP controls one persistent Electron page across visibility cha
         ),
       ).toBe(0);
     });
+    await test.step("isolates renderer webview input from the host composer", async () => {
+      await mcp.call("browser_open", { url: site.appUrl, show: true });
+      await electronApp.evaluate(() => {
+        (
+          globalThis as typeof globalThis & {
+            __synaraVisibleBrowserE2E: { setSurface(value: "renderer"): void };
+          }
+        ).__synaraVisibleBrowserE2E.setSurface("renderer");
+      });
+      await expect(page.locator("html")).toHaveAttribute("data-webview-attached", "true");
+      const composer = page.getByLabel("Host composer");
+      await composer.fill("HOST_SENTINEL");
+      await composer.focus();
+      await electronApp.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()[0]!.webContents.focus(),
+      );
+      await run(
+        'await page.getByLabel("Shared input",{exact:true}).fill("guest-only"); return true;',
+      );
+      await expect(composer).toHaveValue("HOST_SENTINEL");
+      expect(await read('document.querySelector("input").value')).toBe("guest-only");
+      expect(await read("document.body.dataset.inputTrusted")).toBe("true");
+      await run(
+        'await page.keyboard.press("ControlOrMeta+A"); await page.keyboard.press("Backspace"); await page.keyboard.press("x"); return true;',
+      );
+      await expect(composer).toHaveValue("HOST_SENTINEL");
+      expect(await read('document.querySelector("input").value')).toBe("x");
+      await run('await page.keyboard.press("Enter"); return true;');
+      await expect(page.locator("html")).toHaveAttribute("data-host-submits", "0");
+    });
   } finally {
     try {
       await closeElectronApplication(electronApp);

@@ -3,6 +3,7 @@ import { webContents, type WebContents } from "electron";
 import type { BrowserAutomationVisibleRuntime } from "../browserManager";
 import { betterwrightExpectedInputs } from "./betterwrightInput";
 import { BetterwrightKeyboardPolicy } from "./betterwrightKeyboardPolicy";
+import { withRendererGuestFocus } from "./betterwrightFocus";
 
 type Params = Record<string, unknown>;
 let nativeInputQueue: Promise<unknown> = Promise.resolve();
@@ -279,11 +280,16 @@ export class BetterwrightCdpTarget {
         // Native focus is shared across tabs; DOM focus alone cannot route text
         // to an offscreen preview. Keep focus and dispatch in the same lease.
         if (nativeInput && previousFocus !== this.contents) this.contents.focus();
-        return await this.send(
-          method,
-          params,
-          this.childSessions.has(sessionId!) ? sessionId : undefined,
-        );
+        const send = () =>
+          this.send(method, params, this.childSessions.has(sessionId!) ? sessionId : undefined);
+        if (!nativeInput) return await send();
+        const focusedOperation = withRendererGuestFocus(this.contents, send);
+        this.pending.add(focusedOperation);
+        try {
+          return await focusedOperation;
+        } finally {
+          this.pending.delete(focusedOperation);
+        }
       } finally {
         try {
           if (
