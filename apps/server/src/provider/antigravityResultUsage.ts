@@ -63,11 +63,18 @@ export function parseAntigravityPrintResult(stdout: string, elapsedMs?: number) 
     const reasoningOutputTokens = number(raw?.thinking_tokens);
     const duration = streamed ? undefined : number(result.duration_seconds);
     const lastStep = [...states.entries()].toSorted(([a], [b]) => a - b).at(-1)?.[1];
+    // agy may retain an earlier stream error in the result envelope even
+    // after recovering within the first user turn. Require the same positive
+    // final-step evidence as timeout recovery; the error string alone never
+    // establishes success, and terminal stream errors still veto recovery.
+    const recoveredStreamError =
+      result.error === "The stream was interrupted. Please continue the task you were working on.";
     const completedResponse =
       streamed &&
       (result.status === "SUCCESS" ||
         (number(result.num_turns) ?? 1) > 1 ||
-        result.error === "timeout waiting for response") &&
+        result.error === "timeout waiting for response" ||
+        recoveredStreamError) &&
       lastStep?.step_type === "agent_response" &&
       lastStep.state === "DONE" &&
       typeof lastStep.text_delta === "string" &&

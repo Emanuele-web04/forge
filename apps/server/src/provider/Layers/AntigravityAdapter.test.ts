@@ -1377,6 +1377,16 @@ describe("Antigravity turn settle on cancel (#465)", () => {
 
   it.each([
     { error: "Historical failure", turns: 6, stopCleanup: false },
+    {
+      error: "The stream was interrupted. Please continue the task you were working on.",
+      turns: 1,
+      stopCleanup: false,
+    },
+    {
+      error: "The stream was interrupted. Please continue the task you were working on.",
+      turns: 1,
+      stopCleanup: true,
+    },
     { error: "timeout waiting for response", turns: 1, stopCleanup: false },
     { error: "timeout waiting for response", turns: 1, stopCleanup: true },
     { error: undefined, turns: 1, stopCleanup: true },

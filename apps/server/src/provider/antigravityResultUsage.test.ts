@@ -69,6 +69,50 @@ describe("Antigravity print result", () => {
         ?.completedResponse,
     ).toBe(false);
   });
+  it("recognizes a recovered stream interruption on the first turn", () => {
+    const error = "The stream was interrupted. Please continue the task you were working on.";
+    const recovered = [
+      { event: "step_update", step_update: { step_index: 17, step_type: "error", state: "DONE" } },
+      {
+        event: "step_update",
+        step_update: {
+          step_index: 40,
+          step_type: "agent_response",
+          state: "ACTIVE",
+          text_delta: "Finished successfully",
+        },
+      },
+      {
+        event: "step_update",
+        step_update: {
+          step_index: 40,
+          step_type: "agent_response",
+          state: "DONE",
+          usage: { input_tokens: 100, output_tokens: 10, cache_read_tokens: 50 },
+        },
+      },
+    ];
+    const result = { event: "result", result: { status: "ERROR", num_turns: 1, error } };
+    expect(parseAntigravityPrintResult(encode([...recovered, result]))).toMatchObject({
+      completedResponse: true,
+      response: "Finished successfully",
+      usage: { inputTokens: 150, outputTokens: 10, cachedInputTokens: 50 },
+    });
+    // Text alone is not completion; a later error or unfinished tool must still fail.
+    expect(
+      parseAntigravityPrintResult(encode([...recovered.slice(0, 2), result]))?.completedResponse,
+    ).toBe(false);
+    for (const pending of [
+      { event: "error", error: "connection lost after response" },
+      { event: "step_update", step_update: { step_index: 41, step_type: "tool", state: "ACTIVE" } },
+      { event: "step_update", step_update: { step_index: 41, step_type: "error", state: "DONE" } },
+    ]) {
+      expect(
+        parseAntigravityPrintResult(encode([...recovered, pending, result]))?.completedResponse,
+      ).toBe(false);
+    }
+    expect(parseAntigravityPrintResult(encode([result]))?.completedResponse).toBe(false);
+  });
   it("uses this invocation's latest per-step counters, not the cumulative envelope", () => {
     const usage = {
       input_tokens: 50,
