@@ -471,6 +471,7 @@ export class ComputerManager {
       availability: this.correctedAvailability(availability),
       health: this.backendHealth,
       capabilities: this.backendCapabilities,
+      provisionable: this.backend.provision !== undefined,
     };
   }
 

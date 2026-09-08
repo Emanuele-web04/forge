@@ -610,6 +610,8 @@ export type ComputerGetStatusInput = typeof ComputerGetStatusInput.Type;
  * snapshot's is.
  */
 export const ComputerStatusResult = Schema.Struct({
+  /** Optional for compatibility with older servers and thread-state probes. */
+  provisionable: Schema.optional(Schema.Boolean),
   computerId: ComputerId,
   availability: ComputerAvailability,
   health: ComputerHealth,

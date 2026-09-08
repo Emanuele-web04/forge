@@ -49,7 +49,10 @@ export function cursorRuntimeActivity(event: ProviderRuntimeEvent): string | und
       return "Working";
     case "content.delta":
       if (event.payload.streamKind === "assistant_text") return "Responding";
-      if (["reasoning_text", "reasoning_summary_text", "plan_text"].includes(event.payload.streamKind)) return "Thinking";
+      if (
+        ["reasoning_text", "reasoning_summary_text", "plan_text"].includes(event.payload.streamKind)
+      )
+        return "Thinking";
       return undefined;
     default:
       return undefined;
@@ -105,12 +108,12 @@ export class CursorActivity {
       this.timer = undefined;
       const active = [...this.pending.values()].filter((item) => item.thread === this.owner).at(-1);
       const waiting = ["Waiting for you", "Needs approval"].includes(this.base);
-      const text = this.owner === null ? null : waiting ? this.base : active?.text ?? this.base;
+      const text = this.owner === null ? null : waiting ? this.base : (active?.text ?? this.base);
       if (text === this.last) return;
       this.last = text;
       // Catch synchronous and asynchronous backend failures alike.
       void Promise.resolve()
-        .then(() => this.disposed ? undefined : this.publish(text))
+        .then(() => (this.disposed ? undefined : this.publish(text)))
         .catch(() => undefined);
     }, 80);
     this.timer.unref?.();

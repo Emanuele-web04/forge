@@ -104,18 +104,26 @@ describe("ComputerLeaseReactor", () => {
   it("shows a pending user question from the owning provider stream", async () => {
     const labels: Array<string | null> = [];
     const backend = Object.assign(new FakeComputerBackend(), {
-      setCursorActivity: async (text: string | null) => { labels.push(text); },
+      setCursorActivity: async (text: string | null) => {
+        labels.push(text);
+      },
     });
     const manager = new ComputerManager({ backend });
     try {
       await manager.click(OWNER, { x: 5, y: 5 });
-      await withReactor({ manager, events: [
-        event("user-input.requested", OWNER),
-        event("item.completed", OWNER),
-        event("request.opened", OTHER),
-      ] }, async () => {
-        await waitUntil(async () => labels.at(-1) === "Waiting for you");
-      });
+      await withReactor(
+        {
+          manager,
+          events: [
+            event("user-input.requested", OWNER),
+            event("item.completed", OWNER),
+            event("request.opened", OTHER),
+          ],
+        },
+        async () => {
+          await waitUntil(async () => labels.at(-1) === "Waiting for you");
+        },
+      );
       await withReactor({ manager, events: [event("user-input.resolved", OWNER)] }, async () => {
         await waitUntil(async () => labels.at(-1) === "Thinking");
       });

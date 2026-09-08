@@ -66,10 +66,12 @@ const make = Effect.gen(function* () {
         if (releasesDesktopControl(event)) return releaseDesktopControl(event);
         return Effect.sync(() => {
           const activity = cursorRuntimeActivity(event);
-          if (activity !== undefined) computerService.manager.cursorActivity.setRuntime(
-            event.threadId, activity,
-            event.type === "user-input.resolved" || event.type === "request.resolved",
-          );
+          if (activity !== undefined)
+            computerService.manager.cursorActivity.setRuntime(
+              event.threadId,
+              activity,
+              event.type === "user-input.resolved" || event.type === "request.resolved",
+            );
         });
       }),
     ).pipe(Effect.asVoid);

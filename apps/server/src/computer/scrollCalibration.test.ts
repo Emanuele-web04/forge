@@ -221,9 +221,11 @@ describe("estimateVerticalTravel", () => {
     const width = 120;
     const height = 400;
     const frame = (offset: number): LumaImage => ({
-      width, height,
+      width,
+      height,
       luma: Uint8Array.from({ length: width * height }, (_, index) =>
-        (Math.floor(index / width) + offset) % 40 < 5 ? 20 : 240),
+        (Math.floor(index / width) + offset) % 40 < 5 ? 20 : 240,
+      ),
     });
     expect(estimateVerticalTravel(frame(0), frame(17))).toBeUndefined();
   });

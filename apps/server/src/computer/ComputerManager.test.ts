@@ -309,6 +309,29 @@ describe("ComputerManager and FakeComputerBackend", () => {
     await manager.dispose();
   });
 
+  it("provisions through the backend and answers with the engaged status", async () => {
+    const backend = Object.assign(new FakeComputerBackend(), {
+      provision: async () => "Installed the helper.",
+    });
+    const manager = new ComputerManager({ backend });
+
+    expect((await manager.getStatus()).provisionable).toBe(true);
+    const result = await manager.provision();
+    expect(result.summary).toBe("Installed the helper.");
+    expect(result.status.provisionable).toBe(true);
+    // Pressing "Set up" is the engagement: the status that comes back is the
+    // establishing read, not the passive probe the button exists to get past.
+    expect(backend.calls.map((call) => call.method)).toContain("availability");
+
+    await manager.dispose();
+  });
+
+  it("refuses to provision a backend with nothing to install", async () => {
+    const manager = new ComputerManager({ backend: new FakeComputerBackend() });
+    await expect(manager.provision()).rejects.toThrow("nothing to install");
+    await manager.dispose();
+  });
+
   it("reports a failed availability probe as backend-unavailable instead of throwing", async () => {
     const backend = new FakeComputerBackend();
     const manager = new ComputerManager({ backend });

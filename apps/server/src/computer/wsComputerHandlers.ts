@@ -152,6 +152,7 @@ export function makeWsComputerHandlers(
       // what keeps the panel's badges and the tool descriptions from
       // advertising a desktop this host has not got.
       capabilities: NO_COMPUTER_CAPABILITIES,
+      provisionable: false,
     } satisfies ComputerStatusResult;
     const unsupportedState = (input: ComputerThreadInput) =>
       attempt(async () => {

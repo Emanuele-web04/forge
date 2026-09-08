@@ -42,25 +42,21 @@ it("does not render the composer subscription for activity and geometry updates"
   const screen = await render(<Probe />);
   const baseline = renders;
   for (let version = 2; version < 10; version++) {
-    useComputerStateStore
-      .getState()
-      .upsertThreadState({
-        ...initial,
-        version,
-        availability: { kind: "available" },
-        agentActive: true,
-        cursor: { x: version, y: version },
-      });
+    useComputerStateStore.getState().upsertThreadState({
+      ...initial,
+      version,
+      availability: { kind: "available" },
+      agentActive: true,
+      cursor: { x: version, y: version },
+    });
   }
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   expect(renders).toBe(baseline);
-  useComputerStateStore
-    .getState()
-    .upsertThreadState({
-      ...initial,
-      version: 10,
-      availability: { kind: "backend-unavailable", message: "Disconnected" },
-    });
+  useComputerStateStore.getState().upsertThreadState({
+    ...initial,
+    version: 10,
+    availability: { kind: "backend-unavailable", message: "Disconnected" },
+  });
   await expect.element(screen.getByText("backend-unavailable")).toBeVisible();
   expect(renders).toBeGreaterThan(baseline);
   await screen.unmount();

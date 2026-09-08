@@ -160,13 +160,14 @@ export function resolveComputerAvailabilityView(
  */
 export type ComputerSetupProbe = Pick<
   ComputerStatusResult,
-  "availability" | "health" | "capabilities"
+  "availability" | "health" | "capabilities" | "provisionable"
 >;
 
 export function computerStatusNeedsSetup(status: ComputerSetupProbe | undefined): boolean {
   if (!status) return false;
   if (status.availability.kind === "unsupported-platform") return false;
   return (
+    (status.provisionable === true && status.health.status !== "connected") ||
     status.availability.kind === "backend-unavailable" ||
     status.availability.kind === "permission-required" ||
     status.health.captureAvailable === false ||

@@ -27,9 +27,11 @@ export async function waitForControl(
       return result("closed");
     }
     if (
-      !state.root || state.accessibility?.status === "unavailable" ||
+      !state.root ||
+      state.accessibility?.status === "unavailable" ||
       (target.windowId && state.accessibility?.unavailableWindowIds?.includes(target.windowId))
-    ) return result("unavailable");
+    )
+      return result("unavailable");
     try {
       resolveComputerSemanticTarget(state.root, target);
       return result("ready");

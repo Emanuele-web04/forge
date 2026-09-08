@@ -124,3 +124,34 @@ describe("computerProvisionNote", () => {
     );
   });
 });
+
+describe("Linux desktop setup compatibility", () => {
+  it("keeps setup incomplete until a provisionable compositor is connected", () => {
+    expect(
+      computerProvisionOutcome(
+        result(
+          {
+            availability: { kind: "available", backend: "kwin" },
+            provisionable: true,
+            health: { ...READY_STATUS.health, status: "unavailable" },
+          },
+          "Plugin still starting.",
+        ),
+      ),
+    ).toBe("incomplete");
+  });
+
+  it("does not describe unnamed Linux setup as macOS permission setup", () => {
+    expect(computerProvisionStartToast().description).not.toContain("macOS");
+    expect(
+      computerProvisionResultToast(
+        result(
+          {
+            availability: { kind: "backend-unavailable", message: "Plugin missing" },
+          },
+          "Install the plugin.",
+        ),
+      ).title,
+    ).toBe("Computer control still needs setup");
+  });
+});

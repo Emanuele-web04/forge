@@ -52,7 +52,7 @@ export function computerProvisionStartToast(
     description:
       labels.length > 0
         ? `macOS may ask to allow ${labels} for Synara.`
-        : "macOS may ask to allow the permissions Synara needs for this.",
+        : "Setting up the desktop may require installing a helper or allowing the permissions Synara needs.",
   };
 }
 
@@ -64,7 +64,7 @@ export function computerProvisionResultToast(
     ? { type: "success", title: "Computer control is ready", description: result.summary }
     : {
         type: "warning",
-        title: "Computer control still needs a permission",
+        title: "Computer control still needs setup",
         description: result.summary,
       };
 }

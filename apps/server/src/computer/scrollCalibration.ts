@@ -277,10 +277,13 @@ export function estimateVerticalTravel(
   // median is not enough: a false alias otherwise teaches an inflated gearing
   // and makes every subsequent scroll too short. Ignore neighbouring pixels
   // (resampling spreads a real minimum), but require a distinct minimum.
-  if (alignments.some((candidate) =>
-    Math.abs(candidate.shift - winner.shift) > 3 &&
-    candidate.score <= winner.score + 0.5
-  )) return undefined;
+  if (
+    alignments.some(
+      (candidate) =>
+        Math.abs(candidate.shift - winner.shift) > 3 && candidate.score <= winner.score + 0.5,
+    )
+  )
+    return undefined;
   const median = scores.toSorted((first, second) => first - second)[scores.length >> 1]!;
   if (!(best.score < median * MAX_WINNING_SCORE_RATIO)) return undefined;
   return best.shift;
