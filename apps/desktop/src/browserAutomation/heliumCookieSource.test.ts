@@ -491,6 +491,45 @@ describe.skipIf(process.platform !== "darwin")("helium cookie source", () => {
       .catch((value: unknown) => value);
     expect(error).toBe(cause);
   });
+
+  it("propagates a permission-denied Helium root directory as a bounded discovery error", async () => {
+    const root = join(home, "Library", "Application Support", "net.imput.helium");
+    await chmod(root, 0o000);
+    try {
+      const error = await heliumSource.listHeliumProfiles().catch((value: unknown) => value);
+      expect(error).toMatchObject({
+        cookieReaderCode: "discovery_failed",
+        cookiePermissionDenied: true,
+      });
+      expect(String(error)).not.toMatch(/\bEACCES\b/);
+      expect(String(error)).not.toMatch(/\bpermission denied\b/i);
+    } finally {
+      await chmod(root, 0o700).catch(() => {});
+    }
+  });
+
+  it("propagates a permission-denied profile cookie store as a bounded acquisition error", async () => {
+    await createHeliumProfile("Locked", 0, []);
+    const profileDir = join(home, "Library", "Application Support", "net.imput.helium", "Locked");
+    await chmod(profileDir, 0o000);
+    try {
+      const error = await heliumSource
+        .readHeliumCookieSnapshot(heliumOptions({ profile: "Locked" }), {
+          listProfiles: async () => [{ id: "Locked" }],
+          keychainPassword: async () => syntheticKeychainPassword(),
+        })
+        .catch((value: unknown) => value);
+      expect(error).toMatchObject({
+        cookieReaderCode: "source_extraction_failed",
+        cookieReaderStage: "acquisition",
+        cookiePermissionDenied: true,
+      });
+      expect(String(error)).not.toMatch(/\bEACCES\b/);
+      expect(String(error)).not.toMatch(/\bpermission denied\b/i);
+    } finally {
+      await chmod(profileDir, 0o700).catch(() => {});
+    }
+  });
 });
 
 describe("patched Betterwright listCookieSourceBrowsers", () => {

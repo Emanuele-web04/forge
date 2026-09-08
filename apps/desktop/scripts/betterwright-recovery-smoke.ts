@@ -64,7 +64,10 @@ async function smoke() {
     );
     // Only a rejection carrying this run's abort reason proves cancellation; an
     // unrelated early failure would otherwise pass this phase by accident.
-    const rejection = assert.rejects(pending, /Synthetic cancellation/);
+    const rejection = assert.rejects(
+      pending,
+      (error: unknown) => error === controller.signal.reason,
+    );
     setTimeout(() => controller.abort(new Error("Synthetic cancellation")), 500);
     await rejection;
     assert.equal(

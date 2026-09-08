@@ -6,6 +6,7 @@ import { BrowserVault } from "./browserVault";
 class NativeCapturePage extends EventEmitter implements CapturePage {
   closed = false;
   lastAgentActivity = 0;
+  saveSource: "agent" | "user" | undefined = undefined;
   constructor(readonly runtime: BrowserAutomationVisibleRuntime) {
     super();
   }
@@ -82,10 +83,14 @@ export class BrowserVaultCapture {
               typeof label !== "string"
             )
               throw new Error("Invalid captured login.");
+            const source =
+              session.saveSource ??
+              (Date.now() - session.lastAgentActivity < 5000 ? "agent" : "user");
+            session.saveSource = undefined;
             await this.vault.saveCaptured(
               origin,
-              { username, password, label, deferToPending: true },
-              Date.now() - session.lastAgentActivity < 5000 ? "agent" : "user",
+              { username, password, label, deferToPending: source === "agent" },
+              source,
             );
             return {};
           },
@@ -93,8 +98,17 @@ export class BrowserVaultCapture {
           isHeaded: () => true,
           lastModelActivity: () => Number.NaN,
           shouldCapture: (input) => this.vault.shouldOfferSave(input),
-          requestSave: ({ origin, username, mode }) =>
-            this.vault.askSave({ origin, username, mode: mode === "update" ? "update" : "save" }),
+          requestSave: async ({ page, origin, username, mode }) => {
+            const choice = await this.vault.askSave({
+              origin,
+              username,
+              mode: mode === "update" ? "update" : "save",
+            });
+            if (page instanceof NativeCapturePage) {
+              page.saveSource = choice === "save" ? "user" : undefined;
+            }
+            return choice;
+          },
           matchMode: "exact-origin",
           onError: () => this.vault.reportCaptureFailure(),
           onReady: () => this.vault.reportCaptureReady(),

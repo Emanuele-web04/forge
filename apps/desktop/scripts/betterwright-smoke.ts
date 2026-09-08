@@ -76,7 +76,7 @@ async function smoke() {
     code: "await page.evaluate(() => { window.cancelStarted = true; }); await page.waitForTimeout(5000); await page.evaluate(() => { window.lateMutation = true; });",
   }).then(
     () => false,
-    (error) => error instanceof Error && error.message === "Synthetic human takeover.",
+    (error) => error === controller.signal.reason,
   );
   const deadline = Date.now() + 15_000;
   while (!(await contents.executeJavaScript("window.cancelStarted === true"))) {

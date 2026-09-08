@@ -70,10 +70,10 @@ void (async () => {
         ),
       ),
     );
-    assert.ok(
-      window.contentView.children.some((view) => view.getBounds().x === -10000),
-      "Preview page is outside native hit testing",
+    const preview = window.contentView.children.find(
+      (view) => (view as any).webContents === source.webContents,
     );
+    assert.ok(preview && !preview.getVisible(), "Preview page is hidden from native hit testing");
     manager.setPanelBounds({
       threadId,
       surface: "native",

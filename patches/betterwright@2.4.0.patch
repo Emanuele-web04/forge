@@ -219,7 +219,7 @@ new file mode 100644
 index 0000000000000000000000000000000000000000..e384c75bda7a82b2217b73c032d60b83347fa117
 --- /dev/null
 +++ b/dist/src/helium-cookie-source.js
-@@ -0,0 +1,312 @@
+@@ -0,0 +1,327 @@
 +// Helium (net.imput.helium) cookie source for hosts whose native reader does
 +// not register the browser yet. Reads the same Chromium cookie database the
 +// native reader would, decrypts v10 rows with the profile's Keychain secret,
@@ -277,6 +277,17 @@ index 0000000000000000000000000000000000000000..e384c75bda7a82b2217b73c032d60b83
 +    return error;
 +}
 +
++function isMissingError(error) {
++    return error instanceof Error && (error.code === "ENOENT" || error.code === "ENAMETOOLONG");
++}
++
++function isPermissionError(error) {
++    if (!(error instanceof Error)) return false;
++    if (error.code === "EACCES" || error.code === "EPERM") return true;
++    const message = String(error.message);
++    return /\b(?:permission denied|operation not permitted|eacces|eperm|os error (?:1|13))\b/i.test(message);
++}
++
 +// Every failure while opening, snapshotting, or querying the SQLite store is
 +// reported through the bounded reader contract: a fixed message, the failing
 +// stage, and explicit permission markers only, never the raw diagnostic,
@@ -302,7 +313,10 @@ index 0000000000000000000000000000000000000000..e384c75bda7a82b2217b73c032d60b83
 +    for (const candidate of [join(profileDir, "Cookies"), join(profileDir, "Network", "Cookies")]) {
 +        try {
 +            if ((await stat(candidate)).isFile()) return candidate;
-+        } catch { /* Try the next known cookie location. */ }
++        } catch (error) {
++            if (isMissingError(error)) continue;
++            throw heliumError("source_extraction_failed", "acquisition", isPermissionError(error));
++        }
 +    }
 +    return null;
 +}
@@ -312,8 +326,9 @@ index 0000000000000000000000000000000000000000..e384c75bda7a82b2217b73c032d60b83
 +    let entries;
 +    try {
 +        entries = await readdir(heliumProfileRoot(), { withFileTypes: true });
-+    } catch {
-+        return [];
++    } catch (error) {
++        if (isMissingError(error)) return [];
++        throw heliumError("discovery_failed", "discovery", isPermissionError(error));
 +    }
 +    const profiles = [];
 +    for (const entry of entries) {

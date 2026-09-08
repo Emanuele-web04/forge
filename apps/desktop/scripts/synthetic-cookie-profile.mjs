@@ -5,7 +5,7 @@ import { join } from "node:path";
 // A fresh HOME keeps native-reader tests away from personal browser profiles.
 const home = await mkdtemp(join(tmpdir(), "synara-cookie-fixture-"));
 const strings = ["127.0.0.1", "synara_synthetic_import", "/", "synthetic-only"];
-const header = Buffer.alloc(56);
+const header = Buffer.alloc(48);
 let offset = header.length;
 const fields = strings.map((value, index) => {
   const bytes = Buffer.from(`${value}\0`);
@@ -14,7 +14,7 @@ const fields = strings.map((value, index) => {
   return bytes;
 });
 header.writeUInt32LE(offset, 0);
-header.writeDoubleLE(Date.now() / 1000 + 86_400 - 978_307_200, 40);
+header.writeDoubleLE(Date.now() / 1000 + 86_400 - 978_307_200, 32);
 const record = Buffer.concat([header, ...fields]);
 const pageHeader = Buffer.alloc(16);
 pageHeader.set([0, 0, 1, 0]);

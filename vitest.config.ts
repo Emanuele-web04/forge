@@ -2,6 +2,12 @@ import * as path from "node:path";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  test: {
+    // The desktop suite runs memory-hard key derivation (scrypt) and live
+    // BetterWright vault tests. On a shared, heavily concurrent host, they
+    // can exceed the default 5s.
+    testTimeout: 30_000,
+  },
   resolve: {
     alias: [
       {
