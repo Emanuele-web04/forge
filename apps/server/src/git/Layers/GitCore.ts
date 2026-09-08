@@ -2110,7 +2110,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       operationPrefix: string,
       use: (
         env: NodeJS.ProcessEnv,
-        addedGitlinks: ReadonlySet<string>,
+        seededGitlinks: ReadonlySet<string>,
       ) => Effect.Effect<A, GitCommandError>,
     ): Effect.Effect<A, GitCommandError> =>
       Effect.scoped(
@@ -2132,7 +2132,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             env,
             fallbackErrorMessage: "git read-tree failed",
           });
-          // Seed new gitlinks from the real index so Git, rather than a
+          // Seed changed gitlinks from the real index so Git, rather than a
           // /dev/null filesystem comparison, renders their mode and commit.
           // This also works when a submodule has not been initialized.
           const additions = yield* executeGit(
@@ -2144,13 +2144,13 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
               "--raw",
               "--no-abbrev",
               "--no-renames",
-              "--diff-filter=A",
+              "--diff-filter=AMT",
               "-z",
               resolvedRef,
             ],
             { env: { GIT_OPTIONAL_LOCKS: "0" }, timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS },
           ).pipe(Effect.map((result) => result.stdout.split("\0")));
-          const addedGitlinks = new Set<string>();
+          const seededGitlinks = new Set<string>();
           for (let index = 0; index + 1 < additions.length; index += 2) {
             const entry = additions[index]?.split(" ");
             const filePath = additions[index + 1];
@@ -2162,9 +2162,9 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
               ["update-index", "--add", "--replace", "--cacheinfo", `160000,${objectId},${filePath}`],
               { env, timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS },
             );
-            addedGitlinks.add(filePath);
+            seededGitlinks.add(filePath);
           }
-          return yield* use(env, addedGitlinks);
+          return yield* use(env, seededGitlinks);
         }),
       );
 
@@ -2176,7 +2176,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       resolvedRef: string,
       env: NodeJS.ProcessEnv,
       operationPrefix: string,
-      addedGitlinks: ReadonlySet<string>,
+      seededGitlinks: ReadonlySet<string>,
     ) =>
       Effect.gen(function* () {
         const others = yield* listUntrackedFiles(cwd, operationPrefix, env);
@@ -2197,7 +2197,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           Effect.map((result) => result.stdout.split("\0").filter((entry) => entry.length > 0)),
         );
         return [...new Set([...others, ...trackedAdditions])].filter(
-          (filePath) => !addedGitlinks.has(filePath.replace(/\/$/, "")),
+          (filePath) => !seededGitlinks.has(filePath.replace(/\/$/, "")),
         );
       });
 
@@ -2219,7 +2219,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           );
         }
 
-        return yield* withRefIndex(cwd, resolvedRef, "GitCore.readRefPatch", (env, addedGitlinks) =>
+        return yield* withRefIndex(cwd, resolvedRef, "GitCore.readRefPatch", (env, seededGitlinks) =>
           Effect.gen(function* () {
             const trackedPatch = yield* executeGit(
               "GitCore.readRefPatch.trackedPatch",
@@ -2236,7 +2236,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
               resolvedRef,
               env,
               "GitCore.readRefPatch",
-              addedGitlinks,
+              seededGitlinks,
             );
             const untrackedPatches = yield* readUntrackedPatches(
               cwd,
@@ -2283,7 +2283,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                 `Cannot resolve "${compareRef}" to a commit in this repository.`,
               );
             }
-            return yield* withRefIndex(cwd, resolvedRef, "GitCore.readDiffStats", (env, addedGitlinks) =>
+            return yield* withRefIndex(cwd, resolvedRef, "GitCore.readDiffStats", (env, seededGitlinks) =>
               Effect.gen(function* () {
                 const tracked = yield* executeGit(
                   "GitCore.readDiffStats.tracked",
@@ -2299,7 +2299,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                     resolvedRef,
                     env,
                     "GitCore.readDiffStats",
-                    addedGitlinks,
+                    seededGitlinks,
                   ),
                 );
                 const totals = summarizeGitNumstatOutputs([tracked, ...untracked]);

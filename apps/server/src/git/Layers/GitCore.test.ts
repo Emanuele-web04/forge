@@ -186,6 +186,58 @@ it.layer(TestLayer)("git integration", (it) => {
 
 
   describe("bounded working-tree and ref reads", () => {
+    it.effect("preserves a regular-file to gitlink type change against the ref", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        const sub = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* initRepoWithCommit(sub);
+        yield* writeTextFile(path.join(tmp, "vendor"), "old file\n");
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "old file"]);
+        yield* git(tmp, ["rm", "vendor"]);
+        yield* git(tmp, ["-c", "protocol.file.allow=always", "submodule", "add", sub, "vendor"]);
+        const patch = (yield* core.readRefPatch(tmp, "HEAD")).patch;
+        expect(patch).toContain("new file mode 160000");
+        expect(patch).toContain("+Subproject commit ");
+        expect(yield* core.readDiffStats(tmp, "ref", "HEAD")).toEqual({
+          additions: 4, deletions: 1, fileCount: 2,
+        });
+        yield* git(tmp, ["submodule", "deinit", "-f", "vendor"]);
+        expect((yield* core.readRefPatch(tmp, "HEAD")).patch).toContain("new file mode 160000");
+        expect(yield* core.readDiffStats(tmp, "ref", "HEAD")).toEqual({
+          additions: 4, deletions: 1, fileCount: 2,
+        });
+      }),
+    );
+
+    it.effect("preserves an updated stage-zero gitlink when the module is uninitialized", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        const sub = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* initRepoWithCommit(sub);
+        yield* git(tmp, ["-c", "protocol.file.allow=always", "submodule", "add", sub, "vendor"]);
+        yield* git(tmp, ["commit", "-am", "initial module"]);
+        const module = path.join(tmp, "vendor");
+        yield* git(module, ["config", "user.email", "test@test.com"]);
+        yield* git(module, ["config", "user.name", "Test"]);
+        yield* writeTextFile(path.join(module, "next.txt"), "next commit\n");
+        yield* git(module, ["add", "."]);
+        yield* git(module, ["commit", "-m", "next"]);
+        const nextCommit = yield* git(module, ["rev-parse", "HEAD"]);
+        yield* git(tmp, ["add", "vendor"]);
+        yield* git(tmp, ["submodule", "deinit", "-f", "vendor"]);
+        const patch = (yield* core.readRefPatch(tmp, "HEAD")).patch;
+        expect(patch).toContain(`+Subproject commit ${nextCommit}`);
+        expect(yield* core.readDiffStats(tmp, "ref", "HEAD")).toEqual({
+          additions: 1, deletions: 1, fileCount: 1,
+        });
+      }),
+    );
+
     for (const edited of [false, true]) {
       it.effect(
         "preserves " + (edited ? "edited" : "pure") + " rename metadata in a destination-only read",
