@@ -8919,7 +8919,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("hides an unfinished task list once the latest turn is settled", async () => {
+  it("hides the settled turn's task list while keeping unfinished background work visible", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotWithSettledInlinePlan(),
@@ -8931,10 +8931,10 @@ describe("ChatView transcript geometry (full app)", () => {
           expect(document.body.textContent).toContain("Finished the investigation.");
           expect(document.body.textContent).not.toContain("1 out of 3 tasks completed");
           expect(document.querySelector('[data-testid="active-task-list-card"]')).toBeNull();
-          expect(document.body.textContent).not.toContain("1 background agent running");
+          expect(document.body.textContent).toContain("1 background agent running");
           expect(
             document.querySelector('[data-testid="composer-background-tasks-panel"]'),
-          ).toBeNull();
+          ).not.toBeNull();
         },
         { timeout: 8_000, interval: 16 },
       );
