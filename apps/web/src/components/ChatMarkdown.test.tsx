@@ -5,6 +5,11 @@ import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
+// Every test here dynamically imports ChatMarkdown (katex, shiki, the whole
+// render graph), which alone can approach Vitest's 5s default while the
+// workspace suite competes for CPU. The budget only exists to stop a hang.
+vi.setConfig({ testTimeout: 60_000 });
+
 vi.mock("@pierre/diffs", () => ({
   getFiletypeFromFileName: (fileName: string) => (fileName.endsWith(".ts") ? "ts" : "text"),
   getSharedHighlighter: () =>

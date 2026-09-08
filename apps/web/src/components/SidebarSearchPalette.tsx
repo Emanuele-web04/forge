@@ -129,6 +129,7 @@ const ACTION_ICONS: Record<string, IconComponent> = {
   "add-project": FolderClosed,
   "import-thread": LuArrowDownToLine,
   feedback: BugIcon,
+  bug: BugIcon,
   settings: SettingsIcon,
   "usage-settings": SettingsIcon,
 };
