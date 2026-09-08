@@ -2339,7 +2339,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         yield* updateResumeCursor(context);
 
         if (context.lastThreadStartedId !== nextThreadId) {
-          context.resultUsageBaseline = undefined;
+          delete context.resultUsageBaseline;
           context.lastThreadStartedId = nextThreadId;
           const stamp = yield* makeEventStamp();
           yield* offerRuntimeEvent(context, {
@@ -4627,7 +4627,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             return;
           case "conversation_reset":
             // The query survives /clear even when its cumulative counters restart.
-            context.resultUsageBaseline = undefined;
+            delete context.resultUsageBaseline;
             return;
           case "result":
             yield* handleResultMessage(context, message);

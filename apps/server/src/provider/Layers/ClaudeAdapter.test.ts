@@ -8353,7 +8353,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
             type: "conversation_reset",
             new_conversation_id: newSessionId,
             session_id: oldSessionId,
-            uuid: "accounting-reset",
+            uuid: "fcb9a8a0-a7d8-4c73-96a2-2a29ea26b515",
           });
         }
         if (boundary === "zero reset result") {
