@@ -306,7 +306,7 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
       >
         <div
           data-floating-browser-content="true"
-          className="absolute inset-x-0 bottom-0 top-10 min-h-0 min-w-0 overflow-hidden rounded-b-[inherit]"
+          className="absolute inset-0 min-h-0 min-w-0 overflow-hidden rounded-[inherit]"
         >
           <Suspense fallback={<FloatingBrowserPanelFallback />}>
             <LazyBrowserPanel

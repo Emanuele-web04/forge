@@ -77,7 +77,7 @@ it("drags, resizes, and exposes pop/close controls", async () => {
   await vi.waitFor(() => {
     const panel = panelRect();
     const content = contentRect();
-    expect(content.top).toBe(panel.top + 41);
+    expect(content.top).toBe(panel.top + 1);
     expect(content.left).toBeLessThanOrEqual(panel.left + 1);
     expect(content.right).toBeGreaterThanOrEqual(panel.right - 1);
     expect(content.bottom).toBeGreaterThanOrEqual(panel.bottom - 1);
@@ -91,12 +91,13 @@ it("drags, resizes, and exposes pop/close controls", async () => {
   const panel = panelRect();
   expect(header.getBoundingClientRect().top).toBeGreaterThanOrEqual(panel.top);
   expect(header.getBoundingClientRect().right).toBeLessThanOrEqual(panel.right + 1);
-  expect(header.getBoundingClientRect().bottom).toBeLessThanOrEqual(contentRect().top);
+  expect(header.getBoundingClientRect().bottom).toBeLessThan(contentRect().bottom);
   dispatchPointer(header, "pointerdown", 700, 380);
   let overlay = activePointerOverlay();
   dispatchPointer(overlay, "pointermove", 600, 280);
   expect(panelRect().left).toBe(468);
   expect(contentRect().left).toBeLessThanOrEqual(469);
+  expect(contentRect().top).toBe(panelRect().top + 1);
   dispatchPointer(overlay, "pointerup", 600, 280);
 
   await vi.waitFor(() => {
@@ -114,6 +115,8 @@ it("drags, resizes, and exposes pop/close controls", async () => {
   await vi.waitFor(() => {
     const rect = panelRect();
     expect({ width: rect.width, height: rect.height }).toEqual({ width: 420, height: 263 });
+    expect(contentRect().width).toBe(rect.width - 2);
+    expect(contentRect().height).toBe(rect.height - 2);
   });
 
   const host = document.querySelector<HTMLElement>(
