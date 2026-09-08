@@ -12,7 +12,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BROWSER_TOOL_NAMES } from "@synara/contracts";
+import { BROWSER_TOOL_NAMES, type ThreadBrowserState } from "@synara/contracts";
 import { _electron as electron, expect, test, type ElectronApplication } from "playwright/test";
 
 import { createBrowserMcpHarness } from "./fixtures/mcpBrowserHarness";
@@ -667,15 +667,26 @@ test("production MCP controls one persistent Electron page across visibility cha
     });
 
     await test.step("isolates renderer webview input from the host composer", async () => {
-      await mcp.call("browser_open", { url: site.appUrl, show: true });
-      await electronApp.evaluate(() => {
-        (
+      await electronApp.evaluate((_electron, url) => {
+        const fixture = (
           globalThis as typeof globalThis & {
-            __synaraVisibleBrowserE2E: { setSurface(value: "renderer"): void };
+            __synaraVisibleBrowserE2E: {
+              threadId: string;
+              browserManager: {
+                open(input: { threadId: string }): unknown;
+                newTab(input: { threadId: string; url: string }): unknown;
+              };
+              setSurface(value: "native" | "renderer"): void;
+            };
           }
-        ).__synaraVisibleBrowserE2E.setSurface("renderer");
-      });
+        ).__synaraVisibleBrowserE2E;
+        fixture.browserManager.open({ threadId: fixture.threadId });
+        fixture.browserManager.newTab({ threadId: fixture.threadId, url });
+        fixture.setSurface("native");
+        fixture.setSurface("renderer");
+      }, site.appUrl);
       await expect(page.locator("html")).toHaveAttribute("data-webview-attached", "true");
+      await mcp.call("browser_open", { url: site.appUrl, show: true });
       const composer = page.getByLabel("Host composer");
       await composer.fill("HOST_SENTINEL");
       await composer.focus();
@@ -750,6 +761,40 @@ test("production MCP controls one persistent Electron page across visibility cha
       });
       expect(result.structuredContent.finalUrl).toBe(site.nextUrl);
       expect(result.structuredContent.loadState).not.toBe("commit");
+    });
+    await test.step("rejects a stale renderer handoff without replacing the agent's native page", async () => {
+      const result = await page.evaluate(async (url) => {
+        const { ipcRenderer } = (
+          window as unknown as {
+            require(name: string): {
+              ipcRenderer: { invoke(channel: string, input: unknown): Promise<ThreadBrowserState> };
+            };
+          }
+        ).require("electron");
+        const guest = document.createElement("webview") as HTMLElement & {
+          getWebContentsId(): number;
+        };
+        guest.setAttribute("partition", "persist:synara-browser");
+        guest.setAttribute("src", url);
+        const ready = new Promise<void>((resolve) =>
+          guest.addEventListener("dom-ready", () => resolve(), { once: true }),
+        );
+        document.body.append(guest);
+        try {
+          await ready;
+          const tabId = document.documentElement.dataset.nativeRuntimeTabId;
+          return await ipcRenderer.invoke("synara-e2e:attach-webview", {
+            tabId,
+            webContentsId: guest.getWebContentsId(),
+          });
+        } finally {
+          guest.remove();
+        }
+      }, site.appUrl);
+      expect(result.tabs.find((tab) => tab.id === result.activeTabId)?.runtimeSurface).toBe(
+        "native",
+      );
+      expect((await run("return await page.url();")).structuredContent.value).toBe(site.nextUrl);
     });
   } finally {
     try {

@@ -1689,7 +1689,11 @@ export class DesktopBrowserManager {
     const activeTabId = this.getActiveTab(state)?.id ?? null;
     const activeRuntimeKey = activeTabId ? buildRuntimeKey(input.threadId, activeTabId) : null;
     const activeRuntime = activeRuntimeKey ? this.runtimes.get(activeRuntimeKey) : null;
-    if (input.surface === "native" && activeRuntimeKey) {
+    const surface =
+      activeTabId && this.isNativeAutomationTab(input.threadId, activeTabId)
+        ? "native"
+        : input.surface;
+    if (surface === "native" && activeRuntimeKey) {
       this.rendererOnlyRuntimeKeys.delete(activeRuntimeKey);
     }
     const requiresRenderer = activeRuntimeKey
@@ -1701,7 +1705,7 @@ export class DesktopBrowserManager {
     if (
       state.open &&
       nextBounds === null &&
-      (input.surface === "renderer" || requiresRenderer) &&
+      (surface === "renderer" || requiresRenderer) &&
       activeRuntime &&
       !activeRuntime.ownsWebContents
     ) {
@@ -1728,7 +1732,7 @@ export class DesktopBrowserManager {
     }
 
     if (
-      input.surface === "renderer" &&
+      surface === "renderer" &&
       activeTabId &&
       activeRuntimeKey &&
       activeRuntime?.ownsWebContents
@@ -1742,7 +1746,7 @@ export class DesktopBrowserManager {
     }
 
     if (
-      input.surface === "native" &&
+      surface === "native" &&
       !requiresRenderer &&
       activeTabId &&
       activeRuntime &&
@@ -1760,7 +1764,7 @@ export class DesktopBrowserManager {
       this.attachedBoundsSignature = null;
     }
 
-    if ((input.surface === "renderer" || requiresRenderer) && activeTabId && !activeRuntime) {
+    if ((surface === "renderer" || requiresRenderer) && activeTabId && !activeRuntime) {
       if (activeRuntimeKey) this.rendererOnlyRuntimeKeys.add(activeRuntimeKey);
       this.activateThreadForPendingRenderer(input.threadId, nextBounds, nextPageZoomFactor);
       return;
@@ -1817,6 +1821,13 @@ export class DesktopBrowserManager {
       webContents.session !== electronSession.fromPartition(BROWSER_SESSION_PARTITION)
     ) {
       throw new Error("The browser webview does not belong to this Synara window and partition.");
+    }
+
+    // A pane can mount from stale renderer state while an agent opens a native
+    // tab. Return the canonical surface so React removes that unused guest;
+    // adopting it would destroy the page underneath the in-flight tool.
+    if (this.isNativeAutomationTab(input.threadId, tab.id)) {
+      return this.snapshotThreadState(input.threadId, state);
     }
 
     // Promote before adopting. The floating panel's attach effect can run before
@@ -2210,6 +2221,15 @@ export class DesktopBrowserManager {
     this.resumeThread(threadId);
     this.attachActiveTab(threadId, bounds, { pageZoomFactor });
     this.updatePopupWindowsForThread(threadId);
+  }
+
+  private isNativeAutomationTab(threadId: ThreadId, tabId: string): boolean {
+    const state = this.states.get(threadId);
+    return (
+      this.automationRuntimeKeys.has(buildRuntimeKey(threadId, tabId)) &&
+      state !== undefined &&
+      this.getTab(state, tabId)?.runtimeSurface === "native"
+    );
   }
 
   // Marks a tab renderer-owned and parks any native view so a <webview> can

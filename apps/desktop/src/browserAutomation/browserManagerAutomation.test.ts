@@ -458,6 +458,60 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     manager.dispose();
   });
 
+  it.each([true, false])(
+    "keeps an agent's native page when a stale guest attaches (bounds first: %s)",
+    async (boundsFirst) => {
+      const nativeWebContents = new FakeWebContents(213);
+      const nativeView = {
+        webContents: nativeWebContents,
+        setBounds: vi.fn(),
+        setVisible: vi.fn(),
+        setBorderRadius: vi.fn(),
+      };
+      webContentsViewConstructor.mockReturnValueOnce(nativeView);
+      const manager = new DesktopBrowserManager();
+      const hostWindow = {
+        webContents: Object.assign(new EventEmitter(), { id: 41, isDestroyed: () => false }),
+        contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+      };
+      manager.setWindow(hostWindow as never);
+      try {
+        const opened = manager.prepareAutomationTab({
+          threadId: THREAD_ID,
+          url: "https://example.com",
+          reuse: true,
+        });
+        const target = { threadId: THREAD_ID, tabId: opened.activeTabId! };
+        const runtime = await manager.getAutomationRuntime(target, { restore: false });
+        const guest = Object.assign(new FakeWebContents(214), {
+          getType: () => "webview",
+          hostWebContents: hostWindow.webContents,
+          session: browserSession,
+        });
+        fromId.mockReturnValue(guest);
+        const staleBounds = () =>
+          manager.setPanelBounds({
+            threadId: THREAD_ID,
+            surface: "renderer",
+            bounds: { x: 20, y: 40, width: 800, height: 600 },
+          });
+        if (boundsFirst) staleBounds();
+        const attached = manager.attachWebview({ ...target, webContentsId: 214 }, 41);
+        if (!boundsFirst) staleBounds();
+        expect(attached.tabs.find((tab) => tab.id === target.tabId)?.runtimeSurface).toBe("native");
+        expect(nativeWebContents.close).not.toHaveBeenCalled();
+        expect((await manager.getAutomationRuntime(target, { restore: false })).webContents).toBe(
+          runtime.webContents,
+        );
+        expect(manager.getVisibleAutomationRuntime(target).webContents).toBe(nativeWebContents);
+        manager.detachWebview({ ...target, webContentsId: 214 });
+        expect(nativeWebContents.close).not.toHaveBeenCalled();
+      } finally {
+        manager.dispose();
+      }
+    },
+  );
+
   it("creates a native background runtime after the renderer guest detaches", async () => {
     const manager = new DesktopBrowserManager();
     const hostWindow = {
