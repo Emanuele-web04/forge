@@ -56,3 +56,21 @@ describe("provider runtime event ingress sizing", () => {
     expect(sized.bytes).toBe(Buffer.byteLength(JSON.stringify(sized.event), "utf8"));
   });
 });
+
+it("strips images from canonical and raw payloads before ingress sizing", () => {
+  const data = "a".repeat(700_000);
+  const event: ProviderRuntimeEvent = {
+    ...runtimeDelta({ content: [{ type: "image", data, mimeType: "image/png" }] }),
+    type: "item.completed",
+    payload: {
+      itemType: "mcp_tool_call",
+      data: { result: { content: [{ type: "image", data, mimeType: "image/png" }] } },
+    },
+  };
+  const stringify = vi.spyOn(JSON, "stringify");
+  const sized = compactProviderRuntimeEventForIngress(event);
+  expect(sized.bytes).toBeLessThan(2000);
+  expect(stringify.mock.calls).toHaveLength(1);
+  expect(JSON.stringify(stringify.mock.calls[0]?.[0])).not.toContain(data);
+  expect(JSON.stringify(event)).toContain(data);
+});

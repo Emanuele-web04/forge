@@ -6,6 +6,11 @@ import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { ThreadDiagnosticsQuery } from "../Services/ThreadDiagnosticsQuery.ts";
 import { ThreadDiagnosticsQueryLive } from "./ThreadDiagnosticsQuery.ts";
 
+// Relative to now, not a fixed date: writing a diagnostic prunes everything
+// older than thirty days, so a hard-coded timestamp makes this test pass
+// until that date rolls out of the window and then fail forever after.
+const occurredAt = (offsetMs: number) => new Date(Date.now() + offsetMs).toISOString();
+
 const layer = it.layer(
   ThreadDiagnosticsQueryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
 );
@@ -47,7 +52,6 @@ layer("ThreadDiagnosticsQuery", (it) => {
   it.effect("stores bounded structured incidents and reads only the requested thread", () =>
     Effect.gen(function* () {
       const diagnostics = yield* ThreadDiagnosticsQuery;
-      const recentOccurredAt = new Date(Date.now() - 60_000).toISOString();
       yield* diagnostics.recordOperationalDiagnostic({
         threadId: "thread-1",
         source: "server",
@@ -55,7 +59,7 @@ layer("ThreadDiagnosticsQuery", (it) => {
         severity: "warning",
         code: "THREAD_STREAM_CAPACITY_EXCEEDED",
         detail: { reason: "thread-capacity", activeThreads: 16 },
-        occurredAt: recentOccurredAt,
+        occurredAt: occurredAt(-1_000),
       });
       yield* diagnostics.recordOperationalDiagnostic({
         threadId: "thread-2",
@@ -63,7 +67,7 @@ layer("ThreadDiagnosticsQuery", (it) => {
         kind: "ws.stream-admission-rejected",
         severity: "warning",
         detail: { reason: "duplicate" },
-        occurredAt: recentOccurredAt,
+        occurredAt: occurredAt(0),
       });
 
       const incidents = yield* diagnostics.listOperationalDiagnostics({

@@ -74,6 +74,7 @@ const KIND_PROMPT: Record<PendingApproval["requestKind"], string> = {
   "file-read": "Approve reading this file?",
   "file-change": "Approve this file change?",
   permissions: "Grant these permissions?",
+  tool: "Approve this tool call?",
 };
 
 export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPanel({
@@ -117,9 +118,9 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
       <div className="flex items-start justify-between gap-3">
         <p className="min-w-0 text-[13px] font-medium leading-snug text-foreground/90">
           {KIND_PROMPT[approval.requestKind]}
-          {parsed.tool ? (
+          {(approval.toolName ?? parsed.tool) ? (
             <span className="ml-1.5 text-[11px] font-normal text-muted-foreground/50">
-              {parsed.tool}
+              {approval.toolName ?? parsed.tool}
             </span>
           ) : null}
         </p>
@@ -132,6 +133,8 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
       <ApprovalDetail
         parsed={parsed}
         {...(approval.permissionProfile ? { permissionProfile: approval.permissionProfile } : {})}
+        {...(approval.toolName ? { toolName: approval.toolName } : {})}
+        {...(approval.toolParamsDisplay ? { toolParamsDisplay: approval.toolParamsDisplay } : {})}
       />
       <div className="mt-2.5 space-y-0.5">
         {actions.map((action, index) => (
@@ -160,9 +163,13 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
 function ApprovalDetail({
   parsed,
   permissionProfile,
+  toolName,
+  toolParamsDisplay,
 }: {
   parsed: ParsedApproval;
   permissionProfile?: Record<string, unknown>;
+  toolName?: string;
+  toolParamsDisplay?: PendingApproval["toolParamsDisplay"];
 }) {
   if (permissionProfile) {
     return (
@@ -178,6 +185,30 @@ function ApprovalDetail({
         >
           <code>{JSON.stringify(permissionProfile, null, 2)}</code>
         </pre>
+      </div>
+    );
+  }
+
+  if (toolName || (toolParamsDisplay?.length ?? 0) > 0) {
+    return (
+      <div className="mt-2">
+        {parsed.fallback ? (
+          <p className="text-[11.5px] leading-snug text-muted-foreground/70">{parsed.fallback}</p>
+        ) : null}
+        {toolParamsDisplay && toolParamsDisplay.length > 0 ? (
+          <dl className="mt-2 space-y-1 rounded-md bg-[var(--color-background-elevated-secondary)] px-2.5 py-2 text-[11px] leading-snug">
+            {toolParamsDisplay.map((parameter) => (
+              <div className="grid grid-cols-[auto_1fr] gap-x-2" key={parameter.name}>
+                <dt className="font-medium text-muted-foreground/65">
+                  {parameter.displayName ?? parameter.name}
+                </dt>
+                <dd className="min-w-0 break-words font-mono text-foreground/80">
+                  {formatToolParameterValue(parameter.value)}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        ) : null}
       </div>
     );
   }
@@ -218,6 +249,20 @@ function ApprovalDetail({
   return (
     <p className="mt-2 text-[12px] text-muted-foreground/65">Review the request to continue.</p>
   );
+}
+
+function formatToolParameterValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value === null) {
+    return "null";
+  }
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
 }
 
 /**

@@ -22,6 +22,7 @@ import {
   EventId,
   type ProviderKind,
   ProviderSessionStartInput,
+  RuntimeRequestId,
   ThreadId,
   TurnId,
 } from "@synara/contracts";
@@ -1441,6 +1442,145 @@ routing.layer("ProviderServiceLive routing", (it) => {
         assert.equal(asRuntimePayloadRecord(settledBinding?.runtimePayload).activeTurnId, null);
         assert.equal(settledBinding?.status, "stopped");
         assert.equal(staleSettlementPersistedEvents.has("stale-abort-other-turn"), false);
+      }),
+    );
+
+    it.effect("settles a stale interaction resolution naming the binding's active turn", () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("thread-stale-interaction-resolution");
+        yield* staleSettlementRouting.codex.waitForRuntimeSubscribers();
+
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          cwd: "/tmp/project",
+          runtimeMode: "full-access",
+        });
+        yield* provider.sendTurn({ threadId, input: "hello", attachments: [] });
+        const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        const activeTurnId = asRuntimePayloadRecord(binding?.runtimePayload).activeTurnId;
+        assert.equal(typeof activeTurnId, "string");
+
+        // A dying runtime cancels its outstanding user-input request during
+        // teardown, after the generation has already rotated. That resolution is
+        // the only signal that can settle the durable pending row, so it must
+        // pass the stale-generation gate like a terminal event does. Ordinary
+        // stale stream events stay dropped.
+        staleSettlementRouting.codex.emit({
+          type: "user-input.resolved",
+          eventId: asEventId("stale-user-input-resolved-matching-turn"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe(String(activeTurnId)),
+          requestId: RuntimeRequestId.makeUnsafe("request-cancelled-by-teardown"),
+          createdAt: "2026-07-14T14:00:00.000Z",
+          lifecycleGeneration: "old-generation",
+          payload: { answers: { cancelled: true } },
+        });
+        staleSettlementRouting.codex.emit({
+          type: "content.delta",
+          eventId: asEventId("stale-delta-matching-turn"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe(String(activeTurnId)),
+          createdAt: "2026-07-14T14:00:01.000Z",
+          lifecycleGeneration: "old-generation",
+          payload: { streamKind: "assistant_text", delta: "invisible" },
+        });
+        staleSettlementRouting.codex.emit({
+          type: "user-input.resolved",
+          eventId: asEventId("stale-user-input-resolved-other-turn"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe("turn-some-other"),
+          requestId: RuntimeRequestId.makeUnsafe("request-from-another-turn"),
+          createdAt: "2026-07-14T14:00:02.000Z",
+          lifecycleGeneration: "old-generation",
+          payload: { answers: { cancelled: true } },
+        });
+
+        yield* waitUntil(
+          () => staleSettlementPersistedEvents.has("stale-user-input-resolved-matching-turn"),
+          500,
+          10,
+          "matching stale user-input.resolved to be persisted",
+        );
+        assert.equal(
+          staleSettlementPersistedEvents.get("stale-user-input-resolved-matching-turn")?.type,
+          "user-input.resolved",
+        );
+        assert.equal(staleSettlementPersistedEvents.has("stale-delta-matching-turn"), false);
+        assert.equal(
+          staleSettlementPersistedEvents.has("stale-user-input-resolved-other-turn"),
+          false,
+        );
+
+        // Accepting a resolution must not settle the turn: it is not a terminal
+        // event, so the binding keeps running the turn it still owns.
+        const bindingAfter = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        assert.equal(
+          asRuntimePayloadRecord(bindingAfter?.runtimePayload).activeTurnId,
+          activeTurnId,
+        );
+        assert.equal(bindingAfter?.status, "running");
+      }),
+    );
+
+    it.effect("settles a stale resolution without reviving a stopped thread's binding", () =>
+      Effect.gen(function* () {
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("thread-stale-resolution-stopped-binding");
+        yield* staleSettlementRouting.codex.waitForRuntimeSubscribers();
+
+        // A stopped thread: the user stopped the turn, the generation was
+        // retired (no current generation), and `session.exited` already parked
+        // the binding. The dying runtime's cancellation still has to settle the
+        // durable pending row, but it must never flip the binding back to a
+        // live-looking "running" with a fresh liveness stamp — the UI would
+        // show "Working" for a process that no longer exists.
+        yield* directory.upsert({
+          threadId,
+          provider: "codex",
+          status: "stopped",
+          lifecycleGeneration: "old-generation",
+          runtimePayload: {
+            activeTurnId: null,
+            lastRuntimeEvent: "session.exited",
+            lastRuntimeEventAt: "2026-07-14T13:59:00.000Z",
+          },
+        });
+
+        staleSettlementRouting.codex.emit({
+          type: "user-input.resolved",
+          eventId: asEventId("stale-resolution-stopped-binding"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe("turn-stopped-by-user"),
+          requestId: RuntimeRequestId.makeUnsafe("request-cancelled-after-stop"),
+          createdAt: "2026-07-14T14:00:00.000Z",
+          lifecycleGeneration: "old-generation",
+          payload: { answers: { cancelled: true } },
+        });
+
+        yield* waitUntil(
+          () => staleSettlementPersistedEvents.has("stale-resolution-stopped-binding"),
+          500,
+          10,
+          "stale user-input.resolved on a stopped thread to be persisted",
+        );
+        assert.equal(
+          staleSettlementPersistedEvents.get("stale-resolution-stopped-binding")?.type,
+          "user-input.resolved",
+        );
+
+        const bindingAfter = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        assert.equal(bindingAfter?.status, "stopped");
+        const payloadAfter = asRuntimePayloadRecord(bindingAfter?.runtimePayload);
+        assert.equal(payloadAfter.activeTurnId, null);
+        assert.equal(payloadAfter.lastRuntimeEvent, "session.exited");
+        assert.equal(payloadAfter.lastRuntimeEventAt, "2026-07-14T13:59:00.000Z");
       }),
     );
 

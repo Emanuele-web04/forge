@@ -14,9 +14,11 @@
  *   in-tool for any session whose provider has no approval gate, following the
  *   `BrowserDownloadApprovalRequired` precedent of cancelling before the effect
  *   and telling the agent that explicit user approval is required.
- * - Every input tool is refused the same way for gateless providers. Antigravity
- *   runs with `--dangerously-skip-permissions`, so without this a prompt-injected
- *   agent could drive the device with no user in the loop.
+ * - Every input tool is refused the same way for gateless providers
+ *   (`PROVIDERS_WITHOUT_APPROVAL_GATE`). Antigravity runs with
+ *   `--dangerously-skip-permissions` and Pi executes gateway tools with no
+ *   approval bridge, so without this a prompt-injected agent could drive the
+ *   device with no user in the loop.
  *
  * @module agentGateway/deviceTools
  */
@@ -27,7 +29,6 @@ import {
   DEVICE_SWIPE_DURATION_MIN_MS,
   type DeviceHardwareButton,
   type DeviceOpenPaneReason,
-  type ProviderKind,
 } from "@synara/contracts";
 import { Effect } from "effect";
 
@@ -48,15 +49,9 @@ import {
   type ToolContext,
   type ToolEntry,
 } from "./toolRuntime.ts";
+import { PROVIDERS_WITHOUT_APPROVAL_GATE } from "./approvalGate.ts";
 
 export const DEVICE_CONTROL_CAPABILITY = "device:control" as const;
-
-/**
- * Providers whose sessions run without a per-tool approval gate. Synara cannot
- * put a human in the loop for them, so device actions with a physical or
- * exfiltration effect are refused rather than silently auto-approved.
- */
-const PROVIDERS_WITHOUT_APPROVAL_GATE = new Set<ProviderKind>(["antigravity"]);
 
 export function deviceToolRequiresApproval(name: string): boolean {
   return DEVICE_APPROVAL_REQUIRED_TOOLS.has(name);

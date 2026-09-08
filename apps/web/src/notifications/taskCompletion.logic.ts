@@ -32,7 +32,7 @@ export interface ThreadAttentionCandidate {
   title: string;
   requestId: string;
   createdAt: string;
-  requestKind?: "command" | "file-read" | "file-change" | "permissions";
+  requestKind?: "command" | "file-read" | "file-change" | "permissions" | "tool";
   summary?: string;
 }
 
@@ -647,7 +647,7 @@ export function collectCompletedTerminalCandidates(
 }
 
 function approvalSummary(
-  requestKind: "command" | "file-read" | "file-change" | "permissions",
+  requestKind: "command" | "file-read" | "file-change" | "permissions" | "tool",
 ): string {
   switch (requestKind) {
     case "command":
@@ -658,6 +658,8 @@ function approvalSummary(
       return "File-change approval requested.";
     case "permissions":
       return "Permission approval requested.";
+    case "tool":
+      return "Tool approval requested.";
   }
 }
 

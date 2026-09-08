@@ -5,6 +5,7 @@
  * single effect-style text line in a thread-scoped file. Failures are
  * downgraded to warnings so provider runtime behavior is unaffected.
  */
+import { stripDiagnosticImages } from "../stripDiagnosticImages.ts";
 import path from "node:path";
 
 import type { ThreadId } from "@synara/contracts";
@@ -82,7 +83,7 @@ function toLogMessage(event: unknown): Effect.Effect<string | undefined> {
   return Effect.gen(function* () {
     const serialized = yield* Effect.sync(() => {
       try {
-        return { ok: true as const, value: JSON.stringify(event) };
+        return { ok: true as const, value: JSON.stringify(stripDiagnosticImages(event)) };
       } catch (error) {
         return { ok: false as const, error };
       }
