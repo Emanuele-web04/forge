@@ -658,9 +658,11 @@ async function loadCodexUsageSnapshot(input: {
   const recent7d = sessionSummaries.filter((summary) => summary.timestampMs >= cutoff7d);
   const recent30d = sessionSummaries.filter((summary) => summary.timestampMs >= cutoff30d);
 
+  const updatedAt = toIsoString(latestSummary.timestampMs);
+  const source = "codex-session-archive";
   return {
     provider: "codex",
-    updatedAt: toIsoString(latestSummary.timestampMs),
+    updatedAt,
     limits: latestSummary.limits,
     usageLines: buildUsageLines({
       tokens24h: recent24h.reduce((total, summary) => total + summary.totalTokens, 0),
@@ -669,8 +671,8 @@ async function loadCodexUsageSnapshot(input: {
       sessions24h: recent24h.length,
       sessions7d: recent7d.length,
       sessions30d: recent30d.length,
-    }),
-    source: "codex-session-archive",
+    }).map((line) => ({ ...line, source, observedAt: updatedAt })),
+    source,
   };
 }
 
@@ -704,9 +706,11 @@ async function loadClaudeUsageSnapshot(input: { homeDir: string }): Promise<Usag
     current.timestampMs > latest.timestampMs ? current : latest,
   );
 
+  const updatedAt = toIsoString(latestSample.timestampMs);
+  const source = "claude-project-transcripts";
   return {
     provider: "claudeAgent",
-    updatedAt: toIsoString(latestSample.timestampMs),
+    updatedAt,
     limits: [],
     usageLines: buildUsageLines({
       tokens24h: recent24h.reduce((total, sample) => total + sample.totalTokens, 0),
@@ -715,8 +719,8 @@ async function loadClaudeUsageSnapshot(input: { homeDir: string }): Promise<Usag
       sessions24h: new Set(recent24h.map((sample) => sample.sessionId)).size,
       sessions7d: new Set(recent7d.map((sample) => sample.sessionId)).size,
       sessions30d: new Set(recent30d.map((sample) => sample.sessionId)).size,
-    }),
-    source: "claude-project-transcripts",
+    }).map((line) => ({ ...line, source, observedAt: updatedAt })),
+    source,
   };
 }
 
