@@ -42,7 +42,7 @@ import { stripProposedPlanBlocksFromText } from "./proposedPlan";
 import type { ChatMessage, ProposedPlan, ThreadSession } from "./types";
 import {
   backgroundTaskSessionBoundary,
-  collectExplicitBackgroundTaskIds,
+  collectTaskBackgroundStates,
 } from "./backgroundTaskLifecycle";
 
 export type WorkLogRequestKind = ApprovalRequestKind;
@@ -1360,7 +1360,7 @@ function collectBackgroundTaskLinks(
 ): Map<string, BackgroundTaskLink> {
   const linksByToolUseId = new Map<string, BackgroundTaskLink>();
   const toolUseIdByTaskId = new Map<string, string>();
-  const explicitBackgroundTaskIds = collectExplicitBackgroundTaskIds(activities);
+  const taskBackgroundStates = collectTaskBackgroundStates(activities);
   for (const activity of activities) {
     const boundary = backgroundTaskSessionBoundary(activity);
     if (boundary) {
@@ -1386,7 +1386,7 @@ function collectBackgroundTaskLinks(
       // Task-tool subagents own a collab row with its own lifecycle and strip;
       // only detached shell work needs its tool row tied to the task.
       const isDetachedCommand =
-        explicitBackgroundTaskIds.has(taskId) && payload?.subagentType === undefined;
+        taskBackgroundStates.get(taskId) === true && payload?.subagentType === undefined;
       if (!toolUseId || !isDetachedCommand) {
         continue;
       }

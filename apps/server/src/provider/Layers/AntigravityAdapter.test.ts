@@ -2556,6 +2556,9 @@ describe("Antigravity background task helpers (#752)", () => {
             taskId: "task-restart",
             status: "killed",
           });
+          for (const event of taskEvents.filter((event) => event.type === "task.started")) {
+            expect(event.payload).toMatchObject({ isBackgrounded: true });
+          }
           expect(taskEvents[3]?.payload).toMatchObject({
             taskId: "task-buffered",
             status: "completed",

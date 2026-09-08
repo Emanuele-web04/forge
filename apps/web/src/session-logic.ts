@@ -11,7 +11,7 @@ import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import { orderedActivities, parseTaskListTasks } from "./workLog";
 import {
   backgroundTaskSessionBoundary,
-  collectExplicitBackgroundTaskIds,
+  collectTaskBackgroundStates,
 } from "./backgroundTaskLifecycle";
 
 import type {
@@ -297,7 +297,7 @@ export function deriveActiveBackgroundTasksState(
 ): ActiveBackgroundTasksState | null {
   const ordered = orderedActivities(activities);
   const activeTasks = new Map<string, ActiveBackgroundTask>();
-  const explicitBackgroundTaskIds = collectExplicitBackgroundTaskIds(ordered);
+  const taskBackgroundStates = collectTaskBackgroundStates(ordered);
 
   for (const activity of ordered) {
     if (backgroundTaskSessionBoundary(activity)) {
@@ -379,8 +379,9 @@ export function deriveActiveBackgroundTasksState(
   const tasks = [...activeTasks.values()].filter(
     (task) =>
       task.taskType !== "plan" &&
+      (latestTurnId !== undefined || taskBackgroundStates.get(task.taskId) !== false) &&
       (latestTurnId !== undefined ||
-        explicitBackgroundTaskIds.has(task.taskId) ||
+        taskBackgroundStates.get(task.taskId) === true ||
         task.subagentType !== undefined ||
         task.taskType === "subagent" ||
         task.taskType === "local_agent" ||

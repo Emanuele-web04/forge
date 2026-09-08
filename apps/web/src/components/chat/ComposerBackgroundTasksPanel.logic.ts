@@ -49,10 +49,9 @@ export function deriveComposerBackgroundTaskRows(input: {
       if (task.taskType === "local_workflow" || workflowTaskIds.has(task.taskId)) {
         return false;
       }
-      // Task-tool subagents (tool_use_id + subagent type) live in the subagent strip.
+      // Only hide a subagent when the strip actually represents it.
       if (task.toolUseId !== undefined) {
         if (input.subagentToolUseIds?.has(task.toolUseId)) return false;
-        if (task.subagentType !== undefined) return false;
       }
       return true;
     })

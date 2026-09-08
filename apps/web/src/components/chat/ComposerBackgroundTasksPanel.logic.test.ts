@@ -78,6 +78,7 @@ describe("deriveComposerBackgroundTaskRows", () => {
     });
 
     expect(rows.map((row) => [row.taskId, row.kind, row.label])).toEqual([
+      ["agent-untracked", "agent", "researcher"],
       ["agent-plain", "agent", "Subagent"],
       ["bash-1", "command", "Run the baseline"],
     ]);

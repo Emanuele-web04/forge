@@ -1192,6 +1192,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         payload: {
           taskId: RuntimeTaskId.makeUnsafe(taskId),
           taskType,
+          isBackgrounded: true,
           ...(start.description ? { description: start.description } : {}),
         },
         raw: raw("background-task-started", { taskId, ...source }),

@@ -1,8 +1,8 @@
 import type { OrchestrationThreadActivity } from "@synara/contracts";
 
-const backgroundTaskIdsCache = new WeakMap<
+const backgroundTaskStatesCache = new WeakMap<
   ReadonlyArray<OrchestrationThreadActivity>,
-  ReadonlySet<string>
+  ReadonlyMap<string, boolean>
 >();
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -13,13 +13,15 @@ function record(value: unknown): Record<string, unknown> | undefined {
 
 // A local_bash task alone is not background evidence: Claude also emits one
 // for foreground Bash calls. Older task events can use the tool input instead.
-export function collectExplicitBackgroundTaskIds(
+// Callers supply ordered activities; the latest explicit boolean wins over input.
+export function collectTaskBackgroundStates(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
-): ReadonlySet<string> {
-  const cached = backgroundTaskIdsCache.get(activities);
+): ReadonlyMap<string, boolean> {
+  const cached = backgroundTaskStatesCache.get(activities);
   if (cached) return cached;
   const backgroundToolIds = new Set<string>();
-  const taskIds = new Set<string>();
+  const taskStates = new Map<string, boolean>();
+  const explicitStates = new Map<string, boolean>();
   for (const activity of activities) {
     const payload = record(activity.payload);
     const data = record(payload?.data);
@@ -27,8 +29,8 @@ export function collectExplicitBackgroundTaskIds(
       const toolId = data?.toolCallId ?? data?.toolUseId;
       if (typeof toolId === "string") backgroundToolIds.add(toolId);
     }
-    if (payload?.isBackgrounded === true && typeof payload.taskId === "string") {
-      taskIds.add(payload.taskId);
+    if (typeof payload?.isBackgrounded === "boolean" && typeof payload.taskId === "string") {
+      explicitStates.set(payload.taskId, payload.isBackgrounded);
     }
   }
   for (const activity of activities) {
@@ -36,14 +38,18 @@ export function collectExplicitBackgroundTaskIds(
     if (
       activity.kind === "task.started" &&
       typeof payload?.taskId === "string" &&
+      !explicitStates.has(payload.taskId) &&
       typeof payload.toolUseId === "string" &&
       backgroundToolIds.has(payload.toolUseId)
     ) {
-      taskIds.add(payload.taskId);
+      taskStates.set(payload.taskId, true);
     }
   }
-  backgroundTaskIdsCache.set(activities, taskIds);
-  return taskIds;
+  for (const [taskId, backgrounded] of explicitStates) {
+    taskStates.set(taskId, backgrounded);
+  }
+  backgroundTaskStatesCache.set(activities, taskStates);
+  return taskStates;
 }
 
 // Persisted session boundaries prevent tasks from a dead process returning on
