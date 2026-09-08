@@ -1,0 +1,7 @@
+{
+  "bundleName": "Synara Computer Use.app",
+  "binaryName": "synara-computer-helper",
+  "bundleIdentifierSuffix": "computer-use-helper",
+  "minimumMacosVersion": "12.3",
+  "screenRecordingUsageDescription": "Synara needs Screen Recording access so agents can see the desktop when you ask them to use computer control."
+}

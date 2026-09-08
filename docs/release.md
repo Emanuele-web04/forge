@@ -130,6 +130,50 @@ Notes:
 
 - `APPLE_API_KEY` is stored as raw key text in secrets.
 - The workflow writes it to a temporary `AuthKey_<id>.p8` file at runtime.
+- Notarization of the `.app` is performed by the `afterSign` hook
+  (`scripts/lib/mac-after-sign.cjs`), not by electron-builder's `mac.notarize`,
+  which is pinned to `false`. electron-builder notarizes inside its signing
+  step; the hook runs after that and re-signs the nested computer-use helper
+  without Electron's inherited entitlements, then re-seals the app — so a ticket
+  stapled before the hook would describe a code directory hash the shipped app
+  no longer has. The DMG is still notarized and stapled separately after
+  electron-builder exits (`scripts/lib/mac-dmg-finalize.ts`).
+
+## 2a) Locally signed builds (macOS, no Apple account)
+
+`--signed` and `--notarize` are separate flags. `--signed` signs with whatever
+identity is discoverable — `CSC_NAME`, `CSC_LINK`, or the login keychain — and
+turns on the hardened runtime and DMG signing. `--notarize` implies `--signed`
+and additionally submits the app to Apple's notary service; it needs a real
+Developer ID and the `APPLE_API_*` credentials. Release CI passes `--notarize`.
+
+### Contributor builds
+
+Release signing and notarization run in upstream CI. Contributors can build and validate the helper with its ad-hoc signature without obtaining release credentials. An ad-hoc rebuild may invalidate existing macOS privacy grants; grant access again for the development build if needed.
+
+If you already have a local signing identity, you may select it explicitly. Local signing does not establish release notarization or permission persistence; qualify those using the upstream release artifact. See [macOS computer-control release qualification](computer-use-macos-reference.md#release-qualification).
+
+### Building
+
+```bash
+CSC_NAME="Synara Dev" bun run dist:desktop:dmg:arm64 -- --signed
+```
+
+Environment equivalents: `CSC_NAME` selects the identity, `SYNARA_DESKTOP_SIGNED=1`
+replaces `--signed`, and `SYNARA_DESKTOP_NOTARIZE=1` replaces `--notarize`.
+Setting `CSC_NAME` alone is also enough — an explicit identity is honoured even
+without `--signed`, which is the one case where identity discovery is not
+disabled for an otherwise unsigned build.
+
+Notes:
+
+- A self-signed identity has no Team ID and cannot be notarized. The packaged
+  artifact will not pass Gatekeeper on another Mac; it is for your own machine.
+- The build always verifies the nested `Contents/Helpers/Synara Computer Use.app`
+  with `codesign --verify --strict` and asserts it carries **no** entitlements.
+  Team ID and hardened-runtime checks apply only to `--notarize` builds.
+- Grants still reset if you change the app's bundle identifier — a `.dev` or
+  `.canary` flavor is a different TCC subject from production Synara.
 
 ## 3) Azure Trusted Signing setup (Windows)
 

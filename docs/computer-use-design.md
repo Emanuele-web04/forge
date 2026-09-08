@@ -8,8 +8,12 @@ configured backend, the server reports that computer use is unavailable.
 ## Product shape
 
 The web client exposes a Computer panel, a settings status view, and a
-per-thread opt-in. The agent receives computer tools only for threads that
-have opted in and hold the required capability lease. Human interaction with
+per-thread override. Conversations enable computer tools by default; users can
+change the default in settings or turn them off for one thread. The client
+sends the effective choice with each turn, and the agent receives computer
+tools through the required capability lease. Backend readiness does not gate
+this choice: calls can surface setup guidance when permissions are missing.
+Human interaction with
 the panel remains authenticated and independent of the agent turn.
 
 The computer tool surface is intentionally small:
@@ -55,7 +59,7 @@ are placed in contract payloads. State publication is ordered per thread,
 and screenshots are treated as replaceable live frames rather than transcript
 messages.
 
-Computer control is opt-in per thread, capability-gated, and approval-gated.
+Computer control is enabled by default in conversations, capability-gated, and approval-gated.
 The server must continue to fail closed when the provider, lease, backend, or
 authenticated browser connection is unavailable.
 

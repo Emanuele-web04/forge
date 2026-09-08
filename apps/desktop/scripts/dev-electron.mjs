@@ -4,6 +4,7 @@ import { join } from "node:path";
 import waitOn from "wait-on";
 
 import { buildAppSnapHelper } from "./build-appsnap-helper.mjs";
+import { buildComputerHelper } from "./build-computer-helper.mjs";
 import { desktopDir, resolveElectronPath } from "./electron-launcher.mjs";
 import { createSourceDesktopEnvironment } from "./source-desktop-launch.mjs";
 
@@ -27,8 +28,46 @@ const restartDebounceMs = 120;
 const childTreeGracePeriodMs = 1_200;
 const staleComputerUseGracePeriodMs = 300;
 
+/**
+ * Builds one native Swift helper, or explains why the dev session is going
+ * without it.
+ *
+ * A missing or broken Swift toolchain used to abort `bun run dev` outright on
+ * macOS: the whole app refused to start because two optional native helpers
+ * could not be compiled. Neither is required to work on anything else in
+ * Synara, so a failure here degrades to a warning that names the feature that
+ * will be missing and how to get it back.
+ */
+function buildOptionalMacHelper(label, build, consequence) {
+  try {
+    build();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error(`[desktop-dev] Could not build the ${label} helper: ${detail}`);
+    console.error(`[desktop-dev] ${consequence}`);
+    console.error(
+      "[desktop-dev] Install the Xcode command line tools (xcode-select --install) and restart `bun run dev` to enable it.",
+    );
+  }
+}
+
 if (process.platform === "darwin") {
-  buildAppSnapHelper({ arch: process.arch });
+  buildOptionalMacHelper(
+    "AppSnap",
+    () => buildAppSnapHelper({ arch: process.arch }),
+    "Window capture for the app picker will be unavailable in this dev session.",
+  );
+  // The desktop permission preflight runs the helper bundle, not Electron, so a
+  // dev build needs one on disk or every probe falls back to reporting
+  // Electron's own grants. Built with optimization so what you exercise here is
+  // what ships — the difference is small but real, and the fingerprint cache
+  // makes it a one-time cost. Pass SYNARA_COMPUTER_HELPER_OPTIMIZE=debug to
+  // build.sh directly when iterating on the Swift itself.
+  buildOptionalMacHelper(
+    "computer-use",
+    () => buildComputerHelper({ arch: process.arch }),
+    "Computer control will be unavailable in this dev session; everything else runs normally.",
+  );
 }
 
 await waitOn({

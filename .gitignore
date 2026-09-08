@@ -12,6 +12,9 @@ packages/*/dist
 build/
 .logs/
 release/
+# Mock-update packaging output, the sibling of release/ that
+# build-desktop-artifact.ts writes for --mock-updates runs.
+release-mock/
 .synara
 /.synara/electron-dev
 /.synara/backups

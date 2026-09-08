@@ -54,6 +54,17 @@ import { isKeyboardShortcutsHelpChord } from "@synara/shared/browserShortcuts";
 import { getMacTrafficLightPosition } from "@synara/shared/desktopChrome";
 import { DEVICE_HELPER_SOURCE_DIR_ENV } from "@synara/shared/deviceHelperCache";
 import {
+  COMPUTER_HELPER_BINARY_PATH_ENV,
+  COMPUTER_HELPER_BUNDLE_EXECUTABLE_SEGMENTS,
+  COMPUTER_HELPER_BUNDLED_EXPECTED_ENV,
+  COMPUTER_HELPER_DEV_BUNDLE_SEGMENTS,
+  COMPUTER_HELPER_DEV_RAW_SEGMENTS,
+  COMPUTER_HELPER_PACKAGED_SEGMENTS,
+  COMPUTER_HELPER_SOURCE_DIR_ENV,
+  COMPUTER_HELPER_SOURCE_DIR_NAME,
+} from "@synara/shared/computerHelperPaths";
+import {
+  SYNARA_DESKTOP_BUNDLE_ID_ENV,
   SYNARA_DESKTOP_SMOKE_USER_DATA_ENV,
   SYNARA_DESKTOP_UPDATE_CHANNEL,
   SYNARA_SOURCE_DESKTOP_BUILD_MARKER,
@@ -1801,6 +1812,48 @@ function resolveNotificationIconPath(): string | null {
   return resolveResourcePath("synara.png") ?? resolveIconPath("png");
 }
 
+/** The signed computer-use helper inside a packaged `Synara.app`. */
+function packagedComputerHelperPath(): string {
+  return Path.resolve(
+    process.resourcesPath,
+    "..",
+    ...COMPUTER_HELPER_PACKAGED_SEGMENTS.slice(1),
+    ...COMPUTER_HELPER_BUNDLE_EXECUTABLE_SEGMENTS,
+  );
+}
+
+/**
+ * The helper this build can run, or null when none has been produced yet.
+ * A development checkout may have either the bundle the packaging script writes
+ * or the loose binary `build.sh` writes; both are accepted so a developer who
+ * built the Swift side directly does not also have to package it.
+ */
+function resolveDesktopComputerHelperPath(): string | null {
+  if (process.platform !== "darwin") return null;
+  const candidates = app.isPackaged
+    ? [packagedComputerHelperPath()]
+    : [
+        Path.join(
+          resolveAppRoot(),
+          ...COMPUTER_HELPER_DEV_BUNDLE_SEGMENTS,
+          ...COMPUTER_HELPER_BUNDLE_EXECUTABLE_SEGMENTS,
+        ),
+        Path.join(resolveAppRoot(), ...COMPUTER_HELPER_DEV_RAW_SEGMENTS),
+      ];
+  return candidates.find((candidate) => FS.existsSync(candidate)) ?? null;
+}
+
+/**
+ * The helper binary the backend child should spawn, in whichever build shape
+ * this is. Packaged builds get the bundle inside `Synara.app`; a development
+ * checkout gets whichever dev bundle has been built. Null when there is none,
+ * which leaves the backend on its own source-build fallback.
+ */
+function macComputerHelperPathForBackend(): string | null {
+  if (process.platform !== "darwin") return null;
+  return resolveDesktopComputerHelperPath();
+}
+
 function resolveAppSnapHelperPath(): string {
   if (app.isPackaged) {
     return Path.resolve(process.resourcesPath, "..", "Helpers", "synara-appsnap-helper");
@@ -3514,6 +3567,9 @@ function backendEnv(): NodeJS.ProcessEnv {
   const servedStaticRoot = resolveServedStaticRoot();
   const migrationSourceDigest = embeddedDesktopMigrationRuntimeSourceDigest();
   const migrationDivergenceConsent = migrationConsentHandoff.take();
+  // Resolved once: the lookup stats the filesystem, and asking twice for one
+  // env entry meant doing that work again to answer the same question.
+  const computerHelperPath = macComputerHelperPathForBackend();
   const env: NodeJS.ProcessEnv = {
     ...resolveBrowserHostPipeBackendEnv(
       process.env,
@@ -3531,6 +3587,48 @@ function backendEnv(): NodeJS.ProcessEnv {
       : {}),
     ...(migrationDivergenceConsent
       ? { [MIGRATION_DIVERGENCE_CONSENT_ENV]: migrationDivergenceConsent }
+      : {}),
+    // macOS only, and in development as well as packaged. Without the dev path
+    // the backend fell through to its source-build fallback and ran a loose
+    // binary out of ~/Library/Caches — no bundle, so no `LSUIElement`, no bundle
+    // identity for TCC, and a cold Swift compile on first use. The signed bundle
+    // is the thing this feature is designed around, so dev should exercise it
+    // too. A Windows or Linux backend that saw this variable would stat a path
+    // that cannot exist, hence the platform guard.
+    ...(computerHelperPath ? { [COMPUTER_HELPER_BINARY_PATH_ENV]: computerHelperPath } : {}),
+    // Whether a helper was *supposed* to be there, which the variable above
+    // cannot say: it is only set when the file exists, so its absence reads the
+    // same for a development checkout that never built one and for an installed
+    // app whose signed helper is gone. Only the second should be told to
+    // reinstall Synara — the first is told how to build one — and a packaged
+    // macOS build always ships a helper, so `app.isPackaged` is the answer.
+    ...(app.isPackaged && process.platform === "darwin"
+      ? { [COMPUTER_HELPER_BUNDLED_EXPECTED_ENV]: "1" }
+      : {}),
+    // Where the backend's source-build fallback may compile from, and — just as
+    // importantly — where it may not. Packaging stages the Swift sources under
+    // `Resources` precisely because the copy the server would otherwise resolve
+    // relative to its own bundled module sits inside `app.asar`: a compiler
+    // cannot read an archive, so that path fails the build instead of declining
+    // it. Naming the staged directory keeps the fallback honest for the one
+    // case that still needs it — a shipped helper lost to quarantine.
+    ...(app.isPackaged && process.platform === "darwin"
+      ? {
+          [COMPUTER_HELPER_SOURCE_DIR_ENV]: Path.join(
+            process.resourcesPath,
+            COMPUTER_HELPER_SOURCE_DIR_NAME,
+          ),
+        }
+      : {}),
+    // Which app macOS holds responsible for the computer-use helper's TCC
+    // grants. Both the packaged build and the dev launcher stamp this exact
+    // identifier into the running bundle's Info.plist (see
+    // `scripts/electron-launcher.mjs`), so it is the app whose privacy rows the
+    // backend may repair — and on a `.dev` or `.canary` build it is emphatically
+    // not the production one the server used to assume. A backend started
+    // without a desktop shell never sees this and leaves TCC alone.
+    ...(process.platform === "darwin"
+      ? { [SYNARA_DESKTOP_BUNDLE_ID_ENV]: desktopIdentity.bundleId }
       : {}),
     SYNARA_MODE: "desktop",
     SYNARA_NO_BROWSER: "1",

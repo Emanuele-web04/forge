@@ -1,0 +1,125 @@
+# The macOS computer-use helper `dlsym`s private SkyLight SPI —
+# `CGSSetWindowLocation`, `SLPSPostEventRecordTo`, `SLPSGetFrontProcess` and
+# friends — whose symbols move between macOS and Xcode releases. Nothing in the
+# normal CI path would notice: the helper is macOS-only, and users receive a
+# prebuilt one signed at release time, so a toolchain or OS that renamed a
+# symbol reaches them as a desktop that cannot be driven rather than a failed
+# build.
+#
+# This job is the tripwire, and it is the twin of device-helper-matrix.yml. Like
+# that one it is deliberately NOT attached to pull_request: macOS runners are
+# expensive and this catches upstream drift, which happens on Apple's schedule
+# rather than ours.
+#
+# The blocking assertion is the `--probe` report: every `skylight` capability
+# must be present and boolean. A symbol that moved reports `false` there, which
+# is the whole reason the helper reports them at all.
+name: Computer Helper Matrix
+
+on:
+  schedule:
+    # Mondays 05:30 UTC, half an hour after the device helper so the two do not
+    # contend for the macOS runner pool.
+    - cron: "30 5 * * 1"
+  workflow_dispatch:
+    inputs:
+      perception_test:
+        description: "Run the perception-only helper integration test (never sends input)"
+        type: boolean
+        default: true
+
+jobs:
+  # Inventory only: prints what each image ships so the matrix below can be
+  # refreshed when an image drops or adds a version. Kept separate from the
+  # probe jobs so it still reports when a probe fails.
+  discover:
+    name: Discover toolchains (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-14, macos-15, macos-26]
+    steps:
+      - name: List the toolchain and OS
+        run: |
+          echo "Runner image: ${{ matrix.runner }}"
+          sw_vers
+          echo "Selected developer dir: $(xcode-select -p)"
+          xcrun swiftc -version
+
+  probe:
+    name: Probe ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        # The same image set device-helper-matrix.yml discovers against: the
+        # oldest hosted runner in this matrix, the current release, and
+        # the newest image. Unlike the device helper this needs no Xcode pinning
+        # — `build.sh` compiles with the Command Line Tools and each image's
+        # default toolchain is exactly the one worth testing.
+        runner: [macos-14, macos-15, macos-26]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Record the toolchain
+        run: |
+          set -euo pipefail
+          sw_vers
+          xcrun swiftc -version
+
+      # The blocking check. A compile failure here is a Swift or SDK change; a
+      # probe failure is a moved symbol. Both are what this workflow exists for.
+      - name: Compile the helper
+        env:
+          SYNARA_COMPUTER_HELPER_OUT: ${{ runner.temp }}/computer-helper
+        run: bash apps/server/native/computer-use-macos/build.sh "$SYNARA_COMPUTER_HELPER_OUT"
+
+      - name: Probe capabilities and assert the SkyLight report
+        env:
+          COMPUTER_HELPER_PROBE_JSON: ${{ runner.temp }}/computer-helper-probe.json
+        run: |
+          set -euo pipefail
+          "${{ runner.temp }}/computer-helper/synara-computer-helper" --probe \
+            > "$COMPUTER_HELPER_PROBE_JSON"
+          cat "$COMPUTER_HELPER_PROBE_JSON"
+          node scripts/assert-computer-helper-probe.mjs "$COMPUTER_HELPER_PROBE_JSON"
+
+      # Perception only: ping, capabilities, screen-size, list-windows,
+      # describe-ui and one small region capture. It never sends input — no
+      # move, click, drag, scroll, keystroke, focus change or clipboard write —
+      # so it is safe on a real desktop as well as on a runner. Grants the
+      # runner does not have degrade individual assertions to a skip; the
+      # symbol tripwire above is the part that must pass.
+      - name: Perception-only helper integration test
+        if: github.event_name == 'schedule' || inputs.perception_test
+        env:
+          SYNARA_MAC_HELPER_TEST: "1"
+          SYNARA_MAC_HELPER_BINARY: ${{ runner.temp }}/computer-helper/synara-computer-helper
+        run: bun run --cwd apps/server test src/computer/macComputerHelper.integration.test.ts
+
+      # Uploaded even when the assertion failed: the JSON names which capability
+      # went false, which is the entire diagnostic for a moved symbol.
+      - name: Upload probe JSON
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: computer-helper-probe-${{ matrix.runner }}
+          path: ${{ runner.temp }}/computer-helper-probe.json
+          if-no-files-found: warn

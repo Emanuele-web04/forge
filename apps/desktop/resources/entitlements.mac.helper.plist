@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the nested `Synara Computer Use.app` helper: deliberately none.
+
+  electron-builder signs every nested executable it finds with
+  `entitlements.mac.inherit.plist`, which exists for Electron's own renderer,
+  GPU and plugin helpers: those need JIT, unsigned executable memory, library
+  validation turned off, and the microphone. The computer-use helper needs none
+  of them — its only `dlopen` is Apple's own SkyLight, which library validation
+  allows — and it is the process that holds Accessibility and Screen Recording.
+  Shipping the highest-value injection target on the machine with library
+  validation disabled is the opposite of what those grants deserve.
+
+  `scripts/lib/mac-after-sign.cjs` re-signs the helper against this file after
+  electron-builder's signing pass and re-seals the outer app, so an empty dict
+  here is the entitlement set the shipped helper actually carries. Adding a key
+  to this file grants it to the process that can see and drive the whole
+  desktop; do not do so without a reason written down next to it.
+-->
+<plist version="1.0">
+  <dict/>
+</plist>
