@@ -7,7 +7,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Schema } from "effect";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useAppSettings } from "../appSettings";
 import { useLocalStorage } from "../hooks/useLocalStorage";
@@ -46,6 +46,8 @@ export function useOnboarding(): UseOnboardingResult {
     INITIAL_STORAGE,
     OnboardingStorageSchema,
   );
+  const [sessionCompletion, setSessionCompletion] =
+    useState<LocalOnboardingCompletion>(INITIAL_STORAGE);
   const { updateSettingsAndWait } = useAppSettings();
   const settingsQuery = useQuery(serverSettingsQueryOptions());
   // The worktrees directory lives under the server's state directory, so it identifies
@@ -55,6 +57,21 @@ export function useOnboarding(): UseOnboardingResult {
     select: (config) => config.worktreesDir,
   });
   const installationKey = installationKeyQuery.data ?? null;
+  // A Settings replay can finish before config arrives. Keep that dismissal in memory,
+  // then bind it to the first known identity so another installation can still open its tour.
+  useEffect(() => {
+    if (
+      installationKey !== null &&
+      sessionCompletion.completedAt !== null &&
+      sessionCompletion.installationKey === null
+    ) {
+      setSessionCompletion({ ...sessionCompletion, installationKey });
+    }
+  }, [installationKey, sessionCompletion]);
+  const sessionCompletedAt =
+    sessionCompletion.installationKey === null
+      ? sessionCompletion.completedAt
+      : resolveLocalOnboardingCompletion(sessionCompletion, installationKey);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
   const homeDir = useWorkspacePathsStore((store) => store.homeDir);
   const chatWorkspaceRoot = useWorkspacePathsStore((store) => store.chatWorkspaceRoot);
@@ -80,12 +97,12 @@ export function useOnboarding(): UseOnboardingResult {
   const localCompletedAt = resolveLocalOnboardingCompletion(storage, installationKey);
 
   const gate = resolveOnboardingGate({
-    installationKeyStatus: installationKeyQuery.status,
+    installationKeyStatus: installationKey !== null ? "success" : installationKeyQuery.status,
     threadsHydrated,
     settingsSettled,
     projectCount,
     serverCompletedAt,
-    localCompletedAt,
+    localCompletedAt: localCompletedAt ?? sessionCompletedAt,
   });
 
   // Open on the first "show"; revise a first-run open back to closed if authoritative data
@@ -126,6 +143,7 @@ export function useOnboarding(): UseOnboardingResult {
 
   const complete = () => {
     const completedAt = new Date().toISOString();
+    setSessionCompletion({ completedAt, installationKey });
     // Keep the fallback scoped even when Settings manually opens the tour before config
     // arrives. Only a known installation can safely retain a failed server write.
     if (installationKey !== null) {
