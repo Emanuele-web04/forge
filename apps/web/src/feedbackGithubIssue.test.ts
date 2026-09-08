@@ -184,7 +184,11 @@ describe("normalizeHomePaths", () => {
   it.each([
     ["/Users/kartik/x", "~/x"],
     ["/home/k/x", "~/x"],
-    ["/root/k/x", "~/x"],
+    // `/root` is the home directory itself, not a parent of usernames, so the
+    // first path segment after it is preserved under `~`.
+    ["/root/k/x", "~/k/x"],
+    ["/root", "~"],
+    ["file:///Users/k/x", "file://~/x"],
     ["/Users/kartik", "~"],
     // Dots and other punctuation are part of the username; only path
     // separators and whitespace end the home segment.

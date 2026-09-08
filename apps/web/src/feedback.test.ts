@@ -4,6 +4,7 @@ import {
   FEEDBACK_CATEGORIES,
   formatBugReportDiagnostics,
   formatFeedbackSummary,
+  normalizeHomePaths,
   redactObviousSecrets,
   type FeedbackDiagnostics,
   type FeedbackThreadContext,
@@ -245,6 +246,46 @@ describe("buildFeedbackSubmission", () => {
     const { text } = redactObviousSecrets("the mybearer flag controls retries");
 
     expect(text).toBe("the mybearer flag controls retries");
+  });
+
+  // The generic assignment scrubber only fires on whole credential-key
+  // segments: ordinary settings and camelCase names stay readable.
+  it.each([
+    "passwordless=true",
+    "tokenizer=slow",
+    "myPassword=hunter2",
+    "set tokenization=v2",
+    "apikeys.txt",
+  ])("keeps ordinary assignment %s readable", (assignment) => {
+    const { text } = redactObviousSecrets(`flag ${assignment} end`);
+
+    expect(text).toBe(`flag ${assignment} end`);
+  });
+
+  it.each([
+    "secrets=s3cr3tvalue",
+    "client_secrets=s3cr3tvalue",
+    "MY_API_TOKEN=s3cr3tvalue",
+  ])("still redacts the delimited credential key %s", (assignment) => {
+    const { text } = redactObviousSecrets(`flag ${assignment} end`);
+
+    expect(text).not.toContain(assignment);
+    expect(text).toContain("[REDACTED]");
+  });
+
+  it("maps /root to ~ without swallowing the first directory", () => {
+    expect(normalizeHomePaths("crash log at /root/project/config.txt")).toBe(
+      "crash log at ~/project/config.txt",
+    );
+    expect(normalizeHomePaths("bare /root")).toBe("bare ~");
+    expect(normalizeHomePaths("path /rooted/x stays")).toBe("path /rooted/x stays");
+  });
+
+  it("redacts home paths inside file:// URLs", () => {
+    expect(normalizeHomePaths("see file:///Users/alice/project end")).toBe(
+      "see file://~/project end",
+    );
+    expect(normalizeHomePaths("see file:///home/bob/x.log end")).toBe("see file://~/x.log end");
   });
 
   it("sanitizes untrusted provider and model strings in the summary and diagnostics", () => {
