@@ -167,7 +167,7 @@ export const BrowserAutomationErrorMessages = Object.freeze({
   BrowserEvaluationFailed:
     "Browser evaluation failed before a confirmed result was available. Inspect the current page and isolate the failing operation in a focused call; do not repeat unchanged calls. This error does not establish that input or sign-in buttons are blocked.",
   BrowserScriptApiUnavailable:
-    "The script used an unavailable browser API/global. Use page.getByRole(...), page.getByLabel(...), page.url(), and page.evaluate(() => ...) for document/window access. Wait with locator.waitFor or page.waitForURL, not bare waitForTimeout. Earlier actions may have completed; inspect their result before correcting the script. This is not a password-access error.",
+    "The script used an unavailable browser API/global. Use page.getByRole(...), page.getByLabel(...), page.url(), and page.evaluate(() => ...) for document/window access. Use global snapshot(), not page.snapshot(). Wait with locator.waitFor or page.waitForURL, not bare waitForTimeout. Earlier actions may have completed; inspect their result before correcting the script. This is not a password-access error.",
   BrowserEvaluationResultTooLarge: "The browser evaluation result exceeds the safe response limit.",
   BrowserSnapshotTooLarge: "The browser snapshot exceeds the safe response limit.",
   BrowserScreenshotTooLarge: "The browser screenshot exceeds the safe response limit.",

@@ -141,6 +141,7 @@ describe("browser automation catalogue projection", () => {
     expect(batch.description).not.toContain("controls.inspect/directory/batch");
     expect(batch.description).not.toContain("webagents.discover/batch");
     expect(batch.description).toContain("Return the smallest useful result");
+    expect(batch.description).toContain("Use global snapshot(), not page.snapshot()");
     expect(batch.description).toContain("not a whole-page snapshot by default");
     expect(batch.description).toContain(
       "snapshot diffs and aria refs do not persist between calls",

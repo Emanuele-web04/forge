@@ -100,7 +100,7 @@ const BROWSER_POPUP_AGENT_GUIDANCE =
   " humanActionRequired/oauth_popup: wait for the human to finish popup sign-in.";
 const BROWSER_DIRECT_ACTION_AGENT_GUIDANCE = " Prefer this when it directly matches the intent.";
 export const BROWSER_SCRIPT_API_GUIDANCE =
-  'Scripts run in a sandbox, not the page. Locators require page.: page.getByRole, page.getByLabel, page.getByText, page.getByPlaceholder, page.getByTestId, page.locator. Example: await human.click(page.getByRole("button",{name:"Log In",exact:true})); return await page.url(); Read DOM inside page.evaluate(() => document.title), never bare document/window/location. Wait with locator.waitFor or page.waitForURL, not bare waitForTimeout. Script errors do not mean sign-in buttons are blocked.';
+  'Scripts run in a sandbox, not the page. Locators require page.: page.getByRole, page.getByLabel, page.getByText, page.getByPlaceholder, page.getByTestId, page.locator. Example: await human.click(page.getByRole("button",{name:"Log In",exact:true})); return await page.url(); Read DOM inside page.evaluate(() => document.title), never bare document/window/location. Use global snapshot(), not page.snapshot(). Wait with locator.waitFor or page.waitForURL, not bare waitForTimeout. Script errors do not mean sign-in buttons are blocked.';
 const BROWSER_DIRECT_ACTION_TOOLS = new Set<BrowserToolName>([
   "browser_back",
   "browser_forward",

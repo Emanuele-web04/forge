@@ -8,6 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -434,13 +435,19 @@ test("production MCP controls one persistent Electron page across visibility cha
     });
 
     await test.step("shares the system clipboard without granting website reads", async () => {
+      await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.hide());
       await run('await page.getByRole("button",{name:"Copy synthetic text",exact:true}).click();');
+      await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.show());
       await expect.poll(() => read('document.querySelector("#copy").dataset.copied')).toBe("true");
       expect(
         await electronApp.evaluate(
           ({ clipboard }) => clipboard.readText() === "synthetic-browser-copy",
         ),
       ).toBe(true);
+      if (process.platform === "darwin")
+        expect(
+          execFileSync("/usr/bin/pbpaste", { encoding: "utf8" }) === "synthetic-browser-copy",
+        ).toBe(true);
       await electronApp.evaluate(({ clipboard }) => clipboard.writeText("synthetic-shell-copy"));
       await run('await page.getByLabel("Shared input",{exact:true}).fill("");');
       await run('await page.keyboard.press("ControlOrMeta+V");');
@@ -697,6 +704,7 @@ test("production MCP controls one persistent Electron page across visibility cha
         'await human.click(getByRole("button",{name:"Log In",exact:true}));',
         'await getByRole("button",{name:"Log In",exact:true}).click();',
         'await human.click(getByRole("button",{name:"Continue with Google"}));',
+        "return await page.snapshot({interactive:true});",
         'return Array.from(document.querySelectorAll("button"));',
         "await waitForTimeout(400);",
       ]) {

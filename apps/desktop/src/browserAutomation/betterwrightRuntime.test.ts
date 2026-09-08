@@ -98,6 +98,16 @@ describe("Betterwright runtime errors", () => {
     expect(mocks.connectionClose).toHaveBeenCalledWith(true);
   });
 
+  it("points page.snapshot callers to the global snapshot helper", async () => {
+    mocks.run.mockResolvedValue({ ok: false, error: "page.snapshot is not a function" });
+    await expect(run()).rejects.toMatchObject({
+      browserError: {
+        code: "BrowserScriptApiUnavailable",
+        message: expect.stringContaining("global snapshot()"),
+      },
+    });
+  });
+
   it.each([
     "private-password is not defined",
     "getByRole is not defined: private-password",

@@ -5,8 +5,8 @@ import { openBetterwrightConnection } from "./betterwrightConnection";
 import type { BrowserAutomationVisibleRuntime } from "../browserManager";
 import { BrowserAutomationHostError } from "./hostErrors";
 
-const UNAVAILABLE_SCRIPT_GLOBAL_ERRORS = new Set(
-  [
+const UNAVAILABLE_SCRIPT_API_ERRORS = new Set([
+  ...[
     "getByRole",
     "getByLabel",
     "getByText",
@@ -18,7 +18,8 @@ const UNAVAILABLE_SCRIPT_GLOBAL_ERRORS = new Set(
     "location",
     "waitForTimeout",
   ].map((name) => `${name} is not defined`),
-);
+  "page.snapshot is not a function",
+]);
 
 export interface BetterwrightRunOptions {
   readonly home: string;
@@ -82,7 +83,7 @@ export async function runBetterwright<T>(options: BetterwrightRunOptions): Promi
         code:
           result.error === BrowserAutomationErrorMessages.BrowserCredentialUseUnavailable
             ? "BrowserCredentialUseUnavailable"
-            : typeof result.error === "string" && UNAVAILABLE_SCRIPT_GLOBAL_ERRORS.has(result.error)
+            : typeof result.error === "string" && UNAVAILABLE_SCRIPT_API_ERRORS.has(result.error)
               ? "BrowserScriptApiUnavailable"
               : credentialTarget
                 ? "BrowserCredentialTargetRequired"

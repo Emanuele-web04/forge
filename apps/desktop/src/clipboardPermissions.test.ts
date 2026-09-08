@@ -28,10 +28,9 @@ describe("clipboard permissions", () => {
       expect(isClipboardWritePermission(requester(), permission, {})).toBe(false);
     },
   );
-  it("rejects background, destroyed, insecure and foreign-frame requests", () => {
+  it("leaves document focus to Chromium but rejects destroyed, insecure and foreign-frame requests", () => {
     for (const source of [
       null,
-      requester(undefined, false),
       requester(undefined, true, true),
       requester("http://example.com"),
       requester("file:///tmp/page.html"),
@@ -56,5 +55,8 @@ describe("clipboard permissions", () => {
       ),
     ).toBe(false);
     expect(isClipboardWritePermission(requester(), "clipboard-sanitized-write", {})).toBe(true);
+    expect(
+      isClipboardWritePermission(requester(undefined, false), "clipboard-sanitized-write", {}),
+    ).toBe(true);
   });
 });

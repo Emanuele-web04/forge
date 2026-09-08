@@ -2,7 +2,7 @@ import type { WebContents } from "electron";
 
 /** Copy buttons share the OS clipboard; background reads remain denied. */
 export function isClipboardWritePermission(
-  requester: Pick<WebContents, "isDestroyed" | "isFocused" | "getURL"> | null,
+  requester: Pick<WebContents, "isDestroyed" | "getURL"> | null,
   permission: string,
   details: { isMainFrame?: boolean; requestingUrl?: string; embeddingOrigin?: string },
   requestingOrigin?: string,
@@ -11,11 +11,12 @@ export function isClipboardWritePermission(
     permission !== "clipboard-sanitized-write" ||
     !requester ||
     requester.isDestroyed() ||
-    !requester.isFocused() ||
     details.isMainFrame === false
   )
     return false;
   try {
+    // Chromium enforces document focus. Native window focus may already have
+    // returned to the composer when an asynchronous copy requests permission.
     const page = new URL(requester.getURL());
     if (
       page.protocol !== "https:" &&
