@@ -175,6 +175,27 @@ describe("turn throughput", () => {
     ...event("turn.completed", {}),
     createdAt: "2026-09-05T00:00:10.000Z",
   };
+  it("uses the first model output marker even when thinking precedes text", () => {
+    const first = {
+      ...event("provider.first-output", { streamKind: "reasoning_text" }),
+      createdAt: "2026-09-05T00:00:00.500Z",
+    };
+    const usage = deriveConversationUsage([first, codex(1000, 250, 900), completed], messages);
+    expect(values(usage.byTurnId.get(turn)!).TTFT).toBe("0.5 s");
+    expect(values(usage.cumulative).TTFT).toBeUndefined();
+    expect(
+      values(
+        deriveConversationUsage([codex(1000, 250, 900), completed], messages).byTurnId.get(turn)!,
+      ).TTFT,
+    ).toBeUndefined();
+    const invalid = { ...first, createdAt: "invalid" };
+    expect(
+      values(
+        deriveConversationUsage([invalid, codex(1000, 250, 900)], messages).byTurnId.get(turn)!,
+      ).TTFT,
+    ).toBeUndefined();
+  });
+
   it("uses full-turn output and wall time, without adding session TPS", () => {
     const usage = deriveConversationUsage([codex(1000, 250, 900), completed], messages);
     expect(values(usage.byTurnId.get(turn)!).TPS).toBe("25.0 tok/s");

@@ -307,7 +307,9 @@ export function deriveWorkLogEntries(
     .filter((activity) => activity.kind !== "account.rate-limits.updated")
     .filter(
       (activity) =>
-        activity.kind !== "context-window.updated" && activity.kind !== "context-window.configured",
+        activity.kind !== "context-window.updated" &&
+        activity.kind !== "context-window.configured" &&
+        activity.kind !== "provider.first-output",
     )
     .filter((activity) => activity.summary !== "Checkpoint captured")
     // Server-side Studio output attribution is environment-panel data, not transcript work.

@@ -98,11 +98,21 @@ export function deriveConversationUsage(
 ) {
   // Preserve the first user boundary even when a turn has intermediate replies.
   const starts = new Map<TurnId, number>();
+  const firstReplies = new Map<TurnId, number>();
   let userStartedAt: number | undefined;
   for (const message of messages) {
     if (message.role === "user") userStartedAt = Date.parse(message.createdAt);
     if (message.turnId && userStartedAt !== undefined && !starts.has(message.turnId))
       starts.set(message.turnId, userStartedAt);
+  }
+  for (const activity of activities) {
+    if (activity.kind !== "provider.first-output" || !activity.turnId) continue;
+    const at = Date.parse(activity.createdAt);
+    if (Number.isFinite(at))
+      firstReplies.set(
+        activity.turnId,
+        Math.min(firstReplies.get(activity.turnId) ?? Infinity, at),
+      );
   }
   const grouped = new Map<TurnId, OrchestrationThreadActivity[]>();
   for (const activity of activities) {
@@ -181,6 +191,17 @@ export function deriveConversationUsage(
         label: "TPS",
         value: `${(tokens.output / seconds).toFixed(1)} tok/s`,
         detail: `This turn · Average output throughput: ${tokens.output.toLocaleString("en-US")} tokens / ${seconds.toFixed(1)} seconds. Wall time from sending the message to turn completion, including thinking, tools and waiting; not decode-only speed.`,
+      });
+    }
+    const firstReply = firstReplies.get(turnId);
+    const ttft =
+      start !== undefined && firstReply !== undefined ? (firstReply - start) / 1000 : NaN;
+    if (values.length && Number.isFinite(ttft) && ttft >= 0) {
+      values.push({
+        label: "TTFT",
+        value: `${ttft.toFixed(1)} s`,
+        detail:
+          "Time from sending the message to the first model output received: thinking or assistant text, whichever arrives first. Excludes connection events, heartbeats and status placeholders.",
       });
     }
     if (values.length) byTurnId.set(turnId, values);

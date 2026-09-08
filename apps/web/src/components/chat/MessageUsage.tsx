@@ -9,6 +9,7 @@ const names: Record<string, string> = {
   W: "Cache write",
   CH: "Cache hit",
   TPS: "Average output speed",
+  TTFT: "Time to first token",
 };
 
 export function MessageUsage({

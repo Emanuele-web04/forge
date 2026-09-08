@@ -107,9 +107,16 @@ describe("message usage footer", () => {
   });
 });
 
-it("shows turn TPS with units and its wall-time explanation at narrow widths", async () => {
+it("shows TPS and thinking-aware TTFT with units at narrow widths", async () => {
   const usage = deriveConversationUsage(
     [
+      {
+        ...fixture(1000)[0]!,
+        id: EventId.makeUnsafe("first-output"),
+        kind: "provider.first-output",
+        createdAt: "2026-09-05T00:00:00.250Z",
+        payload: { streamKind: "reasoning_text" },
+      },
       {
         ...fixture(1000)[0]!,
         kind: "turn.completed",
@@ -130,7 +137,7 @@ it("shows turn TPS with units and its wall-time explanation at narrow widths", a
     </div>,
   );
   const button = screen.getByRole("button", { name: "Message usage details" });
-  await expect.element(button).toHaveTextContent(/TPS\s*25\.0 tok\/s/);
+  await expect.element(button).toHaveTextContent(/TPS\s*25\.0 tok\/s.*TTFT\s*0\.3 s/);
   const element = document.querySelector('[aria-label="Message usage details"]')!;
   expect(element.scrollWidth).toBeLessThanOrEqual(element.clientWidth);
   await button.click();
