@@ -375,6 +375,13 @@ export const createComposerDraftStoreState =
           }
           nextProjectDraftThreadIdByProjectId[mappingKey] = threadId;
         }
+        for (const threadId of Object.keys(state.draftThreadsByThreadId) as ThreadId[]) {
+          const draftThread = state.draftThreadsByThreadId[threadId];
+          if (draftThread?.projectId === projectId) {
+            removedThreadIds.add(threadId);
+          }
+        }
+
         if (removedThreadIds.size === 0) {
           return state;
         }

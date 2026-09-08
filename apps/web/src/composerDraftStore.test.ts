@@ -586,6 +586,25 @@ describe("composerDraftStore project draft thread mapping", () => {
       envMode: "worktree",
     });
   });
+
+  it("removes standalone Kanban drafts when a project is deleted", () => {
+    const store = useComposerDraftStore.getState();
+    const kanbanId = ThreadId.makeUnsafe("thread-kanban-delete");
+
+    store.registerDraftThread(kanbanId, {
+      projectId,
+      entryPoint: "chat",
+      isKanbanDraft: true,
+    });
+    store.setPrompt(kanbanId, "kanban task to delete");
+    store.setProjectDraftThreadId(otherProjectId, otherThreadId);
+
+    store.clearProjectDraftThreads(projectId);
+
+    expect(store.getDraftThread(kanbanId)).toBeNull();
+    expect(useComposerDraftStore.getState().draftsByThreadId[kanbanId]).toBeUndefined();
+    expect(store.getDraftThreadByProjectId(otherProjectId)?.threadId).toBe(otherThreadId);
+  });
 });
 
 describe("composerDraftStore runtime and interaction settings", () => {
