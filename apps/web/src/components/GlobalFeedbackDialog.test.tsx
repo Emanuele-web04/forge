@@ -119,7 +119,12 @@ describe("GlobalFeedbackDialog.onDraftGithubIssue", () => {
     const draft = props.onDraftGithubIssue as (details: string) => Promise<void>;
     await draft("Send crashes. My key is ghp_0123456789abcdefghijklmnop");
 
-    expect(mocks.handleNewThread).toHaveBeenCalledWith(ordinary.id, { fresh: true });
+    // preserveProjectDraft keeps the project's unsent new-thread draft: a
+    // mapped fresh draft would evict and delete its text.
+    expect(mocks.handleNewThread).toHaveBeenCalledWith(ordinary.id, {
+      fresh: true,
+      preserveProjectDraft: true,
+    });
     expect(mocks.appendComposerPromptText).toHaveBeenCalledTimes(1);
     const [threadId, prompt] = mocks.appendComposerPromptText.mock.calls[0] as [string, string];
     expect(threadId).toBe("thread-1");
@@ -140,7 +145,10 @@ describe("GlobalFeedbackDialog.onDraftGithubIssue", () => {
     const draft = props.onDraftGithubIssue as (details: string) => Promise<void>;
     await draft("Sidebar collapsed and never came back.");
 
-    expect(mocks.handleNewThread).toHaveBeenCalledWith(ordinary.id, { fresh: true });
+    expect(mocks.handleNewThread).toHaveBeenCalledWith(ordinary.id, {
+      fresh: true,
+      preserveProjectDraft: true,
+    });
   });
 
   it("hides the draft action when no ordinary project exists", () => {

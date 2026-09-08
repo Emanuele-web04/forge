@@ -32,6 +32,15 @@ export interface NewThreadOptions {
   temporary?: boolean;
   provider?: ProviderKind;
   fresh?: boolean;
+  /**
+   * Keep the project's mapped new-thread draft untouched. Normally the created
+   * draft claims the project's draft slot via `setProjectDraftThreadId`, which
+   * evicts — and deletes — any unsent composer text already there. Callers that
+   * open a dedicated draft as a side action (e.g. bug-report drafting) set this
+   * so the user's in-progress draft survives; the new draft is still registered
+   * and routable by thread id.
+   */
+  preserveProjectDraft?: boolean;
 }
 
 export interface InheritedThreadContext {

@@ -303,6 +303,29 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
   });
 
+  it("keeps the mapped draft and its text when a detached draft skips the slot claim", () => {
+    // preserveProjectDraft callers (bug-report drafting) stage a routable draft
+    // via registerDraftThread only — no setProjectDraftThreadId — so the user's
+    // unsent project draft must survive untouched.
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectId, threadId);
+    store.setPrompt(threadId, "unsent work in progress");
+
+    store.registerDraftThread(otherThreadId, {
+      projectId,
+      entryPoint: "chat",
+      envMode: "local",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    store.setPrompt(otherThreadId, "bug-report interview prompt");
+
+    const state = useComposerDraftStore.getState();
+    expect(state.getDraftThreadByProjectId(projectId)?.threadId).toBe(threadId);
+    expect(state.draftsByThreadId[threadId]?.prompt).toContain("unsent work in progress");
+    expect(state.getDraftThread(otherThreadId)).toMatchObject({ projectId, entryPoint: "chat" });
+    expect(state.draftsByThreadId[otherThreadId]?.prompt).toContain("bug-report interview prompt");
+  });
+
   it("releases queued preview blobs when remapping a project to a new draft thread", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectId, threadId);

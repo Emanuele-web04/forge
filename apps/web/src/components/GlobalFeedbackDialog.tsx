@@ -75,7 +75,13 @@ export function GlobalFeedbackDialog() {
         diagnostics: submission.diagnostics,
       }),
     });
-    const threadId = await handleNewThread(projectId, { fresh: true });
+    // The bug-report draft must not claim the project's new-thread slot: a
+    // fresh mapped draft would evict and delete the user's unsent composer
+    // text. preserveProjectDraft keeps the existing draft untouched.
+    const threadId = await handleNewThread(projectId, {
+      fresh: true,
+      preserveProjectDraft: true,
+    });
     if (!threadId) {
       throw new Error("Could not open a draft thread.");
     }

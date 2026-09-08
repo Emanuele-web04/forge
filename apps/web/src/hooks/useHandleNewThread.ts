@@ -300,7 +300,9 @@ export function useHandleNewThread() {
           resolvedStoredDraftThread = getDraftThread(bootstrapPlan.threadId);
         }
         applyProviderOverride(bootstrapPlan.threadId);
-        setProjectDraftThreadId(projectId, bootstrapPlan.threadId, { entryPoint });
+        if (!options?.preserveProjectDraft) {
+          setProjectDraftThreadId(projectId, bootstrapPlan.threadId, { entryPoint });
+        }
         restoreComposerDraft(bootstrapPlan.threadId, preservedComposerDraft);
         activateThreadEntryPoint(bootstrapPlan.threadId);
         if (focusedThreadId === bootstrapPlan.threadId) {
@@ -350,7 +352,9 @@ export function useHandleNewThread() {
           resolvedActiveDraftThread = getDraftThread(bootstrapPlan.threadId);
         }
         applyProviderOverride(bootstrapPlan.threadId);
-        setProjectDraftThreadId(projectId, bootstrapPlan.threadId, { entryPoint });
+        if (!options?.preserveProjectDraft) {
+          setProjectDraftThreadId(projectId, bootstrapPlan.threadId, { entryPoint });
+        }
         restoreComposerDraft(bootstrapPlan.threadId, preservedComposerDraft);
         activateThreadEntryPoint(bootstrapPlan.threadId);
         if (entryPoint === "terminal") {
@@ -397,7 +401,13 @@ export function useHandleNewThread() {
         // TanStack resolves an older navigate() promise when a newer navigation supersedes it.
         // Verify the committed route before deleting the previous project draft.
         isDestinationActive: () => router.state.location.pathname === `/${threadId}`,
-        finalize: () => setProjectDraftThreadId(projectId, threadId, draftSeed),
+        finalize: () => {
+          // preserveProjectDraft callers keep the user's existing project draft:
+          // claiming the slot here would evict and delete its unsent text.
+          if (!options?.preserveProjectDraft) {
+            setProjectDraftThreadId(projectId, threadId, draftSeed);
+          }
+        },
         rollback: () => {
           clearDraftThread(threadId);
           clearTerminalState(threadId);
