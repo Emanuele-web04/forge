@@ -3,19 +3,23 @@
 Orchestrator threads that spawn subagents (native `parentThreadId` links or batch/source
 children with `parentThreadId === null`) render their descendants as nested rows under the
 family root in every sidebar surface: Projects, Chats, Studio, Pinned, and Activity (including
-Activity → Pinned). A child row is the same row as its parent — same icon, title, status glyph,
-hover actions and hover card — only indented under a vertical thread line.
+Activity → Pinned). A child row keeps its parent's anatomy — own model icon, title, status glyph,
+hover actions and hover card — indented under a vertical thread line; in Activity it collapses to
+a single line.
 
 ## Fixed subagent slot
 
-- Every thread row ends with a fixed-width subagent slot: 44px on classic one-line rows
-  (`SidebarThreadBranchSlot`/`SidebarThreadBranchControl`, `layout="classic"`) and 40px on the
-  Activity meta line (`layout="activity"`). Rows without children render the slot empty, so
-  every title truncates at the same boundary and the toggle sits at the same x on every row.
+- Every classic one-line row ends with a fixed 44px subagent slot
+  (`SidebarThreadBranchSlot`/`SidebarThreadBranchControl`, `layout="classic"`). Rows without
+  children render the slot empty, so every title truncates at the same boundary and the toggle
+  sits at the same x on every row. Activity rows (`layout="activity"`) reserve nothing: the
+  toggle is content-sized and sits in the meta line right before the fixed time column, so it is
+  omitted entirely on childless rows.
 - With children the slot is the toggle: a rotating `DisclosureChevron` (12px classic, 11px
   Activity) plus the direct child count (`1`, `5`, `20`, `99+`) in a right-aligned tabular-nums
   span. The whole slot is the hit area, not just the chevron. Above 99 the visible text is
-  `99+`; the accessible label and tooltip keep the exact number.
+  `99+`; the accessible label and tooltip keep the exact number. The chevron is always visible;
+  hover changes only the row background.
 - Hover changes only the row background. Classic rows keep their meta chips, ⌘N hint and
   status glyph in an in-flow trailing cluster between the title and the slot; the hover actions
   overlay that cluster, so nothing to the right of them moves.
@@ -35,7 +39,7 @@ hover actions and hover card — only indented under a vertical thread line.
   left edge with `margin-left` equal to the parent row's left padding plus half of the 12px
   provider icon (`hierarchyThreadLineOffsetPx`), so the line runs under the centre of the parent's
   icon: 38px for project-nested roots (`pl-8`), 14px for flush rows and every child (`px-2`), 16px
-  for Activity rows (`px-2.5`). Child rows sit 12px (classic) or 10px (Activity) right of the line.
+  for Activity rows (`px-2.5`). Child rows sit 12px right of the line on every surface.
 - Nested branches draw their own line from their own row; there is no per-depth indent table
   and no per-row connector.
 - Expand/collapse uses the shared `DisclosureRegion` motion (220ms ease-out, reduced-motion safe);
@@ -48,11 +52,15 @@ hover actions and hover card — only indented under a vertical thread line.
   children, the status glyph and compact hover actions, then the fixed slot. They drop project,
   time, branch, PR and origin badges — those live in the hover card. Height and padding are the
   app's row tokens (`--app-density-row-height`, `px-2`).
-- Activity children are full `ActivityThreadRow`s. The meta line is a fixed grid on every row:
-  project (flex) · subagent slot (40px) · branch (up to 150px, PR chip leading the branch name) ·
-  status glyph (12px) · time (34px, right-aligned tabular-nums). Project and branch split spare
-  width evenly on narrow sidebars; the other columns are rigid, so rows align regardless of
-  content.
+- Activity roots keep two lines. The meta line has a fixed order: project (flex) · branch (up to
+  150px, PR chip leading the branch name; omitted without branch or PR) · subagent toggle
+  (omitted without children) · status glyph (omitted when idle) · time (34px, right-aligned
+  tabular-nums). The time is the only rigid column, so the optional items always sit flush
+  against it (`branch · › 2 · 4:29`) and the right edge aligns down the list.
+- Activity children are one 30px line: the child's own provider icon, the nickname/role label or
+  plain title, then the same toggle · status · time cluster aligned with the parent's time. They
+  repeat neither project nor branch (inherited from the parent); model and effort live in the
+  hover card.
 - The hover card names the orchestrator ("Subagent of · <parent title>") for native subagents,
   keeps model + effort, and colours the status label with the status pill's own tone.
 

@@ -31,10 +31,10 @@ export function hierarchyThreadLineOffsetPx(rowPaddingLeftPx: number): number {
   return padding + SIDEBAR_ROW_LEADING_ICON_PX / 2;
 }
 
-/** Gap between the thread line and the child rows (12px classic, 10px Activity). */
+/** Gap between the thread line and the child rows: 12px on every surface. */
 const CHILD_LIST_PADDING_CLASS: Record<SidebarBranchSlotLayout, string> = {
   classic: "pl-3",
-  activity: "pl-2.5",
+  activity: "pl-3",
 };
 
 export function branchControlsId(threadId: ThreadId, surface = "sidebar"): string {
@@ -86,7 +86,7 @@ export function nestSidebarEntriesByDepth<T extends { depth: number }>(
 export interface SidebarThreadHierarchyBranchRenderSlot {
   /**
    * Subagent disclosure when directChildCount > 0. Classic rows reserve an
-   * empty trailing slot otherwise; Activity rows omit the empty title control.
+   * empty trailing slot otherwise; Activity rows render nothing (no reserved space).
    */
   branchControl: ReactNode;
   /** True for every row with logical depth greater than zero. */

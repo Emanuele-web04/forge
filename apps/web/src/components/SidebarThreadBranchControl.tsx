@@ -1,6 +1,7 @@
 // FILE: SidebarThreadBranchControl.tsx
-// Purpose: Shared subagent disclosure. Classic rows reserve a trailing slot;
-//          Activity rows place a compact control before the parent title.
+// Purpose: Shared subagent disclosure. Classic rows reserve a fixed trailing slot;
+//          Activity rows place a compact chevron + count in the meta line, right
+//          before the time column, and reserve nothing when there are no children.
 // Layer: Sidebar UI primitive
 // Exports: SidebarThreadBranchControl, SidebarThreadBranchSlot, SidebarBranchSlotLayout,
 //          formatSubagentCounter, formatBranchCount
@@ -25,22 +26,24 @@ import { ThreadRunningSpinner } from "./ThreadRunningSpinner";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
 
 /**
- * Classic one-line rows (Projects, Chats, Studio, Pinned) reserve 44px; the
- * Activity title uses a 40px control. Both are `min-w` so the
- * slot only grows when the hidden-attention aggregate (icon + count) is present;
- * the chevron and count stay right-aligned and never move.
+ * Classic one-line rows (Projects, Chats, Studio, Pinned) reserve a 44px `min-w`
+ * slot that only grows when the hidden-attention aggregate (icon + count) is
+ * present, so the chevron and count stay right-aligned and never move. The
+ * Activity meta line has no fixed slot: the control is content-sized and sits
+ * flush against the 34px time column, which is the only rigid column there.
  */
 export type SidebarBranchSlotLayout = "classic" | "activity";
 
-// Activity uses the title line height; both layouts expand for coarse pointers.
+// The Activity control lives in a 12px text line and must not grow into a touch
+// target: it would stretch the meta line and break the row height.
 const SLOT_LAYOUT_CLASS: Record<SidebarBranchSlotLayout, string> = {
   classic: "min-w-11 pointer-coarse:min-h-11",
-  activity: "min-w-10 min-h-7 justify-center self-center px-1 pointer-coarse:min-h-11",
+  activity: "self-center",
 };
 
 const SLOT_CHEVRON_CLASS: Record<SidebarBranchSlotLayout, string> = {
   classic: "size-3",
-  activity: "size-3",
+  activity: "size-[11px]",
 };
 
 const SLOT_BASE_CLASS =
@@ -61,7 +64,7 @@ function stopBranchControlPropagation(event: SyntheticEvent): void {
   event.stopPropagation();
 }
 
-/** Classic rows keep their trailing columns aligned; Activity has no empty control. */
+/** Classic rows keep their trailing columns aligned; Activity reserves no empty control. */
 export function SidebarThreadBranchSlot(props: { layout: SidebarBranchSlotLayout }) {
   if (props.layout === "activity") return null;
   return (
@@ -169,10 +172,10 @@ export function SidebarThreadBranchControl(props: {
       className={cn(
         SLOT_BASE_CLASS,
         SLOT_LAYOUT_CLASS[layout],
-        "cursor-pointer rounded-md text-[length:var(--app-font-size-ui,11px)] focus-visible:outline-2 focus-visible:-outline-offset-2",
+        "cursor-pointer rounded-md hover:bg-transparent focus-visible:outline-2 focus-visible:-outline-offset-2 active:bg-transparent",
         layout === "activity"
-          ? "bg-foreground/5 hover:bg-foreground/10 active:bg-foreground/15"
-          : "hover:bg-transparent active:bg-transparent",
+          ? "text-[length:var(--app-font-size-ui-sm,11px)]"
+          : "text-[length:var(--app-font-size-ui,11px)]",
         hiddenSummary?.containsActiveThread === true
           ? "text-[var(--color-text-accent)] hover:text-[var(--color-text-accent)] active:text-[var(--color-text-accent)]"
           : "text-muted-foreground/79 hover:text-foreground active:text-foreground",

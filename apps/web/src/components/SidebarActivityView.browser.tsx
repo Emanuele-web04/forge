@@ -601,7 +601,7 @@ describe("SidebarActivityView compact hierarchy", () => {
     return { root, children, nowThread };
   }
 
-  it("renders descendants as full activity rows with a numeric toggle and five-child paging", async () => {
+  it("renders descendants as one-line rows with a numeric toggle and five-child paging", async () => {
     const { root, children, nowThread } = makeFamily(900, 20);
     children[0] = nowThread(90001, 1000, {
       parentThreadId: root.id,
@@ -639,9 +639,9 @@ describe("SidebarActivityView compact hierarchy", () => {
     expect(document.body.textContent).not.toContain("batch");
     await page.getByRole("button", { name: "Show 15 more" }).click();
 
-    // Children are full two-line activity rows: provider icon + title on the
-    // first line, project · branch · time on the second — identical to
-    // the root row, only indented under the thread line.
+    // Children are one-line rows (icon · title · time): shorter than the root,
+    // with the child's own provider icon and no project/branch meta, only
+    // indented under the thread line.
     const rootRow = page
       .getByTestId(`activity-thread-${root.id}`)
       .element()
@@ -649,12 +649,14 @@ describe("SidebarActivityView compact hierarchy", () => {
     for (const title of ["Activity thread 90003", "Activity thread 90004"]) {
       const nav = page.getByRole("button", { name: title, exact: true }).element();
       const row = nav.closest("[data-thread-item]")!;
-      expect(
-        Math.abs(row.getBoundingClientRect().height - rootRow.getBoundingClientRect().height),
-      ).toBeLessThanOrEqual(1);
+      expect(row.getBoundingClientRect().height).toBeCloseTo(30, 0);
+      expect(row.getBoundingClientRect().height).toBeLessThan(
+        rootRow.getBoundingClientRect().height,
+      );
       expect(nav.querySelector("svg, [data-slot=central-icon]")).not.toBeNull();
       expect(row.querySelectorAll('[class*="bg-border"]')).toHaveLength(0);
-      expect(row.querySelector(`[aria-label="${title} in Project A"]`)).not.toBeNull();
+      expect(row.querySelector(`[aria-label="${title} in Project A"]`)).toBeNull();
+      expect(row.querySelector("[data-activity-branch-column]")).toBeNull();
       expect(row.querySelector("[data-thread-branch-slot]")).toBeNull();
     }
     // Children sit inside the parent's thread line, to the right of the root.
@@ -834,7 +836,7 @@ describe("SidebarActivityView compact hierarchy", () => {
     await mounted.unmount();
   });
 
-  it("groups the disclosure before the parent title and keeps metadata aligned", async () => {
+  it("places the disclosure in the meta line before the time and keeps it fixed on hover", async () => {
     const {
       root: parent,
       children,
@@ -842,7 +844,7 @@ describe("SidebarActivityView compact hierarchy", () => {
     } = makeFamily(951, 1, {
       title: "Same width root title here",
     });
-    const plain = nowThread(950, 0, { title: parent.title });
+    const plain = nowThread(950, 0, { title: parent.title, branch: "feature/meta-branch" });
     const mounted = await render(
       <div style={{ width: "280px" }}>
         {renderActivity({ threads: [plain, parent, ...children] })}
@@ -852,46 +854,45 @@ describe("SidebarActivityView compact hierarchy", () => {
     const titleButton = (id: ThreadId) => page.getByTestId(`activity-thread-${id}`).element();
     const rowOf = (id: ThreadId) => titleButton(id).closest("[data-thread-item]")!;
     const titleOf = (id: ThreadId) => titleButton(id).querySelector("span.truncate")!;
+    const timeOf = (id: ThreadId) =>
+      rowOf(id).querySelector<HTMLElement>("[data-activity-row-time]")!.getBoundingClientRect();
     const toggle = rowOf(parent.id).querySelector<HTMLElement>("[data-thread-branch-slot]")!;
     const toggleRect = toggle.getBoundingClientRect();
-    const parentRect = titleOf(parent.id).getBoundingClientRect();
-    const plainRect = titleOf(plain.id).getBoundingClientRect();
+    const parentTime = timeOf(parent.id);
+    const parentTitleRect = titleOf(parent.id).getBoundingClientRect();
 
+    // Childless rows reserve nothing; rows without a branch omit that column.
     expect(rowOf(plain.id).querySelector("[data-thread-branch-slot]")).toBeNull();
-    expect(toggle.parentElement).toBe(titleButton(parent.id).parentElement);
+    expect(rowOf(plain.id).querySelector("[data-activity-branch-column]")).not.toBeNull();
+    expect(rowOf(parent.id).querySelector("[data-activity-branch-column]")).toBeNull();
+    // The toggle is a button in the meta line, glued to the fixed time column.
     expect(toggle.closest("button")).toBe(toggle);
-    expect(toggleRect.right).toBeLessThanOrEqual(
-      titleButton(parent.id).getBoundingClientRect().left,
-    );
+    expect(toggle.parentElement).not.toBe(titleButton(parent.id).parentElement);
+    expect(toggleRect.right).toBeLessThanOrEqual(parentTime.left);
+    expect(parentTime.left - toggleRect.right).toBeLessThanOrEqual(9);
     expect(
-      Math.abs(toggleRect.top + toggleRect.height / 2 - (parentRect.top + parentRect.height / 2)),
+      Math.abs(toggleRect.top + toggleRect.height / 2 - (parentTime.top + parentTime.height / 2)),
     ).toBeLessThanOrEqual(1);
-    expect(toggleRect.width).toBeGreaterThanOrEqual(40);
-    expect(toggleRect.height).toBeGreaterThanOrEqual(28);
-    expect(parentRect.width).toBeGreaterThan(0);
-    expect(plainRect.width).toBeGreaterThan(parentRect.width);
-    expect(parseFloat(getComputedStyle(toggle.parentElement!).paddingRight)).toBeGreaterThanOrEqual(
-      68,
-    );
+    expect(toggleRect.bottom).toBeGreaterThan(parentTitleRect.bottom);
+    // Titles truncate at the same boundary regardless of children.
+    expect(titleOf(plain.id).getBoundingClientRect().width).toBeCloseTo(parentTitleRect.width, 0);
+    // The time column is the only fixed one and lines up across rows.
+    expect(parentTime.width).toBeCloseTo(34, 0);
+    expect(timeOf(plain.id).right).toBeCloseTo(parentTime.right, 0);
 
     // Showing actions must not shift the disclosure or truncate the title further.
     await page.getByTestId(`activity-thread-${parent.id}`).hover();
-    expect(titleOf(parent.id).getBoundingClientRect().width).toBeCloseTo(parentRect.width, 0);
+    expect(titleOf(parent.id).getBoundingClientRect().width).toBeCloseTo(parentTitleRect.width, 0);
     expect(toggle.getBoundingClientRect().left).toBeCloseTo(toggleRect.left, 0);
     titleButton(parent.id).focus();
-    expect(titleOf(parent.id).getBoundingClientRect().width).toBeCloseTo(parentRect.width, 0);
-    for (const action of rowOf(parent.id).querySelectorAll<HTMLButtonElement>("button")) {
-      if (action === toggle || action === titleButton(parent.id)) continue;
-      const rect = action.getBoundingClientRect();
-      if (rect.top < toggleRect.bottom && rect.bottom > toggleRect.top) {
-        expect(rect.left).toBeGreaterThanOrEqual(parentRect.right);
-      }
-    }
-    const branchOf = (id: ThreadId) =>
-      rowOf(id)
-        .querySelector<HTMLElement>("[data-activity-branch-column]")!
-        .getBoundingClientRect();
-    expect(branchOf(plain.id).left).toBeCloseTo(branchOf(parent.id).left, 0);
+    expect(toggle.getBoundingClientRect().left).toBeCloseTo(toggleRect.left, 0);
+
+    // The open child is one line whose time aligns with the parent's.
+    await toggle.click();
+    const child = children[0]!;
+    await expect.element(page.getByTestId(`activity-thread-${child.id}`)).toBeVisible();
+    expect(timeOf(child.id).right).toBeCloseTo(parentTime.right, 0);
+    expect(rowOf(child.id).getBoundingClientRect().height).toBeCloseTo(30, 0);
     await mounted.unmount();
   });
 
