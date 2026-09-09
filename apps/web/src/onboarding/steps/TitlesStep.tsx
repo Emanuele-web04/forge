@@ -5,8 +5,8 @@
 
 import type { ThreadTitleRefreshMode } from "@synara/contracts";
 
-import { useAppSettings } from "../appSettings";
-import { cn } from "../lib/utils";
+import { useAppSettings } from "~/appSettings";
+import { cn } from "~/lib/utils";
 
 const OPTIONS: ReadonlyArray<{ value: ThreadTitleRefreshMode; label: string; hint: string }> = [
   {

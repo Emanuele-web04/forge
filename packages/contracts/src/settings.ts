@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 import { IsoDateTime, NonNegativeInt, TrimmedString } from "./baseSchemas";
 import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "./model";
-import { ModelSelection, ProviderKind, ThreadEnvironmentMode } from "./orchestration";
+import { ModelSelection, ProviderKind, ThreadEnvironmentMode, ThreadTitleRefreshMode } from "./orchestration";
 
 const StringSetting = TrimmedString.check(Schema.isMaxLength(4096));
 const CustomModels = Schema.Array(Schema.String.check(Schema.isMaxLength(256))).pipe(
@@ -80,9 +80,6 @@ export type DevinServerProviderSettings = typeof DevinServerProviderSettings.Typ
 const DisabledSkillNames = Schema.Array(Schema.String.check(Schema.isMaxLength(256))).pipe(
   Schema.withDecodingDefault(() => []),
 );
-
-export const ThreadTitleRefreshMode = Schema.Literals(["off", "suggested", "automatic"]);
-export type ThreadTitleRefreshMode = typeof ThreadTitleRefreshMode.Type;
 
 /** Global default plus trigger thresholds for opt-in automatic title refresh (#1041). */
 export const ThreadTitleRefreshSettings = Schema.Struct({
