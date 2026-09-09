@@ -12,6 +12,7 @@ import {
   optionalBooleanFlag,
   type BooleanFlagInput,
 } from "@synara/shared/cli";
+import { resolveSynaraDesktopFlavor, synaraDesktopIdentity } from "@synara/shared/desktopIdentity";
 import { applyShellEnvironmentHydrationMarker } from "@synara/shared/shell";
 import { Config, Data, Effect, Hash, Layer, Logger, Option, Path, Schema } from "effect";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -26,7 +27,6 @@ const MAX_PORT = 65535;
 export const DEFAULT_SYNARA_HOME = Effect.map(Effect.service(Path.Path), (path) =>
   path.join(homedir(), ".synara"),
 );
-
 const MODE_ARGS = {
   dev: [
     "run",
@@ -130,7 +130,11 @@ export function resolveOffset(config: {
   return { offset, source: `hashed SYNARA_DEV_INSTANCE=${seed}` };
 }
 
-function resolveBaseDir(baseDir: string | undefined): Effect.Effect<string, never, Path.Path> {
+function resolveBaseDir(
+  baseDir: string | undefined,
+  mode: DevMode,
+  requestedDesktopFlavor?: string | undefined,
+): Effect.Effect<string, never, Path.Path> {
   return Effect.gen(function* () {
     const path = yield* Path.Path;
     const configured = baseDir?.trim();
@@ -139,6 +143,13 @@ function resolveBaseDir(baseDir: string | undefined): Effect.Effect<string, neve
       return path.resolve(configured);
     }
 
+    if (mode === "dev:desktop") {
+      const flavor = resolveSynaraDesktopFlavor({
+        isDevelopment: true,
+        requestedFlavor: requestedDesktopFlavor,
+      });
+      return path.join(homedir(), synaraDesktopIdentity(flavor).defaultHomeDirectoryName);
+    }
     return yield* DEFAULT_SYNARA_HOME;
   });
 }
@@ -175,7 +186,7 @@ export function createDevRunnerEnv({
   return Effect.gen(function* () {
     const serverPort = port ?? BASE_SERVER_PORT + serverOffset;
     const webPort = BASE_WEB_PORT + webOffset;
-    const resolvedBaseDir = yield* resolveBaseDir(synaraHome);
+    const resolvedBaseDir = yield* resolveBaseDir(synaraHome, mode, baseEnv.SYNARA_DESKTOP_FLAVOR);
     const configuredHost = host ?? "127.0.0.1";
     // Brackets are URL syntax, not valid listen-host syntax. Keep the bind host
     // portable while adding brackets back only when constructing an IPv6 URL.

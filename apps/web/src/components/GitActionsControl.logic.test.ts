@@ -22,8 +22,6 @@ import {
   resolveQuickAction,
   shouldOfferCreateBranchPrompt,
   shouldPromotePullAction,
-  shouldShowEnvironmentPanelPullRow,
-  shouldShowHeaderPullAction,
   summarizeGitResult,
 } from "./GitActionsControl.logic";
 
@@ -463,17 +461,8 @@ describe("when: branch is behind upstream", () => {
     assert.deepEqual(availability, { canRun: true, hint: null });
   });
 
-  it("shouldShowEnvironmentPanelPullRow promotes the Pull primary row", () => {
+  it("promotes Pull while behind upstream", () => {
     const quick = resolveQuickAction(status({ behindCount: 2 }), false);
-    assert.equal(
-      shouldShowEnvironmentPanelPullRow({ quickAction: quick, isPullRunning: false }),
-      true,
-    );
-  });
-
-  it("shouldShowHeaderPullAction surfaces Pull next to Hand off while behind", () => {
-    const quick = resolveQuickAction(status({ behindCount: 2 }), false);
-    assert.equal(shouldShowHeaderPullAction({ quickAction: quick, isPullRunning: false }), true);
     assert.equal(shouldPromotePullAction({ quickAction: quick, isPullRunning: false }), true);
     assert.deepEqual(
       resolvePromotedPullPresentation({ quickAction: quick, isPullRunning: false }),
@@ -483,22 +472,9 @@ describe("when: branch is behind upstream", () => {
     );
   });
 
-  it("shouldShowEnvironmentPanelPullRow keeps the Pull row visible while pulling", () => {
+  it("keeps the promoted Pull label visible while pulling", () => {
     const busyQuickAction = resolveQuickAction(status({ behindCount: 2 }), true);
-    assert.equal(
-      shouldShowEnvironmentPanelPullRow({
-        quickAction: busyQuickAction,
-        isPullRunning: true,
-      }),
-      true,
-    );
-    assert.equal(
-      shouldShowHeaderPullAction({
-        quickAction: busyQuickAction,
-        isPullRunning: true,
-      }),
-      true,
-    );
+
     assert.deepEqual(
       resolvePromotedPullPresentation({
         quickAction: busyQuickAction,
@@ -588,13 +564,9 @@ describe("when: branch is up to date", () => {
     });
   });
 
-  it("shouldShowEnvironmentPanelPullRow stays hidden", () => {
+  it("does not promote Pull for an up-to-date branch", () => {
     const quick = resolveQuickAction(status({ aheadCount: 0, behindCount: 0 }), false);
-    assert.equal(
-      shouldShowEnvironmentPanelPullRow({ quickAction: quick, isPullRunning: false }),
-      false,
-    );
-    assert.equal(shouldShowHeaderPullAction({ quickAction: quick, isPullRunning: false }), false);
+
     assert.equal(
       resolvePromotedPullPresentation({ quickAction: quick, isPullRunning: false }),
       null,

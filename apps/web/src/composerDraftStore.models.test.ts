@@ -5,6 +5,7 @@ import {
   resolvePreferredComposerModelSelection,
   useComposerDraftStore,
 } from "./composerDraftStore";
+import { normalizeModelSelection } from "./composerDraftModels";
 import {
   modelSelection,
   providerModelOptions,
@@ -12,6 +13,19 @@ import {
 } from "./composerDraftStoreTestFixtures";
 
 describe("resolvePreferredComposerModelSelection", () => {
+  it("preserves a case-insensitive 1M Claude model variant during normalization", () => {
+    expect(
+      normalizeModelSelection({ provider: "claudeAgent", model: "claude-fable-5-1[1M]" }),
+    ).toEqual(modelSelection("claudeAgent", "claude-fable-5-1[1m]"));
+    expect(
+      normalizeModelSelection({
+        provider: "claudeAgent",
+        model: "claude-fable-5-1[1m]",
+        options: { autoCompactWindow: "200k" },
+      }),
+    ).toEqual(modelSelection("claudeAgent", "claude-fable-5-1[1m]", { autoCompactWindow: "200k" }));
+  });
+
   it("prefers the active draft provider selection over thread and project defaults", () => {
     expect(
       resolvePreferredComposerModelSelection({
@@ -65,6 +79,37 @@ describe("resolvePreferredComposerModelSelection", () => {
         projectModelSelection: null,
       }),
     ).toEqual(cursorSelection);
+  });
+
+  it("restores the last-used selection for a fresh bootstrap ahead of project and global defaults", () => {
+    const lastUsed = modelSelection("claudeAgent", "claude-opus-4-6", { effort: "max" });
+    expect(
+      resolvePreferredComposerModelSelection({
+        draft: {
+          modelSelectionByProvider: { claudeAgent: lastUsed },
+          activeProvider: "claudeAgent",
+        },
+        threadModelSelection: null,
+        projectModelSelection: modelSelection("codex", "gpt-5.5"),
+        defaultProvider: "codex",
+      }),
+    ).toEqual(lastUsed);
+  });
+
+  it("keeps the draft preference ahead of the persisted default", () => {
+    expect(
+      resolvePreferredComposerModelSelection({
+        draft: {
+          modelSelectionByProvider: {
+            pi: modelSelection("pi", "pi-auto"),
+          },
+          activeProvider: "pi",
+        },
+        threadModelSelection: null,
+        projectModelSelection: null,
+        defaultProvider: "devin",
+      }),
+    ).toEqual(modelSelection("pi", "pi-auto"));
   });
 });
 
@@ -123,6 +168,16 @@ describe("composerDraftStore modelSelection", () => {
     expect(
       useComposerDraftStore.getState().draftsByThreadId[threadId]?.modelSelectionByProvider.codex,
     ).toEqual(modelSelection("codex", "gpt-5.6-sol", { fastMode: true }));
+  });
+
+  it("preserves Devin model options in the draft", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setProviderModelOptions(threadId, "devin", { fastMode: true }, { model: "adaptive" });
+
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[threadId]?.modelSelectionByProvider.devin,
+    ).toEqual(modelSelection("devin", "adaptive", { fastMode: true }));
   });
 
   it("keeps default-only model selections on the draft", () => {
@@ -362,9 +417,9 @@ describe("composerDraftStore modelSelection", () => {
         antigravity: [],
         grok: [],
         droid: [],
-        kilo: [],
         opencode: [],
         pi: [],
+        devin: [],
       },
       availableModelOptionsByProvider: {
         opencode: [{ slug: "opencode/gpt-5-nano", name: "GPT-5 Nano" }],
@@ -390,9 +445,9 @@ describe("composerDraftStore modelSelection", () => {
         antigravity: [],
         grok: [],
         droid: [],
-        kilo: [],
         opencode: [],
         pi: [],
+        devin: [],
       },
       availableModelOptionsByProvider: {
         opencode: [
@@ -423,9 +478,9 @@ describe("composerDraftStore modelSelection", () => {
         antigravity: [],
         grok: [],
         droid: [],
-        kilo: [],
         opencode: [],
         pi: [],
+        devin: [],
       },
       availableModelOptionsByProvider: {
         opencode: [
@@ -456,9 +511,9 @@ describe("composerDraftStore modelSelection", () => {
         antigravity: [],
         grok: [],
         droid: [],
-        kilo: [],
         opencode: [],
         pi: [],
+        devin: [],
       },
       availableModelOptionsByProvider: {
         pi: [
@@ -786,6 +841,20 @@ describe("composerDraftStore sticky composer settings", () => {
         claudeAgent: modelSelection("claudeAgent", "claude-opus-4-6"),
       },
       activeProvider: "claudeAgent",
+    });
+  });
+  it("overrides a sticky activeProvider with the saved default provider on a fresh draft", () => {
+    const store = useComposerDraftStore.getState();
+    const threadId = ThreadId.makeUnsafe("thread-sticky-saved-default");
+    store.setStickyModelSelection(modelSelection("pi", "pi-auto"));
+    store.applyStickyState(threadId);
+    store.setModelSelection(threadId, modelSelection("devin", "adaptive"));
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toMatchObject({
+      modelSelectionByProvider: {
+        pi: modelSelection("pi", "pi-auto"),
+        devin: modelSelection("devin", "adaptive"),
+      },
+      activeProvider: "devin",
     });
   });
 

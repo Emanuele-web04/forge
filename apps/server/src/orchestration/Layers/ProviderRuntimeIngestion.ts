@@ -62,6 +62,7 @@ import {
   OrchestrationCommandPreviouslyRejectedError,
 } from "../Errors.ts";
 import { makeRuntimeJournalPoisonGate } from "../runtimeJournalPoisonGate.ts";
+import { isExpiredSidechat } from "../sidechatLifecycle.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ProjectionSnapshotQuery,
@@ -90,7 +91,15 @@ const providerTurnKey = (threadId: ThreadId, turnId: TurnId) => `${threadId}:${t
 const providerCommandId = (event: ProviderRuntimeEvent, tag: string, target = "event"): CommandId =>
   CommandId.makeUnsafe(`provider:${event.eventId}:${tag}:${target}`);
 
-const DEFAULT_ASSISTANT_DELIVERY_MODE: AssistantDeliveryMode = "buffered";
+// The delivery-mode binding handshake (request queue ↔ runtime turn lifecycle)
+// is in-memory: a server restart, a provider that skips turn.started, or a lost
+// request can leave a streaming turn unbound. Defaulting unbound turns to
+// "buffered" silently withheld the whole assistant message until completion
+// (deltas arrived live but were fanned out as one blob at flush time). Fail
+// towards live output instead: an unbound turn streams; only turns whose
+// dispatch explicitly requested "buffered" (assistant streaming setting off)
+// hold text until completion.
+const DEFAULT_ASSISTANT_DELIVERY_MODE: AssistantDeliveryMode = "streaming";
 const PROVIDER_RUNTIME_INGESTION_CAPACITY = 1_024;
 const PROVIDER_RUNTIME_REPLAY_PAGE_SIZE = 128;
 const PROVIDER_RUNTIME_REPLAY_POLL_MIN_MS = 250;
@@ -2275,7 +2284,14 @@ const make = Effect.gen(function* () {
             createdAt: now,
           });
 
-          if (isTerminalTurnEvent) {
+          // Recovery still settles the old turn and drains queued work, but
+          // its technical cancellation must not pause an autonomous goal.
+          const isDevinWedgeRecoveryCancellation =
+            event.provider === "devin" &&
+            event.type === "turn.completed" &&
+            event.payload.state === "cancelled" &&
+            event.payload.stopReason === "synara.devin.wedge-recovery";
+          if (isTerminalTurnEvent && !isDevinWedgeRecoveryCancellation) {
             // The command read model advances synchronously with goal tools.
             // Reading it here prevents a fast terminal provider event from
             // overtaking the projection of achieved/blocked/pause metadata.
@@ -2286,6 +2302,7 @@ const make = Effect.gen(function* () {
               settledThread &&
               settledThread.deletedAt == null &&
               settledThread.archivedAt == null &&
+              !isExpiredSidechat(settledThread) &&
               settledThread.parentThreadId == null &&
               Boolean(activeThreadGoal(settledThread)?.trim()) &&
               settledThread.goalPausedAt == null
@@ -2674,6 +2691,30 @@ const make = Effect.gen(function* () {
             },
             createdAt: now,
           });
+          // The old turn was technically cancelled, so only the failed
+          // recovery can now pause its goal. Never pause a different turn.
+          if (
+            event.provider === "devin" &&
+            asObject(event.payload.detail)?.reason === "synara.devin.wedge-recovery" &&
+            eventTurnId !== undefined &&
+            thread.latestTurn?.turnId === eventTurnId
+          ) {
+            const failedThread = (yield* orchestrationEngine.getReadModel()).threads.find(
+              (candidate) => candidate.id === thread.id,
+            );
+            if (
+              failedThread &&
+              activeThreadGoal(failedThread)?.trim() &&
+              failedThread.goalPausedAt == null
+            ) {
+              yield* orchestrationEngine.dispatch({
+                type: "thread.meta.update",
+                commandId: providerCommandId(event, "goal-recovery-failed-pause", thread.id),
+                threadId: thread.id,
+                goalPaused: true,
+              });
+            }
+          }
         }
       }
 
@@ -3146,15 +3187,11 @@ const make = Effect.gen(function* () {
   const rebuildAcceptedOpenTurnStateForEvent = (event: ProviderRuntimeEvent, sequence: number) =>
     prepareAcceptedRuntimeEventReplay(event).pipe(
       Effect.andThen(processRuntimeEvent(event, sequence)),
+      Effect.as({ replayed: true } as const),
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)
           ? Effect.failCause(cause)
-          : Effect.logWarning("provider runtime ingestion failed to rebuild open-turn state", {
-              eventId: event.eventId,
-              eventType: event.type,
-              threadId: event.threadId,
-              cause: Cause.pretty(cause),
-            }),
+          : Effect.succeed({ replayed: false, cause } as const),
       ),
     );
 
@@ -3163,18 +3200,47 @@ const make = Effect.gen(function* () {
   // deduplicate durable effects while the caches are rebuilt in event order.
   const rebuildAcceptedOpenTurnState = Effect.gen(function* () {
     let sequence = 0;
+    // Log only the first failure for each turn, but keep replaying later rows.
+    // A command rejection or identity collision is scoped to that event's
+    // command ids, while a transient persistence failure may succeed on the
+    // next event. Skipping the rest of the turn would also skip buffered text
+    // that exists only in these process-local caches until completion.
+    const failedTurns = new Set<string>();
+    let failedEvents = 0;
     while (true) {
       const page = yield* runtimeEvents.readAcceptedOpenTurnEvents({
         consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
         sequenceExclusive: sequence,
         limit: PROVIDER_RUNTIME_REPLAY_PAGE_SIZE,
       });
-      if (page.length === 0) return;
+      if (page.length === 0) break;
       for (const entry of page) {
-        yield* rebuildAcceptedOpenTurnStateForEvent(entry.event, entry.sequence);
         sequence = entry.sequence;
+        // Open-turn rows are keyed by (thread, turn), so a replayed event
+        // always carries a turn id.
+        const turnId = toTurnId(entry.event.turnId);
+        const turnKey = turnId ? providerTurnKey(entry.event.threadId, turnId) : null;
+        const replay = yield* rebuildAcceptedOpenTurnStateForEvent(entry.event, entry.sequence);
+        if (replay.replayed) continue;
+
+        failedEvents += 1;
+        const failureKey = turnKey ?? `event:${entry.event.eventId}`;
+        if (failedTurns.has(failureKey)) continue;
+        failedTurns.add(failureKey);
+        yield* Effect.logWarning("provider runtime ingestion failed to rebuild open-turn state", {
+          eventId: entry.event.eventId,
+          eventType: entry.event.type,
+          threadId: entry.event.threadId,
+          cause: Cause.pretty(replay.cause),
+        });
       }
-      if (page.length < PROVIDER_RUNTIME_REPLAY_PAGE_SIZE) return;
+      if (page.length < PROVIDER_RUNTIME_REPLAY_PAGE_SIZE) break;
+    }
+    if (failedTurns.size > 0) {
+      yield* Effect.logWarning("provider runtime ingestion encountered open-turn replay failures", {
+        failedTurns: failedTurns.size,
+        failedEvents,
+      });
     }
   });
   const startupRuntimeReplayComplete = yield* Deferred.make<void>();

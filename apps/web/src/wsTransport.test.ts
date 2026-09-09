@@ -15,6 +15,7 @@ import {
   WS_PROTOCOL_EPOCH,
   WS_PROTOCOL_MAX_REVISION,
   WS_PROTOCOL_MIN_REVISION,
+  WS_PROJECT_FILE_WATCH_CAPABILITY,
   WsCompatibilityError,
   type WsBootstrapNegotiateResult,
 } from "@synara/contracts";
@@ -23,6 +24,7 @@ import {
   shouldKeepServerLifecycleStream,
   getUnexpectedStreamCompletionRetryDelayMs,
   getReconnectRetryDelayMs,
+  getProjectFileWatchRetryDelayMs,
   getStreamCapacityRetryDelayMs,
   getStreamDuplicateRetryDelayMs,
   getStreamFailureCode,
@@ -33,6 +35,9 @@ import {
   makeNegotiateHttpUrl,
   getResnapshotRetryDelayMs,
   getSnapshotFaultRetryDelayMs,
+  getUnaryRpcCapacityRetryDelayMs,
+  MAX_UNARY_RPC_CAPACITY_RETRY_ATTEMPTS,
+  MAX_PROJECT_FILE_WATCH_RETRY_ATTEMPTS,
   SNAPSHOT_FAULT_RETRY_MS,
   isRuntimeInterruptFailure,
   makeRequestAbortScope,
@@ -44,6 +49,7 @@ import {
   resolveStreamAdmissionRetry,
   shouldReconnectAfterStreamFailure,
   threadStreamInputsEqual,
+  projectFileChangeStreamKey,
   WsTransport,
   type WsThreadStreamFailure,
 } from "./wsTransport";
@@ -145,11 +151,16 @@ interface WsTransportInternals {
   readonly streamDuplicateRetries: Map<string, number>;
   readonly streamThreadBootstrapRetries: Map<string, number>;
   readonly streamResnapshotRetries: Map<string, number>;
+  readonly projectFileWatchRetries: Map<string, number>;
   readonly streamCapacityRetryTimers: Map<string, number>;
   readonly streamCompletionRetries: Map<string, number>;
   readonly streamCompletionRetryTimers: Map<string, number>;
   readonly activeThreadStreamInputs: Map<string, unknown>;
   readonly threadSubscriptions: Map<string, unknown>;
+  readonly projectFileSubscriptions: Map<
+    string,
+    { readonly input: { cwd: string; relativePath: string }; readonly listeners: Set<unknown> }
+  >;
   shellSubscribed: boolean;
   readonly threadStreamFailureListeners: Set<(failure: WsThreadStreamFailure) => void>;
   disposed: boolean;
@@ -170,6 +181,7 @@ interface WsTransportInternals {
     input: unknown,
     forceRestart?: boolean,
   ): Promise<void>;
+  startProjectFileChangeStream(client: unknown, key: string, subscription: unknown): void;
   stopStream(key: string, options?: { readonly resetCapacityRetry?: boolean }): Promise<void>;
   emitThreadStreamFailure(failure: WsThreadStreamFailure): void;
 }
@@ -187,11 +199,13 @@ function makeBareTransport(): {
     streamDuplicateRetries: new Map(),
     streamThreadBootstrapRetries: new Map(),
     streamResnapshotRetries: new Map(),
+    projectFileWatchRetries: new Map(),
     streamCapacityRetryTimers: new Map(),
     streamCompletionRetries: new Map(),
     streamCompletionRetryTimers: new Map(),
     activeThreadStreamInputs: new Map(),
     threadSubscriptions: new Map(),
+    projectFileSubscriptions: new Map(),
     threadStreamFailureListeners: new Set(),
     disposed: false,
     sessionVersion: 1,
@@ -273,6 +287,54 @@ afterEach(() => {
 });
 
 describe("WsTransport", () => {
+  it("shares one stream per watched file and stops it after the last listener leaves", async () => {
+    const { transport, internals } = makeBareTransport();
+    const input = { cwd: "/repo", relativePath: "src/app.ts" };
+    const key = projectFileChangeStreamKey(input);
+    const client = {};
+    internals.getClient = vi.fn(async () => client);
+    internals.startProjectFileChangeStream = vi.fn();
+    internals.stopStream = vi.fn(async () => undefined);
+
+    const unsubscribeFirst = transport.subscribeProjectFileChange(input, vi.fn());
+    const unsubscribeSecond = transport.subscribeProjectFileChange(input, vi.fn());
+
+    await vi.waitFor(() => expect(internals.startProjectFileChangeStream).toHaveBeenCalledOnce());
+    expect(internals.projectFileSubscriptions.size).toBe(1);
+
+    unsubscribeFirst();
+    expect(internals.stopStream).not.toHaveBeenCalled();
+    unsubscribeSecond();
+
+    expect(internals.projectFileSubscriptions.size).toBe(0);
+    expect(internals.stopStream).toHaveBeenCalledWith(key);
+  });
+
+  it("does not open a file stream after its subscription is cancelled during connection", async () => {
+    const { transport, internals } = makeBareTransport();
+    let resolveClient!: (client: unknown) => void;
+    internals.getClient = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveClient = resolve;
+        }),
+    );
+    const subscribeFile = vi.fn(() => Stream.never);
+    Object.assign(internals, {
+      compatibility: { capabilities: [WS_PROJECT_FILE_WATCH_CAPABILITY] },
+    });
+    const unsubscribe = transport.subscribeProjectFileChange(
+      { cwd: "/repo", relativePath: "app.ts" },
+      vi.fn(),
+    );
+    unsubscribe();
+    resolveClient({ [WS_METHODS.projectsSubscribeFileChange]: subscribeFile });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(subscribeFile).not.toHaveBeenCalled();
+    expect(internals.projectFileSubscriptions.size).toBe(0);
+  });
+
   it("returns the completed GitHub provisioning result and emits each progress event", async () => {
     const phase = {
       operationId: "operation-1",
@@ -382,6 +444,11 @@ describe("WsTransport", () => {
         Cause.fail({ code: "THREAD_SNAPSHOT_NOT_FOUND", retryable: false }),
       ),
     ).toBe(false);
+    expect(
+      shouldReconnectAfterStreamFailure(
+        Cause.fail({ code: "PROJECT_FILE_WATCH_FAILED", retryable: false }),
+      ),
+    ).toBe(false);
     expect(shouldReconnectAfterStreamFailure(Cause.fail(new Error("transient")))).toBe(true);
     expect(
       shouldReconnectAfterStreamFailure(
@@ -394,6 +461,48 @@ describe("WsTransport", () => {
         retryable: false,
       }),
     ).toBe(true);
+  });
+
+  it("bounds project file watcher retries with exponential backoff", () => {
+    const failure = Cause.fail({ code: "PROJECT_FILE_WATCH_FAILED", retryable: false });
+
+    expect(getProjectFileWatchRetryDelayMs(failure, 0)).toBe(500);
+    expect(getProjectFileWatchRetryDelayMs(failure, 4)).toBe(8_000);
+    expect(
+      getProjectFileWatchRetryDelayMs(failure, MAX_PROJECT_FILE_WATCH_RETRY_ATTEMPTS),
+    ).toBeNull();
+    expect(getProjectFileWatchRetryDelayMs(Cause.fail(new Error("transient")), 0)).toBeNull();
+  });
+
+  it("retries a failed project file watcher in place without reconnecting the socket", async () => {
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    try {
+      const { internals } = makeBareTransport();
+      const key = "projects.file-change:/repo\0src/app.ts";
+      const restart = vi.fn();
+      const reconnect = vi.mocked(internals.reconnect);
+
+      internals.startStream(
+        {},
+        key,
+        Stream.fail({ code: "PROJECT_FILE_WATCH_FAILED", retryable: false }),
+        () => undefined,
+        restart,
+      );
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(499);
+
+      expect(restart).not.toHaveBeenCalled();
+      expect(reconnect).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(restart).toHaveBeenCalledTimes(1);
+      expect(reconnect).not.toHaveBeenCalled();
+      expect(internals.projectFileWatchRetries.get(key)).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not reconnect the socket for snapshot-fence failures", () => {
@@ -705,6 +814,139 @@ describe("WsTransport", () => {
     ).toBeNull();
   });
 
+  it("retries capacity-rejected unary requests in place with the server-provided delay", async () => {
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    try {
+      const { transport, internals } = makeBareTransport();
+      const capacityError = {
+        code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
+        retryable: true,
+        retryAfterMs: 250,
+        message: "WebSocket expensive-read request capacity exceeded.",
+      };
+      const runPromise = vi
+        .fn()
+        .mockRejectedValueOnce(capacityError)
+        .mockResolvedValueOnce({ contents: "ok" });
+      Object.assign(internals, {
+        getClient: vi.fn(async () => ({
+          "projects.readFile": () => Effect.succeed({ contents: "ok" }),
+        })),
+        getClientRuntime: () => ({ runPromise }),
+      });
+
+      const pending = transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runPromise).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(249);
+      expect(runPromise).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(pending).resolves.toEqual({ contents: "ok" });
+      expect(runPromise).toHaveBeenCalledTimes(2);
+      expect(getUnaryRpcCapacityRetryDelayMs(capacityError, 0)).toBe(250);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops retrying a unary capacity rejection after the bounded attempt budget", async () => {
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    try {
+      const { transport, internals } = makeBareTransport();
+      const capacityError = {
+        code: "RPC_REQUEST_CAPACITY_EXCEEDED",
+        retryable: true,
+        retryAfterMs: 250,
+        message: "WebSocket standard request capacity exceeded.",
+      };
+      const runPromise = vi.fn().mockRejectedValue(capacityError);
+      Object.assign(internals, {
+        getClient: vi.fn(async () => ({
+          "projects.readFile": () => Effect.succeed({ contents: "ok" }),
+        })),
+        getClientRuntime: () => ({ runPromise }),
+      });
+
+      const pending = transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null });
+      const rejected = expect(pending).rejects.toMatchObject({
+        code: "RPC_REQUEST_CAPACITY_EXCEEDED",
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      for (let attempt = 0; attempt < MAX_UNARY_RPC_CAPACITY_RETRY_ATTEMPTS; attempt += 1) {
+        await vi.advanceTimersByTimeAsync(250);
+      }
+
+      await rejected;
+      expect(runPromise).toHaveBeenCalledTimes(MAX_UNARY_RPC_CAPACITY_RETRY_ATTEMPTS + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("aborts an in-place unary capacity retry when the request signal aborts", async () => {
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    try {
+      const { transport, internals } = makeBareTransport();
+      const capacityError = {
+        code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
+        retryable: true,
+        retryAfterMs: 250,
+        message: "WebSocket expensive-read request capacity exceeded.",
+      };
+      const runPromise = vi.fn().mockRejectedValue(capacityError);
+      Object.assign(internals, {
+        getClient: vi.fn(async () => ({
+          "projects.readFile": () => Effect.succeed({ contents: "ok" }),
+        })),
+        getClientRuntime: () => ({ runPromise }),
+      });
+
+      const controller = new AbortController();
+      const pending = transport.request(
+        WS_METHODS.projectsReadFile,
+        {},
+        {
+          timeoutMs: null,
+          signal: controller.signal,
+        },
+      );
+      const rejected = expect(pending).rejects.toMatchObject({
+        code: "WS_REQUEST_ABORTED",
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runPromise).toHaveBeenCalledTimes(1);
+
+      controller.abort();
+      await rejected;
+      await vi.advanceTimersByTimeAsync(250);
+      expect(runPromise).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retry a non-capacity unary failure in place", async () => {
+    const { transport, internals } = makeBareTransport();
+    const failure = new Error("file missing");
+    const runPromise = vi.fn().mockRejectedValue(failure);
+    Object.assign(internals, {
+      getClient: vi.fn(async () => ({
+        "projects.readFile": () => Effect.succeed({ contents: "ok" }),
+      })),
+      getClientRuntime: () => ({ runPromise }),
+    });
+
+    await expect(
+      transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null }),
+    ).rejects.toBe(failure);
+    expect(runPromise).toHaveBeenCalledTimes(1);
+  });
+
   it("backs off unexpected normal stream completions with a bounded delay", () => {
     expect(getUnexpectedStreamCompletionRetryDelayMs(1)).toBe(100);
     expect(getUnexpectedStreamCompletionRetryDelayMs(2)).toBe(200);
@@ -956,6 +1198,7 @@ describe("WsTransport", () => {
       const retry = vi.fn();
       const timeoutId = window.setTimeout(retry, 1_000);
       internals.streamCapacityRetries.set(key, 2);
+      internals.projectFileWatchRetries.set(key, 2);
       internals.streamCapacityRetryTimers.set(key, timeoutId);
 
       await transport.request(ORCHESTRATION_WS_METHODS.unsubscribeThread, {
@@ -966,6 +1209,7 @@ describe("WsTransport", () => {
       expect(retry).not.toHaveBeenCalled();
       expect(internals.streamCapacityRetryTimers.has(key)).toBe(false);
       expect(internals.streamCapacityRetries.has(key)).toBe(false);
+      expect(internals.projectFileWatchRetries.has(key)).toBe(false);
     } finally {
       vi.useRealTimers();
     }
@@ -1122,7 +1366,7 @@ describe("WsTransport", () => {
     await expect(internals.getClient()).resolves.toBe(recoveredClient);
   });
 
-  it("keeps reconnecting and restores shell and thread subscriptions after recovery", async () => {
+  it("keeps reconnecting and restores shell, thread and file subscriptions after recovery", async () => {
     vi.useFakeTimers();
     bindWindowTimersToCurrentGlobals();
     try {
@@ -1143,6 +1387,12 @@ describe("WsTransport", () => {
       const startChannelStream = vi.fn();
       const startShellStream = vi.fn(async () => undefined);
       const startThreadStream = vi.fn(async () => undefined);
+      const startProjectFileChangeStream = vi.fn();
+      const watchedFile = {
+        input: { cwd: "/repo", relativePath: "app.ts" },
+        listeners: new Set([vi.fn()]),
+      };
+      const fileKey = projectFileChangeStreamKey(watchedFile.input);
       Object.assign(internals, {
         disposed: false,
         state: "closed",
@@ -1152,6 +1402,8 @@ describe("WsTransport", () => {
         listeners: new Map([[WS_CHANNELS.serverWelcome, new Set([vi.fn()])]]),
         shellSubscribed: true,
         threadSubscriptions: new Map([[threadId, input]]),
+        projectFileSubscriptions: new Map([[fileKey, watchedFile]]),
+        startProjectFileChangeStream,
         runtime: null,
         clientScope: null,
         createSession,
@@ -1174,6 +1426,11 @@ describe("WsTransport", () => {
       expect(startShellStream).toHaveBeenCalledOnce();
       expect(startThreadStream).toHaveBeenCalledOnce();
       expect(startThreadStream).toHaveBeenCalledWith(client, threadId, input);
+      expect(startProjectFileChangeStream).toHaveBeenCalledExactlyOnceWith(
+        client,
+        fileKey,
+        watchedFile,
+      );
     } finally {
       vi.useRealTimers();
     }

@@ -1,0 +1,38 @@
+{
+  "date": "2026-09-06",
+  "base": "55ff1f47c5ec831d2deec0c388b323ac5b9ce7fd",
+  "baselineFixtureRepair": "Replace the two invalid lifecycle event kinds with session in CodexAdapter.test.ts",
+  "hardware": { "model": "Mac17,2", "logicalCpus": 10, "ramGiB": 32, "os": "macOS 26.6.2" },
+  "versions": {
+    "node": "24.13.0",
+    "bun": "1.3.12",
+    "turbo": "2.10.5",
+    "legacyTypeScript": "5.9.3",
+    "legacyEffect": "0.75.1",
+    "nativeTypeScript": "7.0.2",
+    "nativeEffect": "0.41.0"
+  },
+  "unit": "milliseconds",
+  "taskCache": false,
+  "coldDefinition": "Compiler incremental caches cleared; OS cache not cleared",
+  "sameSourceAndDependencies": true,
+  "equivalentDiagnosticCoverage": false,
+  "knownNativeDiagnosticGap": "Configured importFromBarrel error: legacy TS12/nonzero exit, native no diagnostic/zero exit",
+  "allMeasuredRuns": { "exitCode": 0, "successfulWorkspaceTasks": 7, "totalWorkspaceTasks": 7 },
+  "samples": {
+    "legacyCold": [60643.836208, 53848.309958, 52545.192416],
+    "nativeCold": [14428.465875, 11914.368417, 11992.848875],
+    "legacyIncremental": [11500.284958, 11005.009709, 12787.781209],
+    "nativeIncremental": [3156.405667, 2840.553916, 3070.832792]
+  },
+  "sourceFileCountsBothCompilers": {
+    "server": 1135,
+    "web": 1322,
+    "desktop": 222,
+    "marketing": 112,
+    "contracts": 59,
+    "shared": 185,
+    "scripts": 95
+  },
+  "sourceFilesMissingOrAdded": 0
+}

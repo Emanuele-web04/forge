@@ -196,6 +196,44 @@ describe("MessagesTimeline", () => {
     );
   });
 
+  it("renders session-context lifecycle evidence as a compact expandable row", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        timelineEntries={[
+          {
+            id: "context-restart-row",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "context-restart-entry",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "Native session history was unavailable, so the model continued from a recap.",
+              tone: "error",
+              activityKind: "provider.context.changed",
+              providerContextLifecycle: {
+                provider: "opencode",
+                nativeHistory: "unavailable",
+                restartReason: "native-resume-failed",
+                sessionRestarted: true,
+                recapInjected: true,
+                recapCharacters: 4_200,
+                recapPreview: "Bounded recap preview",
+                recapPreviewTruncated: true,
+              },
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("Native session history was unavailable");
+    expect(markup).toContain('data-tool-detail-trigger="true"');
+    expect(markup).not.toContain('data-provider-context-lifecycle-details="true"');
+    expect(markup).not.toContain("Bounded recap preview");
+  });
+
   it("keeps small transcripts on the simple non-virtualized path", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
@@ -1176,6 +1214,7 @@ describe("MessagesTimeline", () => {
               createdAt: "2026-03-17T19:12:28.000Z",
               label: "Context compacted manually",
               tone: "info",
+              activityKind: "context-compaction",
             },
           },
         ]}
@@ -1196,6 +1235,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Context compacted manually");
+    expect(markup).toContain("/central-icons-reversed/arrows-hide.svg");
     expect(markup).not.toContain("Work log");
   });
 
@@ -1217,6 +1257,7 @@ describe("MessagesTimeline", () => {
               createdAt: "2026-03-17T19:12:28.000Z",
               label: "Compacting conversation...",
               tone: "info",
+              activityKind: "context-compaction",
             },
           },
         ]}
@@ -1237,6 +1278,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Compacting conversation...");
+    expect(markup).toContain("/central-icons-reversed/arrows-hide.svg");
     expect(markup).toContain("Working for");
     expect(markup).not.toContain("h-px flex-1 bg-border");
   });
@@ -3362,7 +3404,8 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Undo");
     expect(markup).toContain("Review");
     expect(markup).toContain('aria-expanded="true"');
-    expect(markup).toContain("font-system-ui truncate font-normal");
+    expect(markup).toContain('data-edited-file-row="true"');
+    expect(markup).toContain('aria-label="Open apps/web/src/components/Sidebar.tsx options"');
     expect(markup).toContain("apps/web/src/components/Sidebar.tsx");
     expect(markup.indexOf('aria-label="Copy message"')).toBeGreaterThan(
       markup.indexOf("Edited 1 file"),

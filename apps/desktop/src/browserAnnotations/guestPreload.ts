@@ -31,6 +31,7 @@ import {
   GUEST_ANNOTATION_PROTOCOL_VERSION,
   isGuestAnnotationCommand,
 } from "./guestProtocol";
+import "../browserWebMcp/guestBridge";
 
 const HOST_ATTRIBUTE = "data-synara-browser-annotations";
 /** Mutation storms are coalesced into at most one marker re-resolve per window. */

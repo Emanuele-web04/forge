@@ -1,5 +1,5 @@
 // FILE: desktopUpdate.logic.ts
-// Purpose: Maps desktop updater state into sidebar button actions, copy, and variants.
+// Purpose: Maps desktop updater state into sidebar button actions and copy.
 // Layer: Web UI state helper
 // Depends on: Desktop update IPC contracts.
 
@@ -144,10 +144,6 @@ export function getDesktopUpdateButtonPresentation(
   };
 }
 
-export function getDesktopUpdateButtonLabel(state: DesktopUpdateState | null): string {
-  return getDesktopUpdateButtonPresentation(state).label;
-}
-
 /**
  * Clamped, integer download percentage to surface on the update button while a
  * download is in flight. Returns null outside the downloading state or when the
@@ -251,11 +247,6 @@ export function getDesktopUpdateAlreadyCurrentNotice(
   return `You're already on the latest version (${result.state.currentVersion}).`;
 }
 
-export function shouldHighlightDesktopUpdateError(state: DesktopUpdateState | null): boolean {
-  if (!state) return false;
-  return state.errorContext === "download" || state.errorContext === "install";
-}
-
 export function shouldRecommendManualDesktopDownload(state: DesktopUpdateState | null): boolean {
   return Boolean(state && state.installFailureCount >= 2 && state.releaseUrl);
 }
@@ -270,25 +261,4 @@ export function getDesktopUpdateErrorSignature(state: DesktopUpdateState | null)
   }
   const version = state.downloadedVersion ?? state.availableVersion ?? "";
   return `${state.errorContext}:${version}:${state.installFailureCount}:${state.message ?? ""}`;
-}
-
-export type DesktopUpdateButtonVariant = "installing" | "ready" | "progress" | "error" | "info";
-
-/**
- * Resolve the severity/color variant for the update button.
- *
- * A failed install keeps `status === "downloaded"` (with `errorContext === "install"`),
- * so the error state must be evaluated before the happy "downloaded"/"downloading"
- * states — otherwise a failed install would render with the green "ready" color while
- * its label says "Retry".
- */
-export function getDesktopUpdateButtonVariant(
-  state: DesktopUpdateState | null,
-  options?: { installing?: boolean },
-): DesktopUpdateButtonVariant {
-  if (options?.installing) return "installing";
-  if (shouldHighlightDesktopUpdateError(state)) return "error";
-  if (state?.status === "downloaded") return "ready";
-  if (state?.status === "downloading") return "progress";
-  return "info";
 }

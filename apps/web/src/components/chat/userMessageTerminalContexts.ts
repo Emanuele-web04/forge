@@ -34,6 +34,22 @@ export function formatInlineTerminalContextLabel(header: string): string {
   });
 }
 
+export function resolveUserMessageMarkdownText(
+  visibleText: string,
+  contexts: ReadonlyArray<{
+    header: string;
+  }>,
+): string {
+  if (contexts.length === 0) {
+    return visibleText;
+  }
+  if (textContainsInlineTerminalContextLabels(visibleText, contexts)) {
+    return visibleText;
+  }
+  const prefix = buildInlineTerminalContextText(contexts);
+  return [prefix, visibleText].filter((part) => part.length > 0).join(" ");
+}
+
 export function textContainsInlineTerminalContextLabels(
   text: string,
   contexts: ReadonlyArray<{

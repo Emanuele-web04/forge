@@ -10,6 +10,7 @@ import {
   createComposerThreadMentionSourcesSelector,
   createProjectLastActivityAtSelector,
   createSidebarDisplayThreadsSelector,
+  createSidechatSummariesForSourceSelector,
   createSidebarTreeThreadsSelector,
   createThreadExistsSelector,
   createThreadProjectIdSelector,
@@ -230,6 +231,12 @@ describe("sidebar thread visibility", () => {
     isPinned: true,
   } as SidebarThreadSummary;
   const normalSummary = { ...summaryA, id: threadIdC, title: "C" } as SidebarThreadSummary;
+  const sidechatSummary = {
+    ...summaryA,
+    id: "thread-sidechat" as ThreadId,
+    sidechatSourceThreadId: threadIdC,
+    isPinned: true,
+  } as SidebarThreadSummary;
   const state = makeState({
     threadIds: [threadIdA, threadIdB, threadIdC],
     sidebarThreadSummaryById: {
@@ -252,6 +259,11 @@ describe("sidebar thread visibility", () => {
     expect(isSidebarThreadVisible(normalSummary, options)).toBe(true);
   });
 
+  it("always hides side chats, including pinned side chats", () => {
+    expect(isSidebarThreadVisible(sidechatSummary)).toBe(false);
+    expect(isSidebarThreadVisible(sidechatSummary, { hideAutomationRunThreads: true })).toBe(false);
+  });
+
   it("filters run threads out of the display and tree selectors", () => {
     const selectDisplay = createSidebarDisplayThreadsSelector({ hideAutomationRunThreads: true });
     const selectTree = createSidebarTreeThreadsSelector({ hideAutomationRunThreads: true });
@@ -272,6 +284,74 @@ describe("sidebar thread visibility", () => {
   it("stays reference-stable while the underlying summaries do not change", () => {
     const selectDisplay = createSidebarDisplayThreadsSelector({ hideAutomationRunThreads: true });
     expect(selectDisplay(state)).toBe(selectDisplay(state));
+  });
+});
+
+describe("createSidechatSummariesForSourceSelector", () => {
+  it("selects only a host's side chats in latest-activity order", () => {
+    const sourceThreadId = "thread-source" as ThreadId;
+    const selectSidechats = createSidechatSummariesForSourceSelector(sourceThreadId);
+    const older = {
+      ...summaryA,
+      id: "sidechat-older" as ThreadId,
+      sidechatSourceThreadId: sourceThreadId,
+      sidechatLastActivityAt: "2026-08-30T10:00:00.000Z",
+    } as SidebarThreadSummary;
+    const newer = {
+      ...summaryA,
+      id: "sidechat-newer" as ThreadId,
+      sidechatSourceThreadId: sourceThreadId,
+      sidechatLastActivityAt: "2026-08-30T11:00:00.000Z",
+    } as SidebarThreadSummary;
+    const unrelated = {
+      ...summaryA,
+      id: "sidechat-unrelated" as ThreadId,
+      sidechatSourceThreadId: "other-source" as ThreadId,
+    } as SidebarThreadSummary;
+    const state = makeState({
+      threadIds: [older.id, unrelated.id, newer.id],
+      sidebarThreadSummaryById: {
+        [older.id]: older,
+        [unrelated.id]: unrelated,
+        [newer.id]: newer,
+      },
+    });
+
+    expect(selectSidechats(state).map((thread) => thread.id)).toEqual([newer.id, older.id]);
+  });
+
+  it("keeps its result reference when only an unrelated summary changes", () => {
+    const sourceThreadId = "thread-source" as ThreadId;
+    const selectSidechats = createSidechatSummariesForSourceSelector(sourceThreadId);
+    const sidechat = {
+      ...summaryA,
+      id: "sidechat-stable" as ThreadId,
+      sidechatSourceThreadId: sourceThreadId,
+    } as SidebarThreadSummary;
+    const unrelated = {
+      ...summaryA,
+      id: "thread-unrelated" as ThreadId,
+    } as SidebarThreadSummary;
+    const before = selectSidechats(
+      makeState({
+        threadIds: [sidechat.id, unrelated.id],
+        sidebarThreadSummaryById: {
+          [sidechat.id]: sidechat,
+          [unrelated.id]: unrelated,
+        },
+      }),
+    );
+    const after = selectSidechats(
+      makeState({
+        threadIds: [sidechat.id, unrelated.id],
+        sidebarThreadSummaryById: {
+          [sidechat.id]: sidechat,
+          [unrelated.id]: { ...unrelated, title: "Updated elsewhere" },
+        },
+      }),
+    );
+
+    expect(after).toBe(before);
   });
 });
 

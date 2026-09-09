@@ -3,11 +3,19 @@
 // of concurrent requests, forceRefresh bypass, and the shorter expiry for degraded snapshots —
 // so UI surfaces polling in parallel can't stampede the provider fetchers.
 
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { Effect, Layer } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ServerProviderUsageSnapshot } from "@synara/contracts";
 
-import { __resetProviderUsageCacheForTests, collectProviderUsageSnapshots } from "./index";
+import { ServerConfig } from "../config";
+import { ServerSettingsService } from "../serverSettings";
+import {
+  __resetProviderUsageCacheForTests,
+  collectProviderUsageSnapshots,
+  listProviderUsage,
+} from "./index";
 import type { ProviderUsageContext, ProviderUsageFetcher } from "./types";
 
 const fetchMock = vi.fn<(ctx: ProviderUsageContext) => Promise<ServerProviderUsageSnapshot>>();
@@ -239,6 +247,37 @@ describe("collectProviderUsageSnapshots caching", () => {
     await collectProviderUsageSnapshots(makeCtx(NOW_MS));
     await collectProviderUsageSnapshots(makeCtx(NOW_MS + 90_000));
 
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("omits disabled providers and invalidates their cached snapshots", async () => {
+    fetchMock.mockImplementation(async (ctx) => okSnapshot(ctx.nowMs));
+    const configLayer = ServerConfig.layerTest(process.cwd(), process.cwd()).pipe(
+      Layer.provide(NodeServices.layer),
+    );
+    const layer = Layer.mergeAll(
+      NodeServices.layer,
+      configLayer,
+      ServerSettingsService.layerTest(),
+    );
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const serverSettings = yield* ServerSettingsService;
+        const first = yield* listProviderUsage({});
+
+        yield* serverSettings.updateSettings({ providers: { codex: { enabled: false } } });
+        const disabled = yield* listProviderUsage({ forceRefresh: true });
+
+        yield* serverSettings.updateSettings({ providers: { codex: { enabled: true } } });
+        const reenabled = yield* listProviderUsage({});
+        return { first, disabled, reenabled };
+      }).pipe(Effect.provide(layer), Effect.scoped),
+    );
+
+    expect(result.first).toHaveLength(1);
+    expect(result.disabled).toEqual([]);
+    expect(result.reenabled).toHaveLength(1);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

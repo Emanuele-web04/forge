@@ -21,11 +21,10 @@ import { useComposerDraftStore } from "../../composerDraftStore";
 import type { DiffRouteSearch } from "../../diffRouteSearch";
 import { stripDiffSearchParams } from "../../diffRouteSearch";
 import { readEditorViewState, storeEditorViewState } from "../../editorViewState";
-import { basenameOfPath } from "../../file-icons";
 import { useBrowserPanelDesktopBridge } from "../../hooks/useBrowserPanelDesktopBridge";
 import { useDockPaneRuntimeActivation } from "../../hooks/useDockPaneRuntimeActivation";
 import { useHandleNewThread } from "../../hooks/useHandleNewThread";
-import { useDeviceEventBridge } from "../../hooks/useDeviceEventBridge";
+import { useDevicePaneOpenRequests } from "../../hooks/useDeviceEventBridge";
 import { useDeviceSupport } from "../../hooks/useDeviceSupport";
 import { useRepoDiffTotals } from "../../hooks/useRepoDiffTotals";
 import {
@@ -93,7 +92,11 @@ import { FloatingBrowserPanel } from "./FloatingBrowserPanel";
 import { shouldRenderFloatingBrowserPanel } from "./floatingBrowserPanel.logic";
 import { PanelStateMessage } from "./PanelStateMessage";
 import { RightDock } from "./RightDock";
-import { getRightDockPaneMeta, resolveRightDockLauncherItems } from "./rightDockPaneMeta";
+import {
+  buildRightDockPaneLabelOverrides,
+  getRightDockPaneMeta,
+  resolveRightDockLauncherItems,
+} from "./rightDockPaneMeta";
 import {
   CHAT_BACKGROUND_CLASS_NAME,
   CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME,
@@ -105,10 +108,7 @@ import {
   useFloatingBrowserRequestStore,
 } from "./floatingBrowserRequestStore";
 import { routeSingleDevicePaneOpenRequest } from "./devicePaneOpenRequest";
-import {
-  pullRequestDetailInputFromPane,
-  pullRequestPaneTabLabel,
-} from "../pullRequest/pullRequestDetail.logic";
+import { pullRequestDetailInputFromPane } from "../pullRequest/pullRequestDetail.logic";
 import { usePullRequestPaneStateIcon } from "../pullRequest/usePullRequestPaneStateIcon";
 import { RouteInsetSurface } from "../RouteInsetSurface";
 import { SidebarInset } from "../ui/sidebar";
@@ -646,24 +646,18 @@ export function SingleChatSurface(props: {
     },
   });
 
-  useDeviceEventBridge({
-    onOpenPaneRequested: hasDeviceSupport
-      ? (event) => {
-          routeSingleDevicePaneOpenRequest({
-            currentThreadId: props.threadId,
-            requestedThreadId: event.threadId,
-            requestImmediateDeviceHydration: () => requestImmediateDockHydration("device"),
-            openDevicePane: (threadId) => openPane(threadId, { kind: "device" }),
-            navigateToThread: (threadId) => {
-              void navigate({
-                to: "/$threadId",
-                params: { threadId },
-                replace: true,
-              });
-            },
-          });
-        }
-      : null,
+  useDevicePaneOpenRequests({
+    onOpenPaneRequested:
+      hasDeviceSupport && appSettings.autoOpenDevicePane
+        ? (event) => {
+            routeSingleDevicePaneOpenRequest({
+              currentThreadId: props.threadId,
+              requestedThreadId: event.threadId,
+              requestImmediateDeviceHydration: () => requestImmediateDockHydration("device"),
+              openDevicePane: (threadId) => openPane(threadId, { kind: "device" }),
+            });
+          }
+        : null,
   });
 
   const excludedThreadIds = new Set<ThreadId>([props.threadId]);
@@ -772,24 +766,10 @@ export function SingleChatSurface(props: {
       });
     });
   };
-  const hasNamedFilePane = dockState.panes.some(
-    (pane) => pane.kind === "file" && pane.filePath !== null,
+  const paneLabelOverrides = useMemo(
+    () => buildRightDockPaneLabelOverrides(dockState.panes, threadSummaries),
+    [dockState.panes, threadSummaries],
   );
-  const hasNumberedPullRequestPane = dockState.panes.some(
-    (pane) => pane.kind === "pullRequest" && pane.pullRequestNumber !== null,
-  );
-  let paneLabelOverrides: Record<string, string | undefined> | undefined;
-  if (hasNamedFilePane || hasNumberedPullRequestPane) {
-    const overrides: Record<string, string | undefined> = {};
-    for (const pane of dockState.panes) {
-      if (pane.kind === "file" && pane.filePath) {
-        overrides[pane.id] = basenameOfPath(pane.filePath);
-      } else if (pane.kind === "pullRequest" && pane.pullRequestNumber !== null) {
-        overrides[pane.id] = pullRequestPaneTabLabel(pane.pullRequestNumber);
-      }
-    }
-    paneLabelOverrides = overrides;
-  }
 
   // The pull request pane is a singleton, so at most one tab needs the live state glyph.
   const pullRequestPane = dockState.panes.find(
@@ -937,6 +917,7 @@ export function SingleChatSurface(props: {
             <DockExplorerPane
               threadId={props.threadId}
               workspaceRoot={workspaceRoot}
+              isVisible={context.isVisible}
               onReferenceInChat={handleReferenceInChat}
               onAskWhyInChat={handleAskWhyInChat}
               onCommentInChat={handleCommentInChat}
@@ -949,6 +930,7 @@ export function SingleChatSurface(props: {
             <DockFilePane
               workspaceRoot={workspaceRoot}
               filePath={pane.filePath}
+              isVisible={context.isVisible}
               onReferenceInChat={handleReferenceInChat}
               onAskWhyInChat={handleAskWhyInChat}
               onCommentInChat={handleCommentInChat}
@@ -968,6 +950,7 @@ export function SingleChatSurface(props: {
         return (
           <DeferredChatView
             threadId={pane.threadId}
+            hideHeader
             paneScopeId={dockSidechatPaneScopeId(pane.id)}
             deferMount={false}
             surfaceMode="split"
@@ -977,7 +960,6 @@ export function SingleChatSurface(props: {
             onToggleBrowser={noopChatSurfaceAction}
             onOpenBrowserUrl={noopChatSurfaceAction}
             onOpenTurnDiff={noopChatSurfaceAction}
-            onCloseThreadPane={() => closePane(props.threadId, pane.id)}
           />
         );
       default:

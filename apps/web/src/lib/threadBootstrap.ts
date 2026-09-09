@@ -324,11 +324,9 @@ export function resolveTerminalThreadCreationState(
       input.draftThread?.interactionMode ?? DEFAULT_INTERACTION_MODE,
     lastKnownPr:
       input.draftThread?.lastKnownPr ??
-      (input.activeThread?.projectId === input.projectId
-        ? (input.activeThread.lastKnownPr ?? null)
-        : null) ??
+      (input.activeThread?.projectId === input.projectId ? input.activeThread.lastKnownPr : null) ??
       (input.activeDraftThread?.projectId === input.projectId
-        ? (input.activeDraftThread.lastKnownPr ?? null)
+        ? input.activeDraftThread.lastKnownPr
         : null) ??
       null,
     envMode: hasExplicitEnvModeOverride

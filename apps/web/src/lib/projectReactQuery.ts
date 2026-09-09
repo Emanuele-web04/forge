@@ -13,6 +13,11 @@ import { PROJECT_SEARCH_CONTENT_MIN_QUERY_LENGTH } from "@synara/contracts";
 import { isLocalAbsolutePath } from "@synara/shared/path";
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "~/nativeApi";
+import {
+  EXPENSIVE_READ_RETRY_OPTIONS,
+  expensiveReadErrorRefetchInterval,
+} from "./expensiveReadRetry";
+import { resolveWorkspaceFileReferenceBatched } from "./workspaceFileReferenceBatch";
 
 export const projectQueryKeys = {
   all: ["projects"] as const,
@@ -23,6 +28,8 @@ export const projectQueryKeys = {
   localPreviewGrant: (path: string | null) => ["projects", "local-preview-grant", path] as const,
   resolveOutOfRootFileReference: (cwd: string | null, relativePath: string | null) =>
     ["projects", "resolve-out-of-root-file-reference", cwd, relativePath] as const,
+  resolveWorkspaceFileReference: (cwd: string | null, relativePath: string | null) =>
+    ["projects", "resolve-workspace-file-reference", cwd, relativePath] as const,
   discoverScripts: (cwd: string | null, depth: number) =>
     ["projects", "discover-scripts", cwd, depth] as const,
   searchEntries: (
@@ -37,6 +44,66 @@ export const projectQueryKeys = {
     ["projects", "search-content", cwd, query, limit] as const,
 };
 
+interface ActiveProjectFileRefresh {
+  requestedGeneration: number;
+  promise: Promise<void>;
+}
+
+const activeProjectFileRefreshes = new WeakMap<
+  QueryClient,
+  Map<string, ActiveProjectFileRefresh>
+>();
+
+/**
+ * Revalidates one active file read from scratch. A watcher can emit while the
+ * initial read is still in flight; invalidation alone would join that older
+ * fetch and let pre-change contents become the new cache value.
+ */
+export function refetchFreshProjectFileQuery(
+  queryClient: QueryClient,
+  input: { readonly cwd: string | null; readonly relativePath: string | null },
+): Promise<void> {
+  const queryKey = projectQueryKeys.readFile(input.cwd, input.relativePath);
+  const refreshKey = JSON.stringify(queryKey);
+  let refreshes = activeProjectFileRefreshes.get(queryClient);
+  if (!refreshes) {
+    refreshes = new Map();
+    activeProjectFileRefreshes.set(queryClient, refreshes);
+  }
+  const existing = refreshes.get(refreshKey);
+  if (existing) {
+    existing.requestedGeneration += 1;
+    void queryClient
+      .cancelQueries({ queryKey, exact: true, fetchStatus: "fetching" })
+      .catch(() => undefined);
+    return existing.promise;
+  }
+
+  const entry: ActiveProjectFileRefresh = {
+    requestedGeneration: 1,
+    promise: Promise.resolve(),
+  };
+  refreshes.set(refreshKey, entry);
+  entry.promise = (async () => {
+    let completedGeneration = 0;
+    while (completedGeneration < entry.requestedGeneration) {
+      const targetGeneration = entry.requestedGeneration;
+      await queryClient.invalidateQueries({ queryKey, exact: true, refetchType: "none" });
+      await queryClient.cancelQueries({ queryKey, exact: true, fetchStatus: "fetching" });
+      await queryClient.refetchQueries(
+        { queryKey, exact: true, type: "active" },
+        { cancelRefetch: true },
+      );
+      completedGeneration = targetGeneration;
+    }
+  })().finally(() => {
+    if (refreshes.get(refreshKey) === entry) {
+      refreshes.delete(refreshKey);
+    }
+  });
+  return entry.promise;
+}
+
 // Scope live file-change invalidations to one workspace so unrelated
 // project/worktree caches stay warm (mirrors invalidateGitQueriesForCwds).
 export function invalidateProjectFileQueriesForCwds(
@@ -50,6 +117,9 @@ export function invalidateProjectFileQueriesForCwds(
       queryClient.invalidateQueries({ queryKey: ["projects", "read-file", cwd] as const }),
       queryClient.invalidateQueries({
         queryKey: ["projects", "resolve-out-of-root-file-reference", cwd] as const,
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ["projects", "resolve-workspace-file-reference", cwd] as const,
       }),
       queryClient.invalidateQueries({ queryKey: ["projects", "search-entries", cwd] as const }),
     ]),
@@ -69,6 +139,7 @@ const DEFAULT_SEARCH_CONTENT_STALE_TIME = 10_000;
 // reject the request at decode time, so the query must stay disabled.
 export const SEARCH_CONTENT_MIN_QUERY_LENGTH = PROJECT_SEARCH_CONTENT_MIN_QUERY_LENGTH;
 const DEFAULT_READ_FILE_STALE_TIME = 5_000;
+const DEFAULT_WORKSPACE_FILE_REFERENCE_STALE_TIME = 15_000;
 const LOCAL_PREVIEW_GRANT_REFRESH_SAFETY_MS = 15_000;
 const LOCAL_PREVIEW_GRANT_MIN_REFETCH_INTERVAL_MS = 1_000;
 export const LOCAL_PREVIEW_GRANT_MAX_REFETCH_INTERVAL_MS = 30_000;
@@ -177,19 +248,52 @@ export function projectReadFileQueryOptions(input: {
       : null);
   return queryOptions<ProjectReadFileResult>({
     queryKey: projectQueryKeys.readFile(input.cwd, input.relativePath),
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const api = ensureNativeApi();
       if (!effectiveCwd || !input.relativePath) {
         throw new Error("Workspace file read is unavailable.");
       }
-      return api.projects.readFile({
-        cwd: effectiveCwd,
-        relativePath: input.relativePath,
-        ...(input.previewGrant ? { previewGrant: input.previewGrant } : {}),
-      });
+      return api.projects.readFile(
+        {
+          cwd: effectiveCwd,
+          relativePath: input.relativePath,
+          ...(input.previewGrant ? { previewGrant: input.previewGrant } : {}),
+        },
+        { signal },
+      );
     },
     enabled: (input.enabled ?? true) && effectiveCwd !== null && input.relativePath !== null,
     staleTime: input.staleTime ?? DEFAULT_READ_FILE_STALE_TIME,
+    // File-not-found must surface immediately for out-of-root relocation.
+    // Capacity is retried in-place by the transport; do not stack another budget.
+    retry: false,
+    refetchInterval: expensiveReadErrorRefetchInterval,
+  });
+}
+
+export function projectResolveWorkspaceFileReferenceQueryOptions(input: {
+  cwd: string | null;
+  relativePath: string | null;
+  enabled?: boolean;
+}) {
+  return queryOptions<string | null>({
+    queryKey: projectQueryKeys.resolveWorkspaceFileReference(input.cwd, input.relativePath),
+    queryFn: () => {
+      if (!input.cwd || !input.relativePath) {
+        throw new Error("Workspace file reference resolution is unavailable.");
+      }
+      return resolveWorkspaceFileReferenceBatched({
+        cwd: input.cwd,
+        relativePath: input.relativePath,
+      });
+    },
+    enabled:
+      (input.enabled ?? true) &&
+      input.cwd !== null &&
+      input.relativePath !== null &&
+      typeof window !== "undefined",
+    staleTime: DEFAULT_WORKSPACE_FILE_REFERENCE_STALE_TIME,
+    ...EXPENSIVE_READ_RETRY_OPTIONS,
   });
 }
 
@@ -214,7 +318,11 @@ export function projectResolveOutOfRootFileReferenceQueryOptions(input: {
         relativePath: input.relativePath,
       });
     },
-    enabled: (input.enabled ?? true) && input.cwd !== null && input.relativePath !== null,
+    enabled:
+      (input.enabled ?? true) &&
+      input.cwd !== null &&
+      input.relativePath !== null &&
+      typeof window !== "undefined",
     staleTime: 30_000,
   });
 }
@@ -290,6 +398,7 @@ export function projectSearchEntriesQueryOptions(input: {
     enabled: (input.enabled ?? true) && input.cwd !== null && input.query.length > 0,
     staleTime: input.staleTime ?? DEFAULT_SEARCH_ENTRIES_STALE_TIME,
     placeholderData: (previous) => previous ?? EMPTY_SEARCH_ENTRIES_RESULT,
+    ...EXPENSIVE_READ_RETRY_OPTIONS,
   });
 }
 
@@ -320,6 +429,7 @@ export function projectSearchLocalEntriesQueryOptions(input: {
     enabled: (input.enabled ?? true) && input.rootPath !== null && trimmedQuery.length >= 2,
     staleTime: input.staleTime ?? DEFAULT_SEARCH_LOCAL_ENTRIES_STALE_TIME,
     placeholderData: (previous) => previous ?? EMPTY_SEARCH_LOCAL_ENTRIES_RESULT,
+    ...EXPENSIVE_READ_RETRY_OPTIONS,
   });
 }
 
@@ -351,5 +461,6 @@ export function projectSearchContentQueryOptions(input: {
       trimmedQuery.length >= SEARCH_CONTENT_MIN_QUERY_LENGTH,
     staleTime: input.staleTime ?? DEFAULT_SEARCH_CONTENT_STALE_TIME,
     placeholderData: (previous) => previous ?? EMPTY_SEARCH_CONTENT_RESULT,
+    ...EXPENSIVE_READ_RETRY_OPTIONS,
   });
 }

@@ -89,6 +89,24 @@ describe("useChatAutomationSetup", () => {
     automationMocks.scheduleFromForm.mockReset().mockReturnValue({ type: "manual" });
   });
 
+  it("reads current threads only while the automation dialog is open", () => {
+    const closed = render().automationThreads;
+    expect(closed).toEqual([]);
+    storeState.threads = [{ id: "thread-new" }];
+    expect(render().automationThreads).toBe(closed);
+    render().setAutomationDraftOpen(true);
+    expect(render().automationThreads).toBe(storeState.threads);
+    storeState.threads = [{ id: "renamed-or-moved" }];
+    expect(render().automationThreads).toBe(storeState.threads);
+    storeState.threads = [];
+    expect(render().automationThreads).toBe(storeState.threads);
+    render().setAutomationDraftOpen(false);
+    expect(render().automationThreads).toBe(closed);
+    storeState.threads = [{ id: "created-while-closed" }];
+    render().setAutomationDraftOpen(true);
+    expect(render().automationThreads).toBe(storeState.threads);
+  });
+
   it("restores accumulated setup text plus the typed prompt when the thread changes", () => {
     let result = render();
     result.setPendingAutomationConversation({

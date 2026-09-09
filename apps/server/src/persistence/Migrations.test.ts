@@ -298,10 +298,13 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [94, "ProjectionThreadsGoal"],
         [95, "ProjectionThreadsGoalTiming"],
         [96, "ProjectionThreadsGoalAchievements"],
+        [97, "ProjectionThreadsSidechatLifecycle"],
+        [98, "MigrateKiloToOpenCode"],
+        [99, "InvalidateProjectionThreadsCursor"],
       ]);
 
       const tracker = yield* trackerRows(sql);
-      assert.deepStrictEqual(tracker.slice(-42), [
+      assert.deepStrictEqual(tracker.slice(-45), [
         { migration_id: 55, name: "ManagedAttachments" },
         { migration_id: 56, name: "CommandReceiptFingerprints" },
         { migration_id: 57, name: "ThreadScopedProjectionMessageIdentity" },
@@ -344,6 +347,9 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         { migration_id: 94, name: "ProjectionThreadsGoal" },
         { migration_id: 95, name: "ProjectionThreadsGoalTiming" },
         { migration_id: 96, name: "ProjectionThreadsGoalAchievements" },
+        { migration_id: 97, name: "ProjectionThreadsSidechatLifecycle" },
+        { migration_id: 98, name: "MigrateKiloToOpenCode" },
+        { migration_id: 99, name: "InvalidateProjectionThreadsCursor" },
       ]);
       const preserved = yield* sql<{ readonly count: number }>`
         SELECT COUNT(*) AS count FROM orchestration_consumer_state
@@ -432,6 +438,9 @@ agentGatewayRetentionLegacyLayer(
           [94, "ProjectionThreadsGoal"],
           [95, "ProjectionThreadsGoalTiming"],
           [96, "ProjectionThreadsGoalAchievements"],
+          [97, "ProjectionThreadsSidechatLifecycle"],
+          [98, "MigrateKiloToOpenCode"],
+          [99, "InvalidateProjectionThreadsCursor"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -523,11 +532,14 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [94, "ProjectionThreadsGoal"],
         [95, "ProjectionThreadsGoalTiming"],
         [96, "ProjectionThreadsGoalAchievements"],
+        [97, "ProjectionThreadsSidechatLifecycle"],
+        [98, "MigrateKiloToOpenCode"],
+        [99, "InvalidateProjectionThreadsCursor"],
       ]);
 
       const tracker = yield* trackerRows(sql);
       assert.deepStrictEqual(
-        tracker.slice(-26).map((row) => [row.migration_id, row.name]),
+        tracker.slice(-29).map((row) => [row.migration_id, row.name]),
         [
           [71, "ProjectionThreadsGatewayProvenance"],
           [72, "AgentGatewayOperationRetention"],
@@ -555,6 +567,9 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [94, "ProjectionThreadsGoal"],
           [95, "ProjectionThreadsGoalTiming"],
           [96, "ProjectionThreadsGoalAchievements"],
+          [97, "ProjectionThreadsSidechatLifecycle"],
+          [98, "MigrateKiloToOpenCode"],
+          [99, "InvalidateProjectionThreadsCursor"],
         ],
       );
 
@@ -641,11 +656,14 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [94, "ProjectionThreadsGoal"],
         [95, "ProjectionThreadsGoalTiming"],
         [96, "ProjectionThreadsGoalAchievements"],
+        [97, "ProjectionThreadsSidechatLifecycle"],
+        [98, "MigrateKiloToOpenCode"],
+        [99, "InvalidateProjectionThreadsCursor"],
       ]);
 
       const tracker = yield* trackerRows(sql);
       assert.deepStrictEqual(
-        tracker.slice(-22).map((row) => [row.migration_id, row.name]),
+        tracker.slice(-25).map((row) => [row.migration_id, row.name]),
         [
           [75, "ExternalMcpActiveCapacity"],
           [76, "ExternalMcpHardening"],
@@ -669,6 +687,9 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [94, "ProjectionThreadsGoal"],
           [95, "ProjectionThreadsGoalTiming"],
           [96, "ProjectionThreadsGoalAchievements"],
+          [97, "ProjectionThreadsSidechatLifecycle"],
+          [98, "MigrateKiloToOpenCode"],
+          [99, "InvalidateProjectionThreadsCursor"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`

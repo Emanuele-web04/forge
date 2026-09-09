@@ -12,6 +12,8 @@ import * as path from "node:path";
 import type {
   ProviderComposerCapabilities,
   ProviderKind,
+  ProviderListAgentsResult,
+  ProviderListCommandsResult,
   ProviderListModelsResult,
   ProviderListSkillsResult,
 } from "@synara/contracts";
@@ -229,6 +231,63 @@ describe("ProviderDiscoveryService.getComposerCapabilities", () => {
 });
 
 describe("ProviderDiscoveryService.listModels", () => {
+  it("skips OpenCode agent and command discovery until re-enabled", async () => {
+    const adapterCalls: string[] = [];
+    const adapter: Partial<ProviderAdapterShape<ProviderAdapterError>> = {
+      listAgents: () => {
+        adapterCalls.push("agents");
+        return Effect.succeed({ agents: [], source: "opencode", cached: false });
+      },
+      listCommands: () => {
+        adapterCalls.push("commands");
+        return Effect.succeed({ commands: [], source: "opencode", cached: false });
+      },
+    };
+    const baseLayer = Layer.mergeAll(
+      makeConfigLayer(),
+      ServerSettingsService.layerTest({
+        providers: { opencode: { enabled: false } },
+      }),
+      makeRegistryLayer(adapter),
+    ).pipe(Layer.provideMerge(NodeServices.layer));
+    const testLayer = ProviderDiscoveryServiceLive.pipe(Layer.provideMerge(baseLayer));
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const discovery = yield* ProviderDiscoveryService;
+        const settings = yield* ServerSettingsService;
+        const disabledAgents = yield* discovery.listAgents({ provider: "opencode", cwd });
+        const disabledCommands = yield* discovery.listCommands({ provider: "opencode", cwd });
+
+        yield* settings.updateSettings({ providers: { opencode: { enabled: true } } });
+        const enabledAgents = yield* discovery.listAgents({ provider: "opencode", cwd });
+        const enabledCommands = yield* discovery.listCommands({ provider: "opencode", cwd });
+
+        return {
+          disabledAgents,
+          disabledCommands,
+          enabledAgents,
+          enabledCommands,
+        };
+      }).pipe(Effect.provide(testLayer)) as Effect.Effect<
+        {
+          disabledAgents: ProviderListAgentsResult;
+          disabledCommands: ProviderListCommandsResult;
+          enabledAgents: ProviderListAgentsResult;
+          enabledCommands: ProviderListCommandsResult;
+        },
+        never,
+        never
+      >,
+    );
+
+    expect(result.disabledAgents).toMatchObject({ agents: [], source: "disabled" });
+    expect(result.disabledCommands).toMatchObject({ commands: [], source: "disabled" });
+    expect(result.enabledAgents.source).toBe("opencode");
+    expect(result.enabledCommands.source).toBe("opencode");
+    expect(adapterCalls).toEqual(["agents", "commands"]);
+  });
+
   it("does not invoke the adapter for a disabled provider", async () => {
     let adapterCalls = 0;
     const result = await runListModels({
@@ -271,6 +330,48 @@ describe("ProviderDiscoveryService.listModels", () => {
 
     expect(result.models).toEqual([{ slug: "cursor-model", name: "Cursor Model" }]);
     expect(adapterCalls).toBe(1);
+  });
+
+  it("serves repeat model discovery from the shared cache without re-invoking the adapter", async () => {
+    let adapterCalls = 0;
+    const baseLayer = Layer.mergeAll(
+      makeConfigLayer(),
+      ServerSettingsService.layerTest(),
+      makeRegistryLayer({
+        listModels: (input) => {
+          adapterCalls += 1;
+          return Effect.succeed({
+            models: [
+              { slug: input.cwd === cwd ? "project-a" : "project-b", name: "Project Model" },
+            ],
+            source: "cursor.cli",
+            cached: false,
+          });
+        },
+      }),
+    ).pipe(Layer.provideMerge(NodeServices.layer));
+    const testLayer = ProviderDiscoveryServiceLive.pipe(Layer.provideMerge(baseLayer));
+
+    const results = await Effect.runPromise(
+      Effect.gen(function* () {
+        const discovery = yield* ProviderDiscoveryService;
+        const first = yield* discovery.listModels({ provider: "cursor", cwd });
+        const second = yield* discovery.listModels({ provider: "cursor", cwd });
+        const otherCwd = yield* discovery.listModels({ provider: "cursor", cwd: homeDir });
+        return { first, second, otherCwd };
+      }).pipe(Effect.provide(testLayer)) as Effect.Effect<
+        Record<"first" | "second" | "otherCwd", ProviderListModelsResult>,
+        never,
+        never
+      >,
+    );
+
+    expect(results.first.cached).toBe(false);
+    expect(results.second).toEqual({ ...results.first, cached: true });
+    expect(results.otherCwd.models).toEqual([{ slug: "project-b", name: "Project Model" }]);
+    expect(results.first.models).toEqual([{ slug: "project-a", name: "Project Model" }]);
+    expect(results.otherCwd.cached).toBe(false);
+    expect(adapterCalls).toBe(2);
   });
 
   it("omits malformed model descriptors while preserving valid entries", async () => {

@@ -93,6 +93,7 @@ import { prepareQuitResume } from "./orchestration/quitResume";
 import { makeImportThreadHandler } from "./orchestration/importThreadRoute";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { ProviderCommandReactor } from "./orchestration/Services/ProviderCommandReactor";
+import { SidechatExpiryReactor } from "./orchestration/Services/SidechatExpiryReactor";
 import { ProjectionStateIncompleteError } from "./persistence/Errors";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { shouldPublishThreadShellForEvent } from "./orchestration/threadShellEvents";
@@ -100,6 +101,7 @@ import { ProviderDiscoveryService } from "./provider/Services/ProviderDiscoveryS
 import { discoverSkillsCatalog, synaraSkillsDir } from "./provider/skillsCatalog";
 import { recoverUnregisteredGitHubCheckout } from "./project/githubProjectRegistration";
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
+import { getEnabledProviderAdapter } from "./provider/enabledProviderAdapter";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
 import { ProviderService } from "./provider/Services/ProviderService";
 import { listProviderUsage } from "./providerUsage";
@@ -115,6 +117,7 @@ import { isLoopbackHost } from "./startupAccess";
 import { TerminalManager } from "./terminal/Services/Manager";
 import { TerminalThreadTitleTracker } from "./terminal/terminalThreadTitleTracker";
 import { resolveOutOfRootFileReference } from "./workspace/outOfRootFileReference";
+import { watchWorkspaceFile } from "./workspaceFileChanges";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries";
 import {
   WorkspaceFileConflictError,
@@ -351,6 +354,7 @@ const makeWsRpcHandlersLayer = () =>
       const open = yield* Open;
       const orchestrationEngine = yield* OrchestrationEngineService;
       const providerCommandReactor = yield* ProviderCommandReactor;
+      const sidechatExpiryReactor = yield* SidechatExpiryReactor;
       const path = yield* Path.Path;
       const pullRequests = yield* PullRequestService;
       const profileStatsQuery = yield* ProfileStatsQuery;
@@ -405,6 +409,14 @@ const makeWsRpcHandlersLayer = () =>
               ),
             ),
       });
+      const trackSidechatVisibility =
+        (threadId: ThreadId) =>
+        <A, E, R>(stream: Stream.Stream<A, E, R>): Stream.Stream<A, E, R> =>
+          Stream.unwrap(
+            Effect.acquireRelease(sidechatExpiryReactor.viewStarted(threadId), () =>
+              sidechatExpiryReactor.viewEnded(threadId),
+            ).pipe(Effect.as(stream)),
+          );
       const recordThreadStreamDrop = (threadId: string, report: LiveUiStreamDropReport) =>
         threadDiagnostics
           .recordOperationalDiagnostic({
@@ -607,6 +619,7 @@ const makeWsRpcHandlersLayer = () =>
         projectionSnapshotQuery: projectionReadModelQuery,
         providerAdapterRegistry,
         providerService,
+        serverSettings,
       });
 
       const dispatchOrchestrationCommand = (command: OrchestrationCommand) =>
@@ -878,6 +891,11 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [ORCHESTRATION_WS_METHODS.importThread]: (input) =>
           rpcEffect(importThread(input), "Failed to import thread"),
+        [ORCHESTRATION_WS_METHODS.regenerateThreadTitle]: (input) =>
+          rpcEffect(
+            providerCommandReactor.regenerateThreadTitle(input),
+            "Failed to regenerate thread title",
+          ),
         [ORCHESTRATION_WS_METHODS.getSnapshot]: () =>
           rpcEffect(
             projectionReadModelQuery.getSnapshot(),
@@ -1124,6 +1142,7 @@ const makeWsRpcHandlersLayer = () =>
                       }),
                     );
               }),
+              trackSidechatVisibility(input.threadId),
             ),
           ),
         [ORCHESTRATION_WS_METHODS.unsubscribeThread]: () => Effect.void,
@@ -1156,6 +1175,30 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(workspaceEntries.searchLocal(input), "Failed to search local entries"),
         [WS_METHODS.projectsReadFile]: (input) =>
           rpcEffect(workspaceFileSystem.readFile(input), "Failed to read workspace file"),
+        [WS_METHODS.projectsSubscribeFileChange]: (input, { clientId }) =>
+          streamAdmission.guard(
+            clientId,
+            { key: `projects.file-change:${input.cwd}\0${input.relativePath}` },
+            watchWorkspaceFile(input).pipe(
+              Stream.mapError(
+                (cause) =>
+                  new WsRpcError({
+                    message:
+                      cause instanceof Error && cause.message.length > 0
+                        ? cause.message
+                        : "Failed to watch workspace file",
+                    code: "PROJECT_FILE_WATCH_FAILED",
+                    retryable: false,
+                    cause,
+                  }),
+              ),
+            ),
+          ),
+        [WS_METHODS.projectsResolveWorkspaceFileReferences]: (input) =>
+          rpcEffect(
+            workspaceEntries.resolveFileReferences(input),
+            "Failed to resolve workspace file references",
+          ),
         [WS_METHODS.projectsResolveOutOfRootFileReference]: (input) =>
           rpcEffect(
             Effect.promise(async () => ({
@@ -1732,12 +1775,30 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [WS_METHODS.serverPrewarmVoice]: (input) =>
           rpcEffect(
-            providerAdapterRegistry
-              .getByProvider(input.provider)
-              .pipe(
+            getEnabledProviderAdapter(input.provider, serverSettings, providerAdapterRegistry).pipe(
+              Effect.flatMap((adapter) =>
+                adapter.prewarmVoice
+                  ? adapter.prewarmVoice(input)
+                  : Effect.fail(
+                      new Error(
+                        `Voice transcription is unavailable for provider '${input.provider}'.`,
+                      ),
+                    ),
+              ),
+            ),
+            "Voice transcription prewarm failed",
+          ),
+        [WS_METHODS.serverTranscribeVoice]: (input) =>
+          rpcEffect(
+            voiceUploadAdmissionGate.run(
+              getEnabledProviderAdapter(
+                input.provider,
+                serverSettings,
+                providerAdapterRegistry,
+              ).pipe(
                 Effect.flatMap((adapter) =>
-                  adapter.prewarmVoice
-                    ? adapter.prewarmVoice(input)
+                  adapter.transcribeVoice
+                    ? adapter.transcribeVoice(input)
                     : Effect.fail(
                         new Error(
                           `Voice transcription is unavailable for provider '${input.provider}'.`,
@@ -1745,24 +1806,6 @@ const makeWsRpcHandlersLayer = () =>
                       ),
                 ),
               ),
-            "Voice transcription prewarm failed",
-          ),
-        [WS_METHODS.serverTranscribeVoice]: (input) =>
-          rpcEffect(
-            voiceUploadAdmissionGate.run(
-              providerAdapterRegistry
-                .getByProvider(input.provider)
-                .pipe(
-                  Effect.flatMap((adapter) =>
-                    adapter.transcribeVoice
-                      ? adapter.transcribeVoice(input)
-                      : Effect.fail(
-                          new Error(
-                            `Voice transcription is unavailable for provider '${input.provider}'.`,
-                          ),
-                        ),
-                  ),
-                ),
             ),
             "Voice transcription failed",
           ),

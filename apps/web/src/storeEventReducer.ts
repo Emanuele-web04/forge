@@ -586,6 +586,20 @@ function applyTurnDiffSummaryToThread(
   };
 }
 
+const STREAM_TEXT_AFFIX_LENGTH = 48;
+
+function describeStreamText(text: string): {
+  length: number;
+  prefix: string;
+  suffix: string;
+} {
+  return {
+    length: text.length,
+    prefix: text.slice(0, STREAM_TEXT_AFFIX_LENGTH),
+    suffix: text.slice(-STREAM_TEXT_AFFIX_LENGTH),
+  };
+}
+
 function mergeStreamingMessage(
   existingMessage: ChatMessage,
   incomingMessage: ChatMessage,
@@ -599,12 +613,22 @@ function mergeStreamingMessage(
     nextText = incomingMessage.text;
   } else if (incomingMessage.streaming || incomingMessage.text.length === 0) {
     nextText = `${existingMessage.text}${incomingMessage.text}`;
-  } else if (incomingMessage.text.startsWith(existingMessage.text)) {
-    nextText = incomingMessage.text;
-  } else if (existingMessage.text.startsWith(incomingMessage.text)) {
-    nextText = existingMessage.text;
   } else {
-    nextText = `${existingMessage.text}${incomingMessage.text}`;
+    // Non-streaming completions carry the server's authoritative accumulated
+    // text. Always prefer them so a duplicated or divergent local stream cannot
+    // survive after the turn settles.
+    if (
+      import.meta.env.DEV &&
+      incomingMessage.text !== existingMessage.text &&
+      !incomingMessage.text.startsWith(existingMessage.text)
+    ) {
+      console.warn("[transcript] completion text diverged from local stream", {
+        messageId: existingMessage.id,
+        existing: describeStreamText(existingMessage.text),
+        incoming: describeStreamText(incomingMessage.text),
+      });
+    }
+    nextText = incomingMessage.text;
   }
   const nextAttachments = incomingMessage.attachments ?? existingMessage.attachments;
   const nextSkills =
@@ -1218,7 +1242,10 @@ function applyOrchestrationEvent(
           if (
             session === thread.session &&
             error === thread.error &&
-            latestTurn === thread.latestTurn
+            latestTurn === thread.latestTurn &&
+            (!thread.sidechatSourceThreadId ||
+              thread.sidechatExpiredAt ||
+              thread.sidechatLastActivityAt === event.payload.session.updatedAt)
           ) {
             return thread;
           }
@@ -1227,6 +1254,9 @@ function applyOrchestrationEvent(
             session,
             error,
             latestTurn,
+            ...(thread.sidechatSourceThreadId && !thread.sidechatExpiredAt
+              ? { sidechatLastActivityAt: event.payload.session.updatedAt }
+              : {}),
             updatedAt:
               (thread.updatedAt ?? thread.createdAt) > event.occurredAt
                 ? thread.updatedAt
@@ -1237,6 +1267,48 @@ function applyOrchestrationEvent(
           ...options,
           updateSidebarSummary: true,
         },
+      );
+
+    case "thread.sidechat-activity-recorded":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const updatedAt = resolveEventUpdatedAt(thread, event.payload.lastActivityAt);
+          if (
+            thread.sidechatLastActivityAt === event.payload.lastActivityAt &&
+            thread.updatedAt === updatedAt
+          ) {
+            return thread;
+          }
+          return {
+            ...thread,
+            sidechatLastActivityAt: event.payload.lastActivityAt,
+            updatedAt,
+          };
+        },
+        { ...options, updateSidebarSummary: true },
+      );
+
+    case "thread.sidechat-expired":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const updatedAt = resolveEventUpdatedAt(thread, event.payload.expiredAt);
+          if (
+            thread.sidechatExpiredAt === event.payload.expiredAt &&
+            thread.updatedAt === updatedAt
+          ) {
+            return thread;
+          }
+          return {
+            ...thread,
+            sidechatExpiredAt: event.payload.expiredAt,
+            updatedAt,
+          };
+        },
+        { ...options, updateSidebarSummary: true },
       );
 
     case "thread.turn-interrupt-requested": {
@@ -1311,6 +1383,8 @@ function applyOrchestrationEvent(
             thread.runtimeMode === runtimeMode &&
             thread.interactionMode === interactionMode &&
             thread.pendingSourceProposedPlan === event.payload.sourceProposedPlan &&
+            (!thread.sidechatSourceThreadId ||
+              thread.sidechatLastActivityAt === event.payload.createdAt) &&
             (thread.updatedAt ?? thread.createdAt) >= event.payload.createdAt
           ) {
             return thread;
@@ -1321,6 +1395,9 @@ function applyOrchestrationEvent(
             runtimeMode,
             interactionMode,
             pendingSourceProposedPlan: event.payload.sourceProposedPlan,
+            ...(thread.sidechatSourceThreadId
+              ? { sidechatLastActivityAt: event.payload.createdAt }
+              : {}),
             updatedAt:
               (thread.updatedAt ?? thread.createdAt) > event.payload.createdAt
                 ? thread.updatedAt

@@ -79,10 +79,6 @@ export function createDeviceFrameGateState(): DeviceFrameGateState {
 // u32 sequence wraps, so "next" is computed modulo 2^32 rather than by addition.
 const SEQUENCE_MODULUS = 2 ** 32;
 
-export function isNextDeviceFrameSequence(previous: number, next: number): boolean {
-  return (previous + 1) % SEQUENCE_MODULUS === next;
-}
-
 /**
  * Distance from `previous` to `next` going forward through the wrap point.
  * Used to tell a small forward gap (dropped frames) from a stale/reordered
@@ -171,14 +167,6 @@ export function stepDeviceFrameGate(
     action: { kind: "decode", keyframe: header.keyframe },
     requestKeyframe: false,
   };
-}
-
-/**
- * Drops back to the pre-config phase. Used on decoder error and on
- * detach/resubscribe, where the next stream may carry different parameter sets.
- */
-export function resetDeviceFrameGate(): DeviceFrameGateState {
-  return createDeviceFrameGateState();
 }
 
 // ── Coordinate mapping ───────────────────────────────────────────────
@@ -583,27 +571,6 @@ export function resolveDeviceAvailabilityView(
       };
   }
 }
-
-export function deviceSetupProgress(steps: readonly DeviceSetupStep[]): {
-  readonly done: number;
-  readonly total: number;
-} {
-  return { done: steps.filter((step) => step.done).length, total: steps.length };
-}
-
-// ── Device screen geometry ───────────────────────────────────────────
-
-/**
- * Every Apple display ships at 1x, 2x, or 3x. Frames arrive in pixels and input
- * is injected in points, so the pane must divide by the scale — sending pixels
- * puts a tap several hundred points off the right edge of the screen, where the
- * backend silently clamps it and nothing happens.
- *
- * The authoritative point size comes from the accessibility tree's root frame;
- * this is the fallback for before that first read resolves, and it only has to
- * pick between three candidates.
- */
-export const DEVICE_SCALE_FACTORS = [3, 2, 1] as const;
 
 /**
  * Every 3x device Apple ships is a phone, and every phone is narrow: 3x frames

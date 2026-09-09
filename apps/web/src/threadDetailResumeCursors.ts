@@ -47,12 +47,6 @@ export function clearThreadDetailResumeCursor(threadId: ThreadId): void {
   resumeCursorByThreadId.delete(threadId);
 }
 
-export function clearThreadDetailResumeCursors(threadIds: readonly ThreadId[]): void {
-  for (const threadId of threadIds) {
-    resumeCursorByThreadId.delete(threadId);
-  }
-}
-
 /**
  * Drops every cursor whose thread is not in the surviving set. Full-sync
  * projections use this: they prune detail slices down to the threads the

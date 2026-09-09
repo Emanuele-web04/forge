@@ -95,12 +95,6 @@ export function matchesPullRequestSearchQuery(
     .includes(normalizedQuery);
 }
 
-export function countUniqueViewerReviewRequests(entries: readonly PullRequestListEntry[]): number {
-  return new Set(
-    entries.filter((entry) => entry.viewerReviewRequested).map(pullRequestListRepositoryIdentity),
-  ).size;
-}
-
 /** Stable partition used by ungrouped tabs after an optimistic pin toggle. */
 export function orderPullRequestEntriesPinnedFirst(
   entries: readonly PullRequestListEntry[],

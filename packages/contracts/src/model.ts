@@ -29,9 +29,6 @@ export const PI_THINKING_LEVEL_OPTIONS = [
 export type PiThinkingLevel = (typeof PI_THINKING_LEVEL_OPTIONS)[number];
 // Union of every Grok CLI ladder. Per-model capabilities pick a subset:
 // grok-build keeps none/low/medium/high, Grok 4.5 drops none, Grok 4.6 adds xhigh.
-export const GROK_BUILD_REASONING_EFFORTS = ["none", "low", "medium", "high"] as const;
-export const GROK_4_5_REASONING_EFFORTS = ["low", "medium", "high"] as const;
-export const GROK_4_6_REASONING_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
 export const GROK_REASONING_EFFORT_OPTIONS = ["none", "low", "medium", "high", "xhigh"] as const;
 export type GrokReasoningEffort = (typeof GROK_REASONING_EFFORT_OPTIONS)[number];
 export const DROID_REASONING_EFFORT_OPTIONS = [
@@ -150,14 +147,26 @@ export const DroidModelOptions = Schema.Struct({
 });
 export type DroidModelOptions = typeof DroidModelOptions.Type;
 
+export const DevinModelOptions = Schema.Struct({
+  reasoningEffort: Schema.optional(TrimmedNonEmptyString),
+  fastMode: Schema.optional(Schema.Boolean),
+  thinking: Schema.optional(Schema.Boolean),
+  contextWindow: Schema.optional(TrimmedNonEmptyString),
+  // Devin's ACP command accepts a concrete model UID at process start. This
+  // is populated from runtime discovery when an abstract effort/context
+  // selection needs to resolve to a specific variant.
+  modelVariant: Schema.optional(TrimmedNonEmptyString),
+});
+export type DevinModelOptions = typeof DevinModelOptions.Type;
+
 export const ProviderModelOptions = Schema.Struct({
   codex: Schema.optional(CodexModelOptions),
   claudeAgent: Schema.optional(ClaudeModelOptions),
   cursor: Schema.optional(CursorModelOptions),
+  devin: Schema.optional(DevinModelOptions),
   antigravity: Schema.optional(AntigravityModelOptions),
   grok: Schema.optional(GrokModelOptions),
   droid: Schema.optional(DroidModelOptions),
-  kilo: Schema.optional(OpenCodeModelOptions),
   opencode: Schema.optional(OpenCodeModelOptions),
   pi: Schema.optional(PiModelOptions),
 });
@@ -441,8 +450,9 @@ const DROID_CORE_HIGH_ONLY_CAPABILITIES: ModelCapabilities = {
 // generations, so declare them once and let each model entry override only the
 // fields that genuinely differ (mirrors the CODEX_GPT_5_* pattern above).
 const CLAUDE_AUTO_COMPACT_WINDOWS: readonly ContextWindowOption[] = [
-  { value: "200k", label: "200k", isDefault: true },
-  { value: "1m", label: "1M (model default)" },
+  { value: "auto", label: "Auto (Claude Code)", isDefault: true },
+  { value: "200k", label: "200k" },
+  { value: "1m", label: "1M" },
 ];
 
 function claudeApiEffortOption(
@@ -485,6 +495,8 @@ const CLAUDE_NO_FAST_XHIGH_CAPABILITIES: ModelCapabilities = {
   contextWindowTokens: 1_000_000,
 };
 
+// Fable 5 and 5.1 share the ladder: thinking is always on (no toggle, no
+// ultrathink prompt mode), effort runs low..max, and there is no fast-mode lane.
 const CLAUDE_FABLE_CAPABILITIES: ModelCapabilities = CLAUDE_NO_FAST_XHIGH_CAPABILITIES;
 
 // Opus 5 keeps the Claude 5 ladder (thinking is adaptive, so no ultrathink prompt
@@ -534,10 +546,22 @@ type ModelDefinition = {
   readonly capabilities: ModelCapabilities;
 };
 
+// Static catalog entries that rely on live CLI discovery advertise no
+// capabilities of their own.
+const EMPTY_MODEL_CAPABILITIES: ModelCapabilities = {
+  reasoningEffortLevels: [],
+  supportsFastMode: false,
+  supportsThinkingToggle: false,
+  promptInjectedEffortLevels: [],
+  contextWindowOptions: [],
+};
+
 /**
  * TODO: This should not be a static array, each provider
  * should return its own model list over the WS API.
  */
+export const DEFAULT_DROID_GIT_TEXT_GENERATION_MODEL = "deepseek-v4-flash-0731" as const;
+
 export const MODEL_OPTIONS_BY_PROVIDER = {
   codex: [
     {
@@ -577,6 +601,11 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
     },
   ],
   claudeAgent: [
+    {
+      slug: "claude-fable-5-1",
+      name: "Claude Fable 5.1",
+      capabilities: CLAUDE_FABLE_CAPABILITIES,
+    },
     {
       slug: "claude-fable-5",
       name: "Claude Fable 5",
@@ -825,6 +854,11 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       capabilities: DROID_CORE_DEEPSEEK_CAPABILITIES,
     },
     {
+      slug: DEFAULT_DROID_GIT_TEXT_GENERATION_MODEL,
+      name: "DeepSeek V4 Flash 0731",
+      capabilities: DROID_CORE_DEEPSEEK_CAPABILITIES,
+    },
+    {
       slug: "minimax-m3",
       name: "MiniMax M3",
       capabilities: DROID_CORE_HIGH_ONLY_CAPABILITIES,
@@ -839,26 +873,7 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
     {
       slug: "openai/gpt-5",
       name: "OpenAI GPT-5",
-      capabilities: {
-        reasoningEffortLevels: [],
-        supportsFastMode: false,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
-    },
-  ],
-  kilo: [
-    {
-      slug: "kilo/kilo-auto/free",
-      name: "Kilo Auto Free",
-      capabilities: {
-        reasoningEffortLevels: [],
-        supportsFastMode: false,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
+      capabilities: EMPTY_MODEL_CAPABILITIES,
     },
   ],
   // Pi discovery owns the live catalog, including auth-gated Anthropic models.
@@ -1061,6 +1076,38 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       capabilities: cursorCapabilities({ efforts: ["high", "max"] }),
     },
   ],
+  // Devin selects its model at process start via `devin acp --model`; the ACP
+  // session does not expose a live model list. This list is a static fallback
+  // for when the CLI is unreachable.
+  devin: [
+    {
+      slug: "adaptive",
+      name: "Adaptive",
+      capabilities: EMPTY_MODEL_CAPABILITIES,
+    },
+    {
+      slug: "swe-1-6",
+      name: "SWE 1.6",
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: true,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+    {
+      slug: "swe-1-7",
+      name: "SWE 1.7",
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: true,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+  ],
 } as const satisfies Record<ProviderKind, readonly ModelDefinition[]>;
 export type ModelOptionsByProvider = typeof MODEL_OPTIONS_BY_PROVIDER;
 
@@ -1073,18 +1120,32 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
   codex: "gpt-5.5",
   claudeAgent: "claude-sonnet-5",
   cursor: "auto",
+  devin: "adaptive",
   antigravity: "Gemini 3.5 Flash",
   grok: "grok-4.6",
   droid: "claude-opus-4-8",
-  kilo: "kilo/kilo-auto/free",
   opencode: "openai/gpt-5",
 };
 
 // Backward compatibility for existing Codex-only call sites.
-export const MODEL_OPTIONS = MODEL_OPTIONS_BY_PROVIDER.codex;
 export const DEFAULT_MODEL = DEFAULT_MODEL_BY_PROVIDER.codex;
 export const DEFAULT_GIT_TEXT_GENERATION_MODEL = "gpt-5.6-luna" as const;
 export const DEFAULT_GIT_TEXT_GENERATION_REASONING_EFFORT = "high" as const;
+
+/**
+ * Providers with a dedicated Git text-generation backend. Keep the Settings
+ * picker in sync with this list — do not add chat-only agents (Claude, Grok,
+ * Antigravity, Pi, Devin). Those CLIs have no one-shot git-writing path, and
+ * driving them as coding agents for commit/PR text can run with write access
+ * or violate provider terms.
+ */
+export const GIT_TEXT_GENERATION_PROVIDERS = [
+  "codex",
+  "cursor",
+  "opencode",
+  "droid",
+] as const satisfies readonly ProviderKind[];
+export type GitTextGenerationProvider = (typeof GIT_TEXT_GENERATION_PROVIDERS)[number];
 
 export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string, ModelSlug>> = {
   codex: {
@@ -1096,8 +1157,12 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "gpt-5.3-spark": "gpt-5.3-codex-spark",
   },
   claudeAgent: {
-    fable: "claude-fable-5",
+    fable: "claude-fable-5-1",
+    "fable-5.1": "claude-fable-5-1",
+    "claude-fable-5.1": "claude-fable-5-1",
+    "claude-fable-5-1": "claude-fable-5-1",
     "fable-5": "claude-fable-5",
+    "claude-fable-5": "claude-fable-5",
     opus: "claude-opus-5",
     "opus-5": "claude-opus-5",
     "claude-opus-5": "claude-opus-5",
@@ -1216,9 +1281,22 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "4.6": "grok-4.6",
     "grok-4.6": "grok-4.6",
   },
-  kilo: {},
   opencode: {},
   pi: {},
+  devin: {
+    adaptive: "adaptive",
+    auto: "adaptive",
+    fast: "swe-1-6",
+    "swe-1.6-fast": "swe-1-6",
+    "swe-1.6": "swe-1-6",
+    "swe-1.7": "swe-1-7",
+    swe: "swe-1-6",
+    "swe-1-6": "swe-1-6",
+    "swe-1-7": "swe-1-7",
+    opus: "claude-opus-4-8",
+    sonnet: "claude-sonnet-5",
+    fable: "claude-fable-5",
+  },
 };
 
 // ── Agent mention aliases ─────────────────────────────────────────────
@@ -1255,10 +1333,10 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   codex: "Codex",
   claudeAgent: "Claude",
   cursor: "Cursor",
+  devin: "Devin",
   antigravity: "Antigravity",
   grok: "Grok",
   droid: "Droid",
-  kilo: "Kilo",
   opencode: "OpenCode",
   pi: "Pi",
 };

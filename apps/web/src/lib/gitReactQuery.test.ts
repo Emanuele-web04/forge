@@ -14,6 +14,7 @@ import {
   gitRunStackedActionMutationOptions,
   refreshGitActionAvailability,
   refreshGitQueriesForCwd,
+  refreshGitWorkingTreeDiffsForCwd,
 } from "./gitReactQuery";
 
 function deferredVoid() {
@@ -284,6 +285,40 @@ describe("git query invalidation", () => {
     unsubscribe();
   });
 
+  it("starts a fresh active diff read when a file event races its cold fetch", async () => {
+    const queryClient = new QueryClient();
+    const cwd = "/repo/cold-diff";
+    const diffKey = gitQueryKeys.workingTreeDiff(cwd, "workingTree");
+    let patch = "old";
+    let diffCalls = 0;
+    const firstDiffGate = deferredVoid();
+    const observer = new QueryObserver(queryClient, {
+      queryKey: diffKey,
+      queryFn: async () => {
+        diffCalls += 1;
+        const observed = patch;
+        if (diffCalls === 1) {
+          await firstDiffGate.promise;
+        }
+        return observed;
+      },
+      retry: false,
+      staleTime: Number.POSITIVE_INFINITY,
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    await vi.waitFor(() => expect(diffCalls).toBe(1));
+
+    patch = "fresh";
+    await refreshGitWorkingTreeDiffsForCwd(queryClient, cwd);
+
+    expect(diffCalls).toBe(2);
+    expect(queryClient.getQueryData(diffKey)).toBe("fresh");
+    firstDiffGate.resolve();
+    await Promise.resolve();
+    expect(queryClient.getQueryData(diffKey)).toBe("fresh");
+    unsubscribe();
+  });
+
   it("serializes active expensive Git detail reads after status", async () => {
     const queryClient = new QueryClient();
     const cwd = "/repo/serialized";
@@ -375,9 +410,10 @@ describe("git expensive-read capacity retry", () => {
     expect(typeof options.retryDelay).toBe("function");
     if (typeof options.retry !== "function" || typeof options.retryDelay !== "function") return;
 
-    expect(options.retry(0, capacityError)).toBe(true);
-    expect(options.retry(12, capacityError)).toBe(false);
-    expect(options.retryDelay(0, capacityError)).toBe(375);
+    expect(options.retry(0, capacityError as never)).toBe(false);
+    expect(options.retry(0, new Error("network"))).toBe(true);
+    expect(options.retry(3, new Error("network"))).toBe(false);
+    expect(options.retryDelay(0, capacityError as never)).toBe(375);
   });
 });
 

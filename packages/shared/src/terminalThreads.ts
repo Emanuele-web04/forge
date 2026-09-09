@@ -38,9 +38,6 @@ const WRAPPER_COMMANDS = new Set(["builtin", "command", "env", "noglob", "nocorr
 const CODEX_COMMAND_NAMES = new Set(["codex", "codex-cli"]);
 const CLAUDE_COMMAND_NAMES = new Set(["claude", "claude-code", "claude_code"]);
 const ANTIGRAVITY_COMMAND_NAMES = new Set(["agy", "antigravity", "antigravity-cli"]);
-const OUTPUT_CODEX_TEXT_PATTERNS = [/\bopenai codex\b(?:\s*\(|\s+v)/i, /\bcodex cli\b/i];
-const OUTPUT_CLAUDE_TEXT_PATTERNS = [/\bclaude code\b(?:\s+v\d|\s*$)/i];
-const OUTPUT_ANTIGRAVITY_TEXT_PATTERNS = [/\bantigravity cli\b/i];
 const TITLE_CODEX_TEXT_PATTERNS = [/\bopenai codex\b/i, /\bcodex cli\b/i];
 const TITLE_CLAUDE_TEXT_PATTERNS = [/\bclaude code\b/i];
 const TITLE_ANTIGRAVITY_TEXT_PATTERNS = [/\bantigravity(?: cli)?\b/i, /^agy(?: cli)?$/i];
@@ -70,17 +67,6 @@ function truncateTerminalTitle(title: string): string {
   return title.length <= MAX_TERMINAL_TITLE_LENGTH
     ? title
     : title.slice(0, MAX_TERMINAL_TITLE_LENGTH).trimEnd();
-}
-
-function normalizeTextForIdentityDetection(value: string): string {
-  return value
-    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, " ")
-    .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, " ")
-    .replace(/\u001b[P^_].*?(?:\u001b\\|\u0007|\u009c)/g, " ")
-    .replace(/\u001b[@-_]/g, " ")
-    .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
 }
 
 function normalizeCommandToken(token: string): string {
@@ -140,18 +126,6 @@ function textMatchesCliPatterns(
     }
   }
   return null;
-}
-
-function deriveCliKindFromOutputText(text: string | null | undefined): TerminalCliKind | null {
-  const normalizedText = text?.trim();
-  if (!normalizedText) {
-    return null;
-  }
-  return (
-    textMatchesCliPatterns(normalizedText, OUTPUT_CODEX_TEXT_PATTERNS, "codex") ??
-    textMatchesCliPatterns(normalizedText, OUTPUT_CLAUDE_TEXT_PATTERNS, "claude") ??
-    textMatchesCliPatterns(normalizedText, OUTPUT_ANTIGRAVITY_TEXT_PATTERNS, "antigravity")
-  );
 }
 
 function deriveCliKindFromProcessText(text: string | null | undefined): TerminalCliKind | null {
@@ -454,22 +428,6 @@ export function consumeTerminalTitleInput(
     buffer: nextIdentityState.buffer,
     title: nextIdentityState.identity?.title ?? null,
   };
-}
-
-// Detect provider identity from CLI banners or other high-confidence visible output.
-export function deriveTerminalOutputIdentity(output: string): TerminalCommandIdentity | null {
-  const cliKind = deriveCliKindFromOutputText(normalizeTextForIdentityDetection(output));
-  return cliKind
-    ? createTerminalCommandIdentity(defaultTerminalTitleForCliKind(cliKind), cliKind)
-    : null;
-}
-
-// Detect provider identity from terminal title signals without trusting the title as a tab name.
-export function deriveTerminalTitleSignalIdentity(title: string): TerminalCommandIdentity | null {
-  const cliKind = inferCliKindFromTitle(title);
-  return cliKind
-    ? createTerminalCommandIdentity(defaultTerminalTitleForCliKind(cliKind), cliKind)
-    : null;
 }
 
 // Resolve terminal label, icon, and activity state from persisted metadata plus runtime status.

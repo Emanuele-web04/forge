@@ -17,11 +17,9 @@
 export const MCP_DEFAULT_PROTOCOL_VERSION = "2025-06-18";
 const MCP_SUPPORTED_PROTOCOL_VERSIONS = new Set(["2025-06-18", "2025-03-26", "2024-11-05"]);
 
-export const JSON_RPC_PARSE_ERROR = -32700;
 export const JSON_RPC_INVALID_REQUEST = -32600;
 export const JSON_RPC_METHOD_NOT_FOUND = -32601;
 export const JSON_RPC_INVALID_PARAMS = -32602;
-export const JSON_RPC_INTERNAL_ERROR = -32603;
 
 export type JsonRpcId = string | number | null;
 
@@ -58,10 +56,6 @@ export interface McpToolCallResult {
   >;
   readonly isError?: boolean;
   readonly structuredContent?: Record<string, unknown>;
-}
-
-export function mcpToolResultText(text: string): McpToolCallResult {
-  return { content: [{ type: "text", text }] };
 }
 
 export function mcpToolResultError(text: string): McpToolCallResult {

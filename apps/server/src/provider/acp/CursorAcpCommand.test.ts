@@ -31,6 +31,29 @@ describe("resolveCursorAgentBinaryPath", () => {
     expect(resolveCursorAgentBinaryPath("cursor-agent")).toBe("cursor-agent");
     expect(resolveCursorAgentBinaryPath("/usr/local/bin/agent")).toBe("/usr/local/bin/agent");
   });
+
+  it("discovers native Windows Cursor Agent installs outside PATH", () => {
+    const installedPath = "C:\\Users\\me\\AppData\\Local\\cursor-agent\\agent.exe";
+    expect(
+      resolveCursorAgentBinaryPath(undefined, {
+        platform: "win32",
+        env: { LOCALAPPDATA: "C:\\Users\\me\\AppData\\Local", PATH: "C:\\Windows" },
+        pathExists: (path) => path === installedPath,
+      }),
+    ).toBe(installedPath);
+  });
+
+  it("keeps PATH precedence over the native Windows fallback", () => {
+    expect(
+      resolveCursorAgentBinaryPath(undefined, {
+        platform: "win32",
+        env: { LOCALAPPDATA: "C:\\Users\\me\\AppData\\Local", PATH: "C:\\Tools" },
+        pathExists: (path) =>
+          path.replaceAll("/", "\\") === "C:\\Tools\\cursor-agent.CMD" ||
+          path === "C:\\Users\\me\\AppData\\Local\\cursor-agent\\agent.exe",
+      }),
+    ).toBe("cursor-agent");
+  });
 });
 
 describe("buildCursorAgentCommand", () => {

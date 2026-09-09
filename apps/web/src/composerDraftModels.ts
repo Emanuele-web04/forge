@@ -8,6 +8,7 @@ import {
   type ClaudeCodeEffort,
   type CodexReasoningEffort,
   type CursorModelOptions,
+  type DevinModelOptions,
   type DroidReasoningEffort,
   type GrokReasoningEffort,
   type ModelSelection,
@@ -32,10 +33,10 @@ export const COMPOSER_PROVIDER_KINDS = [
   "codex",
   "claudeAgent",
   "cursor",
+  "devin",
   "antigravity",
   "grok",
   "droid",
-  "kilo",
   "opencode",
   "pi",
 ] as const satisfies readonly ProviderKind[];
@@ -111,6 +112,9 @@ export function normalizeProviderKind(value: unknown): ProviderKind | null {
   if (value === "gemini") {
     return "antigravity";
   }
+  if (value === "kilo") {
+    return "opencode";
+  }
   return isProviderKind(value) ? value : null;
 }
 
@@ -120,6 +124,10 @@ function trimStringOrUndefined(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function booleanOrUndefined(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function isGrokReasoningEffort(value: unknown): value is GrokReasoningEffort {
@@ -170,6 +178,14 @@ export function makeModelSelection(
           ? { options: options as Extract<ModelSelection, { provider: "cursor" }>["options"] }
           : {}),
       };
+    case "devin":
+      return {
+        provider,
+        model,
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "devin" }>["options"] }
+          : {}),
+      };
     case "grok":
       return {
         provider,
@@ -184,14 +200,6 @@ export function makeModelSelection(
         model,
         ...(options
           ? { options: options as Extract<ModelSelection, { provider: "droid" }>["options"] }
-          : {}),
-      };
-    case "kilo":
-      return {
-        provider,
-        model,
-        ...(options
-          ? { options: options as Extract<ModelSelection, { provider: "kilo" }>["options"] }
           : {}),
       };
     case "opencode":
@@ -231,6 +239,10 @@ export function normalizeProviderModelOptions(
     candidate?.cursor && typeof candidate.cursor === "object"
       ? (candidate.cursor as Record<string, unknown>)
       : null;
+  const devinCandidate =
+    candidate?.devin && typeof candidate.devin === "object"
+      ? (candidate.devin as Record<string, unknown>)
+      : null;
   const antigravityCandidate =
     candidate?.antigravity && typeof candidate.antigravity === "object"
       ? (candidate.antigravity as Record<string, unknown>)
@@ -246,10 +258,6 @@ export function normalizeProviderModelOptions(
   const openCodeCandidate =
     candidate?.opencode && typeof candidate.opencode === "object"
       ? (candidate.opencode as Record<string, unknown>)
-      : null;
-  const kiloCandidate =
-    candidate?.kilo && typeof candidate.kilo === "object"
-      ? (candidate.kilo as Record<string, unknown>)
       : null;
   const piCandidate =
     candidate?.pi && typeof candidate.pi === "object"
@@ -276,12 +284,7 @@ export function normalizeProviderModelOptions(
         }
       : undefined;
 
-  const claudeThinking =
-    claudeCandidate?.thinking === true
-      ? true
-      : claudeCandidate?.thinking === false
-        ? false
-        : undefined;
+  const claudeThinking = booleanOrUndefined(claudeCandidate?.thinking);
   const claudeEffort: ClaudeCodeEffort | undefined =
     claudeCandidate?.effort === "low" ||
     claudeCandidate?.effort === "medium" ||
@@ -292,12 +295,7 @@ export function normalizeProviderModelOptions(
     claudeCandidate?.effort === "ultracode"
       ? claudeCandidate.effort
       : undefined;
-  const claudeFastMode =
-    claudeCandidate?.fastMode === true
-      ? true
-      : claudeCandidate?.fastMode === false
-        ? false
-        : undefined;
+  const claudeFastMode = booleanOrUndefined(claudeCandidate?.fastMode);
   const claudeAutoCompactWindow =
     trimStringOrUndefined(claudeCandidate?.autoCompactWindow) ??
     trimStringOrUndefined(claudeCandidate?.contextWindow);
@@ -317,18 +315,8 @@ export function normalizeProviderModelOptions(
       : undefined;
 
   const cursorReasoningEffort = trimStringOrUndefined(cursorCandidate?.reasoningEffort);
-  const cursorFastMode =
-    cursorCandidate?.fastMode === true
-      ? true
-      : cursorCandidate?.fastMode === false
-        ? false
-        : undefined;
-  const cursorThinking =
-    cursorCandidate?.thinking === true
-      ? true
-      : cursorCandidate?.thinking === false
-        ? false
-        : undefined;
+  const cursorFastMode = booleanOrUndefined(cursorCandidate?.fastMode);
+  const cursorThinking = booleanOrUndefined(cursorCandidate?.thinking);
   const cursorContextWindow = trimStringOrUndefined(cursorCandidate?.contextWindow);
   const cursor: CursorModelOptions | undefined =
     cursorReasoningEffort !== undefined ||
@@ -371,15 +359,6 @@ export function normalizeProviderModelOptions(
           ...(openCodeAgent !== undefined ? { agent: openCodeAgent } : {}),
         }
       : undefined;
-  const kiloVariant = trimStringOrUndefined(kiloCandidate?.variant);
-  const kiloAgent = trimStringOrUndefined(kiloCandidate?.agent);
-  const kilo =
-    kiloVariant !== undefined || kiloAgent !== undefined
-      ? {
-          ...(kiloVariant !== undefined ? { variant: kiloVariant } : {}),
-          ...(kiloAgent !== undefined ? { agent: kiloAgent } : {}),
-        }
-      : undefined;
   const piThinkingLevel: PiThinkingLevel | undefined =
     piCandidate?.thinkingLevel === "off" ||
     piCandidate?.thinkingLevel === "minimal" ||
@@ -391,14 +370,33 @@ export function normalizeProviderModelOptions(
       ? piCandidate.thinkingLevel
       : undefined;
   const pi = piThinkingLevel !== undefined ? { thinkingLevel: piThinkingLevel } : undefined;
+  const devinFastMode = booleanOrUndefined(devinCandidate?.fastMode);
+  const devinReasoningEffort = trimStringOrUndefined(devinCandidate?.reasoningEffort);
+  const devinThinking = booleanOrUndefined(devinCandidate?.thinking);
+  const devinContextWindow = trimStringOrUndefined(devinCandidate?.contextWindow);
+  const devinModelVariant = trimStringOrUndefined(devinCandidate?.modelVariant);
+  const devin: DevinModelOptions | undefined =
+    devinReasoningEffort !== undefined ||
+    devinFastMode !== undefined ||
+    devinThinking !== undefined ||
+    devinContextWindow !== undefined ||
+    devinModelVariant !== undefined
+      ? {
+          ...(devinReasoningEffort !== undefined ? { reasoningEffort: devinReasoningEffort } : {}),
+          ...(devinFastMode !== undefined ? { fastMode: devinFastMode } : {}),
+          ...(devinThinking !== undefined ? { thinking: devinThinking } : {}),
+          ...(devinContextWindow !== undefined ? { contextWindow: devinContextWindow } : {}),
+          ...(devinModelVariant !== undefined ? { modelVariant: devinModelVariant } : {}),
+        }
+      : undefined;
   if (
     !codex &&
     !claude &&
     !cursor &&
+    !devin &&
     !antigravity &&
     !grok &&
     !droid &&
-    !kilo &&
     !opencode &&
     !pi
   ) {
@@ -408,10 +406,10 @@ export function normalizeProviderModelOptions(
     ...(codex ? { codex } : {}),
     ...(claude ? { claudeAgent: claude } : {}),
     ...(cursor ? { cursor } : {}),
+    ...(devin ? { devin } : {}),
     ...(antigravity ? { antigravity } : {}),
     ...(grok ? { grok } : {}),
     ...(droid ? { droid } : {}),
-    ...(kilo ? { kilo } : {}),
     ...(opencode ? { opencode } : {}),
     ...(pi ? { pi } : {}),
   };
@@ -449,8 +447,6 @@ export function normalizeModelSelection(
     : hasLegacyAntigravityEffort
       ? antigravityLegacyMatch[1]!.trim()
       : rawModel;
-  const inferredClaudeAutoCompactWindow =
-    provider === "claudeAgent" && /\[1m\]$/iu.test(rawModel) ? "1m" : undefined;
   const model = normalizeModelSlug(normalizedRawModel, provider);
   if (!model) {
     return null;
@@ -466,27 +462,21 @@ export function normalizeModelSelection(
     provider === "codex"
       ? modelOptions?.codex
       : provider === "claudeAgent"
-        ? inferredClaudeAutoCompactWindow !== undefined
-          ? {
-              ...modelOptions?.claudeAgent,
-              autoCompactWindow:
-                modelOptions?.claudeAgent?.autoCompactWindow ?? inferredClaudeAutoCompactWindow,
-            }
-          : modelOptions?.claudeAgent
+        ? modelOptions?.claudeAgent
         : provider === "antigravity"
           ? modelOptions?.antigravity
           : provider === "grok"
             ? normalizeGrokModelOptions(model, modelOptions?.grok)
             : provider === "droid"
               ? modelOptions?.droid
-              : provider === "kilo"
-                ? modelOptions?.kilo
-                : provider === "cursor"
-                  ? modelOptions?.cursor
-                  : provider === "opencode"
-                    ? modelOptions?.opencode
-                    : provider === "pi"
-                      ? modelOptions?.pi
+              : provider === "cursor"
+                ? modelOptions?.cursor
+                : provider === "opencode"
+                  ? modelOptions?.opencode
+                  : provider === "pi"
+                    ? modelOptions?.pi
+                    : provider === "devin"
+                      ? modelOptions?.devin
                       : undefined;
   const normalizedOptions =
     provider === "antigravity" && hasLegacyAntigravityEffort
@@ -760,6 +750,10 @@ export function resolvePreferredComposerModelSelection(input: {
   projectModelSelection: ModelSelection | null | undefined;
   defaultProvider?: ProviderKind | null | undefined;
 }): ModelSelection {
+  // The draft's selection is the user's most recently used target: a fresh draft
+  // is seeded from the sticky (last-used) state, so this precedence is what
+  // makes a new chat reopen with the model and options used last time. Project
+  // and global defaults only apply when nothing has been used yet.
   const draftProviderWithSelection =
     COMPOSER_PROVIDER_KINDS.find(
       (provider) => input.draft?.modelSelectionByProvider?.[provider] !== undefined,
@@ -772,14 +766,18 @@ export function resolvePreferredComposerModelSelection(input: {
     input.defaultProvider ??
     "codex";
 
-  return (
-    input.draft?.modelSelectionByProvider?.[preferredProvider] ??
+  const persistedSelection =
     (input.threadModelSelection?.provider === preferredProvider
       ? input.threadModelSelection
       : null) ??
     (input.projectModelSelection?.provider === preferredProvider
       ? input.projectModelSelection
-      : null) ?? {
+      : null);
+  const draftSelection = input.draft?.modelSelectionByProvider?.[preferredProvider] ?? null;
+
+  return (
+    draftSelection ??
+    persistedSelection ?? {
       provider: preferredProvider === "pi" ? "codex" : preferredProvider,
       model: getDefaultModel(preferredProvider === "pi" ? "codex" : preferredProvider),
     }

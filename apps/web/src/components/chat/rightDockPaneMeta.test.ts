@@ -1,26 +1,31 @@
 import { describe, expect, it } from "vitest";
 
-import { RIGHT_DOCK_PANE_KINDS } from "~/rightDockStore.logic";
+import type { ThreadId } from "@synara/contracts";
+import { type RightDockPane } from "~/rightDockStore.logic";
 import {
-  RIGHT_DOCK_ADD_MENU_KINDS,
+  buildRightDockPaneLabelOverrides,
   getRightDockPaneMeta,
+  resolveRightDockPaneLabel,
   resolveRightDockLauncherItems,
 } from "./rightDockPaneMeta";
 
-describe("RIGHT_DOCK_ADD_MENU_KINDS", () => {
-  it("offers the explorer pane but not the chat-driven file pane", () => {
-    // The "+" menu surfaces the file-tree explorer; single-file preview tabs are
-    // opened by clicking a file reference in chat, not from the add menu.
-    expect(RIGHT_DOCK_ADD_MENU_KINDS).toContain("explorer");
-    expect(RIGHT_DOCK_ADD_MENU_KINDS).not.toContain("file");
-  });
+function makePane(
+  input: Partial<RightDockPane> & Pick<RightDockPane, "id" | "kind">,
+): RightDockPane {
+  return {
+    threadId: null,
+    diffTurnId: null,
+    diffFilePath: null,
+    filePath: null,
+    pullRequestProjectId: null,
+    pullRequestRepository: null,
+    pullRequestNumber: null,
+    pullRequestInitialTab: null,
+    ...input,
+  };
+}
 
-  it("keeps the canonical kind order minus context-only panes", () => {
-    expect([...RIGHT_DOCK_ADD_MENU_KINDS]).toEqual(
-      RIGHT_DOCK_PANE_KINDS.filter((kind) => kind !== "file" && kind !== "pullRequest"),
-    );
-  });
-
+describe("getRightDockPaneMeta", () => {
   it("labels the explorer pane", () => {
     expect(getRightDockPaneMeta("explorer").label).toBe("Explorer");
   });
@@ -106,5 +111,35 @@ describe("resolveRightDockLauncherItems", () => {
         hasReview: false,
       }).map(({ kind }) => kind),
     ).not.toContain("device");
+  });
+});
+
+describe("buildRightDockPaneLabelOverrides", () => {
+  it("uses the embedded sidechat thread title for its hidden-header tab", () => {
+    const pane = makePane({
+      id: "sidechat:thread-child",
+      kind: "sidechat",
+      threadId: "thread-child" as ThreadId,
+    });
+
+    const overrides = buildRightDockPaneLabelOverrides(
+      [pane],
+      [{ id: "thread-child", title: "Investigate the parser" }],
+    );
+
+    expect(resolveRightDockPaneLabel(pane, overrides)).toBe("Investigate the parser");
+  });
+
+  it("keeps the generic sidechat label until the child thread is hydrated", () => {
+    const pane = makePane({
+      id: "sidechat:thread-child",
+      kind: "sidechat",
+      threadId: "thread-child" as ThreadId,
+    });
+
+    const overrides = buildRightDockPaneLabelOverrides([pane], []);
+
+    expect(overrides).toBeUndefined();
+    expect(resolveRightDockPaneLabel(pane, overrides)).toBe("Side chats");
   });
 });

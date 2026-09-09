@@ -1,7 +1,7 @@
 // FILE: Diffs.ts
-// Purpose: Parses unified diffs into turn/checkpoint file summaries.
+// Purpose: Parses unified diffs into checkpoint file summaries.
 // Layer: Server checkpointing helper
-// Exports: turn diff file parsers used by checkpoint capture and provider live-diff ingestion
+// Exports: checkpoint file parser used by capture and provider live-diff ingestion
 
 import type { OrchestrationCheckpointFile } from "@synara/contracts";
 import { Effect } from "effect";
@@ -16,14 +16,24 @@ type ParsedPatches = ReturnType<PierreDiffsModule["parsePatchFiles"]>;
 // it on first parse instead; later parses reuse the same module namespace.
 const loadPierreDiffs: () => Promise<PierreDiffsModule> = lazyModule(() => import("@pierre/diffs"));
 
-export interface TurnDiffFileSummary {
-  readonly path: string;
-  readonly additions: number;
-  readonly deletions: number;
+function checkpointKindFromParsedFile(
+  type: ParsedPatches[number]["files"][number]["type"],
+): string {
+  switch (type) {
+    case "deleted":
+      return "deleted";
+    case "new":
+      return "added";
+    case "rename-pure":
+    case "rename-changed":
+      return "renamed";
+    case "change":
+      return "modified";
+  }
 }
 
-function summarizeParsedPatches(parsedPatches: ParsedPatches): ReadonlyArray<TurnDiffFileSummary> {
-  const filesByPath = new Map<string, TurnDiffFileSummary>();
+function summarizeParsedPatches(parsedPatches: ParsedPatches): OrchestrationCheckpointFile[] {
+  const filesByPath = new Map<string, OrchestrationCheckpointFile>();
   for (const patch of parsedPatches) {
     for (const file of patch.files) {
       const additions = file.hunks.reduce((total, hunk) => total + hunk.additionLines, 0);
@@ -31,6 +41,7 @@ function summarizeParsedPatches(parsedPatches: ParsedPatches): ReadonlyArray<Tur
       const existing = filesByPath.get(file.name);
       filesByPath.set(file.name, {
         path: file.name,
+        kind: checkpointKindFromParsedFile(file.type),
         additions: (existing?.additions ?? 0) + additions,
         deletions: (existing?.deletions ?? 0) + deletions,
       });
@@ -46,32 +57,17 @@ function summarizeParsedPatches(parsedPatches: ParsedPatches): ReadonlyArray<Tur
  * Effectful because the diff parser is imported lazily. A malformed patch still
  * surfaces as a defect, exactly as it did when the parser was a static import.
  */
-export function parseTurnDiffFilesFromUnifiedDiff(
+export function parseCheckpointFilesFromUnifiedDiff(
   diff: string,
-): Effect.Effect<ReadonlyArray<TurnDiffFileSummary>> {
+): Effect.Effect<OrchestrationCheckpointFile[]> {
   return Effect.suspend(() => {
     const normalized = diff.replace(/\r\n/g, "\n").trim();
     if (normalized.length === 0) {
-      return Effect.succeed<ReadonlyArray<TurnDiffFileSummary>>([]);
+      return Effect.succeed<OrchestrationCheckpointFile[]>([]);
     }
     return Effect.map(
       Effect.promise(() => loadPierreDiffs()),
       ({ parsePatchFiles }) => summarizeParsedPatches(parsePatchFiles(normalized)),
     );
   });
-}
-
-export function parseCheckpointFilesFromUnifiedDiff(
-  diff: string,
-): Effect.Effect<OrchestrationCheckpointFile[]> {
-  return Effect.map(parseTurnDiffFilesFromUnifiedDiff(diff), (files) =>
-    files.map(
-      (file): OrchestrationCheckpointFile => ({
-        path: file.path,
-        kind: "modified",
-        additions: file.additions,
-        deletions: file.deletions,
-      }),
-    ),
-  );
 }

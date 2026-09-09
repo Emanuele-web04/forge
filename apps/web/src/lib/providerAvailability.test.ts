@@ -63,6 +63,28 @@ describe("normalizeProviderStatusForLocalConfig", () => {
     });
   });
 
+  it("makes a disabled provider unavailable before its health status refreshes", () => {
+    expect(
+      normalizeProviderStatusForLocalConfig({
+        provider: "opencode",
+        status: {
+          ...READY_STATUS,
+          provider: "opencode",
+          message: "OpenCode is ready.",
+        },
+        customBinaryPath: "/custom/bin/opencode",
+        disabled: true,
+      }),
+    ).toEqual({
+      provider: "opencode",
+      status: "warning",
+      available: false,
+      authStatus: "unknown",
+      checkedAt: BASE_STATUS.checkedAt,
+      message: "Provider is disabled in Synara settings.",
+    });
+  });
+
   it("marks a custom-path provider ready after a successful session confirms it", () => {
     expect(
       normalizeProviderStatusForLocalConfig({
@@ -211,6 +233,22 @@ describe("resolveAvailableProviderPreference", () => {
         providerOrder: ["claudeAgent", "cursor"],
       }),
     ).toBe("cursor");
+  });
+
+  it("falls back when the preferred provider is installed but unauthenticated", () => {
+    expect(
+      resolveAvailableProviderPreference({
+        preferredProvider: "claudeAgent",
+        statuses: [
+          {
+            ...READY_STATUS,
+            provider: "claudeAgent",
+            authStatus: "unauthenticated",
+          },
+          { ...READY_STATUS, provider: "codex" },
+        ],
+      }),
+    ).toBe("codex");
   });
 
   it("preserves the preference while provider status is loading", () => {

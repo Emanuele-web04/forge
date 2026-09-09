@@ -3,22 +3,20 @@ import {
   CLAUDE_API_EFFORT_OPTIONS,
   CLAUDE_CODE_MODE_OPTIONS,
   CLAUDE_PROMPT_MODE_OPTIONS,
+  DEFAULT_DROID_GIT_TEXT_GENERATION_MODEL,
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
   DEFAULT_GIT_TEXT_GENERATION_REASONING_EFFORT,
   DEFAULT_MODEL,
   DEFAULT_MODEL_BY_PROVIDER,
-  MODEL_OPTIONS,
   MODEL_OPTIONS_BY_PROVIDER,
   CODEX_REASONING_EFFORT_OPTIONS,
-  GROK_4_5_REASONING_EFFORTS,
-  GROK_4_6_REASONING_EFFORTS,
-  GROK_BUILD_REASONING_EFFORTS,
 } from "@synara/contracts";
 
 import {
   applyClaudePromptEffortPrefix,
   claudeSelectionRequiresRestart,
   formatModelDisplayName,
+  getClaudeContextWindowSuffix,
   getDefaultAutoCompactWindow,
   getDefaultContextWindow,
   getDefaultModel,
@@ -29,20 +27,18 @@ import {
   isClaudeUltrathinkPrompt,
   normalizeAntigravityModelOptions,
   normalizeClaudeModelOptions,
-  normalizeCodexModelOptions,
   normalizeCursorModelOptions,
   normalizeGrokModelOptions,
   normalizeModelSlug,
   normalizePiModelOptions,
   parseCursorCliReasoningEffort,
   resolveApiModelId,
+  resolveDevinModelVariant,
   resolveSelectableModel,
   resolveModelSlug,
   resolveModelSlugForProvider,
   getDefaultEffort,
-  getProviderOptionCurrentLabel,
   getProviderOptionDescriptors,
-  buildProviderOptionSelectionsFromDescriptors,
   hasEffortLevel,
   resolveGrokEffortFamily,
 } from "./model";
@@ -66,6 +62,67 @@ describe("parseCursorCliReasoningEffort", () => {
     ["gpt-5.5-fast", undefined],
   ] as const)("parses %s as %s", (model, expected) => {
     expect(parseCursorCliReasoningEffort(model)).toBe(expected);
+  });
+});
+
+describe("resolveDevinModelVariant", () => {
+  it("resolves static SWE fast variants", () => {
+    expect(resolveDevinModelVariant({ model: "swe-1-6", fastMode: true })).toBe("swe-1-6-fast");
+    expect(resolveDevinModelVariant({ model: "swe-1-7", fastMode: true })).toBe(
+      "swe-1-7-lightning",
+    );
+    expect(resolveDevinModelVariant({ model: "swe-1-7", fastMode: false })).toBe("swe-1-7");
+  });
+
+  it("recomputes runtime variants from current traits instead of a stored variant", () => {
+    expect(
+      resolveDevinModelVariant({
+        model: "gpt-5.6-sol",
+        modelVariant: "gpt-5-6-sol-high",
+        reasoningEffort: "low",
+        runtimeModel: {
+          slug: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          defaultReasoningEffort: "medium",
+          modelVariants: [
+            { model: "gpt-5-6-sol-low", reasoningEffort: "low", fastMode: false },
+            { model: "gpt-5-6-sol-high", reasoningEffort: "high", fastMode: false },
+          ],
+        },
+      }),
+    ).toBe("gpt-5-6-sol-low");
+  });
+
+  it("preserves an explicit variant when no supplied trait maps to a variant dimension", () => {
+    expect(
+      resolveDevinModelVariant({
+        model: "custom-family",
+        modelVariant: "custom-concrete-model",
+        thinking: false,
+        runtimeModel: {
+          slug: "custom-family",
+          name: "Custom Family",
+          modelVariants: [{ model: "custom-concrete-model" }],
+        },
+      }),
+    ).toBe("custom-concrete-model");
+  });
+
+  it("returns undefined when no variant matches an all-fast matrix", () => {
+    expect(
+      resolveDevinModelVariant({
+        runtimeModel: {
+          slug: "devin",
+          name: "Devin",
+          supportsFastMode: true,
+          modelVariants: [
+            { model: "devin-fast-1", reasoningEffort: "medium", fastMode: true },
+            { model: "devin-fast-2", reasoningEffort: "high", fastMode: true },
+          ],
+        },
+        fastMode: false,
+      }),
+    ).toBeUndefined();
   });
 });
 
@@ -108,6 +165,15 @@ describe("normalizeModelSlug", () => {
     expect(normalizeModelSlug("grok-code-fast-1-0825", "grok")).toBe("grok-build-0.1");
     expect(normalizeModelSlug("4.5", "grok")).toBe("grok-4.5");
     expect(normalizeModelSlug("grok-4.6", "grok")).toBe("grok-4.6");
+    expect(normalizeModelSlug("Vendor/ModelCase-MEDIUM", "devin")).toBe("Vendor/ModelCase-MEDIUM");
+    expect(normalizeModelSlug("swe-1-7-medium", "devin")).toBe("swe-1-7");
+  });
+
+  it("resolves devin aliases to canonical swe-1-6 / swe-1-7 slugs", () => {
+    expect(normalizeModelSlug("swe-1.7", "devin")).toBe("swe-1-7");
+    expect(normalizeModelSlug("swe-1.6", "devin")).toBe("swe-1-6");
+    expect(normalizeModelSlug("swe-1.6-fast", "devin")).toBe("swe-1-6");
+    expect(normalizeModelSlug("fast", "devin")).toBe("swe-1-6");
   });
 });
 
@@ -123,7 +189,7 @@ describe("resolveModelSlug", () => {
   });
 
   it("resolves only supported model options", () => {
-    for (const model of MODEL_OPTIONS) {
+    for (const model of MODEL_OPTIONS_BY_PROVIDER.codex) {
       expect(resolveModelSlug(model.slug)).toBe(model.slug);
     }
   });
@@ -133,6 +199,15 @@ describe("resolveModelSlug", () => {
       DEFAULT_MODEL_BY_PROVIDER.claudeAgent,
     );
     expect(resolveModelSlugForProvider("claudeAgent", "sonnet")).toBe("claude-sonnet-5");
+    expect(resolveModelSlugForProvider("claudeAgent", "fable")).toBe("claude-fable-5-1");
+    expect(resolveModelSlugForProvider("claudeAgent", "fable-5.1")).toBe("claude-fable-5-1");
+    expect(resolveModelSlugForProvider("claudeAgent", "claude-fable-5-1[1m]")).toBe(
+      "claude-fable-5-1",
+    );
+    expect(resolveModelSlugForProvider("claudeAgent", "claude-fable-5-1[1M]")).toBe(
+      "claude-fable-5-1",
+    );
+    expect(resolveModelSlugForProvider("claudeAgent", "fable-5")).toBe("claude-fable-5");
     expect(resolveModelSlugForProvider("claudeAgent", "gpt-5.3-codex")).toBe(
       DEFAULT_MODEL_BY_PROVIDER.claudeAgent,
     );
@@ -140,7 +215,7 @@ describe("resolveModelSlug", () => {
 
   it("keeps codex defaults for backward compatibility", () => {
     expect(getDefaultModel()).toBe(DEFAULT_MODEL);
-    expect(getModelOptions()).toEqual(MODEL_OPTIONS);
+    expect(getModelOptions()).toEqual(MODEL_OPTIONS_BY_PROVIDER.codex);
     expect(getModelOptions("claudeAgent")).toEqual(MODEL_OPTIONS_BY_PROVIDER.claudeAgent);
   });
 });
@@ -242,6 +317,7 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
     const droidSlugs = MODEL_OPTIONS_BY_PROVIDER.droid.map((model) => model.slug);
 
     expect(droidSlugs).toContain("gpt-5.5-fast");
+    expect(droidSlugs).toContain(DEFAULT_DROID_GIT_TEXT_GENERATION_MODEL);
     expect(droidSlugs).not.toContain("gpt-5.6-fast");
     expect(getModelCapabilities("droid", "gpt-5.6-sol").supportsFastMode).toBe(false);
   });
@@ -373,14 +449,14 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
   });
 
   it("returns Grok Build effort options for grok-build models", () => {
-    expect(values("grok", "grok-build-0.1")).toEqual([...GROK_BUILD_REASONING_EFFORTS]);
-    expect(values("grok", "grok-build")).toEqual([...GROK_BUILD_REASONING_EFFORTS]);
+    expect(values("grok", "grok-build-0.1")).toEqual(["none", "low", "medium", "high"]);
+    expect(values("grok", "grok-build")).toEqual(["none", "low", "medium", "high"]);
   });
 
   it("returns Grok 4.5 and 4.6 CLI effort ladders", () => {
-    expect(values("grok", "grok-4.5")).toEqual([...GROK_4_5_REASONING_EFFORTS]);
-    expect(values("grok", "grok-4.6")).toEqual([...GROK_4_6_REASONING_EFFORTS]);
-    expect(values("grok", "grok-4.7")).toEqual([...GROK_4_6_REASONING_EFFORTS]);
+    expect(values("grok", "grok-4.5")).toEqual(["low", "medium", "high"]);
+    expect(values("grok", "grok-4.6")).toEqual(["low", "medium", "high", "xhigh"]);
+    expect(values("grok", "grok-4.7")).toEqual(["low", "medium", "high", "xhigh"]);
   });
 
   it("co-locates labels with effort values", () => {
@@ -479,7 +555,6 @@ describe("provider option descriptor helpers", () => {
       type: "select",
       currentValue: "xhigh",
     });
-    expect(getProviderOptionCurrentLabel(reasoning)).toBe("Extra High");
     expect(fastMode).toMatchObject({
       type: "boolean",
       currentValue: true,
@@ -507,11 +582,6 @@ describe("provider option descriptor helpers", () => {
       type: "select",
       currentValue: "xhigh",
     });
-    expect(
-      getProviderOptionCurrentLabel(
-        grok46.find((descriptor) => descriptor.id === "reasoningEffort"),
-      ),
-    ).toBe("Extra High");
   });
 
   it("maps Pi reasoning controls onto the thinkingLevel option", () => {
@@ -538,7 +608,41 @@ describe("provider option descriptor helpers", () => {
     expect(descriptors.some((descriptor) => descriptor.id === "reasoningEffort")).toBe(false);
   });
 
-  it("honors explicit descriptors and serializes their current values", () => {
+  it("surfaces Devin runtime reasoningEffortLevels and keeps effort/fast controls", () => {
+    const descriptors = getProviderOptionDescriptors({
+      provider: "devin",
+      caps: {
+        reasoningEffortLevels: [
+          { value: "low", label: "Low" },
+          { value: "medium", label: "Medium" },
+          { value: "high", label: "High", isDefault: true },
+        ],
+        supportsFastMode: true,
+        supportsThinkingToggle: true,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+      selections: { reasoningEffort: "high" },
+    });
+    expect(descriptors.find((descriptor) => descriptor.id === "reasoningEffort")).toMatchObject({
+      label: "Reasoning",
+      type: "select",
+      currentValue: "high",
+    });
+    const reasoning = descriptors.find((descriptor) => descriptor.id === "reasoningEffort");
+    if (reasoning?.type === "select") {
+      expect(reasoning.options.map((option) => option.id)).toEqual(["low", "medium", "high"]);
+    }
+    expect(descriptors.some((descriptor) => descriptor.id === "variant")).toBe(false);
+    expect(descriptors.find((descriptor) => descriptor.id === "fastMode")).toMatchObject({
+      type: "boolean",
+    });
+    expect(descriptors.find((descriptor) => descriptor.id === "thinking")).toMatchObject({
+      type: "boolean",
+      currentValue: true,
+    });
+  });
+  it("honors explicit descriptors and applies their selected values", () => {
     const descriptors = getProviderOptionDescriptors({
       provider: "codex",
       caps: {
@@ -560,9 +664,48 @@ describe("provider option descriptor helpers", () => {
 
     expect(descriptors).toHaveLength(1);
     expect(descriptors[0]).toMatchObject({ id: "reasoningDepth", currentValue: "deep" });
-    expect(buildProviderOptionSelectionsFromDescriptors(descriptors)).toEqual([
-      { id: "reasoningDepth", value: "deep" },
-    ]);
+  });
+
+  it("marks Auto as the default auto-compact option for a 1M Claude variant", () => {
+    const caps = getModelCapabilities("claudeAgent", "claude-fable-5-1[1m]");
+    const defaultDescriptor = getProviderOptionDescriptors({
+      provider: "claudeAgent",
+      caps,
+    }).find((descriptor) => descriptor.id === "autoCompactWindow");
+    const explicitDescriptor = getProviderOptionDescriptors({
+      provider: "claudeAgent",
+      caps,
+      selections: { autoCompactWindow: "200k" },
+    }).find((descriptor) => descriptor.id === "autoCompactWindow");
+
+    expect(defaultDescriptor).toMatchObject({
+      type: "select",
+      currentValue: "auto",
+      options: [
+        { id: "auto", label: "Auto (Claude Code)", isDefault: true },
+        { id: "200k", label: "200k" },
+        { id: "1m", label: "1M" },
+      ],
+    });
+    expect(explicitDescriptor).toMatchObject({ type: "select", currentValue: "200k" });
+  });
+
+  it("marks Auto as the default auto-compact option for native 1M Claude models", () => {
+    const model = "claude-fable-5-1";
+    const descriptor = getProviderOptionDescriptors({
+      provider: "claudeAgent",
+      caps: getModelCapabilities("claudeAgent", model),
+    }).find((candidate) => candidate.id === "autoCompactWindow");
+
+    expect(descriptor).toMatchObject({
+      type: "select",
+      currentValue: "auto",
+      options: [
+        { id: "auto", label: "Auto (Claude Code)", isDefault: true },
+        { id: "200k", label: "200k" },
+        { id: "1m", label: "1M" },
+      ],
+    });
   });
 });
 
@@ -570,15 +713,24 @@ describe("context window helpers", () => {
   it("separates Claude's real context capacity from its auto-compact budget", () => {
     const opusCaps = getModelCapabilities("claudeAgent", "claude-opus-4-6");
     expect(getDefaultContextWindow(opusCaps)).toBeNull();
-    expect(getDefaultAutoCompactWindow(opusCaps)).toBe("200k");
+    expect(getDefaultAutoCompactWindow(opusCaps)).toBe("auto");
     expect(opusCaps.contextWindowTokens).toBe(1_000_000);
     expect(getModelCapabilities("claudeAgent", "claude-opus-4-5").contextWindowTokens).toBe(
       200_000,
     );
     const opus5Caps = getModelCapabilities("claudeAgent", "claude-opus-5");
     expect(opus5Caps.contextWindowTokens).toBe(1_000_000);
-    expect(getDefaultAutoCompactWindow(opus5Caps)).toBe("200k");
+    expect(getDefaultAutoCompactWindow(opus5Caps)).toBe("auto");
+    const sonnet5Caps = getModelCapabilities("claudeAgent", "claude-sonnet-5");
+    expect(sonnet5Caps.contextWindowTokens).toBe(1_000_000);
+    expect(getDefaultAutoCompactWindow(sonnet5Caps)).toBe("auto");
     expect(getDefaultContextWindow(getModelCapabilities("codex", "gpt-5.4"))).toBeNull();
+  });
+
+  it("reads Claude context-window suffixes case-insensitively", () => {
+    expect(getClaudeContextWindowSuffix("claude-fable-5-1[1m]")).toBe("1m");
+    expect(getClaudeContextWindowSuffix("claude-fable-5-1[1M]")).toBe("1m");
+    expect(getClaudeContextWindowSuffix("claude-fable-5-1")).toBeNull();
   });
 
   it("validates auto-compact budgets against model capabilities", () => {
@@ -622,30 +774,13 @@ describe("formatModelDisplayName", () => {
   });
 });
 
-describe("normalizeCodexModelOptions", () => {
-  it("drops default-only codex options", () => {
-    expect(
-      normalizeCodexModelOptions("gpt-5.4", { reasoningEffort: "high", fastMode: false }),
-    ).toBeUndefined();
-  });
-
-  it("preserves non-default codex options", () => {
-    expect(
-      normalizeCodexModelOptions("gpt-5.4", { reasoningEffort: "xhigh", fastMode: true }),
-    ).toEqual({
-      reasoningEffort: "xhigh",
-      fastMode: true,
-    });
-  });
-});
-
 describe("normalizeClaudeModelOptions", () => {
   it("drops default-only claude options", () => {
     expect(
       normalizeClaudeModelOptions("claude-opus-4-6", {
         effort: "high",
         fastMode: false,
-        autoCompactWindow: "200k",
+        autoCompactWindow: "auto",
       }),
     ).toBeUndefined();
   });
@@ -658,6 +793,29 @@ describe("normalizeClaudeModelOptions", () => {
     ).toEqual({
       autoCompactWindow: "1m",
     });
+  });
+
+  it("preserves explicit Claude budgets even on native 1M models", () => {
+    expect(
+      normalizeClaudeModelOptions("claude-fable-5-1[1m]", {
+        autoCompactWindow: "1m",
+      }),
+    ).toEqual({ autoCompactWindow: "1m" });
+    expect(
+      normalizeClaudeModelOptions("claude-fable-5-1[1M]", {
+        autoCompactWindow: "200k",
+      }),
+    ).toEqual({ autoCompactWindow: "200k" });
+    expect(
+      normalizeClaudeModelOptions("claude-fable-5-1", {
+        autoCompactWindow: "1m",
+      }),
+    ).toEqual({ autoCompactWindow: "1m" });
+    expect(
+      normalizeClaudeModelOptions("claude-fable-5-1", {
+        autoCompactWindow: "200k",
+      }),
+    ).toEqual({ autoCompactWindow: "200k" });
   });
 
   it("migrates the legacy context-window field to the auto-compact budget", () => {
@@ -723,21 +881,21 @@ describe("normalizeClaudeModelOptions", () => {
 });
 
 describe("resolveApiModelId", () => {
-  it("keeps native-1M Claude model ids unchanged", () => {
+  it("selects extended context for explicit 1M budgets", () => {
     expect(
       resolveApiModelId({
         provider: "claudeAgent",
         model: "claude-opus-4-6",
         options: { autoCompactWindow: "1m" },
       }),
-    ).toBe("claude-opus-4-6");
+    ).toBe("claude-opus-4-6[1m]");
     expect(
       resolveApiModelId({
         provider: "claudeAgent",
         model: "claude-sonnet-5",
         options: { autoCompactWindow: "1m" },
       }),
-    ).toBe("claude-sonnet-5");
+    ).toBe("claude-sonnet-5[1m]");
   });
 
   it("leaves Claude models unchanged for the default context window", () => {
@@ -1072,6 +1230,7 @@ describe("getModelCapabilities Claude capability flags", () => {
   it("only enables ultrathink keyword handling for Opus 4.6 and Sonnet 4.6", () => {
     const has = (m: string | undefined) =>
       getModelCapabilities("claudeAgent", m).promptInjectedEffortLevels.includes("ultrathink");
+    expect(has("claude-fable-5-1")).toBe(false);
     expect(has("claude-fable-5")).toBe(false);
     expect(has("claude-opus-5")).toBe(false);
     expect(has("claude-opus-4-8")).toBe(true);

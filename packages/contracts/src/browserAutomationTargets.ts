@@ -88,17 +88,7 @@ export const BrowserLocator = Schema.Union([
     exact: Schema.optional(Schema.Boolean),
   }),
   browserClosedStruct({
-    kind: Schema.Literal("text"),
-    text: BoundedLocatorText,
-    exact: Schema.optional(Schema.Boolean),
-  }),
-  browserClosedStruct({
-    kind: Schema.Literal("label"),
-    text: BoundedLocatorText,
-    exact: Schema.optional(Schema.Boolean),
-  }),
-  browserClosedStruct({
-    kind: Schema.Literal("placeholder"),
+    kind: Schema.Literals(["text", "label", "placeholder"]),
     text: BoundedLocatorText,
     exact: Schema.optional(Schema.Boolean),
   }),

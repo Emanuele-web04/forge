@@ -540,6 +540,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       case "thread.message.edit-and-resend":
       case "thread.message.assistant.complete":
       case "thread.approval.respond":
+      case "thread.user-input.respond":
+      case "thread.sidechat.expire":
         return loadThreadDetailForDecider(command, commandReadModel, command.threadId);
       default:
         return Effect.succeed(commandReadModel);
@@ -755,6 +757,25 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           ...startCommand,
           message: { ...startCommand.message, attachments },
         };
+      }
+
+      if (command.type === "thread.meta.update" && command.expectedTitleSequence !== undefined) {
+        const currentTitleSequence = yield* eventStore
+          .getThreadTitleHighWaterSequence(command.threadId)
+          .pipe(
+            Effect.mapError(() =>
+              makeCommandInternalError(
+                command,
+                "Could not verify the thread title revision before the conditional update.",
+              ),
+            ),
+          );
+        if (currentTitleSequence !== command.expectedTitleSequence) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Thread '${command.threadId}' title changed before the conditional update.`,
+          });
+        }
       }
 
       const deciderReadModel = yield* buildDeciderReadModel(command);
@@ -1203,6 +1224,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       eventTypes,
     );
   const getEventHighWaterSequence = eventStore.getHighWaterSequence();
+  const getThreadTitleHighWaterSequence = (threadId: string) =>
+    eventStore.getThreadTitleHighWaterSequence(threadId);
   const subscribeDomainEvents: OrchestrationEngineShape["subscribeDomainEvents"] = PubSub.subscribe(
     eventPubSub,
   ).pipe(Effect.map((subscription) => Stream.fromEffectRepeat(PubSub.take(subscription))));
@@ -1499,6 +1522,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     readThreadEvents,
     readThreadEventsThrough,
     getEventHighWaterSequence,
+    getThreadTitleHighWaterSequence,
     subscribeDomainEvents,
     dispatch,
     repairState,

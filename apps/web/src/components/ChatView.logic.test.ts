@@ -14,7 +14,6 @@ import type { WorkLogEntry } from "../session-logic";
 
 import {
   appendVoiceTranscriptToPrompt,
-  buildComposerMenuSelectionKey,
   buildTranscriptAutoFollowSignal,
   buildTranscriptTailKey,
   commitAfterRuntimeModePersistence,
@@ -42,6 +41,7 @@ import {
   isVoiceAuthExpiredMessage,
   LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS,
   resolveActiveThreadTitle,
+  resolveDraftFallbackModelSelection,
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
   resolveComposerStripWorkLogEntries,
@@ -387,60 +387,6 @@ describe("file undo completion", () => {
         },
       }),
     ).toBe(false);
-  });
-});
-
-describe("composer menu selection", () => {
-  const items = [{ id: "skill:check-code" }, { id: "skill:sanity-check" }] as const;
-
-  it("builds a stable key from query and displayed item order", () => {
-    const baseKey = buildComposerMenuSelectionKey({
-      menuOpen: true,
-      picker: null,
-      triggerKind: "slash-command",
-      triggerQuery: "check",
-      items,
-    });
-
-    expect(
-      buildComposerMenuSelectionKey({
-        menuOpen: true,
-        picker: null,
-        triggerKind: "slash-command",
-        triggerQuery: "check",
-        items: [...items],
-      }),
-    ).toBe(baseKey);
-    expect(
-      buildComposerMenuSelectionKey({
-        menuOpen: true,
-        picker: null,
-        triggerKind: "slash-command",
-        triggerQuery: "chec",
-        items,
-      }),
-    ).not.toBe(baseKey);
-    expect(
-      buildComposerMenuSelectionKey({
-        menuOpen: true,
-        picker: null,
-        triggerKind: "slash-command",
-        triggerQuery: "check",
-        items: [...items].reverse(),
-      }),
-    ).not.toBe(baseKey);
-  });
-
-  it("returns null while the menu is closed", () => {
-    expect(
-      buildComposerMenuSelectionKey({
-        menuOpen: false,
-        picker: null,
-        triggerKind: "slash-command",
-        triggerQuery: "check",
-        items,
-      }),
-    ).toBeNull();
   });
 });
 
@@ -2484,6 +2430,39 @@ describe("resolveWorkingLabel", () => {
     expect(resolveWorkingLabel({ isSendBusy: true, turnTakenOver: true })).toBe("Thinking");
     expect(resolveWorkingLabel({ isSendBusy: false, turnTakenOver: false })).toBe("Thinking");
   });
+
+  it("shows Starting provider… during the connecting phase", () => {
+    expect(
+      resolveWorkingLabel({
+        isSendBusy: false,
+        turnTakenOver: false,
+        isConnecting: true,
+        providerName: "Pi",
+      }),
+    ).toBe("Starting Pi…");
+
+    expect(
+      resolveWorkingLabel({
+        isSendBusy: true,
+        turnTakenOver: false,
+        isConnecting: true,
+        providerName: "Pi",
+      }),
+    ).toBe("Loading");
+
+    expect(
+      resolveWorkingLabel({
+        isSendBusy: true,
+        turnTakenOver: true,
+        isConnecting: true,
+        providerName: "Pi",
+      }),
+    ).toBe("Starting Pi…");
+
+    expect(
+      resolveWorkingLabel({ isSendBusy: false, turnTakenOver: false, isConnecting: true }),
+    ).toBe("Thinking");
+  });
 });
 
 describe("shouldAutoDeleteTerminalThreadOnLastClose", () => {
@@ -2907,5 +2886,61 @@ describe("thread detail hydration", () => {
         detailSyncState: "failed",
       }),
     ).toBe("failed");
+  });
+});
+
+describe("resolveDraftFallbackModelSelection", () => {
+  it("prefers an explicit project default over the settings default provider", () => {
+    expect(
+      resolveDraftFallbackModelSelection({
+        projectDefault: { provider: "codex", model: "gpt-5.5" },
+        settingsDefaultProvider: "devin",
+      }),
+    ).toEqual({ provider: "codex", model: "gpt-5.5" });
+  });
+
+  it("uses the settings default provider when the project has no default", () => {
+    expect(
+      resolveDraftFallbackModelSelection({
+        projectDefault: null,
+        settingsDefaultProvider: "devin",
+      }),
+    ).toEqual({ provider: "devin", model: "adaptive" });
+  });
+
+  it("keeps the project default model when it matches the settings provider", () => {
+    expect(
+      resolveDraftFallbackModelSelection({
+        projectDefault: { provider: "devin", model: "swe-1-7" },
+        settingsDefaultProvider: "devin",
+      }),
+    ).toEqual({ provider: "devin", model: "swe-1-7" });
+  });
+
+  it("uses the project default provider when the settings default is pi", () => {
+    expect(
+      resolveDraftFallbackModelSelection({
+        projectDefault: { provider: "claudeAgent", model: "claude-sonnet-5" },
+        settingsDefaultProvider: "pi",
+      }),
+    ).toEqual({ provider: "claudeAgent", model: "claude-sonnet-5" });
+  });
+
+  it("falls back to codex when the settings default is pi and no project default exists", () => {
+    expect(
+      resolveDraftFallbackModelSelection({
+        projectDefault: null,
+        settingsDefaultProvider: "pi",
+      }),
+    ).toEqual({ provider: "codex", model: "gpt-5.5" });
+  });
+
+  it("uses the settings provider default model when no project default exists", () => {
+    expect(
+      resolveDraftFallbackModelSelection({
+        projectDefault: undefined,
+        settingsDefaultProvider: "grok",
+      }),
+    ).toEqual({ provider: "grok", model: "grok-4.6" });
   });
 });

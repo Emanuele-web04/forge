@@ -149,8 +149,6 @@ const drainCleanupBatches = <E, R>(
     }
   });
 
-export const drainManagedAttachmentCleanup = drainCleanupBatches(runManagedAttachmentCleanupBatch);
-
 export const ManagedAttachmentCleanupLive = Layer.effect(
   ManagedAttachmentCleanup,
   Effect.gen(function* () {

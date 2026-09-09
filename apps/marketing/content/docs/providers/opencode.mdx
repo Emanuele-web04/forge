@@ -1,0 +1,157 @@
+---
+title: OpenCode
+description: Install, configure, verify, and run OpenCode through Synara.
+---
+
+Synara connects to the OpenCode runtime installed on your machine. OpenCode owns its configured model providers, credentials, model catalog, agents, and commands; Synara supplies the task, environment, transcript, Git workflow, and review surfaces around the session.
+
+## Install
+
+The official installer is:
+
+```bash
+curl -fsSL https://opencode.ai/install | bash
+```
+
+OpenCode can also be installed through npm or Homebrew:
+
+```bash
+npm install -g opencode-ai
+```
+
+```bash
+brew install anomalyco/tap/opencode
+```
+
+Synara looks for the `opencode` executable. Verify it with:
+
+```bash
+opencode --version
+```
+
+## Authenticate
+
+OpenCode can connect to many model providers. Start OpenCode and configure the provider credentials you intend to use:
+
+```bash
+opencode
+```
+
+Inside the TUI, use `/connect` to add a provider and `/models` to select a model. OpenCode can also read provider credentials and model definitions from its own configuration.
+
+Authentication belongs to OpenCode and the selected model provider. Synara does not move API keys into a separate account system.
+
+## Verify
+
+From a fresh terminal:
+
+```bash
+opencode --version
+opencode
+```
+
+Confirm that:
+
+- The intended model provider is connected
+- `/models` shows the expected catalog
+- A harmless read-only request succeeds
+- The same executable is the one Synara should use
+
+## Connect to Synara
+
+<Steps>
+<Step>
+
+### Enable OpenCode
+
+Open provider settings and confirm that Synara detects `opencode`.
+
+</Step>
+<Step>
+
+### Check the binary path
+
+Use automatic discovery unless you intentionally installed multiple OpenCode versions. A custom path should point to the executable, not its configuration directory.
+
+</Step>
+<Step>
+
+### Refresh the model catalog
+
+Synara reads models and provider-specific options from the OpenCode runtime. Confirm that the model and variant controls match the configuration you tested in OpenCode.
+
+</Step>
+<Step>
+
+### Start a test task
+
+Use a small repository and one explicit model before relying on custom routing, local models, or a large provider catalog.
+
+</Step>
+</Steps>
+
+## Capabilities in Synara
+
+OpenCode sessions can expose:
+
+- Models configured through OpenCode and its connected providers
+- Provider-specific variants and model options
+- Tool calls, file changes, and command output
+- OpenCode agents, commands, and skills where the runtime advertises them
+- Session continuation and task history supported by the installed runtime
+- Plan, approval, and user-input events where available
+- OpenCode compaction and context behavior where supported
+
+OpenCode supports many underlying model providers. Two users with the same OpenCode version can therefore see different models, authentication requirements, and limits.
+
+Synara does not currently classify OpenCode as supporting native live-turn steering. Send follow-ups according to the controls available in the active task rather than assuming Claude, Codex, and OpenCode behave identically.
+
+Synara 0.8.0 removed the retired Kilo Code provider. During the database upgrade, existing Kilo tasks and provider-session identities are migrated to OpenCode, along with saved favorite-provider and editor-tab selections. Review the migrated task's OpenCode executable, credentials, and model catalog before continuing important work.
+
+## Configuration
+
+Keep provider credentials and model definitions in OpenCode’s supported configuration locations. Project-level configuration can intentionally differ from global configuration, so verify the catalog from the same repository Synara will open.
+
+When a model appears in OpenCode but not Synara, compare:
+
+- The executable path
+- Global and project configuration
+- Provider credentials
+- OpenCode version
+- The working directory used for discovery
+
+## Updating
+
+OpenCode supports an update command:
+
+```bash
+opencode upgrade
+```
+
+Synara can also identify common npm, Bun, pnpm, native, and Homebrew installations and present an appropriate update path. Restart Synara after updating.
+
+## Troubleshooting
+
+### OpenCode is not detected
+
+Run `opencode --version` in a fresh terminal. If it works there but not in Synara, inspect the custom binary path and the `PATH` inherited by desktop applications.
+
+### OpenCode opens but no model is usable
+
+Configure at least one model provider through `/connect` or OpenCode configuration, then verify it directly with `/models` and a test request.
+
+### The wrong provider or model catalog appears
+
+Multiple OpenCode installations or project-level configuration can produce different catalogs. Confirm the exact executable and working directory.
+
+### A model option is ignored
+
+Not every underlying provider supports the same options. Reproduce the selection in OpenCode first, then report the OpenCode version, model ID, provider ID, and option that differs.
+
+## Official documentation
+
+- [OpenCode introduction and installation](https://opencode.ai/docs)
+- [OpenCode providers](https://opencode.ai/docs/providers)
+- [OpenCode configuration](https://opencode.ai/docs/config)
+
+Continue with [Your first task](/docs/getting-started/first-task) or [Provider handoffs](/docs/workflows/handoffs).

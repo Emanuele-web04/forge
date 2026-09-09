@@ -367,13 +367,14 @@ export interface AutomationRepositoryShape {
   readonly createRun: (
     input: CreateAutomationRunInput,
   ) => Effect.Effect<AutomationRun, AutomationRepositoryError>;
-  /** Atomically inserts a fresh run and consumes one definition iteration. */
+  /** Atomically inserts a fresh run, claims the definition, and advances its schedule. */
   readonly createRunAndIncrementDefinition: (
     input: CreateAutomationRunInput,
     scheduleAdvance?: {
       readonly nextRunAt: string | null;
       readonly disable: boolean;
       readonly expectedDefinitionUpdatedAt: string;
+      readonly consumeIteration?: boolean;
     },
   ) => Effect.Effect<Option.Option<AutomationRun>, AutomationRepositoryError>;
   readonly getRunById: (

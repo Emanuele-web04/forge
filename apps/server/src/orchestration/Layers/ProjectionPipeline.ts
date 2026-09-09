@@ -69,7 +69,7 @@ import {
 } from "../projectMetadataProjection.ts";
 import { applySpaceMetadataProjection } from "../spaceMetadataProjection.ts";
 import { resolveStableMessageTurnId } from "../messageTurnId.ts";
-import { settleTurnStateFromSession } from "../turnLifecycle.ts";
+import { maxIso, settleTurnStateFromSession } from "../turnLifecycle.ts";
 import { deriveTurnStartModelSelection, deriveTurnStartSession } from "../turnStartSession.ts";
 import {
   attachmentRelativePath,
@@ -217,10 +217,6 @@ function shouldApplyPendingInteractionsProjection(event: OrchestrationEvent): bo
     (event.type === "thread.activity-appended" &&
       PENDING_INTERACTION_ACTIVITY_KINDS.has(event.payload.activity.kind))
   );
-}
-
-function maxIso(left: string | null, right: string): string {
-  return left === null || right > left ? right : left;
 }
 
 // Destructive history edits are rare and rebuild from bounded/indexed summary queries.
@@ -578,6 +574,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             subagentRole: event.payload.subagentRole ?? null,
             forkSourceThreadId: event.payload.forkSourceThreadId,
             sidechatSourceThreadId: event.payload.sidechatSourceThreadId,
+            sidechatLastActivityAt: event.payload.sidechatLastActivityAt,
+            sidechatExpiredAt: event.payload.sidechatExpiredAt,
             lastKnownPr: event.payload.lastKnownPr ?? null,
             latestTurnId: null,
             handoff: event.payload.handoff,
@@ -798,6 +796,20 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             updatedAt: event.payload.updatedAt,
           }));
 
+        case "thread.sidechat-activity-recorded":
+          return yield* updateThreadProjection(event.payload.threadId, (thread) => ({
+            ...thread,
+            sidechatLastActivityAt: event.payload.lastActivityAt,
+            updatedAt: event.payload.lastActivityAt,
+          }));
+
+        case "thread.sidechat-expired":
+          return yield* updateThreadProjection(event.payload.threadId, (thread) => ({
+            ...thread,
+            sidechatExpiredAt: event.payload.expiredAt,
+            updatedAt: event.payload.expiredAt,
+          }));
+
         case "thread.turn-start-requested": {
           const existingRow = yield* projectionThreadRepository.getById({
             threadId: event.payload.threadId,
@@ -837,10 +849,23 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                   interactionMode: event.payload.interactionMode,
                 }
               : {}),
+            ...(existingRow.value.sidechatSourceThreadId
+              ? { sidechatLastActivityAt: event.payload.createdAt }
+              : {}),
             updatedAt: event.payload.createdAt,
           });
           return;
         }
+
+        // Turn completion must advance updated_at here too, or projection repair
+        // replay regresses it to the turn start (re-marks read chats unread).
+        // Monotonic: stale events (retries, imports) carry earlier occurredAt.
+        case "thread.session-set":
+        case "thread.turn-diff-completed":
+          return yield* updateThreadProjection(event.payload.threadId, (thread) => ({
+            ...thread,
+            updatedAt: maxIso(thread.updatedAt, event.occurredAt),
+          }));
 
         case "thread.deleted": {
           attachmentSideEffects.deletedThreadIds.add(event.payload.threadId);
@@ -939,13 +964,18 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           const nextRow = yield* withRefreshedActionablePlanSummary({
             thread: {
               ...existingRow.value,
+              ...(event.type === "thread.session-set" &&
+              existingRow.value.sidechatSourceThreadId &&
+              !existingRow.value.sidechatExpiredAt
+                ? { sidechatLastActivityAt: event.payload.session.updatedAt }
+                : {}),
               latestTurnId:
                 event.type === "thread.session-set"
                   ? event.payload.session.activeTurnId
                   : event.payload.preserveLatestTurn
                     ? existingRow.value.latestTurnId
                     : event.payload.turnId,
-              updatedAt: event.occurredAt,
+              updatedAt: maxIso(existingRow.value.updatedAt, event.occurredAt),
             },
             projectionThreadProposedPlanRepository,
           });

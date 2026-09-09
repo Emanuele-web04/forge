@@ -1,0 +1,26 @@
+diff --git a/react.js b/react.js
+index 544cca82136ab14cbeec0a01499f554bd4eca75f..18be43921d5fe5267148482ab4061c9ed823f436 100644
+--- a/react.js
++++ b/react.js
+@@ -1392,7 +1392,7 @@ function doMaintainScrollAtEnd(ctx) {
+       const activeState = maintainScrollAtEnd.animated ? "animated" : "instant";
+       state.maintainingScrollAtEnd = pendingState;
+       requestAnimationFrame(() => {
+-        if (peek$(ctx, "isWithinMaintainScrollAtEndThreshold")) {
++        if (state.props.maintainScrollAtEnd && peek$(ctx, "isWithinMaintainScrollAtEndThreshold")) {
+           state.maintainingScrollAtEnd = activeState;
+           const scroller = refScroller.current;
+           if (state.props.horizontal && isHorizontalRTL(state)) {
+diff --git a/react.mjs b/react.mjs
+index 6b2d9011f6c5e85664eca195de538617fe7d9dee..d3ef822c6f005604a1f7b7920d1994d43b2192f5 100644
+--- a/react.mjs
++++ b/react.mjs
+@@ -1371,7 +1371,7 @@ function doMaintainScrollAtEnd(ctx) {
+       const activeState = maintainScrollAtEnd.animated ? "animated" : "instant";
+       state.maintainingScrollAtEnd = pendingState;
+       requestAnimationFrame(() => {
+-        if (peek$(ctx, "isWithinMaintainScrollAtEndThreshold")) {
++        if (state.props.maintainScrollAtEnd && peek$(ctx, "isWithinMaintainScrollAtEndThreshold")) {
+           state.maintainingScrollAtEnd = activeState;
+           const scroller = refScroller.current;
+           if (state.props.horizontal && isHorizontalRTL(state)) {

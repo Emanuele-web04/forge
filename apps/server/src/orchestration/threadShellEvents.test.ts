@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import {
   shouldApplyDeferredThreadShellSummary,
   shouldPublishThreadShellForEvent,
-  shouldRefreshThreadShellSummary,
 } from "./threadShellEvents.ts";
 
 const threadId = ThreadId.makeUnsafe("thread-shell-events");
@@ -78,7 +77,6 @@ describe("thread shell event relevance", () => {
 
   it("keeps events that update shell fields or summary state", () => {
     expect(shouldPublishThreadShellForEvent(activityEvent("approval.requested"))).toBe(true);
-    expect(shouldRefreshThreadShellSummary(activityEvent("approval.requested"))).toBe(true);
     expect(shouldApplyDeferredThreadShellSummary(activityEvent("approval.requested"))).toBe(false);
     expect(shouldPublishThreadShellForEvent(messageEvent({ role: "user", streaming: false }))).toBe(
       true,

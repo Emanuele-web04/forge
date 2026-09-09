@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import {
   applyCursorAcpModelSelection,
   buildCursorCliModelListCommand,
-  buildCursorAcpModelDescriptors,
   buildCursorAcpModelDescriptorsFromAvailableModels,
   buildCursorAcpSpawnInput,
   flattenCursorAcpModelChoices,
@@ -372,63 +371,6 @@ claude-opus-4-7 - Claude Opus 4.7
         upstreamProviderName: "Anthropic",
       },
     ]);
-  });
-});
-
-describe("buildCursorAcpModelDescriptors", () => {
-  it("returns Cursor runtime models without exposing separate trait pickers", () => {
-    expect(buildCursorAcpModelDescriptors(parameterizedGpt54ConfigOptions)).toEqual([
-      {
-        slug: "gpt-5.4-medium-fast",
-        name: "GPT-5.4",
-        upstreamProviderId: "openai",
-        upstreamProviderName: "OpenAI",
-      },
-    ]);
-  });
-
-  it("expands Cursor parameterized model choices into reasoning, context, and fast variants", () => {
-    const models = buildCursorAcpModelDescriptors(parameterizedCursorVariantConfigOptions);
-    expect(models).toHaveLength(24);
-    expect(models).toContainEqual(
-      expect.objectContaining({
-        slug: "gpt-5.3-codex[reasoning=medium,fast=false]",
-        name: "GPT-5.3 Codex",
-      }),
-    );
-    expect(models).toContainEqual(
-      expect.objectContaining({
-        slug: "gpt-5.3-codex[reasoning=high,fast=true]",
-        name: "GPT-5.3 Codex High Fast",
-      }),
-    );
-    expect(models).toContainEqual(
-      expect.objectContaining({
-        slug: "gpt-5.3-codex[reasoning=extra-high,fast=true]",
-        name: "GPT-5.3 Codex Extra High Fast",
-      }),
-    );
-    expect(models).toContainEqual(
-      expect.objectContaining({
-        slug: "claude-opus-4-6[thinking=true,context=1m,effort=high,fast=false]",
-        name: "Claude Opus 4.6 1M",
-      }),
-    );
-    expect(models).toContainEqual(
-      expect.objectContaining({
-        slug: "claude-opus-4-6[thinking=true,context=200k,effort=extra-high,fast=true]",
-        name: "Claude Opus 4.6 Extra High Fast",
-      }),
-    );
-    expect(models).toContainEqual(
-      expect.objectContaining({
-        slug: "claude-opus-4-6[thinking=true,context=1m,effort=extra-high,fast=true]",
-        name: "Claude Opus 4.6 Extra High 1M Fast",
-      }),
-    );
-    expect(models.every((model) => model.supportsFastMode !== true)).toBe(true);
-    expect(models.every((model) => model.supportedReasoningEfforts === undefined)).toBe(true);
-    expect(models.every((model) => model.contextWindowOptions === undefined)).toBe(true);
   });
 });
 

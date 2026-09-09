@@ -20,15 +20,24 @@ export function PickerTriggerButton(
     // Drop the trailing chevron so the trigger reads as a plain label (e.g. the
     // folder picker) instead of an obvious dropdown.
     hideChevron?: boolean;
-  } & Omit<ComponentProps<typeof Button>, "children" | "size" | "variant">,
+  } & Omit<ComponentProps<typeof Button>, "children" | "size">,
 ) {
-  const { icon, label, compact, hideLabel, hideChevron, className, ...buttonProps } = props;
+  const {
+    icon,
+    label,
+    compact,
+    hideLabel,
+    hideChevron,
+    className,
+    variant = "chrome",
+    ...buttonProps
+  } = props;
 
   return (
     <Button
       {...buttonProps}
       size="sm"
-      variant="chrome"
+      variant={variant}
       {...(hideLabel && typeof label === "string" ? { title: label } : {})}
       className={cn(
         "min-w-0 justify-start overflow-hidden whitespace-nowrap px-1.5 text-[var(--color-text-foreground)] [&_svg]:mx-0",

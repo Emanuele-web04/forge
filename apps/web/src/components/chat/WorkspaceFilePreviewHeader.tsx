@@ -17,9 +17,16 @@ import { isWorkspaceRelativePathSafe, joinWorkspaceRelativePath } from "@synara/
 import { Fragment, useLayoutEffect, useRef, useState } from "react";
 
 import { basenameOfPath } from "~/file-icons";
-import { useCopyFileContentsToClipboard } from "~/hooks/useCopyToClipboard";
+import { useCopyFileContentsToClipboard, useCopyPathToClipboard } from "~/hooks/useCopyToClipboard";
 import type { ChatFileReference } from "~/lib/chatReferences";
-import { ChevronRightIcon, CodeIcon, EllipsisIcon, EyeOpenIcon } from "~/lib/icons";
+import {
+  ChevronRightIcon,
+  CodeIcon,
+  CopyIcon,
+  EllipsisIcon,
+  EyeOpenIcon,
+  RefreshCwIcon,
+} from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
 import { CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME, ChatHeaderIconButton } from "./chatHeaderControls";
@@ -53,6 +60,9 @@ interface WorkspaceFilePreviewHeaderProps {
   dirty?: boolean;
   /** Short reason the current source cannot be edited safely. */
   readOnlyReason?: string | null;
+  /** Re-fetches the current file without discarding a dirty edit buffer. */
+  onReload?: (() => void) | undefined;
+  reloading?: boolean;
 }
 
 // Source (raw file, where selecting text yields a precise line/column chat
@@ -260,9 +270,13 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
     onAskWhyInChat?.({ path: filePath });
   };
   const copyFileContents = useCopyFileContentsToClipboard();
+  const copyPathToClipboard = useCopyPathToClipboard();
 
   const canCopyContents = contentsForCopy != null;
-  const hasOverflowMenu = canCopyContents || Boolean(onReferenceInChat || onAskWhyInChat);
+  const openInTarget =
+    fileIsOutsideWorkspace || !workspaceRoot
+      ? filePath
+      : joinWorkspaceRelativePath(workspaceRoot, filePath);
 
   return (
     <div
@@ -323,43 +337,53 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
           </div>
         ) : null}
 
-        {hasOverflowMenu ? (
-          <Menu>
-            <MenuTrigger render={<ChatHeaderIconButton label="More actions" tone="plain" />}>
-              <EllipsisIcon aria-hidden="true" className="size-3.5" />
-            </MenuTrigger>
-            <ComposerPickerMenuPopup align="end" side="bottom" className="w-52 min-w-52">
-              {canCopyContents ? (
-                <MenuItem
-                  onClick={() =>
-                    copyFileContents(contentsForCopy ?? "", fileSegment, {
-                      partial: props.truncated ?? false,
-                    })
-                  }
-                >
-                  Copy contents
-                </MenuItem>
-              ) : null}
-              {onReferenceInChat ? (
-                <MenuItem onClick={referenceWholeFile}>Reference in chat</MenuItem>
-              ) : null}
-              {onAskWhyInChat ? (
-                <MenuItem onClick={askWhyWholeFile}>Ask why this changed</MenuItem>
-              ) : null}
-            </ComposerPickerMenuPopup>
-          </Menu>
+        {props.onReload ? (
+          <ChatHeaderIconButton
+            label="Reload file from disk"
+            title="Reload file from disk"
+            tone="plain"
+            onClick={props.onReload}
+          >
+            <RefreshCwIcon
+              aria-hidden="true"
+              className={cn("size-3.5", props.reloading && "animate-spin")}
+            />
+          </ChatHeaderIconButton>
         ) : null}
+
+        <Menu>
+          <MenuTrigger render={<ChatHeaderIconButton label="More actions" tone="plain" />}>
+            <EllipsisIcon aria-hidden="true" className="size-3.5" />
+          </MenuTrigger>
+          <ComposerPickerMenuPopup align="end" side="bottom" className="w-52 min-w-52">
+            <MenuItem onClick={() => copyPathToClipboard(openInTarget)}>
+              <CopyIcon className="size-3.5 shrink-0 text-muted-foreground" />
+              <span>Copy path</span>
+            </MenuItem>
+            {canCopyContents ? (
+              <MenuItem
+                onClick={() =>
+                  copyFileContents(contentsForCopy ?? "", fileSegment, {
+                    partial: props.truncated ?? false,
+                  })
+                }
+              >
+                Copy contents
+              </MenuItem>
+            ) : null}
+            {onReferenceInChat ? (
+              <MenuItem onClick={referenceWholeFile}>Reference in chat</MenuItem>
+            ) : null}
+            {onAskWhyInChat ? (
+              <MenuItem onClick={askWhyWholeFile}>Ask why this changed</MenuItem>
+            ) : null}
+          </ComposerPickerMenuPopup>
+        </Menu>
 
         {/* Responsive (default) mode: the "Open" label rides the same
             `header-actions` container declared on this header, so it shows on a
             wide pane and collapses to the editor icon when the pane is narrow. */}
-        <OpenInPicker
-          openInTarget={
-            fileIsOutsideWorkspace || !workspaceRoot
-              ? filePath
-              : joinWorkspaceRelativePath(workspaceRoot, filePath)
-          }
-        />
+        <OpenInPicker openInTarget={openInTarget} />
       </div>
     </div>
   );

@@ -1,0 +1,224 @@
+---
+title: Automations
+description: Schedule recurring Synara work with reviewable runs, bounded ownership, and explicit stop conditions.
+---
+
+Automations schedule agent work through the same task, provider, environment, and turn pipeline as interactive Synara work. They remove the need to start every run manually; they do not remove the need to constrain, monitor, and review the result.
+
+## Good automation candidates
+
+Automate work that is:
+
+- Repeated on a predictable schedule
+- Safe to run without a new design decision each time
+- Easy to verify from its output
+- Bounded to a known project and environment
+- Useful even when one run fails cleanly
+
+Examples:
+
+- Summarize failing checks every morning
+- Review newly opened issues on a schedule
+- Re-run a known flaky reproduction until a stop condition is met
+- Refresh a generated report from trusted inputs
+- Check a repository for a specific maintenance condition
+
+Avoid automating broad feature development, destructive cleanup, secret rotation, production deployment, or any workflow that requires human judgment at each run.
+
+## Create the automation
+
+A schedule-style composer prompt can produce a draft for review:
+
+```text
+Every weekday at 9:00, inspect open pull requests in this project.
+Summarize failing checks and unresolved review threads.
+Do not modify files or GitHub state.
+```
+
+Before enabling the draft, verify:
+
+- Schedule and timezone
+- Project and task
+- Provider and model
+- Local checkout or worktree environment
+- Approval-required or full-access runtime mode
+- Exact prompt
+- Stop condition, if any
+- Whether the task may mutate files or remote systems
+- How many consecutive failures are allowed before Synara disables the automation
+
+Do not accept a generated schedule merely because the natural-language interpretation looks plausible.
+
+## Choose the environment
+
+| Environment               | Use it when                                                                                 |
+| ------------------------- | ------------------------------------------------------------------------------------------- |
+| Existing task environment | Runs should continue one durable body of work                                               |
+| Managed worktree          | Runs may create or modify repository files and should remain isolated                       |
+| Local checkout            | The automation intentionally owns that checkout and no interactive task can collide with it |
+| Read-only objective       | The run should inspect and report without changing files or remote state                    |
+
+Scheduled writers should normally use an isolated environment. A recurring task on a shared checkout can collide with an interactive agent, manual edits, or another automation.
+
+## Write an automation-safe prompt
+
+A scheduled prompt should state:
+
+- What to inspect
+- What may change
+- What must never change
+- How to verify the result
+- What to report on failure
+- When to stop repeating
+
+```text
+Inspect the latest CI results for the default branch.
+
+Allowed:
+- Read repository and GitHub status
+- Update the existing maintenance report file
+
+Forbidden:
+- Push commits
+- Modify application source
+- Close or merge pull requests
+
+Verification:
+- Validate the report format
+- Include the exact check URLs and head SHA
+
+Stop condition:
+Disable this automation after five consecutive successful runs with no failing checks.
+```
+
+Do not depend on hidden context from a previous interactive conversation. The durable prompt should carry the constraints needed for every run.
+
+## Heartbeat automations and stop conditions
+
+A heartbeat automation repeats until its natural-language stop condition is satisfied. After a successful run, Synara can evaluate the condition and disable the automation with a recorded reason.
+
+Use stop clauses for measurable completion:
+
+- A test passes a defined number of consecutive runs
+- A pull request reaches a specific state
+- A migration report contains no remaining items
+- A dependency version becomes available
+- A known error stops appearing
+
+Avoid subjective conditions such as “stop when the feature is good.” State an observable condition the run can demonstrate.
+
+## Run history and transcript labels
+
+Automation-triggered turns are identified in the task transcript, and the automation retains run history for triage.
+
+Review:
+
+- Scheduled and actual run time
+- Success, failure, or skipped state
+- Provider and task used
+- Output and reported verification
+- File or Git changes
+- Reason for automatic pause or completion
+
+A successful scheduler dispatch does not mean the agent’s work was correct.
+
+## Choose a failure policy
+
+The **On failure** policy controls how many consecutive failed runs Synara tolerates before disabling the automation:
+
+| Policy                | Behavior                                                            |
+| --------------------- | ------------------------------------------------------------------- |
+| Stop after 1 failure  | Disable after the first failed run                                  |
+| Stop after 3 failures | Default; tolerate two consecutive failures and disable on the third |
+| Stop after 5 failures | Allow a longer transient-failure window                             |
+| Keep running          | Never auto-disable solely because of consecutive failures           |
+
+A successful run resets the consecutive-failure count. Duplicate reconciliation of the same run does not count as another failure.
+
+When the threshold is reached, Synara records the failure count and disable reason. Re-enabling is deliberate: inspect the failed runs, environment, provider state, and prompt before turning the automation back on. Choosing **Keep running** does not automatically restart an automation that was already disabled by failures.
+
+This policy is separate from maximum iterations and natural-language completion conditions. Whichever applicable stop boundary is reached first can disable future runs with its own recorded reason.
+
+## Current and paused automations
+
+Pause an automation when:
+
+- The repository is undergoing a conflicting migration
+- Provider authentication or availability changed
+- The prompt is producing ambiguous output
+- The environment is no longer isolated
+- Several consecutive runs fail without a new diagnosis
+- A human decision is required before the next run
+
+Resume only after reviewing the prompt, schedule, environment, and most recent failure.
+
+## Review scheduled changes
+
+For an automation that edits files:
+
+1. Inspect every changed and untracked file.
+2. Confirm the run operated in the intended environment.
+3. Review the exact diff against the correct base.
+4. Run independent verification.
+5. Commit or deliver only intentional changes.
+6. Check whether the next scheduled run will repeat or conflict with the preserved work.
+
+Do not allow unreviewed scheduled diffs to accumulate indefinitely.
+
+## Prevent duplicate effects
+
+Repeated or retried runs can produce duplicate external effects when a prompt sends messages, creates issues, updates records, or triggers deployments.
+
+Design for safe replay:
+
+- Read current state before mutating it
+- Use stable identifiers where the target system supports idempotency
+- Record what was already processed
+- Verify whether an ambiguous action committed before repeating it
+- Keep external mutations narrow and explicit
+
+A timeout is not proof that the action did not happen.
+
+## Failure handling
+
+### The run never starts
+
+Check whether the automation is paused, the schedule and timezone are correct, Synara is available, and the provider is installed and authenticated.
+
+### The run starts in the wrong repository state
+
+Pause the automation. Inspect its task environment, base branch, worktree, and pending changes before another run.
+
+### The provider is unavailable
+
+Do not silently substitute a different provider unless that fallback is part of the approved automation design. Pause, repair authentication, or make a deliberate provider change.
+
+### The stop condition fires too early
+
+Disable the automation, inspect the recorded reason and evidence, then rewrite the condition to use a stricter observable signal.
+
+### Runs keep failing identically
+
+Inspect the **On failure** threshold and the recorded disable reason. Do not merely re-enable the automation: require a new diagnosis rather than consuming repeated provider turns against the same broken assumption.
+
+### A run leaves an active process
+
+Inspect the task terminal and stop dependent servers, watchers, or child processes before the next run or environment cleanup.
+
+## Automation checklist
+
+- [ ] Schedule and timezone are verified
+- [ ] Project, task, provider, model, and environment are explicit
+- [ ] Write authority is no broader than necessary
+- [ ] The prompt states allowed and forbidden actions
+- [ ] Verification is observable
+- [ ] Stop conditions are measurable
+- [ ] Consecutive-failure tolerance is explicit and appropriate for the action's risk
+- [ ] Repeated external effects are replay-safe
+- [ ] Run history and task diffs are reviewed
+- [ ] Failed or ambiguous automations are paused before retrying
+
+<Callout type="warn" title="Scheduled does not mean autonomous approval">
+  An automation is still an agent turn with real repository and external-system effects. Keep
+  permissions narrow and review its output before shipping anything.
+</Callout>

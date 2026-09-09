@@ -1,10 +1,11 @@
 // FILE: rightDockPaneMeta.tsx
 // Purpose: Shared semantic metadata (icon + label) for right-dock pane kinds.
 // Layer: Chat right-dock UI primitives
-// Exports: per-kind meta map, ordered add-menu kinds, and pane label/icon resolvers.
+// Exports: per-kind meta map, launcher items, and pane label/icon resolvers.
 
 import type { ReactNode } from "react";
 
+import { basenameOfPath } from "~/file-icons";
 import type { LucideIcon } from "~/lib/icons";
 import {
   DeviceMobileIcon,
@@ -15,16 +16,13 @@ import {
   GitPullRequestIcon,
   GlobeIcon,
   InfoIcon,
-  MessageCircleIcon,
+  SidechatIcon,
   TerminalIcon,
 } from "~/lib/icons";
-import {
-  RIGHT_DOCK_PANE_KINDS,
-  type RightDockPane,
-  type RightDockPaneKind,
-} from "~/rightDockStore.logic";
+import { type RightDockPane, type RightDockPaneKind } from "~/rightDockStore.logic";
 import { CHAT_SURFACE_CHIP_ICON_CLASS_NAME, SurfaceChipIcon } from "./chatHeaderControls";
 import { FileEntryIcon } from "./FileEntryIcon";
+import { pullRequestPaneTabLabel } from "../pullRequest/pullRequestDetail.logic";
 
 export interface RightDockPaneMeta {
   label: string;
@@ -45,7 +43,7 @@ export const RIGHT_DOCK_PANE_META: Record<RightDockPaneKind, RightDockPaneMeta> 
   explorer: { label: "Explorer", Icon: FoldersIcon },
   file: { label: "File", Icon: FileIcon },
   terminal: { label: "Terminal", Icon: TerminalIcon },
-  sidechat: { label: "Side chats", Icon: MessageCircleIcon },
+  sidechat: { label: "Side chats", Icon: SidechatIcon },
   git: { label: "Git", Icon: GitCommitIcon },
   pullRequest: { label: "Pull request", Icon: GitPullRequestIcon },
 };
@@ -63,15 +61,6 @@ const FALLBACK_RIGHT_DOCK_PANE_META: RightDockPaneMeta = {
 export function getRightDockPaneMeta(kind: RightDockPaneKind): RightDockPaneMeta {
   return RIGHT_DOCK_PANE_META[kind] ?? FALLBACK_RIGHT_DOCK_PANE_META;
 }
-
-// Add-menu / quick triggers follow the canonical kind order from the single
-// source of truth, so they stay in sync as kinds are added or removed. The
-// "file" kind is intentionally excluded: single-file preview tabs are opened by
-// clicking a file reference in chat, while the add menu offers the richer
-// "explorer" pane (file tree + search + viewer) in its place.
-export const RIGHT_DOCK_ADD_MENU_KINDS: readonly RightDockPaneKind[] = RIGHT_DOCK_PANE_KINDS.filter(
-  (kind) => kind !== "file" && kind !== "pullRequest",
-);
 
 // Empty-dock launchers prioritize the everyday workspace tools. Review only
 // appears when the selected diff scope contains changes, Git is gated by
@@ -136,6 +125,31 @@ export function resolveRightDockPaneLabel(
   overrides?: Record<string, string | undefined>,
 ): string {
   return overrides?.[pane.id] ?? getRightDockPaneMeta(pane.kind).label;
+}
+
+export function buildRightDockPaneLabelOverrides(
+  panes: readonly RightDockPane[],
+  threadSummaries: readonly { id: string; title: string }[],
+): Record<string, string | undefined> | undefined {
+  const sidechatTitleByThreadId = new Map(
+    threadSummaries.map((thread) => [thread.id, thread.title] as const),
+  );
+  const overrides: Record<string, string | undefined> = {};
+
+  for (const pane of panes) {
+    if (pane.kind === "file" && pane.filePath) {
+      overrides[pane.id] = basenameOfPath(pane.filePath);
+    } else if (pane.kind === "pullRequest" && pane.pullRequestNumber !== null) {
+      overrides[pane.id] = pullRequestPaneTabLabel(pane.pullRequestNumber);
+    } else if (pane.kind === "sidechat" && pane.threadId) {
+      const title = sidechatTitleByThreadId.get(pane.threadId)?.trim();
+      if (title) {
+        overrides[pane.id] = title;
+      }
+    }
+  }
+
+  return Object.keys(overrides).length > 0 ? overrides : undefined;
 }
 
 // Resolves a tab glyph: file panes show the per-file-type icon (matching the

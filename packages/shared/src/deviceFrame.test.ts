@@ -5,12 +5,7 @@ import {
 } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import {
-  DeviceFrameEncodeError,
-  decodeDeviceFrame,
-  encodeDeviceFrame,
-  peekDeviceFrameHeader,
-} from "./deviceFrame";
+import { DeviceFrameEncodeError, decodeDeviceFrame, encodeDeviceFrame } from "./deviceFrame";
 
 const header = {
   deviceId: "A1B2C3D4-1111-2222-3333-444455556666",
@@ -141,12 +136,5 @@ describe("decodeDeviceFrame malformed input", () => {
     corrupted[DEVICE_FRAME_HEADER_FIXED_BYTES] = 0xff;
 
     expect(decodeDeviceFrame(corrupted)).toEqual({ ok: false, reason: "invalid-device-id" });
-  });
-});
-
-describe("peekDeviceFrameHeader", () => {
-  it("returns the header for a valid frame and null otherwise", () => {
-    expect(peekDeviceFrameHeader(encodeDeviceFrame({ header, payload }))).toEqual(header);
-    expect(peekDeviceFrameHeader(new Uint8Array(4))).toBeNull();
   });
 });

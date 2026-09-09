@@ -1,0 +1,142 @@
+---
+title: Grok Build
+description: Install, authenticate, verify, and run Grok Build through Synara.
+---
+
+Synara connects to xAI’s Grok Build runtime through the `grok` executable and its Agent Client Protocol support. Grok owns authentication, models, tools, and provider behavior; Synara supplies the task, repository environment, transcript, approvals, review surfaces, and Git lifecycle around the session.
+
+## Install
+
+On macOS, Linux, or WSL, use the official installer:
+
+```bash
+curl -fsSL https://x.ai/cli/install.sh | bash
+```
+
+On Windows PowerShell:
+
+```powershell
+irm https://x.ai/cli/install.ps1 | iex
+```
+
+Verify the installation:
+
+```bash
+grok --version
+```
+
+## Authenticate
+
+Start Grok Build in a normal terminal:
+
+```bash
+grok
+```
+
+On first launch, Grok normally opens a browser for authentication. You can explicitly restart that flow with:
+
+```bash
+grok login
+```
+
+For headless environments, use device authentication or an xAI API key. The environment-variable path is:
+
+```bash
+export XAI_API_KEY="xai-..."
+```
+
+Do not place the key in a repository, prompt, screenshot, or documentation file. Grok may prefer an existing cached account session over the environment variable until you sign out.
+
+## Verify
+
+From a disposable repository:
+
+```bash
+grok --version
+grok models
+```
+
+Then run Grok and ask a harmless read-only question. Confirm that the expected model catalog is available and that authentication succeeds before opening Synara.
+
+## Connect to Synara
+
+<Steps>
+<Step>
+
+### Enable Grok
+
+Open provider settings and confirm that Synara detects `grok`.
+
+</Step>
+<Step>
+
+### Confirm authentication
+
+Use the cached Grok account session or make `XAI_API_KEY` available to the process that launches Synara.
+
+</Step>
+<Step>
+
+### Select model and reasoning
+
+Confirm that Synara shows the expected model and reasoning-effort options before starting the task.
+
+</Step>
+<Step>
+
+### Run a test task
+
+Use a small repository and a bounded objective. Review the active mode and permissions before allowing edits or commands.
+
+</Step>
+</Steps>
+
+## Capabilities in Synara
+
+Grok sessions can expose:
+
+- Grok model selection and reasoning-effort controls
+- Plan and normal interaction modes supported by the ACP runtime
+- Tool calls, command output, file changes, and assistant text
+- Provider authentication through a cached session or xAI API key
+- Compaction when the installed runtime advertises the command
+- Synara’s terminal, browser, diff, checkpoint, worktree, and Git delivery surfaces
+
+Grok currently applies model and reasoning settings when the ACP process starts. Change those settings before beginning a new session rather than assuming every option can be switched safely during an active turn.
+
+Synara does not currently classify Grok as supporting native live-turn steering.
+
+## Updating
+
+Use xAI’s official installer or release mechanism to update Grok Build, then restart Synara so provider health and model discovery use the new executable.
+
+After an update, start a new task when the change affects ACP behavior, model options, permissions, or session negotiation.
+
+## Troubleshooting
+
+### Grok is not detected
+
+1. Run `grok --version` from a fresh terminal.
+2. Confirm the installer directory is on `PATH`.
+3. Check Synara’s custom binary path.
+4. Restart Synara after installation or environment changes.
+
+### Grok is detected but authentication fails
+
+Run `grok login` directly. In a headless environment, use the device-code flow or provide `XAI_API_KEY`. If a cached session is active, remember that it can take precedence over the API key.
+
+### The model or reasoning setting is ignored
+
+Confirm the setting in a newly created Synara session. Grok’s ACP integration applies these selections when the provider process starts.
+
+### Compaction is unavailable
+
+Update Grok Build and start a new session. Older builds may not advertise the compaction command consistently.
+
+## Official documentation
+
+- [Grok Build overview and installation](https://docs.x.ai/build/overview)
+- [Grok Build CLI reference](https://docs.x.ai/build/cli/reference)
+- [Grok Build source and authentication guide](https://github.com/xai-org/grok-build)
+
+Continue with [Your first task](/docs/getting-started/first-task) or [Provider handoffs](/docs/workflows/handoffs).

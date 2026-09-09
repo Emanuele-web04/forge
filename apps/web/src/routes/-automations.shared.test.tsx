@@ -20,13 +20,13 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   applyScheduleToForm,
-  allVisibleTriageRuns,
   applyAutomationEvent,
   automationDefinitionUpdateMutationOptions,
   automationAttentionCount,
   automationAttentionLabel,
   automationFastIntervalLimitMessage,
   automationListRowIcon,
+  automationTargetThreads,
   canCancelAutomationRun,
   createInputFromForm,
   datetimeLocalFromIso,
@@ -89,6 +89,20 @@ const projectId = (value: string) => ProjectId.makeUnsafe(value);
 const threadId = (value: string) => ThreadId.makeUnsafe(value);
 const commandId = (value: string) => CommandId.makeUnsafe(value);
 const messageId = (value: string) => MessageId.makeUnsafe(value);
+
+describe("automationTargetThreads", () => {
+  it("excludes parent-linked side chats from heartbeat target choices", () => {
+    const project = projectId("project-1");
+    const parent = { projectId: project, sidechatSourceThreadId: null, title: "Parent" };
+    const sidechat = {
+      projectId: project,
+      sidechatSourceThreadId: threadId("thread-parent"),
+      title: "Side chat",
+    };
+
+    expect(automationTargetThreads([sidechat, parent], project)).toEqual([parent]);
+  });
+});
 
 describe("reconcileAutomationFormAutoModeSupport", () => {
   it("persists refreshed Claude capability before an Auto automation is submitted", () => {
@@ -351,11 +365,6 @@ describe("automation shared route helpers", () => {
       "run-failed-no-result",
     ]);
     expect(automationAttentionCount(runs)).toBe(2);
-    expect(allVisibleTriageRuns(runs).map((run) => run.id)).toEqual([
-      "run-unresolved",
-      "run-read",
-      "run-failed-no-result",
-    ]);
   });
 
   it("keeps silent successful runs in history without counting them for attention", () => {
@@ -370,7 +379,6 @@ describe("automation shared route helpers", () => {
 
     expect(unresolvedTriageRuns([silent])).toEqual([]);
     expect(automationAttentionCount([silent])).toBe(0);
-    expect(allVisibleTriageRuns([silent])).toEqual([silent]);
   });
 
   it("does not surface a reported result before its run finishes", () => {
@@ -386,7 +394,6 @@ describe("automation shared route helpers", () => {
 
     expect(isTriageRun(running)).toBe(false);
     expect(unresolvedTriageRuns([running])).toEqual([]);
-    expect(allVisibleTriageRuns([running])).toEqual([]);
   });
 
   it("allows cancelling active and waiting runs only", () => {

@@ -1,10 +1,7 @@
+import { refreshPiOpenCodeCatalog } from "../piOpenCodeCatalog";
 import crypto from "node:crypto";
 import path from "node:path";
-import {
-  spawn as spawnChildProcess,
-  type ChildProcess,
-  type SpawnOptions,
-} from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 
 import type {
   BashOperations,
@@ -38,6 +35,10 @@ import {
   TurnId,
   type UserInputQuestion,
 } from "@synara/contracts";
+import {
+  spawnProcess as spawnPlatformProcess,
+  type RuntimeSpawnOptions,
+} from "@synara/shared/processRuntime";
 import { Effect, FileSystem, Layer, Option, Queue, Stream } from "effect";
 
 import { takeSynaraHarnessPolicyForProviderSession } from "../../agentGateway/harnessPolicy.ts";
@@ -74,7 +75,10 @@ import {
 } from "../Services/ProviderAdapter.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { makeBoundedCallbackIngress } from "../boundedCallbackIngress.ts";
+import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
 import { classifyPiTurnFailure } from "../piTurnFailure.ts";
+import { fetchOpenRouterModels, OPENROUTER_BASE_URL } from "../OpenRouterDiscovery.ts";
+import { openrouterProvider } from "@earendil-works/pi-ai/providers/openrouter";
 import {
   compactProviderRuntimeEventForIngress,
   isTerminalProviderRuntimeEvent,
@@ -112,12 +116,17 @@ const PI_DEFAULT_SUPPORTED_THINKING_LEVELS = new Set<ThinkingLevel>([
   "medium",
   "high",
 ]);
-const PI_ANTHROPIC_ENSURED_MODEL_IDS = ["claude-fable-5", "claude-opus-4-8"] as const;
+const PI_ANTHROPIC_ENSURED_MODEL_IDS = [
+  "claude-fable-5-1",
+  "claude-fable-5",
+  "claude-opus-4-8",
+] as const;
 type PiAnthropicEnsuredModelId = (typeof PI_ANTHROPIC_ENSURED_MODEL_IDS)[number];
 
 /**
  * Metadata used when an OAuth/extension Anthropic catalog replaced Pi's built-ins
- * and omitted Fable / Opus 4.8. Values mirror `@earendil-works/pi-ai` Anthropic models.
+ * and omitted Fable 5.1 / Fable 5 / Opus 4.8. Values mirror `@earendil-works/pi-ai`
+ * Anthropic models; Fable 5.1 follows Anthropic's published pricing until pi-ai ships it.
  */
 const PI_ANTHROPIC_ENSURED_MODEL_TEMPLATES: Record<
   PiAnthropicEnsuredModelId,
@@ -133,6 +142,17 @@ const PI_ANTHROPIC_ENSURED_MODEL_TEMPLATES: Record<
     readonly maxTokens: number;
   }
 > = {
+  "claude-fable-5-1": {
+    id: "claude-fable-5-1",
+    name: "Claude Fable 5.1",
+    reasoning: true,
+    thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
+    compat: { forceAdaptiveThinking: true },
+    input: ["text", "image"],
+    cost: { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
+  },
   "claude-fable-5": {
     id: "claude-fable-5",
     name: "Claude Fable 5",
@@ -180,7 +200,7 @@ export interface PiBashProcessSupervisorOptions {
   readonly spawnProcess?: (
     command: string,
     args: ReadonlyArray<string>,
-    options: SpawnOptions,
+    options: RuntimeSpawnOptions,
   ) => ChildProcess;
   readonly teardownProcessTree?: typeof teardownProviderProcessTree;
 }
@@ -188,7 +208,14 @@ export interface PiBashProcessSupervisorOptions {
 export function makePiBashProcessSupervisor(
   options: PiBashProcessSupervisorOptions,
 ): PiBashProcessSupervisor {
-  const spawnProcess = options.spawnProcess ?? spawnChildProcess;
+  const spawnProcess =
+    options.spawnProcess ??
+    ((command: string, args: ReadonlyArray<string>, spawnOptions: RuntimeSpawnOptions) =>
+      spawnPlatformProcess(command, args, {
+        ...spawnOptions,
+        requireExecutable: true,
+        ownProcessGroup: true,
+      }));
   const teardownProcessTree = options.teardownProcessTree ?? teardownProviderProcessTree;
   const activeProcesses = new Set<PiActiveProcess>();
   let configuredShellPath: string | undefined;
@@ -229,13 +256,11 @@ export function makePiBashProcessSupervisor(
         commandFromStdin ? shell.args : [...shell.args, command],
         {
           cwd,
-          detached: process.platform !== "win32",
           env: buildProviderChildEnvironment({
             provider: "pi",
             baseEnv: execution.env ?? process.env,
           }),
           stdio: [commandFromStdin ? "pipe" : "ignore", "pipe", "pipe"],
-          windowsHide: true,
         },
       );
       const active: PiActiveProcess = {
@@ -541,8 +566,9 @@ export function getPiSupportedThinkingOptions(
 }
 
 /**
- * When Anthropic is already authenticated, ensure Fable 5 and Opus 4.8 appear even
- * if an older pi-anthropic-oauth extension replaced the built-in Anthropic catalog.
+ * When Anthropic is already authenticated, ensure Fable 5.1, Fable 5, and Opus 4.8
+ * appear even if an older pi-anthropic-oauth extension replaced the built-in
+ * Anthropic catalog.
  */
 export function ensurePiAnthropicCatalogModels(
   available: ReadonlyArray<Model<Api>>,
@@ -662,6 +688,13 @@ function createProviderModelFallback(
   if (!providerDefault) {
     return undefined;
   }
+  // Zen mixes four protocols. A missing model must not inherit an arbitrary API.
+  if (
+    parsed.provider === "opencode" &&
+    /^https:\/\/opencode\.ai\/zen(?:\/|$)/u.test(providerDefault.baseUrl)
+  ) {
+    return undefined;
+  }
   if (parsed.provider === "anthropic" && isPiAnthropicEnsuredModelId(parsed.id)) {
     const template = PI_ANTHROPIC_ENSURED_MODEL_TEMPLATES[parsed.id];
     return {
@@ -689,7 +722,7 @@ function createProviderModelFallback(
   };
 }
 
-function findModelInRegistry(
+export function findModelInRegistry(
   registry: PiModelRegistry,
   modelId: string | null | undefined,
 ): Model<Api> | undefined {
@@ -1208,11 +1241,42 @@ function makeAgentDir(
 export async function createPiModelRuntime(
   agentDir: string,
   piSdk: Pick<PiCodingAgentModule, "ModelRuntime">,
+  signal?: AbortSignal,
 ): Promise<ModelRuntime> {
-  return piSdk.ModelRuntime.create({
+  const runtime = await piSdk.ModelRuntime.create({
     authPath: path.join(agentDir, "auth.json"),
     modelsPath: path.join(agentDir, "models.json"),
   });
+  await refreshPiOpenCodeCatalog(runtime, { signal });
+  return runtime;
+}
+
+export async function refreshPiOpenRouterModels(runtime: ModelRuntime): Promise<void> {
+  // Explicit extension catalogs and custom endpoints own their model metadata.
+  if (
+    process.env.PI_OFFLINE !== undefined ||
+    runtime.getRegisteredProviderIds().includes("openrouter") ||
+    !runtime.hasConfiguredAuth("openrouter") ||
+    runtime.getProvider("openrouter")?.baseUrl !== OPENROUTER_BASE_URL
+  )
+    return;
+  const live = await fetchOpenRouterModels();
+  if (live.length === 0) return;
+  const base = openrouterProvider();
+  const models = new Map(base.getModels().map((model) => [model.id, model]));
+  for (const model of live) models.set(model.id, model);
+  // Native providers remain below models.json, preserving user model overrides.
+  runtime.registerNativeProvider({
+    ...base,
+    getModels: () => [...models.values()],
+    // Reuse the SDK store so a later session keeps discovered capacities offline.
+    refreshModels: async ({ publish }) => {
+      await publish({
+        persist: { models: live, lastModified: Date.now(), checkedAt: Date.now() },
+      });
+    },
+  });
+  await runtime.refresh({ allowNetwork: false });
 }
 
 function modelRegistryFacade(
@@ -2074,8 +2138,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       thinkingLevel?: ThinkingLevel;
       processSupervisor: PiBashProcessSupervisor;
       gatewayTools?: ReadonlyArray<ToolDefinition>;
+      signal?: AbortSignal;
     }) => {
-      const modelRuntime = await createPiModelRuntime(input.agentDir, input.sdk);
+      const modelRuntime = await createPiModelRuntime(input.agentDir, input.sdk, input.signal);
+      input.signal?.throwIfAborted();
       const createRuntime: CreateAgentSessionRuntimeFactory = async ({
         cwd,
         agentDir,
@@ -2088,6 +2154,13 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           modelRuntime,
         });
         const registry = modelRegistryFacade(services.modelRuntime, input.sdk);
+        const requested = parseModelReference(input.modelId);
+        if (
+          requested?.provider === "openrouter" &&
+          !registry.find(requested.provider, requested.id)
+        ) {
+          await refreshPiOpenRouterModels(services.modelRuntime);
+        }
         const model = findModelInRegistry(registry, input.modelId);
         if (input.modelId && !model) {
           throw new Error(
@@ -2209,8 +2282,9 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         const { runtime, modelRegistry } = yield* releaseAgentGatewaySessionLeaseOnInterrupt(
           agentGatewaySessionLease,
           Effect.tryPromise({
-            try: () =>
+            try: (signal) =>
               createSdkRuntime({
+                signal,
                 sdk: piSdk,
                 cwd,
                 agentDir,
@@ -2718,23 +2792,21 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       );
 
     const stopAll: PiAdapterShape["stopAll"] = () =>
-      Effect.forEach(Array.from(sessions.keys()), (threadId) => stopSession(threadId), {
-        concurrency: "unbounded",
-        discard: true,
-      }).pipe(Effect.asVoid);
+      settleConcurrentTeardowns(sessions.keys(), stopSession);
 
     const listModels: NonNullable<PiAdapterShape["listModels"]> = (input) =>
       Effect.tryPromise({
-        try: async () => {
+        try: async (signal) => {
           const piSdk = await loadPiCodingAgentModule();
           const agentDir = makeAgentDir(input.agentDir, piSdk);
           const cwd = trimToUndefined(input.cwd) ?? serverConfig.cwd;
-          const modelRuntime = await createPiModelRuntime(agentDir, piSdk);
+          const modelRuntime = await createPiModelRuntime(agentDir, piSdk, signal);
           const services = await piSdk.createAgentSessionServices({
             cwd,
             agentDir,
             modelRuntime,
           });
+          await refreshPiOpenRouterModels(services.modelRuntime);
           const registry = modelRegistryFacade(services.modelRuntime, piSdk);
           const extensionCount = services.resourceLoader.getExtensions().extensions.length;
           const models = getPiDiscoverableModels(registry).flatMap((model) => {
@@ -2744,6 +2816,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             );
             return descriptor ? [descriptor] : [];
           });
+
           return {
             models,
             source: extensionCount > 0 ? "pi.sdk+extensions" : "pi.sdk",
@@ -2938,8 +3011,6 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       },
     } satisfies PiAdapterShape;
   });
-
-export const PiAdapterLive = Layer.effect(PiAdapter, makePiAdapter());
 
 export function makePiAdapterLive(options?: PiAdapterLiveOptions) {
   return Layer.effect(PiAdapter, makePiAdapter(options));

@@ -17,6 +17,7 @@ import {
   createPiModelRuntime,
   ensurePiAnthropicCatalogModels,
   getPiDiscoverableModels,
+  findModelInRegistry,
   getPiSupportedThinkingOptions,
   buildPiAgentGatewayCustomTools,
   makePiBashProcessSupervisor,
@@ -260,8 +261,16 @@ describe("getPiDiscoverableModels", () => {
     const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-runtime-isolation-"));
 
     try {
-      const firstRuntime = await createPiModelRuntime(agentDir, { ModelRuntime });
-      const secondRuntime = await createPiModelRuntime(agentDir, { ModelRuntime });
+      const firstRuntime = await createPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        AbortSignal.abort(),
+      );
+      const secondRuntime = await createPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        AbortSignal.abort(),
+      );
       const firstRegistry = new ModelRegistry(firstRuntime);
       const secondRegistry = new ModelRegistry(secondRuntime);
 
@@ -288,6 +297,50 @@ describe("getPiDiscoverableModels", () => {
       rmSync(agentDir, { recursive: true, force: true });
     }
   });
+
+  it.each([
+    { provider: "zai", id: "glm-5.3-flash", auth: { type: "api_key", key: "test-key" } },
+    {
+      provider: "openai-codex",
+      id: "gpt-6-astra",
+      auth: { type: "oauth", access: "tok", refresh: "ref", expires: 4_102_444_800_000 },
+    },
+  ])(
+    "discovers bundled $provider/$id with configured credentials",
+    async ({ provider, id, auth }) => {
+      const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-bundled-models-"));
+      try {
+        const authPath = path.join(agentDir, "auth.json");
+        writeFileSync(authPath, JSON.stringify({ [provider]: auth }));
+        const runtime = await ModelRuntime.create({
+          authPath,
+          modelsPath: path.join(agentDir, "models.json"),
+          allowModelNetwork: false,
+        });
+        const registry = new ModelRegistry(runtime);
+        const model = getPiDiscoverableModels(registry).find(
+          (candidate) => candidate.provider === provider && candidate.id === id,
+        );
+
+        expect(model).toBeDefined();
+        if (!model) throw new Error(`Missing bundled model: ${provider}/${id}`);
+        expect(findModelInRegistry(registry, `${provider}/${id}`)).toEqual(model);
+        expect(toPiProviderModelDescriptor(model, (name) => name)).toMatchObject({
+          slug: `${provider}/${id}`,
+          upstreamProviderId: provider,
+          supportedReasoningEfforts: expect.arrayContaining([
+            {
+              value: "high",
+              label: expect.any(String),
+              description: expect.any(String),
+            },
+          ]),
+        });
+      } finally {
+        rmSync(agentDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("includes custom-provider models authenticated through auth.json semantics", async () => {
     const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-models-"));
@@ -413,7 +466,7 @@ describe("ensurePiAnthropicCatalogModels", () => {
     expect(models.every((model) => model.provider !== "anthropic")).toBe(true);
   });
 
-  it("restores Fable 5 and Opus 4.8 when an oauth catalog omitted them", () => {
+  it("restores Fable 5.1, Fable 5, and Opus 4.8 when an oauth catalog omitted them", () => {
     const peer = {
       id: "claude-opus-4-7",
       name: "Claude Opus 4.7",
@@ -430,9 +483,17 @@ describe("ensurePiAnthropicCatalogModels", () => {
 
     expect(models.map((model) => model.id)).toEqual([
       "claude-opus-4-7",
+      "claude-fable-5-1",
       "claude-fable-5",
       "claude-opus-4-8",
     ]);
+    expect(models.find((model) => model.id === "claude-fable-5-1")).toMatchObject({
+      provider: "anthropic",
+      name: "Claude Fable 5.1",
+      reasoning: true,
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    });
     expect(models.find((model) => model.id === "claude-fable-5")).toMatchObject({
       provider: "anthropic",
       name: "Claude Fable 5",

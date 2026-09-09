@@ -6,7 +6,7 @@
 // Depends on: EDITORS metadata plus filesystem stat checks.
 
 import { execFileSync } from "node:child_process";
-import { readdirSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import { join } from "node:path";
 
 import { EDITORS } from "@synara/contracts";
@@ -126,43 +126,6 @@ export function resolveAvailableMacApplication(
   );
 }
 
-function trimNonEmpty(value: string | undefined): string | null {
-  const trimmed = value?.trim() ?? "";
-  return trimmed.length > 0 ? trimmed : null;
-}
-
-function uniqueNonEmpty(values: ReadonlyArray<string | null>): string[] {
-  return Array.from(new Set(values.filter((value): value is string => value !== null)));
-}
-
-export function resolveWindowsStorePackageSearchRoots(
-  env: NodeJS.ProcessEnv,
-): ReadonlyArray<string> {
-  const programFiles = trimNonEmpty(env.ProgramFiles);
-  const programW6432 = trimNonEmpty(env.ProgramW6432);
-  const systemDrive = trimNonEmpty(env.SystemDrive);
-
-  return uniqueNonEmpty([
-    programFiles ? join(programFiles, "WindowsApps") : null,
-    programW6432 ? join(programW6432, "WindowsApps") : null,
-    systemDrive ? join(systemDrive, "Program Files", "WindowsApps") : null,
-  ]);
-}
-
-function windowsStorePackageDirMatches(
-  dirName: string,
-  packageDef: WindowsStorePackageDefinition,
-): boolean {
-  const normalizedName = dirName.toLowerCase();
-  const packageName = packageDef.packageName.toLowerCase();
-  const publisherId = packageDef.publisherId.toLowerCase();
-
-  return (
-    normalizedName === `${packageName}_${publisherId}` ||
-    (normalizedName.startsWith(`${packageName}_`) && normalizedName.endsWith(`__${publisherId}`))
-  );
-}
-
 function windowsStorePackageFamilyName(packageDef: WindowsStorePackageDefinition): string {
   return `${packageDef.packageName}_${packageDef.publisherId}`;
 }
@@ -175,40 +138,6 @@ function uniqueWindowsStorePackageDefinitions(
     byFamily.set(windowsStorePackageFamilyName(packageDef).toLowerCase(), packageDef);
   }
   return Array.from(byFamily.values());
-}
-
-// Scans package payload folders only. Availability still needs current-user AppX registration.
-export function resolveWindowsStorePackageDirectory(
-  packages: readonly WindowsStorePackageDefinition[] | undefined,
-  platform: NodeJS.Platform,
-  env: NodeJS.ProcessEnv,
-): string | null {
-  if (platform !== "win32" || !packages) return null;
-
-  for (const root of resolveWindowsStorePackageSearchRoots(env)) {
-    let entries;
-    try {
-      entries = readdirSync(root, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      if (!packages.some((packageDef) => windowsStorePackageDirMatches(entry.name, packageDef))) {
-        continue;
-      }
-
-      const packageDir = join(root, entry.name);
-      try {
-        if (statSync(packageDir).isDirectory()) return packageDir;
-      } catch {
-        // Keep probing other package roots.
-      }
-    }
-  }
-
-  return null;
 }
 
 function quotePowerShellLiteral(value: string): string {

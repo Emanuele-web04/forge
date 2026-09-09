@@ -209,7 +209,8 @@ function SettingsRouteView() {
     systemUiFont,
     setSystemUiFont,
   } = useTheme();
-  const { settings, defaults, updateSettings, resetSettings } = useAppSettings();
+  const { settings, defaults, updateSettings, updateSettingsAndWait, resetSettings } =
+    useAppSettings();
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const [releaseHistoryOpen, setReleaseHistoryOpen] = useState(false);
   const [resetEpoch, setResetEpoch] = useState(0);
@@ -285,6 +286,11 @@ function SettingsRouteView() {
   const isInstallSettingsDirty = isProviderInstallSettingsDirty(settings, defaults);
   const hiddenProviderCount = new Set(settings.hiddenProviders).size;
   const isProviderOrderDirty = !sameProviderOrder(settings.providerOrder, defaults.providerOrder);
+  const isProviderActivityDirty =
+    settings.disabledProviders.length !== defaults.disabledProviders.length ||
+    settings.disabledProviders.some(
+      (provider, index) => provider !== defaults.disabledProviders[index],
+    );
 
   // Deep links and sidebar search targets all resolve to stable DOM ids in the active panel.
   useEffect(() => {
@@ -336,6 +342,9 @@ function SettingsRouteView() {
       ? ["Assistant output"]
       : []),
     ...(settings.followUpBehavior !== defaults.followUpBehavior ? ["Follow-up behavior"] : []),
+    ...(settings.autoOpenDevicePane !== defaults.autoOpenDevicePane
+      ? ["Automatically open simulator"]
+      : []),
     ...(settings.enableAppSnap !== defaults.enableAppSnap ? ["AppSnap"] : []),
     ...(!sameAppSnapShortcut(settings.appSnapShortcut, defaults.appSnapShortcut)
       ? ["AppSnap shortcut"]
@@ -364,12 +373,12 @@ function SettingsRouteView() {
     settings.customAntigravityModels.length > 0 ||
     settings.customGrokModels.length > 0 ||
     settings.customDroidModels.length > 0 ||
-    settings.customKiloModels.length > 0 ||
     settings.customOpenCodeModels.length > 0 ||
     settings.customPiModels.length > 0
       ? ["Custom models"]
       : []),
     ...(isInstallSettingsDirty ? ["Provider installs"] : []),
+    ...(isProviderActivityDirty ? ["Provider activity"] : []),
     ...(hiddenProviderCount > 0 ? ["Provider visibility"] : []),
     ...(isProviderOrderDirty ? ["Provider order"] : []),
   ];
@@ -393,7 +402,7 @@ function SettingsRouteView() {
 
     setTheme("system");
     resetAllThemes();
-    resetSettings();
+    await resetSettings();
     setResetEpoch((current) => current + 1);
   }
 
@@ -442,7 +451,7 @@ function SettingsRouteView() {
       <SettingsSection title="Core defaults">
         <SettingsRow
           title="Default provider"
-          description="Choose the provider used for new chats."
+          description="Provider used for new chats until you pick a model. New chats then reuse your most recent model and options."
           resetAction={
             settings.defaultProvider !== defaults.defaultProvider ? (
               <SettingResetButton
@@ -1141,6 +1150,15 @@ function SettingsRouteView() {
           resetLabel: "assistant output",
           ariaLabel: "Stream assistant messages",
         })}
+
+        {renderBooleanSettingRow({
+          settingKey: "autoOpenDevicePane",
+          title: "Automatically open simulator",
+          description:
+            "Open the iOS Simulator pane when an agent uses a device. Turn this off to use Simulator.app without the mirrored pane reopening. You can still open the pane manually.",
+          resetLabel: "automatically open simulator",
+          ariaLabel: "Automatically open simulator",
+        })}
       </SettingsSection>
 
       <SettingsSection title="Review">
@@ -1303,6 +1321,7 @@ function SettingsRouteView() {
                   settings={settings}
                   defaults={defaults}
                   updateSettings={updateSettings}
+                  updateSettingsAndWait={updateSettingsAndWait}
                   resetEpoch={resetEpoch}
                 />
                 <ExternalMcpSettingsPanel active={activeSection === "integrations"} />

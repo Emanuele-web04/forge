@@ -1,0 +1,148 @@
+---
+title: Frequently asked questions
+description: Answers to common Synara setup, provider, privacy, Git, workflow, automation, and troubleshooting questions.
+---
+
+These answers describe the shared Synara model. Provider availability, models, limits, permissions, and session behavior can still vary by runtime, account, operating system, and release.
+
+<Accordions>
+<Accordion title="What is Synara?">
+
+Synara is a local desktop workspace and control plane for coding-agent runtimes. It keeps tasks, provider sessions, terminals, browser work, diffs, branches, worktrees, approvals, handoffs, automations, and orchestration in one reviewable environment.
+
+</Accordion>
+<Accordion title="Does Synara include model access or a subscription?">
+
+No. Install and authenticate the provider runtimes you want to use. Provider accounts, subscriptions, API keys, models, usage limits, and service availability remain provider-owned.
+
+</Accordion>
+<Accordion title="Which providers are supported?">
+
+Synara supports Claude Code, Codex, OpenCode, Cursor, Antigravity, Grok Build, Devin CLI, Pi, and Factory Droid. The authoritative list for your installation is the provider settings shown by that build. See [Provider guides](/docs/providers).
+
+</Accordion>
+<Accordion title="Why does Synara not detect a provider that works in my terminal?">
+
+The desktop process may have a different `PATH`, environment, executable selection, or custom binary path. Open a fresh terminal, record the resolved executable and version, check Synara’s provider settings, and fully restart Synara. See [Provider troubleshooting](/docs/troubleshooting/providers).
+
+</Accordion>
+<Accordion title="Why are models missing?">
+
+Model discovery can depend on the installed CLI, account, subscription, region, organization policy, project configuration, working directory, credentials, and provider service. Verify the model through the exact provider executable Synara uses.
+
+</Accordion>
+<Accordion title="Does Synara upload my repository to a Synara cloud account?">
+
+Synara does not require a Synara cloud account for the local workspace. The provider you select receives the prompts, file content, diffs, terminal output, browser results, or other context needed for that provider session. Review the provider’s own privacy and data policies.
+
+</Accordion>
+<Accordion title="Can I use a repository that is not on GitHub?">
+
+Yes. Local tasks, providers, terminals, browser work, diffs, branches, and worktrees do not require GitHub. GitHub-specific pull-request discovery and remote actions require a GitHub remote plus an authenticated GitHub CLI.
+
+</Accordion>
+<Accordion title="Can I use a folder that is not a Git repository?">
+
+Basic work can run in a folder, but Git provides the strongest review and recovery boundary. Branches, worktrees, checkpoints, commits, pushes, and pull requests require a Git repository.
+
+</Accordion>
+<Accordion title="When should I use a worktree?">
+
+Use a worktree when another task may touch the same repository, when you want a dedicated branch and terminal environment, or when an experiment should be easy to review or discard. Do not let two writing tasks share one checkout. See [Worktrees](/docs/workflows/worktrees).
+
+</Accordion>
+<Accordion title="Is a detached HEAD in a Synara worktree an error?">
+
+Not necessarily. Managed worktrees can begin from a selected base ref without immediately attaching a named branch. Inspect the task environment and intended delivery branch before changing it.
+
+</Accordion>
+<Accordion title="What is the difference between a task, turn, and provider session?">
+
+A task is the durable body of work. A turn is one user instruction followed by provider activity and a result. The provider session is the runtime connection owned by that task. A task can contain many turns and may recover or hand off between provider sessions.
+
+</Accordion>
+<Accordion title="How do I know whether a task is actually stuck?">
+
+Check whether it is working, waiting for approval, waiting for user input, interrupted, idle, or in error. Inspect recent activity, terminal output, provider health, and the current diff before interrupting. See [Tasks and runtime](/docs/troubleshooting/tasks-and-runtime).
+
+</Accordion>
+<Accordion title="Does interrupting a turn undo its changes?">
+
+No guarantee. Commands and file mutations may already have committed before the interruption. Inspect the working tree, untracked files, and child processes before retrying or starting another session.
+
+</Accordion>
+<Accordion title="Is the provider’s final message proof that the task is complete?">
+
+No. Read the complete diff, run the relevant tests, inspect visible behavior, check untracked files, and confirm that the exact final head was tested. The final response is a report, not verification.
+
+</Accordion>
+<Accordion title="What is a provider handoff?">
+
+A handoff changes the provider continuing the same task and environment. Use it for a second opinion, a provider-specific capability, or recovery. It does not transfer every provider-native session detail and does not remove the need for review. See [Provider handoffs](/docs/workflows/handoffs).
+
+</Accordion>
+<Accordion title="Can several agents work in parallel?">
+
+Yes, when ownership is explicit. Give independent writing tasks separate worktrees, use provider-native subagents for bounded work inside one owner task, and assign one integration owner. See [Parallel agents](/docs/workflows/parallel-agents).
+
+</Accordion>
+<Accordion title="Can the browser keep working when another chat is active?">
+
+The task-scoped shared browser runtime can continue in the background when another chat is active. It still belongs to its task and tab scope. OAuth, consent, credentials, and other human-required actions must be completed visibly by the user.
+
+</Accordion>
+<Accordion title="Why did a browser action time out but still change the page?">
+
+A timeout reports that the tool did not receive a conclusive result in time; it does not prove the effect failed. Re-snapshot and inspect the page before retrying. See [Browser troubleshooting](/docs/troubleshooting/browser).
+
+</Accordion>
+<Accordion title="What are automations?">
+
+Automations schedule agent work through the same task, provider, environment, approval, and review pipeline as interactive work. Heartbeat automations can evaluate a stop condition after successful runs. Scheduled output must still be reviewed. See [Automations](/docs/workflows/automations).
+
+</Accordion>
+<Accordion title="What is Studio?">
+
+Studio is a workspace for long-running, artifact-oriented work with dedicated projects, threads, routing, and an Environment panel. It does not make generated output automatically correct or approved. See [Studio](/docs/workflows/studio).
+
+</Accordion>
+<Accordion title="What is the Agent Gateway?">
+
+The Agent Gateway is Synara’s internal, thread-scoped MCP surface for authorized provider sessions. It can inspect projects and tasks, coordinate bounded task creation, wait for work, steer eligible tasks, use supported browser tools, and manage supported automations within capability and privilege boundaries.
+
+</Accordion>
+<Accordion title="What is External MCP?">
+
+External MCP is a smaller, user-created integration for another local application. It uses pairing, project allowlists, capability scopes, safe execution defaults, rate limits, active-task limits, expiring credentials, audit records, and immediate revocation. It is separate from the internal Agent Gateway.
+
+</Accordion>
+<Accordion title="Can External MCP expose Synara over the network?">
+
+The external endpoint is available only while Synara is loopback-only. Configuring remote or published access disables that endpoint rather than exposing its credentials and tools remotely.
+
+</Accordion>
+<Accordion title="Where should I start when something fails?">
+
+Preserve the work, identify the failing layer, reproduce the smallest failure, capture exact evidence, change one variable, and verify the recovery. Start at [Troubleshooting](/docs/troubleshooting).
+
+</Accordion>
+<Accordion title="Are Synara diagnostics safe to post publicly?">
+
+Not without review. Diagnostic tools redact common secret patterns and bound output, but they can still include private prompts, source fragments, paths, URLs, identifiers, and novel secret formats. Manually redact every shared artifact. See [Diagnostics](/docs/troubleshooting/diagnostics).
+
+</Accordion>
+<Accordion title="What information belongs in a bug report?">
+
+Include the Synara version and build type, operating system, provider executable and version, model and options, task environment, minimal reproduction, expected and actual behavior, exact error and time range, verification attempts, and a manually redacted diagnostic sample. See [Report a problem](/docs/troubleshooting/report-a-problem).
+
+</Accordion>
+<Accordion title="What is the difference between stable behavior and current main?">
+
+A feature can exist on the app repository’s `main` branch before it reaches a packaged release. State the exact release, branch, or commit when reporting behavior. Use the controls shown by your installed build as authoritative for that build.
+
+</Accordion>
+</Accordions>
+
+## Still have a question?
+
+Search the documentation and existing [GitHub issues](https://github.com/Emanuele-web04/synara/issues). When the answer depends on a specific failure, use the [reporting guide](/docs/troubleshooting/report-a-problem) rather than posting an unredacted transcript.

@@ -2,7 +2,7 @@
 // Purpose: Verifies WSL workspace process routing stays shell-free and distro-scoped.
 // Layer: Shared Node runtime utility tests
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
   parseWindowsWslUncPath,
@@ -42,15 +42,12 @@ describe("windowsProcess WSL routing", () => {
     );
   });
 
-  it("routes commands in WSL workspaces through wsl.exe without where.exe or a shell", () => {
-    const spawnSync = vi.fn();
-
+  it("routes commands in WSL workspaces through wsl.exe without a shell", () => {
     expect(
       prepareWindowsSafeProcess("copilot", ["--acp", "--stdio"], {
         platform: "win32",
         cwd: "\\\\wsl.localhost\\Ubuntu-24.04\\home\\dev\\repo",
         env: { SystemRoot: "C:\\Windows" },
-        spawnSync,
       }),
     ).toEqual({
       command: "C:\\Windows\\System32\\wsl.exe",
@@ -67,7 +64,6 @@ describe("windowsProcess WSL routing", () => {
       shell: false,
       windowsHide: true,
     });
-    expect(spawnSync).not.toHaveBeenCalled();
   });
 
   it("preserves command arguments literally instead of invoking a Linux shell", () => {
@@ -75,7 +71,6 @@ describe("windowsProcess WSL routing", () => {
       platform: "win32",
       cwd: "\\\\wsl$\\Ubuntu\\home\\dev\\repo",
       env: { SystemRoot: "C:\\Windows" },
-      spawnSync: vi.fn(),
     });
 
     expect(prepared.args.slice(-4)).toEqual(["tool", "one&two", "$(touch nope)", "café"]);

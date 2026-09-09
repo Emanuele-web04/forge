@@ -307,16 +307,10 @@ describe("wsNativeApi", () => {
           codex: { enabled: true, binaryPath: "codex", homePath: "", customModels: [] },
           claudeAgent: { enabled: true, binaryPath: "claude", launchArgs: "", customModels: [] },
           cursor: { enabled: false, binaryPath: "agent", apiEndpoint: "", customModels: [] },
+          devin: { enabled: true, binaryPath: "devin", customModels: [] },
           antigravity: { enabled: true, binaryPath: "agy", customModels: [] },
           grok: { enabled: true, binaryPath: "grok", customModels: [] },
           droid: { enabled: true, binaryPath: "droid", customModels: [] },
-          kilo: {
-            enabled: true,
-            binaryPath: "kilo",
-            serverUrl: "",
-            serverPasswordConfigured: false,
-            customModels: [],
-          },
           opencode: {
             enabled: true,
             binaryPath: "opencode",
@@ -513,6 +507,22 @@ describe("wsNativeApi", () => {
     });
   });
 
+  it("runs thread-title regeneration without a client timeout", async () => {
+    requestMock.mockResolvedValue({ status: "renamed", title: "Backend auth" });
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    await api.orchestration.regenerateThreadTitle({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+    });
+
+    expect(requestMock).toHaveBeenCalledWith(
+      ORCHESTRATION_WS_METHODS.regenerateThreadTitle,
+      { threadId: "thread-1" },
+      { timeoutMs: null },
+    );
+  });
+
   it("forwards terminal output ACKs to the websocket transport", async () => {
     requestMock.mockResolvedValue(undefined);
     const { createWsNativeApi } = await import("./wsNativeApi");
@@ -595,6 +605,37 @@ describe("wsNativeApi", () => {
       cwd: "/tmp/project",
       relativePath: "src/app.ts",
     });
+  });
+
+  it("forwards an abort signal on projects.readFile to the transport", async () => {
+    requestMock.mockResolvedValue({
+      relativePath: "src/app.ts",
+      contents: "export {};\n",
+      truncated: false,
+      version: `sha256:${"1".repeat(64)}`,
+      encoding: "utf8",
+      lineEnding: "lf",
+    });
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const controller = new AbortController();
+    const api = createWsNativeApi();
+
+    await api.projects.readFile(
+      {
+        cwd: "/tmp/project",
+        relativePath: "src/app.ts",
+      },
+      { signal: controller.signal },
+    );
+
+    expect(requestMock).toHaveBeenCalledWith(
+      WS_METHODS.projectsReadFile,
+      {
+        cwd: "/tmp/project",
+        relativePath: "src/app.ts",
+      },
+      { signal: controller.signal },
+    );
   });
 
   it("forwards local preview grant creation to the websocket project method", async () => {

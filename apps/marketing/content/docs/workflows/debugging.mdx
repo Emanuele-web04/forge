@@ -1,0 +1,82 @@
+---
+title: Debug mode
+description: Diagnose defects through Synara's evidence-first observe, reproduce, investigate, fix, and verify loop.
+---
+
+Debug mode gives the selected provider a shared, evidence-first debugging policy. It is designed for a reported defect whose cause is not yet established—not for general feature implementation or an unverified request to "fix whatever looks wrong."
+
+## Debug or Plan
+
+Use **Debug** when the primary problem is diagnosis: observe a symptom, reproduce it, narrow competing hypotheses, repair the smallest root cause, and prove the symptom is gone.
+
+Use **Plan** when the behavior is understood but the implementation or product decision still needs design. Debug mode does not make the provider plan-only, and Plan mode does not replace reproduction evidence.
+
+## Start Debug mode
+
+Choose **Debug** from the composer mode menu or run:
+
+```text
+/debug
+```
+
+The composer shows a Debug badge while the mode is active. Send the defect report as a normal message with the observed behavior, reproduction boundary, relevant environment, and what would count as verified resolution.
+
+Return to ordinary build mode with:
+
+```text
+/default
+```
+
+## Evidence loop
+
+Debug mode instructs the provider to follow this order:
+
+1. **Observe** the real current state before editing.
+2. **Reproduce** the symptom locally when possible.
+3. **Investigate** logs, errors, stack traces, state transitions, and testable hypotheses.
+4. **Fix** the smallest root cause instead of masking the symptom.
+5. **Verify** the original reproduction and the relevant regression checks.
+
+A passing test that never exercised the reported symptom is not enough. A changed code path without a repeated observation is not verification.
+
+## Reproduction questions
+
+Some failures require state only the user can create—for example a specific browser account, external device action, or intermittent UI sequence. When the provider can pause for structured input, Debug mode asks one focused reproduction question with **Reproduced**, **Could not reproduce**, and **Cancel** choices.
+
+Keep the requested application or state open until the provider says the evidence has been captured. Synara cannot observe an external action unless the relevant browser, terminal, device, logs, or other signal is actually available to the task.
+
+## Permissions and safety
+
+Debug mode preserves the task's current runtime permission mode. It does not grant broader file, shell, browser, device, or network authority.
+
+Inspect before repeating a mutation. A timed-out click, command, remote action, or device input may already have taken effect. Observe the new state before deciding whether a retry is safe.
+
+## Persistence and continuation
+
+The selected interaction mode is durable task state. Debug survives drafts, queued turns, restarts, supported forks, and provider handoffs unless you explicitly return to Default or choose another mode.
+
+If the task also has a [thread goal](/docs/features/thread-goals), Debug changes how each turn diagnoses the defect; it does not bypass goal pause rules, pending approvals, user-input gates, or interruption handling.
+
+## When diagnosis is blocked
+
+A useful blocked report states:
+
+- What was inspected
+- Whether the symptom was reproduced
+- Evidence supporting or rejecting each leading hypothesis
+- What source or environment remains inaccessible
+- The smallest next action that could resolve the uncertainty
+
+Do not let the provider convert missing evidence into a confident root-cause claim.
+
+## Debug completion checklist
+
+- [ ] Original symptom and environment recorded
+- [ ] Reproduction attempted before editing
+- [ ] Evidence distinguishes the root cause from nearby symptoms
+- [ ] Fix is scoped to the established cause
+- [ ] Regression coverage added or updated when practical
+- [ ] Relevant focused and broader checks passed
+- [ ] Original reproduction repeated after the fix
+- [ ] Remaining uncertainty and inaccessible evidence reported
+- [ ] Interaction mode returned to Default when diagnosis is finished

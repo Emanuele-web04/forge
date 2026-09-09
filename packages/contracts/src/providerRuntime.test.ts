@@ -57,6 +57,35 @@ describe("ProviderRuntimeEvent", () => {
     expect(parsed.payload.planMarkdown).toBe("# Ship it");
   });
 
+  it("decodes canonical hook completion diagnostics", () => {
+    const parsed = decodeRuntimeEvent({
+      type: "hook.completed",
+      eventId: "event-hook-1",
+      provider: "codex",
+      createdAt: "2026-02-28T00:00:00.000Z",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      payload: {
+        hookId: "hook-run-1",
+        hookName: "/Users/example/.codex/hooks.json",
+        hookEvent: "preToolUse",
+        outcome: "cancelled",
+        status: "blocked",
+        statusMessage: "Destructive command blocked.",
+        durationMs: 12,
+        data: { handlerType: "command" },
+      },
+    });
+
+    expect(parsed.type).toBe("hook.completed");
+    if (parsed.type !== "hook.completed") {
+      throw new Error("expected hook.completed");
+    }
+    expect(parsed.payload.status).toBe("blocked");
+    expect(parsed.payload.hookEvent).toBe("preToolUse");
+    expect(parsed.payload.durationMs).toBe(12);
+  });
+
   it("decodes user-input.requested with structured questions", () => {
     const parsed = decodeRuntimeEvent({
       type: "user-input.requested",

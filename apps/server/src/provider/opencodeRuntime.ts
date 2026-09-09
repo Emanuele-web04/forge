@@ -39,15 +39,12 @@ import {
   Stream,
 } from "effect";
 import * as Semaphore from "effect/Semaphore";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { makeEffectProcessCommand } from "../platform/effectProcessRuntime.ts";
 
 import { NetService, type NetServiceShape } from "@synara/shared/Net";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import { buildProviderChildEnvironment } from "../providerChildEnvironment.ts";
-import {
-  readOpenCodeAuthFileUtf8,
-  resolveOpenCodeCompatibleAuthPaths,
-} from "./openCodeAuthPaths.ts";
+import { readOpenCodeAuthFileUtf8 } from "./openCodeAuthPaths.ts";
 import {
   teardownEffectProcessTree,
   teardownProviderProcessTree,
@@ -57,7 +54,6 @@ import { isWindowsShellCommandMissingResult } from "../shell-command-detection.t
 const DEFAULT_OPENCODE_SERVER_TIMEOUT_MS = 20_000;
 const DEFAULT_HOSTNAME = "127.0.0.1";
 export const OPENCODE_LOCAL_SERVER_IDLE_TTL_MS = 5 * 60_000;
-export const KILO_CREDENTIAL_STARTUP_RETRY_DELAYS_MS = [500, 1_500] as const;
 const OPENCODE_STARTUP_OUTPUT_MAX_CHARS = 4_000;
 const REDACTED_STARTUP_SECRET = "[redacted]";
 const STARTUP_OUTPUT_AUTHORIZATION_PATTERN =
@@ -81,15 +77,6 @@ export const OPENCODE_CLI_SPEC: OpenCodeCompatibleCliSpec = {
   configContentEnvVar: "OPENCODE_CONFIG_CONTENT",
   dataDirectoryName: "opencode",
   serverAuthUsername: "opencode",
-};
-
-export const KILO_CLI_SPEC: OpenCodeCompatibleCliSpec = {
-  defaultBinaryPath: "kilo",
-  displayName: "Kilo",
-  serverReadyPrefix: "kilo server listening",
-  configContentEnvVar: "KILO_CONFIG_CONTENT",
-  dataDirectoryName: "kilo",
-  serverAuthUsername: "kilo",
 };
 
 export interface OpenCodeServerProcess {
@@ -184,7 +171,6 @@ export interface OpenCodeCliModelDescriptor {
     readonly isDefault?: true;
   }>;
   readonly defaultContextWindow?: string;
-  readonly isFree?: boolean;
 }
 
 export interface OpenCodePathInfo {
@@ -339,25 +325,6 @@ function pooledOpenCodeServerKey(input: {
   });
 }
 
-function isRetryableKiloCredentialStartupFailure(
-  cliSpec: OpenCodeCompatibleCliSpec,
-  cause: unknown,
-): boolean {
-  if (cliSpec.dataDirectoryName !== KILO_CLI_SPEC.dataDirectoryName) {
-    return false;
-  }
-
-  const detail = openCodeRuntimeErrorDetail(cause).toLowerCase();
-  return (
-    detail.includes('failed query: update "credential" set') ||
-    detail.includes("failed query: update 'credential' set") ||
-    detail.includes("failed query: update `credential` set") ||
-    detail.includes("sqlite_busy") ||
-    detail.includes("database is busy") ||
-    detail.includes("database is locked")
-  );
-}
-
 export function parseOpenCodeModelSlug(
   slug: string | null | undefined,
 ): ParsedOpenCodeModelSlug | null {
@@ -492,22 +459,6 @@ function readOpenCodeVariantEffort(
   return null;
 }
 
-export function resolveOpenCodeAuthFilePath(
-  pathInfo: Pick<OpenCodePathInfo, "home">,
-  cliSpec: OpenCodeCompatibleCliSpec = OPENCODE_CLI_SPEC,
-): string {
-  const [preferredPath] = resolveOpenCodeCompatibleAuthPaths({
-    homeDir: pathInfo.home,
-    env: process.env,
-    platform: process.platform,
-    dataDirectoryName: cliSpec.dataDirectoryName,
-  });
-  if (!preferredPath) {
-    throw new Error("OpenCode auth path resolution produced no candidates");
-  }
-  return preferredPath;
-}
-
 export function parseOpenCodeCredentialProviderIDs(content: string): ReadonlyArray<string> {
   const parsed = JSON.parse(content) as unknown;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -635,7 +586,6 @@ function parseOpenCodeCliModelJson(
       : null) ??
     undefined;
   const contextWindowOptions = parseOpenCodeContextWindowOptions(object);
-  const isFree = object.isFree;
 
   return {
     slug,
@@ -646,7 +596,6 @@ function parseOpenCodeCliModelJson(
     supportedReasoningEfforts,
     ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
     ...(contextWindowOptions ?? {}),
-    ...(typeof isFree === "boolean" ? { isFree } : {}),
   };
 }
 
@@ -820,13 +769,11 @@ export function buildOpenCodePermissionRules(
 }
 
 export function buildOpenCodeServerProcessEnv(input: {
-  readonly cliSpec?: OpenCodeCompatibleCliSpec;
   readonly experimentalWebSockets?: boolean;
   readonly baseEnv?: NodeJS.ProcessEnv;
 }): NodeJS.ProcessEnv {
   return buildProviderChildEnvironment({
-    provider:
-      input.cliSpec?.dataDirectoryName === KILO_CLI_SPEC.dataDirectoryName ? "kilo" : "opencode",
+    provider: "opencode",
     baseEnv: input.baseEnv ?? process.env,
     overrides: input.experimentalWebSockets ? { OPENCODE_EXPERIMENTAL_WEBSOCKETS: "true" } : {},
   });
@@ -900,17 +847,9 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
 
     const runOpenCodeCommand: OpenCodeRuntimeShape["runOpenCodeCommand"] = (input) =>
       Effect.gen(function* () {
-        const childEnv = buildOpenCodeServerProcessEnv({
-          ...(input.cliSpec ? { cliSpec: input.cliSpec } : {}),
-        });
-        const prepared = prepareWindowsSafeProcess(input.binaryPath, input.args, {
-          cwd: input.cwd,
-          env: childEnv,
-        });
+        const childEnv = buildOpenCodeServerProcessEnv({});
         const child = yield* spawner.spawn(
-          ChildProcess.make(prepared.command, prepared.args, {
-            shell: prepared.shell,
-            ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+          makeEffectProcessCommand(input.binaryPath, input.args, {
             ...(input.cwd ? { cwd: input.cwd } : {}),
             env: childEnv,
           }),
@@ -969,23 +908,13 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
         const timeoutMs = input.timeoutMs ?? DEFAULT_OPENCODE_SERVER_TIMEOUT_MS;
         const args = ["serve", "--hostname", hostname, "--port", String(port)];
         const childEnv = buildOpenCodeServerProcessEnv({
-          cliSpec,
           ...(input.experimentalWebSockets !== undefined
             ? { experimentalWebSockets: input.experimentalWebSockets }
             : {}),
         });
-        // Match runOpenCodeCommand: bare npm/pi-node shims like `opencode.cmd` need
-        // Windows-safe resolution before Effect/Node spawn can launch them.
-        const prepared = prepareWindowsSafeProcess(input.binaryPath, args, {
-          cwd: input.cwd,
-          env: childEnv,
-        });
-
         const child = yield* spawner
           .spawn(
-            ChildProcess.make(prepared.command, prepared.args, {
-              shell: prepared.shell,
-              ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+            makeEffectProcessCommand(input.binaryPath, args, {
               env: childEnv,
               ...(input.cwd ? { cwd: input.cwd } : {}),
               detached: false,
@@ -1247,50 +1176,24 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
           // Start lazily on first real use, then keep warm only while recent sessions need it.
           return yield* Effect.uninterruptibleMask((restore) =>
             Effect.gen(function* () {
-              const cliSpec = input.cliSpec ?? OPENCODE_CLI_SPEC;
-              let retryIndex = 0;
-              let started: { server: OpenCodeServerProcess; scope: Scope.Closeable } | undefined;
-
-              while (!started) {
-                const serverScope = yield* Scope.make();
-                const startedExit = yield* Effect.exit(
-                  restore(
-                    startOpenCodeServerProcess(input).pipe(
-                      Effect.provideService(Scope.Scope, serverScope),
-                    ),
+              const serverScope = yield* Scope.make();
+              const startedExit = yield* Effect.exit(
+                restore(
+                  startOpenCodeServerProcess(input).pipe(
+                    Effect.provideService(Scope.Scope, serverScope),
                   ),
-                );
+                ),
+              );
 
-                if (Exit.isSuccess(startedExit)) {
-                  started = { server: startedExit.value, scope: serverScope };
-                  break;
-                }
-
+              if (Exit.isFailure(startedExit)) {
                 yield* Scope.close(serverScope, Exit.void).pipe(Effect.ignore);
-                const retryDelayMs = KILO_CREDENTIAL_STARTUP_RETRY_DELAYS_MS[retryIndex];
-                const failure = Cause.squash(startedExit.cause);
-                if (
-                  retryDelayMs === undefined ||
-                  !isRetryableKiloCredentialStartupFailure(cliSpec, failure)
-                ) {
-                  return yield* Effect.failCause(startedExit.cause);
-                }
-
-                retryIndex += 1;
-                yield* Effect.logWarning(
-                  "Kilo credential reconciliation failed during startup; retrying",
-                  {
-                    attempt: retryIndex + 1,
-                    delayMs: retryDelayMs,
-                  },
-                );
-                yield* restore(Effect.sleep(retryDelayMs));
+                return yield* Effect.failCause(startedExit.cause);
               }
 
               const pooledServer: PooledOpenCodeServer = {
                 key,
-                server: started.server,
-                scope: started.scope,
+                server: startedExit.value,
+                scope: serverScope,
                 closeOnRelease: input.poolIsolationKey !== undefined,
                 refCount: 1,
                 idleCloseFiber: null,

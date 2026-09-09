@@ -9,13 +9,16 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { Effect, Exit, Fiber, Stream } from "effect";
-import { describe, expect } from "vitest";
+import { Effect, Exit, Fiber, Option, Stream } from "effect";
+import { TestClock } from "effect/testing";
+import { describe, expect, it as runIt } from "vitest";
 
+import { collectSessionConfigOptionValues, findSessionConfigOption } from "./AcpRuntimeModel.ts";
 import {
   AcpSessionRuntime,
   type AcpProtocolLogEvent,
   type AcpSessionRequestLogEvent,
+  type AcpSessionRuntimeShape,
 } from "./AcpSessionRuntime.ts";
 import { forkViaAcpRuntime } from "./acpFork.ts";
 import { ProviderAdapterRequestError, ProviderAdapterValidationError } from "../Errors.ts";
@@ -159,47 +162,281 @@ describe("AcpSessionRuntime", () => {
     );
   });
 
-  it.effect("loads a resumed session and still prompts normally", () =>
-    Effect.gen(function* () {
-      const runtime = yield* AcpSessionRuntime;
-      const started = yield* runtime.start();
-      expect(started.sessionId).toBe("mock-session-1");
+  runIt(
+    "discards the first probe session and fences orphan updates for on-demand auth",
+    async () => {
+      const requestEvents: Array<AcpSessionRequestLogEvent> = [];
+      let runtimeForProbe: AcpSessionRuntimeShape | undefined;
+      let probeEnqueuedCount = 0;
+      const program = Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime;
+        runtimeForProbe = runtime;
+        const started = yield* runtime.start().pipe(Effect.timeout("2 seconds"));
+        expect(started.sessionId).toBe("mock-session-1");
 
-      // Resumed sessions drop session/update until a consumer attaches, so the
-      // events stream must be taken before prompting (mirrors the adapters,
-      // which fork the drain right after start()).
-      const eventsFiber = yield* Stream.runCollect(Stream.take(runtime.getEvents(), 4)).pipe(
-        Effect.forkChild,
+        const newSessionStarts = requestEvents.filter(
+          (event) => event.method === "session/new" && event.status === "started",
+        );
+        expect(newSessionStarts.length).toBe(2);
+        expect(requestEvents.some((event) => event.method === "authenticate")).toBe(true);
+        expect(probeEnqueuedCount).toBeGreaterThan(0);
+
+        // The final session's bounded state is present, but nothing from the
+        // discarded probe session leaked through.
+        const commands = yield* runtime.getAvailableCommands;
+        expect(commands).toEqual([{ name: "compact", description: "Compact the current context" }]);
+
+        // Give any orphan update a moment to arrive, then consume the event stream.
+        yield* Effect.sleep("200 millis");
+        const eventsChunk = yield* Stream.runCollect(runtime.getEvents()).pipe(
+          Effect.timeoutOption("500 millis"),
+        );
+        const events = Option.isSome(eventsChunk) ? Array.from(eventsChunk.value) : [];
+        expect(
+          events.some((event) => event._tag === "ContentDelta" && event.text === "orphan"),
+        ).toBe(false);
+        expect(yield* runtime.sessionUpdatesEnqueuedCount).toBe(events.length);
+      }).pipe(
+        Effect.provide(
+          AcpSessionRuntime.layer({
+            spawn: {
+              command: bunExe,
+              args: [mockAgentPath],
+              env: {
+                VITEST: "true",
+                SYNARA_ACP_ADVERTISE_AUTH_METHODS: "1",
+                SYNARA_ACP_REQUIRE_AUTH_FOR_SESSION: "1",
+                SYNARA_ACP_EMIT_ORPHAN_UPDATE: "1",
+                SYNARA_ACP_EMIT_AVAILABLE_COMMANDS: "1",
+                SYNARA_ACP_ORPHAN_UPDATE_DELAY_MS: "50",
+                SYNARA_ACP_FINAL_SESSION_DELAY_MS: "150",
+              },
+            },
+            cwd: process.cwd(),
+            clientInfo: { name: "synara-test", version: "0.0.0" },
+            authMethodId: "test-key",
+            authPolicy: "on-demand",
+            authSetupHeuristic: (initializeResult, setupResult) => {
+              const modelOption = findSessionConfigOption(setupResult.configOptions ?? [], "model");
+              const allowedModels =
+                modelOption?.type === "select" ? collectSessionConfigOptionValues(modelOption) : [];
+              return allowedModels.length === 0 && (initializeResult.authMethods?.length ?? 0) > 0;
+            },
+            requestLogger: (event) =>
+              Effect.gen(function* () {
+                requestEvents.push(event);
+                const probeRuntime = runtimeForProbe;
+                if (
+                  event.method === "session/new" &&
+                  event.status === "succeeded" &&
+                  requestEvents.filter(
+                    (candidate) =>
+                      candidate.method === "session/new" && candidate.status === "succeeded",
+                  ).length === 1 &&
+                  probeRuntime
+                ) {
+                  const consumer = yield* Stream.runDrain(probeRuntime.getEvents()).pipe(
+                    Effect.forkChild,
+                  );
+                  yield* Effect.yieldNow;
+                  yield* Fiber.interrupt(consumer);
+                  const epoch = yield* probeRuntime.getSessionEpoch();
+                  Object.assign(epoch, { activeSessionId: Option.some("mock-session-probe") });
+                  yield* Effect.sleep("100 millis");
+                  probeEnqueuedCount = yield* probeRuntime.sessionUpdatesEnqueuedCount;
+                }
+              }),
+          }),
+        ),
+        Effect.scoped,
+        Effect.provide(NodeServices.layer),
       );
-      const promptResult = yield* runtime.prompt({
-        prompt: [{ type: "text", text: "hi" }],
-      });
-      expect(promptResult).toMatchObject({ stopReason: "end_turn" });
 
-      // The session/load replay chunk emitted before the consumer attached is
-      // dropped; only the prompt's own events arrive.
-      const notes = Array.from(yield* Fiber.join(eventsFiber));
-      expect(notes.map((note) => note._tag)).toEqual([
-        "PlanUpdated",
-        "AssistantItemStarted",
-        "ContentDelta",
-        "AssistantItemCompleted",
-      ]);
-    }).pipe(
-      Effect.provide(
-        AcpSessionRuntime.layer({
-          spawn: {
-            command: bunExe,
-            args: [mockAgentPath],
-          },
-          cwd: process.cwd(),
-          resumeSessionId: "mock-session-1",
-          clientInfo: { name: "synara-test", version: "0.0.0" },
-          authMethodId: "test",
-        }),
+      await Effect.runPromise(program);
+    },
+  );
+
+  it.effect("suppresses late load replay before an immediate first prompt", () =>
+    TestClock.withLive(
+      Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime;
+        const started = yield* runtime.start();
+        expect(started.sessionId).toBe("mock-session-1");
+
+        // Resumed sessions drop session/update until a consumer attaches, so the
+        // events stream must be taken before prompting (mirrors the adapters,
+        // which fork the drain right after start()).
+        const eventsFiber = yield* Stream.runCollect(Stream.take(runtime.getEvents(), 4)).pipe(
+          Effect.forkChild,
+        );
+        const promptResult = yield* runtime.prompt({
+          prompt: [{ type: "text", text: "hi" }],
+        });
+        expect(promptResult).toMatchObject({ stopReason: "end_turn" });
+        expect(yield* runtime.getModeState).toMatchObject({ currentModeId: "code" });
+
+        // The session/load replay chunks are dropped; only the immediate first
+        // prompt's legitimate events arrive after the quiet gate opens.
+        const notes = Array.from(yield* Fiber.join(eventsFiber));
+        expect(notes.map((note) => note._tag)).toEqual([
+          "PlanUpdated",
+          "AssistantItemStarted",
+          "ContentDelta",
+          "AssistantItemCompleted",
+        ]);
+      }).pipe(
+        Effect.provide(
+          AcpSessionRuntime.layer({
+            spawn: {
+              command: bunExe,
+              args: [mockAgentPath],
+              env: {
+                VITEST: "true",
+                SYNARA_ACP_LOAD_REPLAY_DELAYS_MS: "0,0",
+                SYNARA_ACP_LOAD_REPLAY_MODE_ID: "code",
+                SYNARA_ACP_REJECT_PROMPT_DURING_LOAD_REPLAY: "1",
+              },
+            },
+            cwd: process.cwd(),
+            resumeSessionId: "mock-session-1",
+            loadReplayPolicy: {
+              quietMs: 20,
+              hardTimeoutMs: 200,
+            },
+            clientInfo: { name: "synara-test", version: "0.0.0" },
+            authMethodId: "test",
+          }),
+        ),
+        Effect.scoped,
+        Effect.provide(NodeServices.layer),
       ),
-      Effect.scoped,
-      Effect.provide(NodeServices.layer),
+    ),
+  );
+
+  it.effect("settles load replay before checking whether a mode write is a no-op", () => {
+    const requestEvents: Array<AcpSessionRequestLogEvent> = [];
+    return TestClock.withLive(
+      Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime;
+        yield* runtime.start();
+
+        // The load response starts in ask mode, then replay reports code mode.
+        // Waiting before reading retained state makes this ask request a real
+        // write instead of incorrectly treating it as an early no-op.
+        yield* runtime.setMode("ask");
+
+        const modeRequest = requestEvents.find(
+          (event) => event.method === "session/set_config_option" && event.status === "started",
+        );
+        expect(modeRequest?.payload).toMatchObject({ configId: "mode", value: "ask" });
+        expect(yield* runtime.getModeState).toMatchObject({ currentModeId: "ask" });
+      }).pipe(
+        Effect.provide(
+          AcpSessionRuntime.layer({
+            spawn: {
+              command: bunExe,
+              args: [mockAgentPath],
+              env: {
+                VITEST: "true",
+                SYNARA_ACP_LOAD_REPLAY_DELAYS_MS: "10,25",
+                SYNARA_ACP_LOAD_REPLAY_MODE_ID: "code",
+              },
+            },
+            cwd: process.cwd(),
+            resumeSessionId: "mock-session-1",
+            loadReplayPolicy: {
+              quietMs: 20,
+              hardTimeoutMs: 200,
+            },
+            clientInfo: { name: "synara-test", version: "0.0.0" },
+            authMethodId: "test",
+            requestLogger: (event) =>
+              Effect.sync(() => {
+                requestEvents.push(event);
+              }),
+          }),
+        ),
+        Effect.scoped,
+        Effect.provide(NodeServices.layer),
+      ),
+    );
+  });
+
+  it.effect("settles load replay before applying session configuration", () =>
+    TestClock.withLive(
+      Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime;
+        yield* runtime.start();
+
+        yield* runtime.setModel("composer-2");
+
+        expect(yield* runtime.getConfigOptions).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ id: "model", currentValue: "composer-2" }),
+          ]),
+        );
+      }).pipe(
+        Effect.provide(
+          AcpSessionRuntime.layer({
+            spawn: {
+              command: bunExe,
+              args: [mockAgentPath],
+              env: {
+                VITEST: "true",
+                SYNARA_ACP_LOAD_REPLAY_DELAYS_MS: "10,25",
+                SYNARA_ACP_REJECT_CONFIG_DURING_LOAD_REPLAY: "1",
+              },
+            },
+            cwd: process.cwd(),
+            resumeSessionId: "mock-session-1",
+            loadReplayPolicy: {
+              quietMs: 20,
+              hardTimeoutMs: 200,
+            },
+            clientInfo: { name: "synara-test", version: "0.0.0" },
+            authMethodId: "test",
+          }),
+        ),
+        Effect.scoped,
+        Effect.provide(NodeServices.layer),
+      ),
+    ),
+  );
+
+  it.effect("settles load replay before reading available commands", () =>
+    TestClock.withLive(
+      Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime;
+        yield* runtime.start();
+
+        expect(yield* runtime.getAvailableCommands).toEqual([
+          { name: "compact", description: "Compact the current context" },
+        ]);
+      }).pipe(
+        Effect.provide(
+          AcpSessionRuntime.layer({
+            spawn: {
+              command: bunExe,
+              args: [mockAgentPath],
+              env: {
+                VITEST: "true",
+                SYNARA_ACP_LOAD_REPLAY_DELAYS_MS: "10,25",
+                SYNARA_ACP_LOAD_REPLAY_AVAILABLE_COMMANDS: "1",
+              },
+            },
+            cwd: process.cwd(),
+            resumeSessionId: "mock-session-1",
+            loadReplayPolicy: {
+              quietMs: 20,
+              hardTimeoutMs: 200,
+            },
+            clientInfo: { name: "synara-test", version: "0.0.0" },
+            authMethodId: "test",
+          }),
+        ),
+        Effect.scoped,
+        Effect.provide(NodeServices.layer),
+      ),
     ),
   );
 
@@ -233,6 +470,93 @@ describe("AcpSessionRuntime", () => {
       ),
       Effect.scoped,
       Effect.provide(NodeServices.layer),
+    );
+  });
+
+  it.effect("completes two consecutive prompts on the same session", () =>
+    Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime;
+      const started = yield* runtime.start();
+      expect(started.sessionId).toBe("mock-session-1");
+
+      const eventsFiber = yield* Stream.runCollect(Stream.take(runtime.getEvents(), 8)).pipe(
+        Effect.forkChild,
+      );
+      const first = yield* runtime.prompt({ prompt: [{ type: "text", text: "first" }] });
+      expect(first).toMatchObject({ stopReason: "end_turn" });
+
+      const enqueuedAfterFirst = yield* runtime.sessionUpdatesEnqueuedCount;
+      expect(enqueuedAfterFirst).toBeGreaterThan(0);
+
+      const second = yield* runtime.prompt({ prompt: [{ type: "text", text: "second" }] });
+      expect(second).toMatchObject({ stopReason: "end_turn" });
+
+      const enqueuedAfterSecond = yield* runtime.sessionUpdatesEnqueuedCount;
+      expect(enqueuedAfterSecond).toBeGreaterThan(enqueuedAfterFirst);
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      expect(events.filter((event) => event._tag === "AssistantItemCompleted").length).toBe(2);
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          spawn: {
+            command: bunExe,
+            args: [mockAgentPath],
+          },
+          cwd: process.cwd(),
+          clientInfo: { name: "synara-test", version: "0.0.0" },
+          authMethodId: "test",
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    ),
+  );
+
+  runIt("resumes across a runtime restart and accepts a follow-up prompt", async () => {
+    const layerFor = (resumeSessionId?: string) =>
+      AcpSessionRuntime.layer({
+        spawn: {
+          command: bunExe,
+          args: [mockAgentPath],
+          env: { VITEST: "true", SYNARA_ACP_SUPPORT_SESSION_RESUME: "1" },
+        },
+        cwd: process.cwd(),
+        ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
+        clientInfo: { name: "synara-test", version: "0.0.0" },
+        authMethodId: "test",
+      });
+
+    // First server lifetime: fresh session plus one completed turn.
+    const firstSessionId = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime;
+        const started = yield* runtime.start();
+        const result = yield* runtime.prompt({ prompt: [{ type: "text", text: "before" }] });
+        expect(result).toMatchObject({ stopReason: "end_turn" });
+        return started.sessionId;
+      }).pipe(Effect.provide(layerFor()), Effect.scoped, Effect.provide(NodeServices.layer)),
+    );
+
+    // Second server lifetime: resume from the persisted cursor and prompt again.
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime;
+        const started = yield* runtime.start();
+        expect(started.sessionSetupMethod).toBe("resume");
+        expect(started.sessionId).toBe(firstSessionId);
+        const eventsFiber = yield* Stream.runCollect(Stream.take(runtime.getEvents(), 4)).pipe(
+          Effect.forkChild,
+        );
+        const result = yield* runtime.prompt({ prompt: [{ type: "text", text: "after" }] });
+        expect(result).toMatchObject({ stopReason: "end_turn" });
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        expect(events.some((event) => event._tag === "AssistantItemCompleted")).toBe(true);
+      }).pipe(
+        Effect.provide(layerFor(firstSessionId)),
+        Effect.scoped,
+        Effect.provide(NodeServices.layer),
+      ),
     );
   });
 
@@ -402,6 +726,105 @@ describe("AcpSessionRuntime", () => {
     );
   });
 
+  it.effect("forks a loaded session after replay settles without an event consumer", () =>
+    TestClock.withLive(
+      Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime;
+        yield* runtime.start();
+
+        const result = yield* forkViaAcpRuntime({
+          provider: "test",
+          runtime,
+          targetCwd: process.cwd(),
+          unsupportedIssue: "fork unsupported",
+          requestTimeoutMs: 1_000,
+          timeoutError: (method) =>
+            new ProviderAdapterRequestError({
+              provider: "test",
+              method,
+              detail: "timed out",
+            }),
+        });
+
+        expect(result.sessionId).toBe("mock-session-fork-1");
+      }).pipe(
+        Effect.provide(
+          AcpSessionRuntime.layer({
+            spawn: {
+              command: bunExe,
+              args: [mockAgentPath],
+              env: {
+                VITEST: "true",
+                SYNARA_ACP_SUPPORT_SESSION_FORK: "1",
+                SYNARA_ACP_LOAD_REPLAY_DELAYS_MS: "10,25",
+                SYNARA_ACP_REJECT_FORK_DURING_LOAD_REPLAY: "1",
+              },
+            },
+            cwd: process.cwd(),
+            resumeSessionId: "mock-session-1",
+            loadReplayPolicy: {
+              quietMs: 20,
+              hardTimeoutMs: 200,
+            },
+            clientInfo: { name: "synara-test", version: "0.0.0" },
+            authMethodId: "test",
+          }),
+        ),
+        Effect.scoped,
+        Effect.provide(NodeServices.layer),
+      ),
+    ),
+  );
+
+  it.effect("preserves the fork RPC timeout after replay reaches its hard cap", () =>
+    TestClock.withLive(
+      Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime;
+        yield* runtime.start();
+
+        const result = yield* forkViaAcpRuntime({
+          provider: "test",
+          runtime,
+          targetCwd: process.cwd(),
+          unsupportedIssue: "fork unsupported",
+          requestTimeoutMs: 100,
+          timeoutError: (method) =>
+            new ProviderAdapterRequestError({
+              provider: "test",
+              method,
+              detail: "timed out",
+            }),
+        });
+
+        expect(result.sessionId).toBe("mock-session-fork-1");
+      }).pipe(
+        Effect.provide(
+          AcpSessionRuntime.layer({
+            spawn: {
+              command: bunExe,
+              args: [mockAgentPath],
+              env: {
+                VITEST: "true",
+                SYNARA_ACP_SUPPORT_SESSION_FORK: "1",
+                SYNARA_ACP_LOAD_REPLAY_DELAYS_MS: "0,50,100,150,199",
+              },
+            },
+            cwd: process.cwd(),
+            resumeSessionId: "mock-session-1",
+            loadReplayPolicy: {
+              quietMs: 1_000,
+              hardTimeoutMs: 200,
+            },
+            clientInfo: { name: "synara-test", version: "0.0.0" },
+            authMethodId: "test",
+          }),
+        ),
+        Effect.scoped,
+        Effect.provide(NodeServices.layer),
+      ),
+    ),
+  );
+
   it.effect(
     "assigns distinct fallback assistant item ids across separate runtime instances",
     () => {
@@ -431,14 +854,16 @@ describe("AcpSessionRuntime", () => {
         return delta?._tag === "ContentDelta" ? delta.itemId : undefined;
       }).pipe(Effect.provide(runtimeLayer), Effect.scoped, Effect.provide(NodeServices.layer));
 
-      return Effect.gen(function* () {
-        const firstItemId = yield* collectFallbackAssistantItemId;
-        const secondItemId = yield* collectFallbackAssistantItemId;
-        const fallbackIdPattern = /^assistant:mock-session-1:[0-9a-f]{8}:segment:0$/;
-        expect(firstItemId).toMatch(fallbackIdPattern);
-        expect(secondItemId).toMatch(fallbackIdPattern);
-        expect(firstItemId).not.toBe(secondItemId);
-      });
+      return TestClock.withLive(
+        Effect.gen(function* () {
+          const firstItemId = yield* collectFallbackAssistantItemId;
+          const secondItemId = yield* collectFallbackAssistantItemId;
+          const fallbackIdPattern = /^assistant:mock-session-1:[0-9a-f]{8}:segment:0$/;
+          expect(firstItemId).toMatch(fallbackIdPattern);
+          expect(secondItemId).toMatch(fallbackIdPattern);
+          expect(firstItemId).not.toBe(secondItemId);
+        }),
+      );
     },
   );
 

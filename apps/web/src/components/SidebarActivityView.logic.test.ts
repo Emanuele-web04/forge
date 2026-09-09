@@ -3,15 +3,12 @@ import { describe, expect, it } from "vitest";
 import { ProjectId, ThreadId } from "@synara/contracts";
 
 import type { SidebarThreadSummary, ThreadSession } from "../types";
-import { formatRelativeTime } from "~/lib/relativeTime";
-import { formatShortTimestamp } from "../timestampFormat";
 import { resolveThreadProjectLabel } from "./Sidebar.logic";
 import {
   buildActivityViewModel,
   collectActivityScopeOptions,
   collectUnreadActivityThreads,
   collectVisibleActivityThreadIds,
-  formatActivityRowTime,
   groupActivityThreadsByProject,
   hasUnreadActivity,
   isActivityThread,
@@ -387,25 +384,6 @@ describe("date buckets", () => {
     expect(resolveActivityDateBucket(threadAt(localIso(2026, 7, 1, 9)), nowMs)).toBe("today");
     expect(resolveActivityDateBucket(threadAt(localIso(2026, 6, 31, 23)), nowMs)).toBe("yesterday");
     expect(resolveActivityDateBucket(threadAt(localIso(2026, 6, 30, 23)), nowMs)).toBe("earlier");
-  });
-
-  it("shows clock time for today's rows and relative time otherwise", () => {
-    const todayIso = localIso(2026, 7, 1, 9);
-    const yesterdayIso = localIso(2026, 6, 31, 9);
-    expect(
-      formatActivityRowTime({
-        thread: threadAt(todayIso),
-        nowMs,
-        timestampFormat: "24-hour",
-      }),
-    ).toBe(formatShortTimestamp(todayIso, "24-hour"));
-    expect(
-      formatActivityRowTime({
-        thread: threadAt(yesterdayIso),
-        nowMs,
-        timestampFormat: "24-hour",
-      }),
-    ).toBe(formatRelativeTime(yesterdayIso));
   });
 
   it("splits an ordered list preserving order inside each bucket", () => {

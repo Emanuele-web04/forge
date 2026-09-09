@@ -140,7 +140,10 @@ export function useLocalStorage<T, E>(
     };
 
     const handleStorageChange = (event: StorageEvent) => {
-      if (event.key === key) {
+      const affectsLocalStorage =
+        event.storageArea === null || event.storageArea === isomorphicLocalStorage;
+      // Browsers report localStorage.clear() with key === null; every subscribed key must reset.
+      if (affectsLocalStorage && (event.key === null || event.key === key)) {
         syncFromStorage();
       }
     };

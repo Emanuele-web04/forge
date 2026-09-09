@@ -9,7 +9,6 @@ import { randomUUID } from "./utils";
 // live on the composer draft like terminal contexts (not wire attachments) and
 // are serialized into a trailing <file_comments> prompt block on send.
 export const FILE_COMMENT_TEXT_MAX_CHARS = 4_000;
-const FILE_COMMENT_PREVIEW_MAX_CHARS = 44;
 
 const TRAILING_FILE_COMMENTS_PATTERN = /\n*<file_comments>\n([\s\S]*?)\n<\/file_comments>\s*$/;
 const FILE_COMMENT_HEADER_PATTERN = /^- (.+?) (?:line (\d+)|lines (\d+)-(\d+)):$/;
@@ -109,17 +108,6 @@ export function formatFileCommentLabel(selection: {
   return `${selection.path} ${formatFileCommentRange(selection)}`;
 }
 
-export function formatFileCommentPreview(text: string): string {
-  const normalized = normalizeFileCommentText(text);
-  if (normalized.length === 0) {
-    return "Comment";
-  }
-  const firstLine = normalized.split("\n")[0] ?? normalized;
-  return firstLine.length > FILE_COMMENT_PREVIEW_MAX_CHARS
-    ? `${firstLine.slice(0, FILE_COMMENT_PREVIEW_MAX_CHARS - 1)}…`
-    : firstLine;
-}
-
 export function formatFileCommentTitleSeed(commentCount: number): string {
   return commentCount === 1 ? "File comment" : "File comments";
 }
@@ -172,10 +160,6 @@ export function extractTrailingFileComments(prompt: string): ExtractedFileCommen
     promptText: prompt.slice(0, match.index).replace(/\n+$/, ""),
     comments: parseFileCommentEntries(match[1] ?? ""),
   };
-}
-
-export function stripTrailingFileComments(prompt: string): string {
-  return extractTrailingFileComments(prompt).promptText;
 }
 
 function parseFileCommentEntries(block: string): ParsedFileCommentEntry[] {

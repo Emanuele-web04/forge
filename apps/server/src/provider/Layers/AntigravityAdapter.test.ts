@@ -447,8 +447,8 @@ describe("Antigravity CLI integration helpers", () => {
       prompt: "Ouvre YouTube dans le navigateur intégré.",
       hasGatewaySessionLease: true,
     });
-    expect(autonomousPrompt).toContain("Use the browser_* tools autonomously");
-    expect(autonomousPrompt).toContain("browser_open");
+    expect(autonomousPrompt).toContain("use browser_* autonomously");
+    expect(autonomousPrompt).toContain("Detailed rules live in each tool description");
     expect(autonomousPrompt).toContain("Ouvre YouTube dans le navigateur intégré.");
     expect(
       buildAntigravityTurnPrompt(withLease, {
@@ -823,8 +823,21 @@ describe("Antigravity CLI integration helpers", () => {
             },
           ]);
 
+          const turnTerminalFiber = yield* adapter.streamEvents.pipe(
+            Stream.filter((event) => event.type === "turn.completed"),
+            Stream.take(1),
+            Stream.runCollect,
+            Effect.forkChild,
+          );
           child?.emit("close", 0, null);
-          yield* Effect.sleep("25 millis");
+          // The close handler settles the turn asynchronously (gateway cancel,
+          // hook-file drain, run-dir cleanup) and clears activeProcess before
+          // emitting turn.completed. Wait for that event instead of a fixed
+          // sleep so stopSession cannot race the pid-less fake into teardown.
+          const terminalEvents = Array.from(
+            yield* Fiber.join(turnTerminalFiber).pipe(Effect.timeout("2 seconds")),
+          );
+          expect(terminalEvents).toHaveLength(1);
           yield* adapter.stopSession(threadId);
         }).pipe(
           Effect.provide(

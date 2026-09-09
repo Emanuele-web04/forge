@@ -25,6 +25,7 @@ export function ProviderUsagePanelContent(props: {
   rateLimits: ReadonlyArray<ProviderRateLimit>;
   usageLines?: ReadonlyArray<OpenUsageUsageLine> | undefined;
   notice?: string | null | undefined;
+  emptyMessage?: string | null | undefined;
   isLoading?: boolean | undefined;
   learnMoreHref?: string | null | undefined;
   showUsageLines?: boolean | undefined;
@@ -64,9 +65,10 @@ export function ProviderUsagePanelContent(props: {
         </p>
       ) : visibleRows.length === 0 ? (
         <p className="text-[length:var(--app-font-size-chat-meta,10px)] leading-relaxed text-muted-foreground">
-          {props.provider
-            ? "No local usage data was found yet for the selected provider."
-            : "No local usage data was found yet."}
+          {props.emptyMessage ??
+            (props.provider
+              ? "No local usage data was found yet for the selected provider."
+              : "No local usage data was found yet.")}
         </p>
       ) : null}
       {props.showLearnMore === true && learnMoreHref ? (

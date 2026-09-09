@@ -44,13 +44,13 @@ Organize work around projects and threads. Projects define the workspace; thread
 
 The tools surrounding an agent session remain available from the same task surface, keeping execution and review connected.
 
-| Surface            | Purpose                                                  |
-| ------------------ | -------------------------------------------------------- |
-| **Changes**        | Inspect diffs, changed files, and review state.          |
-| **Terminal**       | Run commands in the project environment.                 |
-| **Browser**        | Keep local previews and browser work next to the thread. |
-| **Files / Editor** | Browse, inspect, and edit project files in context.      |
-| **Git**            | Work with branches, commits, pushes, and pull requests.  |
+| Surface            | Purpose                                                                                           |
+| ------------------ | ------------------------------------------------------------------------------------------------- |
+| **Changes**        | Inspect diffs, changed files, and review state.                                                   |
+| **Terminal**       | Run commands in the project environment.                                                          |
+| **Browser**        | Keep local previews next to the thread and let agents use semantic or page-declared WebMCP tools. |
+| **Files / Editor** | Browse, inspect, and edit project files in context.                                               |
+| **Git**            | Work with branches, commits, pushes, and pull requests.                                           |
 
 ### 3. Split views and previews
 
@@ -72,9 +72,9 @@ Synara connects to coding-agent runtimes that are installed and authenticated lo
 | **Antigravity** | Antigravity CLI                             |
 | **Grok**        | Grok Build                                  |
 | **Droid**       | Factory Droid                               |
-| **Kilo**        | Kilo Code or a configured Kilo server       |
 | **OpenCode**    | OpenCode and its configured model providers |
 | **Pi**          | Pi and its configured model providers       |
+| **Devin**       | Devin CLI                                   |
 
 ### 5. Isolated parallel work
 
@@ -123,7 +123,7 @@ Synara uses the provider installations and subscriptions already configured on t
 
 ### Run from source
 
-The development checkout uses [Bun 1.3.12](https://bun.sh/) and [Node.js 24.13.1](https://nodejs.org/).
+The development checkout uses [Bun 1.4.2](https://bun.sh/) and [Node.js 24.13.1](https://nodejs.org/).
 
 ```console
 git clone https://github.com/Emanuele-web04/synara.git
@@ -131,6 +131,20 @@ cd synara
 bun install
 bun run dev
 ```
+
+`bun run typecheck` checks all seven workspaces with TypeScript 7 and the native
+Effect checker. CI and each workspace's `typecheck` script use the same compiler.
+`bun run typecheck:native` remains an alias for the default check.
+
+The native Effect checker does not enforce every legacy rule: in particular,
+`importFromBarrel` errors are currently missed. `bun run typecheck:legacy` keeps
+the TypeScript 5 check available for explicit comparisons; it is not run by CI.
+The existing compiler also remains installed for build and declaration tools
+that require its JavaScript API. Native and legacy checks use separate caches.
+
+Use these named scripts rather than a bare `tsc`, whose version depends on the
+current directory. Normal installation patches the native compiler for Effect;
+the root `typecheck` command also ensures that patch is applied before checking.
 
 ## Contributing
 

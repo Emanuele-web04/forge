@@ -47,7 +47,3 @@ export function hasPendingTurnDispatch(threadId: ThreadId): boolean {
   }
   return true;
 }
-
-export function resetPendingTurnDispatchesForTests(): void {
-  pendingDispatchArmedAtByThreadId.clear();
-}

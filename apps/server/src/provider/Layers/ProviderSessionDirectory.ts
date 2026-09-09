@@ -74,6 +74,16 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
                   runtimePayload: value.runtimePayload,
                 }),
               ),
+              // A binding for a provider that no longer exists behaves like no
+              // binding at all: the thread starts a fresh session instead of the
+              // whole lookup failing.
+              Effect.catchTag("ProviderSessionDirectoryPersistenceError", (error) =>
+                Effect.logDebug("provider session directory ignored unknown persisted provider", {
+                  threadId: value.threadId,
+                  providerName: value.providerName,
+                  detail: error.detail,
+                }).pipe(Effect.as(Option.none<ProviderRuntimeBinding>())),
+              ),
             ),
         }),
       ),
@@ -196,7 +206,3 @@ export const ProviderSessionDirectoryLive = Layer.effect(
   ProviderSessionDirectory,
   makeProviderSessionDirectory,
 );
-
-export function makeProviderSessionDirectoryLive() {
-  return Layer.effect(ProviderSessionDirectory, makeProviderSessionDirectory);
-}

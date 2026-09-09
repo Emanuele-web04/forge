@@ -376,6 +376,7 @@ it.layer(testLayer)("server CLI command", (it) => {
         SYNARA_NO_BROWSER: "true",
         SYNARA_AUTH_TOKEN: "env-token",
         SYNARA_DESKTOP_SHUTDOWN_TOKEN: "shutdown-token",
+        SYNARA_MIGRATION_DIVERGENCE_CONSENT: "migration-consent",
       });
 
       assert.equal(start.mock.calls.length, 1);
@@ -388,6 +389,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(resolvedConfig?.noBrowser, true);
       assert.equal(resolvedConfig?.authToken, "env-token");
       assert.equal(resolvedConfig?.desktopShutdownToken, "shutdown-token");
+      assert.equal(resolvedConfig?.migrationDivergenceConsent, "migration-consent");
       assert.equal(resolvedConfig?.autoBootstrapProjectFromCwd, false);
       assert.equal(resolvedConfig?.logProviderEvents, false);
       assert.equal(resolvedConfig?.logWebSocketEvents, false);
@@ -450,6 +452,34 @@ it.layer(testLayer)("server CLI command", (it) => {
           if (value !== undefined) {
             process.env[key] = value;
           }
+        }
+      }
+    }),
+  );
+
+  it.effect("consumes migration divergence consent before generic child launches", () =>
+    Effect.gen(function* () {
+      const environmentKey = "SYNARA_MIGRATION_DIVERGENCE_CONSENT";
+      const originalValue = process.env[environmentKey];
+      process.env[environmentKey] = "one-startup-consent";
+
+      try {
+        yield* runCli([]);
+
+        assert.equal(resolvedConfig?.migrationDivergenceConsent, "one-startup-consent");
+        assert.equal(process.env[environmentKey], undefined);
+        const descendant = spawnSync(
+          process.execPath,
+          ["-e", `process.stdout.write(process.env.${environmentKey} ?? "missing")`],
+          { encoding: "utf8" },
+        );
+        assert.equal(descendant.status, 0, descendant.stderr);
+        assert.equal(descendant.stdout, "missing");
+      } finally {
+        if (originalValue === undefined) {
+          delete process.env[environmentKey];
+        } else {
+          process.env[environmentKey] = originalValue;
         }
       }
     }),
@@ -527,6 +557,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       yield* runCli([], {
         SYNARA_AUTH_TOKEN: "browser-secret",
         SYNARA_DESKTOP_SHUTDOWN_TOKEN: "shutdown-secret",
+        SYNARA_MIGRATION_DIVERGENCE_CONSENT: "migration-secret",
       });
       const config = resolvedConfig;
       if (!config) throw new Error("Expected resolved server config");
@@ -534,9 +565,11 @@ it.layer(testLayer)("server CLI command", (it) => {
       const logData = makeServerStartupLogData(config);
       assert.equal(Object.hasOwn(logData, "authToken"), false);
       assert.equal(Object.hasOwn(logData, "desktopShutdownToken"), false);
+      assert.equal(Object.hasOwn(logData, "migrationDivergenceConsent"), false);
       assert.equal(logData.authEnabled, true);
       assert.notInclude(JSON.stringify(logData), "browser-secret");
       assert.notInclude(JSON.stringify(logData), "shutdown-secret");
+      assert.notInclude(JSON.stringify(logData), "migration-secret");
     }),
   );
 

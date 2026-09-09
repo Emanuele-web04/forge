@@ -1,0 +1,199 @@
+---
+title: Studio
+description: Organize long-running, output-oriented agent work separately from day-to-day development tasks.
+---
+
+Studio is a dedicated Synara workspace for long-running, agent-led work whose files and generated outputs matter more than a short interactive conversation. Use it to keep durable projects and their artifacts separate from routine repository tasks.
+
+## Studio or a regular task
+
+| Choose               | When                                                                                                     |
+| -------------------- | -------------------------------------------------------------------------------------------------------- |
+| Regular task         | The objective is focused, interactive, and tied to a normal project or repository workflow               |
+| Worktree-backed task | The objective is a code change that needs isolated Git ownership                                         |
+| Studio               | The work spans a longer period, produces a collection of outputs, or benefits from a dedicated workspace |
+| Automation           | The work should recur on a schedule rather than remain continuously open                                 |
+
+Studio is not automatically better for large code changes. Use Git-backed project tasks when branch ownership, diffs, commits, and pull requests are the primary deliverable.
+
+## Good Studio projects
+
+Studio fits work such as:
+
+- Research that produces several notes, reports, or source files
+- Long-form writing and iterative drafts
+- Image or media generation with many outputs
+- Product exploration with artifacts collected over several sessions
+- A durable agent-led project that should not crowd the normal task sidebar
+
+The project should still have a concrete outcome and review standard.
+
+## Define the project boundary
+
+Before starting, record:
+
+- Final deliverables
+- Input sources and constraints
+- Allowed tools and external systems
+- File naming and organization
+- Review checkpoints
+- What counts as complete
+- Which outputs may be shared or published
+
+```text
+Outcome:
+Produce a reviewed launch package for the feature.
+
+Deliverables:
+- positioning.md
+- launch-posts.md
+- faq.md
+- three approved image assets
+
+Constraints:
+- Use only verified product claims
+- Preserve source citations in the research notes
+- Do not publish or send anything
+
+Completion:
+All deliverables are present in the Environment panel and approved in a final review pass.
+```
+
+A long-running workspace without a deliverable contract becomes an unbounded conversation.
+
+## Use the Environment panel
+
+Studio collects outputs such as files and generated images in its Environment panel.
+
+Use the panel to:
+
+- Find the current deliverables without scrolling through the transcript
+- Review file names, formats, and versions
+- Detect duplicate or abandoned outputs
+- Separate final artifacts from intermediate experiments
+- Confirm that the project produced what its objective required
+
+The transcript explains how work happened. The Environment panel is where you verify what the work actually produced.
+
+## Organize outputs deliberately
+
+Use stable names and a simple structure:
+
+```text
+research/
+  sources.md
+  findings.md
+
+drafts/
+  launch-post-v1.md
+  launch-post-v2.md
+
+final/
+  launch-post.md
+  faq.md
+  hero-image.png
+```
+
+Avoid relying on “latest,” “final-final,” or transcript position to identify the approved version. Promote reviewed artifacts into a clear final location.
+
+## Work in checkpoints
+
+Long-running work benefits from explicit review stages:
+
+<Steps>
+<Step>
+
+### Research checkpoint
+
+Confirm sources, assumptions, and gaps before synthesis begins.
+
+</Step>
+<Step>
+
+### Structure checkpoint
+
+Review the outline, artifact plan, and success criteria before producing all outputs.
+
+</Step>
+<Step>
+
+### Draft checkpoint
+
+Evaluate substance and completeness before polishing formatting or generating variants.
+
+</Step>
+<Step>
+
+### Final checkpoint
+
+Inspect every deliverable, remove abandoned artifacts, and confirm that nothing was published or shared unintentionally.
+
+</Step>
+</Steps>
+
+Do not let a long session hide a wrong direction for hours. Stop and review at meaningful boundaries.
+
+## Provider changes
+
+A Studio project may still benefit from different providers for different phases. Apply the same handoff discipline used in regular tasks:
+
+- Preserve the current artifacts
+- State the receiver’s role
+- Do not assume provider-native context transfers
+- Ask the receiver to inspect the actual files
+- Verify what changed after the handoff
+
+Use separate Studio threads when work should remain independent rather than sharing one evolving artifact set.
+
+## Verification
+
+Match verification to the output:
+
+| Output             | Useful checks                                                                          |
+| ------------------ | -------------------------------------------------------------------------------------- |
+| Research           | Source coverage, citations, unsupported claims, conflicting evidence                   |
+| Documentation      | Structure, links, terminology, rendered output, build                                  |
+| Code artifact      | Tests, typecheck, build, diff review, runtime checks                                   |
+| Image              | Dimensions, cropping, text accuracy, visual defects, rights and privacy                |
+| Data file          | Schema validation, row counts, duplicates, deterministic regeneration                  |
+| Publishing package | Final filenames, platform constraints, links, factual review, no accidental publishing |
+
+Generated output is not approved output.
+
+## Privacy and secrets
+
+Long-running projects can accumulate sensitive material.
+
+- Do not place credentials in Studio files or prompts.
+- Remove private URLs and account data from final artifacts.
+- Keep source material within its permitted use.
+- Review generated images for private information or unintended people and text.
+- Confirm which files are intended for sharing before exporting or publishing.
+
+## When to leave Studio
+
+Move work into a normal Git project task when:
+
+- The next phase is a code implementation
+- Branch and pull-request ownership becomes central
+- Existing repository tests and tooling should govern the output
+- Several concurrent writers need separate worktrees
+
+Move a repeated process into an automation when its objective, schedule, and stop condition are stable.
+
+## Completion checklist
+
+- [ ] Deliverables and completion criteria are explicit
+- [ ] Inputs and sources are understood
+- [ ] Environment-panel outputs match the objective
+- [ ] Intermediate and final artifacts are separated
+- [ ] Meaningful checkpoints were reviewed
+- [ ] Provider handoffs preserved file ownership
+- [ ] Output-specific verification was completed
+- [ ] Secrets and private information were removed
+- [ ] Nothing was published or shared without deliberate confirmation
+
+<Callout type="info" title="Review the artifacts, not only the conversation">
+  Studio is successful when the final outputs are correct, organized, and independently reviewed—not
+  merely when the agent produced a long transcript.
+</Callout>

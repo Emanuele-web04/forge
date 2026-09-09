@@ -9,6 +9,8 @@ import { makeAgentGatewaySessionRegistry } from "./Layers/AgentGatewaySessionReg
 import type { AgentGatewayCredentialsShape } from "./Services/AgentGatewayCredentials.ts";
 import { makeAgentGatewayInFlightRequestRegistry } from "./inFlightRequestRegistry.ts";
 import { makeAgentGatewayMcpTransport } from "./mcpTransport.ts";
+import { FALLBACK_OBJECT_DESCRIPTION } from "./sanitizeToolInputSchema.ts";
+import { countSchemaKeyOccurrences, isJsonRecord } from "./schemaTestUtils.ts";
 import { acquireAgentGatewaySessionLease, type AgentGatewaySessionLease } from "./sessionLease.ts";
 import type { ToolEntry } from "./toolRuntime.ts";
 
@@ -56,6 +58,7 @@ function makeThread(threadId: string): OrchestrationThreadShell {
 
 function makeTransport(input: {
   readonly tool: ToolEntry;
+  readonly extraTools?: ReadonlyArray<ToolEntry>;
   readonly threads: ReadonlyArray<OrchestrationThreadShell>;
 }) {
   const threads = new Map(input.threads.map((thread) => [String(thread.id), thread]));
@@ -132,7 +135,7 @@ function makeTransport(input: {
   const transport = makeAgentGatewayMcpTransport({
     credentials,
     snapshotQuery,
-    tools: [input.tool],
+    tools: [input.tool, ...(input.extraTools ?? [])],
     instructions: "test",
     requireThreadShell: (threadId) => {
       const thread = threads.get(threadId);
@@ -454,5 +457,67 @@ describe("makeAgentGatewayMcpTransport cancellation", () => {
         assert.equal(response.status, 200);
         assert.deepEqual(response.body, [{ jsonrpc: "2.0", id: "fast-batch", result: {} }]);
       }).pipe(Effect.timeout("2 seconds")),
+  );
+});
+
+const findToolOrThrow = (tools: ReadonlyArray<unknown>, name: string): Record<string, unknown> => {
+  const found = tools.find((candidate) => isJsonRecord(candidate) && candidate.name === name);
+  if (!isJsonRecord(found)) {
+    throw new Error(`Expected tools/list to serve ${name}.`);
+  }
+  return found;
+};
+
+describe("makeAgentGatewayMcpTransport tools/list schema sanitization", () => {
+  it.effect("serves sanitized schemas while keeping stored definitions dirty", () =>
+    Effect.gen(function* () {
+      const recursiveTool: ToolEntry = {
+        definition: {
+          name: "synara_recursive",
+          description: "tool with a cyclic schema",
+          inputSchema: {
+            type: "object",
+            properties: { payload: { $ref: "#/$defs/JsonValue" } },
+            $defs: {
+              JsonValue: {
+                anyOf: [
+                  { type: "string" },
+                  { type: "array", items: { $ref: "#/$defs/JsonValue" } },
+                ],
+              },
+            },
+          },
+        },
+        requiredCapability: "thread:read",
+        handler: () => Effect.succeed({ content: [{ type: "text" as const, text: "ok" }] }),
+      };
+      const transport = makeTransport({
+        threads: [makeThread("thread-schema")],
+        tool: recursiveTool,
+      });
+      const response = yield* post(transport, "token-1", {
+        jsonrpc: "2.0",
+        id: "list-schemas",
+        method: "tools/list",
+      });
+      assert.equal(response.status, 200);
+      if (!isJsonRecord(response.body) || !isJsonRecord(response.body.result)) {
+        throw new Error("Expected tools/list to answer with a result object.");
+      }
+      if (!Array.isArray(response.body.result.tools)) {
+        throw new Error("Expected tools/list to answer with a tools array.");
+      }
+      const listed = findToolOrThrow(response.body.result.tools, "synara_recursive");
+      assert.deepEqual(listed.inputSchema, {
+        type: "object",
+        properties: {
+          payload: {
+            type: "object",
+            description: FALLBACK_OBJECT_DESCRIPTION,
+          },
+        },
+      });
+      assert.isAbove(countSchemaKeyOccurrences(recursiveTool.definition.inputSchema, "$ref"), 0);
+    }),
   );
 });

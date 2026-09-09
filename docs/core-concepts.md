@@ -24,7 +24,8 @@ using separate worktrees also have separate working directories and branches.
 - **Conversation** — user messages, agent responses, plans, tools, approvals, and subagent activity
 - **Composer** — objectives, attachments, provider selection, model selection, and task controls
 - **Terminal** — a real shell opened in the task's working directory
-- **Browser** — a page surface for previews, inspection, and supported agent interaction
+- **Browser** — a shared live page surface for previews, semantic automation, and page-declared
+  WebMCP tools
 - **Diff and Git views** — the changes produced in the environment and the path toward committing or
   opening a PR
 

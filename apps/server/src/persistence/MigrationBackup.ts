@@ -1,27 +1,43 @@
 import { constants as fsConstants, type Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { Effect } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import {
   MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS,
   migrationBackupDirectory,
+  migrationBackupProvenancePath,
   migrationRecoveryMarkerPath,
   parseMigrationRecoveryResumeState,
+  type MigrationSchemaTooNewRecovery,
 } from "@synara/shared/migrationRecovery";
 export {
   migrationBackupDirectory,
+  migrationBackupProvenancePath,
   migrationRecoveryMarkerPath,
 } from "@synara/shared/migrationRecovery";
 
+import {
+  sameFileIdentity,
+  syncDirectoryEntry,
+  syncRegularFile,
+} from "@synara/shared/filesystemPlatform";
 import { ensurePrivateDirectorySync, repairPrivateFile } from "../privatePathPermissions.ts";
 import { withDatabaseLifecycleLock } from "./DatabaseLifecycleLock.ts";
+import {
+  createMigrationDivergenceConsentChallenge,
+  MigrationDivergenceConsentRequiredError,
+  type MigrationDivergencePlan,
+} from "./MigrationDivergenceConsent.ts";
+export { MigrationDivergenceConsentRequiredError } from "./MigrationDivergenceConsent.ts";
 import {
   findFirstMigrationLineageDivergence,
   LAST_SHARED_LINEAGE_MIGRATION_ID,
   migrationEntries,
+  planLegacyMigration32Rename,
+  planMigrationLineageAliasRepairs,
 } from "./Migrations.ts";
 
 /** Keep at most this many finished pre-migration SQLite backups (issue #618). */
@@ -171,19 +187,25 @@ async function assertBackupSpaceAvailable(
   }
 }
 
-type MigrationBackupPlan = {
-  readonly sourceVersion: string;
-  readonly targetVersion: number;
-};
+type MigrationBackupPlan = MigrationDivergencePlan;
 
 export type MigrationBackupResult = MigrationBackupPlan & {
   readonly backupPath: string;
+  readonly createdAt: string;
 };
 
 const attemptPromise = <A>(tryPromise: () => Promise<A>) =>
   Effect.tryPromise({ try: tryPromise, catch: (cause) => cause });
 
 const latestMigrationId = Math.max(...migrationEntries.map(([id]) => id));
+
+function migrationLineageFingerprint(
+  recorded: ReadonlyArray<{ readonly migration_id: number; readonly name: string }>,
+): string {
+  return createHash("sha256")
+    .update(JSON.stringify(recorded.map(({ migration_id, name }) => [migration_id, name])))
+    .digest("hex");
+}
 
 export const inspectMigrationBackupPlan = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -222,30 +244,46 @@ export const inspectMigrationBackupPlan = Effect.gen(function* () {
 
   const recordedNames = new Map(recorded.map((row) => [row.migration_id, row.name] as const));
   const highWaterMark = recorded[recorded.length - 1]!.migration_id;
-  const canonicalPrefixThrough31 = migrationEntries
-    .filter(([id]) => id < 32)
-    .every(([id, name]) => recordedNames.get(id) === name);
-  if (
-    canonicalPrefixThrough31 &&
-    recordedNames.has(32) &&
-    recordedNames.get(32) !== "ReconcileImportedSchemaLineage"
-  ) {
-    return { sourceVersion: `v${highWaterMark}-legacy32`, targetVersion: latestMigrationId };
+  const inspectedNames = new Map(recordedNames);
+  const migration32Rename = planLegacyMigration32Rename(recordedNames);
+  if (migration32Rename !== null) {
+    inspectedNames.set(32, migration32Rename);
   }
-
-  // Same predicate the reconciler classifies trackers with. Sharing it is what
-  // keeps "this database needs a backup" and "this database will be replayed"
-  // from ever disagreeing.
-  const firstDivergedId = findFirstMigrationLineageDivergence(recordedNames, highWaterMark)?.[0];
-  if (firstDivergedId !== undefined) {
+  for (const repair of planMigrationLineageAliasRepairs(inspectedNames)) {
+    if (repair.kind === "rename") {
+      inspectedNames.set(repair.migrationId, repair.name);
+    } else {
+      inspectedNames.delete(repair.migrationId);
+    }
+  }
+  const inspectedHighWaterMark = Math.max(...inspectedNames.keys(), 0);
+  // This is the same post-alias predicate the reconciler uses. Sharing it keeps
+  // "this database needs consent" and "this database will be replayed" aligned.
+  const firstDiverged = findFirstMigrationLineageDivergence(inspectedNames, inspectedHighWaterMark);
+  if (firstDiverged !== undefined) {
+    const [firstDivergedId, expectedName] = firstDiverged;
     // Shared-lineage divergence is rejected before the migrator mutates data.
     if (firstDivergedId <= LAST_SHARED_LINEAGE_MIGRATION_ID) {
       return null;
     }
     return {
-      sourceVersion: `imported-v${highWaterMark}-from${firstDivergedId}`,
+      sourceVersion:
+        migration32Rename === null
+          ? `imported-v${highWaterMark}-from${firstDivergedId}`
+          : `v${highWaterMark}-legacy32`,
       targetVersion: latestMigrationId,
+      lineageDivergence: {
+        firstDivergedId,
+        expectedName,
+        recordedName: inspectedNames.get(firstDivergedId) ?? "<missing>",
+        highWaterMark,
+        lineageFingerprint: migrationLineageFingerprint(recorded),
+      },
     };
+  }
+
+  if (migration32Rename !== null) {
+    return { sourceVersion: `v${highWaterMark}-legacy32`, targetVersion: latestMigrationId };
   }
 
   if (highWaterMark < latestMigrationId) {
@@ -266,41 +304,6 @@ async function ensurePrivateBackupDirectory(directory: string): Promise<void> {
   ensurePrivateDirectorySync(directory);
 }
 
-async function syncDirectory(directory: string): Promise<void> {
-  if (process.platform === "win32") return;
-  const handle = await fs.open(
-    directory,
-    fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW,
-  );
-  try {
-    await handle.sync();
-  } catch (cause) {
-    const code = (cause as NodeJS.ErrnoException).code;
-    if (code !== "EINVAL" && code !== "ENOTSUP" && code !== "EBADF") throw cause;
-  } finally {
-    await handle.close();
-  }
-}
-
-/**
- * Flushes a freshly written regular file to stable storage.
- *
- * The handle is opened read-write on purpose. Windows `FlushFileBuffers`
- * requires `GENERIC_WRITE`, so syncing through an `O_RDONLY` handle fails there
- * with EPERM/EACCES — which is how a full-size `.partial` snapshot was stranded
- * on every single backup attempt.
- */
-async function syncRegularFile(filePath: string): Promise<void> {
-  const flags =
-    process.platform === "win32" ? fsConstants.O_RDWR : fsConstants.O_RDWR | fsConstants.O_NOFOLLOW;
-  const handle = await fs.open(filePath, flags);
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-}
-
 async function ensurePrivateRegularFile(filePath: string) {
   await repairPrivateFile(filePath);
   const stat = await fs.lstat(filePath);
@@ -308,10 +311,6 @@ async function ensurePrivateRegularFile(filePath: string) {
     throw new Error(`Migration backup is not a regular file: ${filePath}`);
   }
   return stat;
-}
-
-function sameFileIdentity(left: Stats, right: Stats): boolean {
-  return process.platform === "win32" || (left.dev === right.dev && left.ino === right.ino);
 }
 
 async function assertDirectoryIdentity(directory: string, openedStat: Stats): Promise<void> {
@@ -445,18 +444,16 @@ function isMigrationBackupPartial(dbBasename: string): (name: string) => boolean
 }
 
 /**
- * Matches the temporary marker `writeRecoveryMarkerFile` writes before renaming it
- * over the durable recovery marker.
+ * Matches a temporary migration-state JSON file before its atomic rename.
  *
  * These land next to the database rather than in the backup directory, so the
  * backup-partial sweep never sees them. The write window is tiny, but a crash
  * inside it strands the file permanently — in the very directory whose file churn
  * is what users notice.
  */
-function isMigrationRecoveryMarkerPartial(markerBasename: string): (name: string) => boolean {
-  const partialPrefix = `${markerBasename}.`;
-  return (name) =>
-    name !== markerBasename && name.startsWith(partialPrefix) && name.endsWith(".partial");
+function isAtomicMigrationJsonPartial(basename: string): (name: string) => boolean {
+  const partialPrefix = `${basename}.`;
+  return (name) => name !== basename && name.startsWith(partialPrefix) && name.endsWith(".partial");
 }
 
 const BUNDLE_SIDECAR_SUFFIXES = ["-wal", "-shm"] as const;
@@ -692,7 +689,8 @@ export const createMigrationBackup = (dbPath: string, plan: MigrationBackupPlan)
     );
     const requiredBytes = yield* estimateMigrationBackupRequiredBytes(dbPath);
     yield* attemptPromise(() => assertBackupSpaceAvailable(requiredBytes, backupDirectory));
-    const uniqueSuffix = `${compactTimestamp(new Date())}-${randomUUID()}`;
+    const createdAt = new Date().toISOString();
+    const uniqueSuffix = `${compactTimestamp(new Date(createdAt))}-${randomUUID()}`;
     const finalName = `${basename}.pre-migration-${safeVersionLabel(plan.sourceVersion)}-to-v${plan.targetVersion}-${uniqueSuffix}.sqlite`;
     const backupPath = path.join(backupDirectory, finalName);
     const temporaryPath = path.join(backupDirectory, `.${finalName}.partial`);
@@ -703,7 +701,7 @@ export const createMigrationBackup = (dbPath: string, plan: MigrationBackupPlan)
         await ensurePrivateRegularFile(temporaryPath);
         await syncRegularFile(temporaryPath);
         await fs.rename(temporaryPath, backupPath);
-        await syncDirectory(backupDirectory);
+        await syncDirectoryEntry(backupDirectory);
       });
     }).pipe(
       // Must span the whole critical section, not just the vacuum. A failure
@@ -712,12 +710,12 @@ export const createMigrationBackup = (dbPath: string, plan: MigrationBackupPlan)
       Effect.tapError(() => attemptPromise(() => fs.unlink(temporaryPath)).pipe(Effect.ignore)),
     );
     yield* pruneMigrationBackups(dbPath);
-    return { ...plan, backupPath } satisfies MigrationBackupResult;
+    return { ...plan, backupPath, createdAt } satisfies MigrationBackupResult;
   });
 
-/** Durably replaces the marker in one atomic rename; never leaves a partial behind. */
-async function writeRecoveryMarkerFile(markerPath: string, payload: unknown): Promise<void> {
-  const temporaryPath = `${markerPath}.${randomUUID()}.partial`;
+/** Durably replaces private JSON in one atomic rename; never leaves a partial behind. */
+async function writePrivateJsonFile(filePath: string, payload: unknown): Promise<void> {
+  const temporaryPath = `${filePath}.${randomUUID()}.partial`;
   try {
     await fs.writeFile(temporaryPath, `${JSON.stringify(payload, null, 2)}\n`, {
       encoding: "utf8",
@@ -726,50 +724,92 @@ async function writeRecoveryMarkerFile(markerPath: string, payload: unknown): Pr
     });
     await ensurePrivateRegularFile(temporaryPath);
     await syncRegularFile(temporaryPath);
-    await fs.rename(temporaryPath, markerPath);
-    await syncDirectory(path.dirname(markerPath));
+    await fs.rename(temporaryPath, filePath);
+    await syncDirectoryEntry(path.dirname(filePath));
   } catch (cause) {
     await fs.unlink(temporaryPath).catch(() => undefined);
     throw cause;
   }
 }
 
-const writeRecoveryMarker = (dbPath: string, backup: MigrationBackupResult) =>
-  attemptPromise(async () => {
-    await writeRecoveryMarkerFile(migrationRecoveryMarkerPath(dbPath), {
+function migrationRecoveryPayload(dbPath: string, backup: MigrationBackupResult) {
+  return {
+    version: 1,
+    databasePath: dbPath,
+    backupPath: backup.backupPath,
+    sourceVersion: backup.sourceVersion,
+    targetVersion: backup.targetVersion,
+    lineageDivergence: backup.lineageDivergence ?? null,
+    phase: "migration-in-progress",
+    createdAt: backup.createdAt,
+    resumeAttempts: 0,
+    restore: {
+      executable: "synara-restore-migration-backup",
+      arguments: [dbPath],
+    },
+    recovery:
+      "Stop every Synara process, then run the explicit migration-backup restore command for this database.",
+  } as const;
+}
+
+const writeRecoveryMarker = (dbPath: string, payload: Record<string, unknown>) =>
+  attemptPromise(() => writePrivateJsonFile(migrationRecoveryMarkerPath(dbPath), payload));
+
+const writeCompletedMigrationProvenance = (dbPath: string, payload: Record<string, unknown>) =>
+  attemptPromise(() =>
+    writePrivateJsonFile(migrationBackupProvenancePath(dbPath), {
+      ...payload,
+      version: 1,
       databasePath: dbPath,
-      backupPath: backup.backupPath,
-      sourceVersion: backup.sourceVersion,
-      targetVersion: backup.targetVersion,
-      phase: "migration-in-progress",
-      createdAt: new Date().toISOString(),
-      resumeAttempts: 0,
-      recovery:
-        "Synara retries an interrupted migration a bounded number of times on startup. Once that budget is spent it refuses to open this database until an operator stops every Synara process and runs the explicit migration-backup restore command.",
-    });
-  });
+      phase: "migration-completed",
+      completedAt: new Date().toISOString(),
+    }),
+  );
 
 const removeRecoveryMarker = (dbPath: string) =>
   attemptPromise(async () => {
     await fs.unlink(migrationRecoveryMarkerPath(dbPath));
-    await syncDirectory(path.dirname(dbPath));
+    await syncDirectoryEntry(path.dirname(dbPath));
   });
+
+const removeRecoveryMarkerIfPresent = async (dbPath: string): Promise<void> => {
+  try {
+    await fs.unlink(migrationRecoveryMarkerPath(dbPath));
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw cause;
+  }
+  await syncDirectoryEntry(path.dirname(dbPath));
+};
+
+export interface RunWithPreMigrationBackupOptions {
+  readonly divergenceConsent?: string | undefined;
+}
 
 export const runWithPreMigrationBackup = <A, E, R>(
   dbPath: string,
   migration: Effect.Effect<A, E, R>,
+  options: RunWithPreMigrationBackupOptions = {},
 ) =>
   Effect.gen(function* () {
     const plan = yield* inspectMigrationBackupPlan;
+    if (plan) {
+      const challenge = createMigrationDivergenceConsentChallenge(dbPath, plan);
+      if (challenge && options.divergenceConsent !== challenge.consentToken) {
+        return yield* Effect.fail(new MigrationDivergenceConsentRequiredError(challenge));
+      }
+    }
     const backup = plan ? yield* createMigrationBackup(dbPath, plan) : null;
-    if (backup) {
+    const recoveryPayload = backup ? migrationRecoveryPayload(dbPath, backup) : null;
+    if (recoveryPayload) {
       // This write-ahead marker must be durable before migrations can mutate
       // the live database. A later startup will fail closed until an operator
       // explicitly restores the known-good snapshot.
-      yield* writeRecoveryMarker(dbPath, backup);
+      yield* writeRecoveryMarker(dbPath, recoveryPayload);
     }
     const result = yield* migration;
-    if (backup) {
+    if (recoveryPayload) {
+      yield* writeCompletedMigrationProvenance(dbPath, recoveryPayload);
       yield* removeRecoveryMarker(dbPath);
     }
     return result;
@@ -783,9 +823,13 @@ export const runWithPreMigrationBackup = <A, E, R>(
 const restoreSqliteMigrationBackup = (input: {
   readonly dbPath: string;
   readonly backupPath: string;
+  readonly latestSupportedMigrationId: number;
+  readonly beforeLiveDatabaseSwap?: (() => Promise<void>) | undefined;
+  readonly afterLiveDatabaseRollback?: (() => Promise<void>) | undefined;
 }) =>
   attemptPromise(async () => {
-    await validateSqliteMigrationBackup(input.backupPath);
+    const sourceInspection = await inspectSqliteMigrationBackup(input.backupPath);
+    assertMigrationBackupCompatible(sourceInspection, input.latestSupportedMigrationId);
     const dbDirectory = path.dirname(input.dbPath);
     const dbBasename = path.basename(input.dbPath);
     await removeStaleRegularFiles(
@@ -793,13 +837,26 @@ const restoreSqliteMigrationBackup = (input: {
       (name) => name.startsWith(`${dbBasename}.`) && name.endsWith(".restore"),
     );
     const restoredTemporaryPath = `${input.dbPath}.${randomUUID()}.restore`;
-    await fs.copyFile(input.backupPath, restoredTemporaryPath, fsConstants.COPYFILE_EXCL);
-    await ensurePrivateRegularFile(restoredTemporaryPath);
-    await syncRegularFile(restoredTemporaryPath);
+    try {
+      await fs.copyFile(input.backupPath, restoredTemporaryPath, fsConstants.COPYFILE_EXCL);
+      await ensurePrivateRegularFile(restoredTemporaryPath);
+      await syncRegularFile(restoredTemporaryPath);
+      const copiedInspection = await inspectSqliteMigrationBackup(restoredTemporaryPath);
+      assertMigrationBackupCompatible(copiedInspection, input.latestSupportedMigrationId);
+      if (copiedInspection.migrationId !== sourceInspection.migrationId) {
+        throw new Error(`Migration backup changed while it was copied: ${input.backupPath}`);
+      }
+    } catch (cause) {
+      await fs.unlink(restoredTemporaryPath).catch(() => undefined);
+      throw cause;
+    }
 
     const failedSuffix = `.failed-migration-${compactTimestamp(new Date())}-${randomUUID()}`;
     const moved: Array<readonly [string, string]> = [];
+    let swapPrepared = false;
     try {
+      swapPrepared = true;
+      await input.beforeLiveDatabaseSwap?.();
       for (const suffix of ["", "-wal", "-shm"]) {
         const source = `${input.dbPath}${suffix}`;
         const destination = `${input.dbPath}${failedSuffix}${suffix}`;
@@ -814,36 +871,47 @@ const restoreSqliteMigrationBackup = (input: {
     } catch (cause) {
       // Rollback is valid only before the restored main database is installed.
       await fs.unlink(restoredTemporaryPath).catch(() => undefined);
+      let rollbackSucceeded = true;
       for (const [source, destination] of moved.reverse()) {
-        await fs.rename(destination, source).catch(() => undefined);
+        await fs.rename(destination, source).catch(() => {
+          rollbackSucceeded = false;
+        });
+      }
+      if (swapPrepared && rollbackSucceeded) {
+        await input.afterLiveDatabaseRollback?.();
       }
       throw cause;
     }
 
-    // Make the database/WAL/SHM swap durable before clearing the marker. A
-    // crash or cleanup failure before the final unlink therefore remains an
-    // explicit, retryable recovery state.
-    await syncDirectory(path.dirname(input.dbPath));
+    // Make the database/WAL/SHM swap durable before the caller records the
+    // completed restore and clears the marker. Until both happen, a crash or
+    // cleanup failure remains an explicit, retryable recovery state.
+    await syncDirectoryEntry(path.dirname(input.dbPath));
     await pruneFailedMigrationBundles(input.dbPath);
-    await syncDirectory(path.dirname(input.dbPath));
-    await fs.unlink(migrationRecoveryMarkerPath(input.dbPath)).catch((cause) => {
-      if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
-    });
-    await syncDirectory(path.dirname(input.dbPath));
+    await syncDirectoryEntry(path.dirname(input.dbPath));
   });
 
-async function validateSqliteMigrationBackup(backupPath: string): Promise<void> {
+interface SqliteMigrationBackupInspection {
+  readonly migrationId: number;
+  readonly lineage: "canonical" | "imported" | "incompatible";
+}
+
+async function inspectSqliteMigrationBackup(
+  backupPath: string,
+): Promise<SqliteMigrationBackupInspection> {
   const backupStat = await fs.lstat(backupPath);
   if (!backupStat.isFile() || backupStat.isSymbolicLink()) {
     throw new Error(`Migration backup is not a regular file: ${backupPath}`);
   }
 
   let integrity: unknown;
+  let migration: SqliteMigrationBackupInspection;
   if (process.versions.bun !== undefined) {
     const { Database } = await import("bun:sqlite");
     const database = new Database(backupPath, { readonly: true });
     try {
       integrity = database.query("PRAGMA integrity_check").get();
+      migration = readBunMigrationInspection(database);
     } finally {
       database.close();
     }
@@ -852,6 +920,7 @@ async function validateSqliteMigrationBackup(backupPath: string): Promise<void> 
     const database = new DatabaseSync(backupPath, { readOnly: true });
     try {
       integrity = database.prepare("PRAGMA integrity_check").get();
+      migration = readNodeMigrationInspection(database);
     } finally {
       database.close();
     }
@@ -862,6 +931,93 @@ async function validateSqliteMigrationBackup(backupPath: string): Promise<void> 
     !Object.values(integrity as Record<string, unknown>).includes("ok")
   ) {
     throw new Error(`Migration backup failed SQLite integrity_check: ${backupPath}`);
+  }
+  return migration;
+}
+
+function readBunMigrationInspection(
+  database: import("bun:sqlite").Database,
+): SqliteMigrationBackupInspection {
+  const tracker = database
+    .query(
+      "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'",
+    )
+    .get();
+  if (!tracker) return inspectMigrationRows([]);
+  return inspectMigrationRows(
+    database
+      .query(
+        "SELECT migration_id AS migrationId, name FROM effect_sql_migrations ORDER BY migration_id ASC",
+      )
+      .all(),
+  );
+}
+
+function readNodeMigrationInspection(
+  database: import("node:sqlite").DatabaseSync,
+): SqliteMigrationBackupInspection {
+  const tracker = database
+    .prepare(
+      "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'",
+    )
+    .get();
+  if (!tracker) return inspectMigrationRows([]);
+  return inspectMigrationRows(
+    database
+      .prepare(
+        "SELECT migration_id AS migrationId, name FROM effect_sql_migrations ORDER BY migration_id ASC",
+      )
+      .all(),
+  );
+}
+
+function inspectMigrationRows(rows: ReadonlyArray<unknown>): SqliteMigrationBackupInspection {
+  const recordedNames = new Map<number, string>();
+  for (const row of rows) {
+    const migration = row as { readonly migrationId?: unknown; readonly name?: unknown };
+    if (
+      typeof migration.migrationId !== "number" ||
+      !Number.isSafeInteger(migration.migrationId) ||
+      migration.migrationId < 0 ||
+      typeof migration.name !== "string"
+    ) {
+      throw new Error("Migration backup has an unreadable migration tracker.");
+    }
+    recordedNames.set(migration.migrationId, migration.name);
+  }
+
+  for (const repair of planMigrationLineageAliasRepairs(recordedNames)) {
+    if (repair.kind === "rename") {
+      recordedNames.set(repair.migrationId, repair.name);
+    } else {
+      recordedNames.delete(repair.migrationId);
+    }
+  }
+  const migrationId = Math.max(...recordedNames.keys(), 0);
+  const divergence = findFirstMigrationLineageDivergence(recordedNames, migrationId);
+  return {
+    migrationId,
+    lineage:
+      divergence === undefined
+        ? "canonical"
+        : divergence[0] > LAST_SHARED_LINEAGE_MIGRATION_ID
+          ? "imported"
+          : "incompatible",
+  };
+}
+
+function assertMigrationBackupCompatible(
+  inspection: SqliteMigrationBackupInspection,
+  latestSupportedMigrationId: number,
+): void {
+  if (inspection.lineage === "incompatible") {
+    throw new Error("Migration backup has an unrecognized migration lineage.");
+  }
+  if (inspection.lineage === "canonical" && inspection.migrationId > latestSupportedMigrationId) {
+    throw new Error(
+      `Migration backup schema ${inspection.migrationId} is newer than this build ` +
+        `(latest supported migration: ${latestSupportedMigrationId}).`,
+    );
   }
 }
 
@@ -904,59 +1060,116 @@ async function readRegularFileNoFollow(filePath: string): Promise<string> {
   }
 }
 
-async function readMigrationRecoveryMarker(
+async function readMigrationBackupRecord(
   dbPath: string,
+  recordPath: string,
+  recordLabel: string,
 ): Promise<MigrationRecoveryMarker | null> {
-  const markerPath = migrationRecoveryMarkerPath(dbPath);
-  let markerText: string;
+  let recordText: string;
   try {
-    markerText = await readRegularFileNoFollow(markerPath);
+    recordText = await readRegularFileNoFollow(recordPath);
   } catch (cause) {
     if ((cause as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw cause;
   }
 
-  const marker = JSON.parse(markerText) as {
+  const record = JSON.parse(recordText) as {
     readonly databasePath?: unknown;
     readonly backupPath?: unknown;
   };
-  if (marker.databasePath !== dbPath || typeof marker.backupPath !== "string") {
-    throw new Error(`Invalid migration recovery marker: ${markerPath}`);
+  if (record.databasePath !== dbPath || typeof record.backupPath !== "string") {
+    throw new Error(`Invalid ${recordLabel}: ${recordPath}`);
   }
-  const resumeState = parseMigrationRecoveryResumeState(markerText);
+  const resumeState = parseMigrationRecoveryResumeState(recordText);
   if (resumeState === null) {
-    throw new Error(`Migration recovery marker has an unreadable resume counter: ${markerPath}`);
+    throw new Error(`${recordLabel} has an unreadable resume counter: ${recordPath}`);
   }
   const backupDirectory = path.resolve(migrationBackupDirectory(dbPath));
   const backupDirectoryStat = await fs.lstat(backupDirectory);
   if (!backupDirectoryStat.isDirectory() || backupDirectoryStat.isSymbolicLink()) {
     throw new Error(`Invalid migration backup directory: ${backupDirectory}`);
   }
-  const backupPath = path.resolve(marker.backupPath);
+  const backupPath = path.resolve(record.backupPath);
   const backupName = path.basename(backupPath);
   if (
-    marker.backupPath !== backupPath ||
+    record.backupPath !== backupPath ||
     path.dirname(backupPath) !== backupDirectory ||
     !generatedBackupNamePattern(dbPath).test(backupName)
   ) {
-    throw new Error(`Migration recovery marker references an invalid backup: ${backupPath}`);
+    throw new Error(`${recordLabel} references an invalid backup: ${backupPath}`);
   }
   const backupStat = await fs.lstat(backupPath);
   if (!backupStat.isFile() || backupStat.isSymbolicLink()) {
-    throw new Error(`Migration recovery marker references a non-regular backup: ${backupPath}`);
+    throw new Error(`${recordLabel} references a non-regular backup: ${backupPath}`);
   }
   const canonicalBackupDirectory = await fs.realpath(backupDirectory);
   const canonicalBackupPath = await fs.realpath(backupPath);
   if (path.dirname(canonicalBackupPath) !== canonicalBackupDirectory) {
-    throw new Error(
-      `Migration recovery marker backup escapes its canonical directory: ${backupPath}`,
-    );
+    throw new Error(`${recordLabel} backup escapes its canonical directory: ${backupPath}`);
   }
   return {
-    markerPath,
+    markerPath: recordPath,
     backupPath,
     resumeAttempts: resumeState.attempts,
-    payload: marker as Record<string, unknown>,
+    payload: record as Record<string, unknown>,
+  };
+}
+
+const readMigrationRecoveryMarker = (dbPath: string) =>
+  readMigrationBackupRecord(
+    dbPath,
+    migrationRecoveryMarkerPath(dbPath),
+    "migration recovery marker",
+  );
+
+const readCompletedMigrationProvenance = (dbPath: string) =>
+  readMigrationBackupRecord(
+    dbPath,
+    migrationBackupProvenancePath(dbPath),
+    "migration backup provenance",
+  );
+
+export async function inspectCompletedMigrationBackupForSchemaTooNew(
+  dbPath: string,
+  input: {
+    readonly databaseMigrationId: number;
+    readonly latestSupportedMigrationId: number;
+  },
+): Promise<MigrationSchemaTooNewRecovery> {
+  let record: MigrationRecoveryMarker | null;
+  try {
+    record = await readCompletedMigrationProvenance(dbPath);
+  } catch {
+    return { kind: "restore-unavailable", reason: "invalid-provenance" };
+  }
+  if (!record) {
+    return { kind: "restore-unavailable", reason: "missing-provenance" };
+  }
+  if (
+    record.payload.phase !== "migration-completed" ||
+    record.payload.targetVersion !== input.databaseMigrationId
+  ) {
+    return { kind: "restore-unavailable", reason: "invalid-provenance" };
+  }
+
+  let inspection: SqliteMigrationBackupInspection;
+  try {
+    inspection = await inspectSqliteMigrationBackup(record.backupPath);
+  } catch {
+    return { kind: "restore-unavailable", reason: "invalid-backup" };
+  }
+  if (
+    inspection.lineage === "incompatible" ||
+    (inspection.lineage === "canonical" &&
+      inspection.migrationId > input.latestSupportedMigrationId)
+  ) {
+    return { kind: "restore-unavailable", reason: "incompatible-backup" };
+  }
+  return {
+    kind: "restore-available",
+    backupPath: record.backupPath,
+    provenancePath: record.markerPath,
+    backupMigrationId: inspection.migrationId,
   };
 }
 
@@ -968,9 +1181,9 @@ async function readMigrationRecoveryMarker(
  * wedged install keeps every partial its restart loop produced — the failure
  * mode that filled hundreds of gigabytes in minutes.
  *
- * Three things are swept: the snapshot partials in the backup directory, the
- * marker partials beside the database, and the artifact families that no
- * recovery path can restore from. Removing partials unconditionally is safe only
+ * Four things are swept: snapshot partials, marker partials, provenance
+ * partials, and artifact families that no recovery path can restore from.
+ * Removing partials unconditionally is safe only
  * because every caller holds the database lifecycle lock, which makes this
  * process their sole owner; the retained families are bounded rather than
  * emptied. It never removes a finished `pre-migration` backup, never a live
@@ -979,6 +1192,7 @@ async function readMigrationRecoveryMarker(
 export const reclaimOrphanedMigrationArtifacts = (dbPath: string) =>
   attemptPromise(async () => {
     const markerPath = migrationRecoveryMarkerPath(dbPath);
+    const provenancePath = migrationBackupProvenancePath(dbPath);
     await Promise.all([
       removeRegularFiles(
         migrationBackupDirectory(dbPath),
@@ -986,7 +1200,11 @@ export const reclaimOrphanedMigrationArtifacts = (dbPath: string) =>
       ),
       removeRegularFiles(
         path.dirname(markerPath),
-        isMigrationRecoveryMarkerPartial(path.basename(markerPath)),
+        isAtomicMigrationJsonPartial(path.basename(markerPath)),
+      ),
+      removeRegularFiles(
+        path.dirname(provenancePath),
+        isAtomicMigrationJsonPartial(path.basename(provenancePath)),
       ),
       pruneUnreferencedMigrationArtifacts(dbPath),
     ]);
@@ -1068,14 +1286,14 @@ export const resumeMarkedMigration = <A, E, R>(
       previousAttempts: marker.resumeAttempts,
       remainingAttempts: MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS - marker.resumeAttempts,
     });
-    yield* attemptPromise(() =>
-      writeRecoveryMarkerFile(marker.markerPath, {
-        ...marker.payload,
-        resumeAttempts: marker.resumeAttempts + 1,
-        lastResumeAt: new Date().toISOString(),
-      }),
-    );
+    const resumedPayload = {
+      ...marker.payload,
+      resumeAttempts: marker.resumeAttempts + 1,
+      lastResumeAt: new Date().toISOString(),
+    };
+    yield* attemptPromise(() => writePrivateJsonFile(marker.markerPath, resumedPayload));
     const result = yield* migration;
+    yield* writeCompletedMigrationProvenance(dbPath, resumedPayload);
     yield* removeRecoveryMarker(dbPath);
     yield* Effect.logInfo("Interrupted database migration completed on resume", {
       databasePath: dbPath,
@@ -1084,21 +1302,116 @@ export const resumeMarkedMigration = <A, E, R>(
   });
 
 /**
- * Explicit one-shot recovery path. The operator must stop every Synara process
+ * Explicit one-shot restore path for the active recovery marker or the latest
+ * completed migration provenance. The operator must stop every Synara process
  * before invoking it; startup itself deliberately never calls this function.
  */
-export const restoreMarkedMigrationBackup = (dbPath: string) =>
+export interface RestoreMarkedMigrationBackupOptions {
+  readonly expectedBackupPath?: string | undefined;
+  readonly expectedProvenancePath?: string | undefined;
+}
+
+export const restoreMarkedMigrationBackup = (
+  dbPath: string,
+  options: RestoreMarkedMigrationBackupOptions = {},
+) =>
   withDatabaseLifecycleLock(
     dbPath,
     attemptPromise(async () => {
-      const marker = await readMigrationRecoveryMarker(dbPath);
-      if (!marker) {
+      const hasExpectedCompletedBackup =
+        options.expectedBackupPath !== undefined || options.expectedProvenancePath !== undefined;
+      if (
+        hasExpectedCompletedBackup &&
+        (options.expectedBackupPath === undefined || options.expectedProvenancePath === undefined)
+      ) {
+        throw new Error("Both expected migration backup and provenance paths are required.");
+      }
+      let activeMarker: MigrationRecoveryMarker | null;
+      if (hasExpectedCompletedBackup) {
+        try {
+          activeMarker = await readMigrationRecoveryMarker(dbPath);
+        } catch {
+          activeMarker = null;
+        }
+      } else {
+        activeMarker = await readMigrationRecoveryMarker(dbPath);
+      }
+      const completedProvenance =
+        hasExpectedCompletedBackup || !activeMarker
+          ? await readCompletedMigrationProvenance(dbPath)
+          : null;
+      const matchingRestoreMarker =
+        hasExpectedCompletedBackup &&
+        activeMarker !== null &&
+        activeMarker.backupPath === options.expectedBackupPath &&
+        activeMarker.payload.phase === "migration-restore-in-progress"
+          ? activeMarker
+          : null;
+      const record = hasExpectedCompletedBackup
+        ? (matchingRestoreMarker ?? completedProvenance)
+        : (activeMarker ?? completedProvenance);
+      if (!record) {
         throw new Error(
-          `No migration recovery marker exists: ${migrationRecoveryMarkerPath(dbPath)}`,
+          `No migration recovery marker or completed backup provenance exists for ${dbPath}.`,
         );
       }
+      if (hasExpectedCompletedBackup) {
+        if (
+          completedProvenance === null ||
+          completedProvenance.backupPath !== options.expectedBackupPath ||
+          completedProvenance.markerPath !== options.expectedProvenancePath
+        ) {
+          throw new Error("Completed migration provenance no longer matches the selected backup.");
+        }
+      }
+
+      const restoringCompletedProvenance = record === completedProvenance;
+      if (restoringCompletedProvenance) {
+        if (record.payload.phase !== "migration-completed") {
+          throw new Error(`Migration backup provenance is not restorable: ${record.markerPath}`);
+        }
+        const liveInspection = await inspectSqliteMigrationBackup(dbPath);
+        if (record.payload.targetVersion !== liveInspection.migrationId) {
+          throw new Error(
+            `Migration backup provenance does not describe the current database: ${record.markerPath}`,
+          );
+        }
+      }
+      const restoreMarkerPath = migrationRecoveryMarkerPath(dbPath);
+      const restoreMarkerPayload = {
+        ...record.payload,
+        version: 1,
+        databasePath: dbPath,
+        backupPath: record.backupPath,
+        phase: "migration-restore-in-progress",
+        restoreStartedAt: new Date().toISOString(),
+        resumeAttempts: MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS,
+      };
       await Effect.runPromise(
-        restoreSqliteMigrationBackup({ dbPath, backupPath: marker.backupPath }),
+        restoreSqliteMigrationBackup({
+          dbPath,
+          backupPath: record.backupPath,
+          latestSupportedMigrationId: latestMigrationId,
+          // Defer the fail-closed marker until the backup has been copied and
+          // verified. If the live swap then rolls back completely, restore the
+          // marker state that existed before this explicit attempt.
+          beforeLiveDatabaseSwap: () =>
+            writePrivateJsonFile(restoreMarkerPath, restoreMarkerPayload),
+          afterLiveDatabaseRollback: restoringCompletedProvenance
+            ? () => removeRecoveryMarkerIfPresent(dbPath)
+            : () => writePrivateJsonFile(record.markerPath, record.payload),
+        }),
       );
+      await writePrivateJsonFile(migrationBackupProvenancePath(dbPath), {
+        ...record.payload,
+        version: 1,
+        databasePath: dbPath,
+        phase: "migration-restored",
+        restoredAt: new Date().toISOString(),
+      });
+      await fs.unlink(migrationRecoveryMarkerPath(dbPath)).catch((cause) => {
+        if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
+      });
+      await syncDirectoryEntry(path.dirname(dbPath));
     }),
   );

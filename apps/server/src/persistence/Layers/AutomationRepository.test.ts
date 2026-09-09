@@ -144,6 +144,51 @@ layer("AutomationRepository", (it) => {
     }),
   );
 
+  it.effect("atomically advances a skipped occurrence without consuming an iteration", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+      const definition = yield* repository.createDefinition({
+        id: AutomationId.makeUnsafe("automation-skipped-occurrence"),
+        input: {
+          ...createInputForProject("project-skipped-occurrence"),
+          schedule: { type: "interval", everySeconds: 300 },
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      const claimed = yield* repository.createRunAndIncrementDefinition(
+        {
+          id: AutomationRunId.makeUnsafe("run-skipped-occurrence"),
+          automationId: definition.id,
+          projectId: definition.projectId,
+          threadId: null,
+          trigger: { type: "scheduled" },
+          scheduledFor: "2026-06-16T10:00:00.000Z",
+          permissionSnapshot,
+          now: "2026-06-16T10:00:01.000Z",
+        },
+        {
+          nextRunAt: "2026-06-16T10:05:00.000Z",
+          disable: false,
+          expectedDefinitionUpdatedAt: definition.updatedAt,
+          consumeIteration: false,
+        },
+      );
+
+      assert.isTrue(Option.isSome(claimed));
+      const reloaded = Option.getOrThrow(
+        yield* repository.getDefinitionById({ id: definition.id }),
+      );
+      assert.strictEqual(reloaded.iterationCount, 0);
+      assert.strictEqual(reloaded.nextRunAt, "2026-06-16T10:05:00.000Z");
+      yield* repository.archiveDefinition({
+        id: definition.id,
+        archivedAt: "2026-06-16T10:00:02.000Z",
+      });
+    }),
+  );
+
   it.effect("decodes a pre-007 persisted definition row with additive defaults", () =>
     Effect.gen(function* () {
       const repository = yield* AutomationRepository;

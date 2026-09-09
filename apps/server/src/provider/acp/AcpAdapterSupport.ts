@@ -77,18 +77,6 @@ export function mapAcpToAdapterError(
   });
 }
 
-export function acpPermissionOutcome(decision: ProviderApprovalDecision): string {
-  switch (decision) {
-    case "acceptForSession":
-      return "allow-always";
-    case "accept":
-      return "allow-once";
-    case "decline":
-    default:
-      return "reject-once";
-  }
-}
-
 type AcpPermissionOptionLike = {
   readonly kind: "allow_once" | "allow_always" | "reject_once" | "reject_always";
   readonly optionId: string;
