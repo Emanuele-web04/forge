@@ -1215,7 +1215,7 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   ),
   target: Flag.string("target").pipe(
     Flag.withDescription(
-      "Artifact target, for example dmg/AppImage/nsis (env: SYNARA_DESKTOP_TARGET).",
+      "Artifact target, for example dmg/AppImage/deb/nsis (env: SYNARA_DESKTOP_TARGET).",
     ),
     Flag.optional,
   ),
