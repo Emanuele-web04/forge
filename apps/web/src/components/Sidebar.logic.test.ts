@@ -39,6 +39,7 @@ import {
   resolveSettingsBackTarget,
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadEnvMode,
+  resolveSidebarProjectRowLabel,
   resolveThreadHoverCardMetadata,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
@@ -433,6 +434,35 @@ describe("debug feature flags menu visibility", () => {
         storageValue: null,
       }),
     ).toBe(false);
+  });
+});
+
+describe("resolveSidebarProjectRowLabel", () => {
+  it("prefers the configured display name over the folder name", () => {
+    expect(
+      resolveSidebarProjectRowLabel({
+        name: "Hubspot extension",
+        folderName: "hubspot-support-send-email-extension",
+      }),
+    ).toBe("Hubspot extension");
+  });
+
+  it("falls back to the folder name when the display name is empty", () => {
+    expect(
+      resolveSidebarProjectRowLabel({
+        name: "   ",
+        folderName: "hubspot-support-send-email-extension",
+      }),
+    ).toBe("hubspot-support-send-email-extension");
+  });
+
+  it("trims whitespace from the configured display name", () => {
+    expect(
+      resolveSidebarProjectRowLabel({
+        name: "  Hubspot extension  ",
+        folderName: "hubspot-support-send-email-extension",
+      }),
+    ).toBe("Hubspot extension");
   });
 });
 

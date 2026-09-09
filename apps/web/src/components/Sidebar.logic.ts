@@ -219,6 +219,22 @@ export function resolveThreadProjectLabel(
   return nonEmptyDisplayValue(project.name) ?? project.folderName;
 }
 
+/**
+ * Primary label for a project row in the Threads sidebar.
+ *
+ * Always prefer the configured display name (`project.name`, which already
+ * reflects `localName` when set). Do not render the underlying folder name as a
+ * competing sibling: a previous shrink-0 muted suffix could crowd the display
+ * name out of a narrow row and leave only a greyed-out folder label visible,
+ * while the hover card correctly showed the configured name (#1000). Folder
+ * identity stays in the project hover card path row.
+ */
+export function resolveSidebarProjectRowLabel(
+  project: Pick<Project, "name" | "folderName">,
+): string {
+  return nonEmptyDisplayValue(project.name) ?? project.folderName;
+}
+
 export type SidebarThreadHoverMetadata = {
   projectName: string;
   projectCwd: string | null;
