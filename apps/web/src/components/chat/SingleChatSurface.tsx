@@ -43,6 +43,7 @@ import type { DockPaneRuntimeMode } from "../../lib/dockPaneActivation";
 import type { FileCommentSelection } from "../../lib/fileComments";
 import { gitBranchesQueryOptions } from "../../lib/gitReactQuery";
 import { canComposerHandlePanelWidth } from "../../lib/panelResize";
+import { acceptsFullWidthPanelDrag } from "../../lib/panelWidthPolicy";
 import { projectListDirectoriesQueryOptions } from "../../lib/projectReactQuery";
 import { waitForSidechatCreator } from "../../lib/sidechatCreatorRegistry";
 import {
@@ -149,10 +150,20 @@ const allowAnySplitDirection = (_direction: SplitDirection) => true;
 function shouldAcceptDockWidth({
   nextWidth,
   wrapper,
+  allowFullWidth,
 }: {
   nextWidth: number;
   wrapper: HTMLElement;
+  allowFullWidth: boolean;
 }) {
+  // Full width opts out of the composer feasibility probe: the user has asked for a
+  // panel wider than the chat column can survive, so the only bound left is the shell.
+  if (allowFullWidth) {
+    return acceptsFullWidthPanelDrag({
+      nextWidth,
+      shellWidth: wrapper.parentElement?.clientWidth ?? 0,
+    });
+  }
   const previousSidebarWidth = wrapper.style.getPropertyValue("--sidebar-width");
   return canComposerHandlePanelWidth({
     nextWidth,
@@ -245,6 +256,12 @@ export function SingleChatSurface(props: {
   const projects = useStore((store) => store.projects);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
   const { settings: appSettings } = useAppSettings();
+  const allowFullWidthPanels = appSettings.allowFullWidthPanels;
+  const handleShouldAcceptDockWidth = useCallback(
+    (context: { nextWidth: number; wrapper: HTMLElement }) =>
+      shouldAcceptDockWidth({ ...context, allowFullWidth: allowFullWidthPanels }),
+    [allowFullWidthPanels],
+  );
   const { handleNewThread } = useHandleNewThread();
   const queryClient = useQueryClient();
   const lastAppliedRoutePanelSearchKeyRef = useRef<string | null>(null);
@@ -1151,7 +1168,8 @@ export function SingleChatSurface(props: {
           state={dockState}
           minWidth={SINGLE_PANEL_MIN_WIDTH}
           defaultWidth={DIFF_INLINE_DEFAULT_WIDTH}
-          shouldAcceptWidth={shouldAcceptDockWidth}
+          shouldAcceptWidth={handleShouldAcceptDockWidth}
+          openFullWidth={appSettings.allowFullWidthPanels}
           addMenuKinds={availableDockPaneKinds}
           launcherItems={dockLauncherItems}
           motionKey={props.threadId}

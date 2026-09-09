@@ -355,6 +355,9 @@ function SettingsRouteView() {
       ? ["Provider update checks"]
       : []),
     ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
+    ...(settings.allowFullWidthPanels !== defaults.allowFullWidthPanels
+      ? ["Full-width panels"]
+      : []),
     ...(settings.showPullRequestDiffColors !== defaults.showPullRequestDiffColors
       ? ["Pull request diff colors"]
       : []),
@@ -1172,6 +1175,17 @@ function SettingsRouteView() {
             "Open the iOS Simulator pane when an agent uses a device. Turn this off to use Simulator.app without the mirrored pane reopening. You can still open the pane manually.",
           resetLabel: "automatically open simulator",
           ariaLabel: "Automatically open simulator",
+        })}
+      </SettingsSection>
+
+      <SettingsSection title="Panels">
+        {renderBooleanSettingRow({
+          settingKey: "allowFullWidthPanels",
+          title: "Full-width panels",
+          description:
+            "Let the browser, diff, terminal, file, git, and side chat panels open at the full window width and be dragged edge to edge. Off, a panel stops widening once the chat column can no longer fit its composer.",
+          resetLabel: "full-width panels",
+          ariaLabel: "Allow full-width panels",
         })}
       </SettingsSection>
 

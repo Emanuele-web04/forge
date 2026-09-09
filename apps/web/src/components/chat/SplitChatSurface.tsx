@@ -39,6 +39,8 @@ import {
   attachPanelPointerOverlaySession,
   removePanelResizeOverlay,
 } from "../../lib/panelResize";
+import { acceptsFullWidthPanelDrag, resolveSplitPanelMaxWidth } from "../../lib/panelWidthPolicy";
+import { useAppSettings } from "../../appSettings";
 import { splitViewPaneScopeId } from "../../lib/chatPaneScope";
 import { resolveActiveSplitView } from "../../splitViewRoute";
 import { canSubdividePane, collectLeaves, findLeafPaneById } from "../../splitView.logic";
@@ -117,6 +119,8 @@ function SplitPaneEmbeddedPanel(props: {
   ) => void;
 }) {
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const { settings: appSettings } = useAppSettings();
+  const allowFullWidthPanels = appSettings.allowFullWidthPanels;
   const panelWidthStorageKey =
     props.panel === "browser" ? "browser" : props.panel === "diff" ? "diff" : "panel";
   const storageKey = `${RIGHT_PANEL_SIDEBAR_WIDTH_STORAGE_KEY}:${props.splitViewId}:${props.paneId}:${panelWidthStorageKey}`;
@@ -141,6 +145,14 @@ function SplitPaneEmbeddedPanel(props: {
   const shouldAcceptEmbeddedWidth = (nextWidth: number) => {
     const wrapper = wrapperRef.current;
     if (!wrapper) return true;
+    // Full width opts out of the composer feasibility probe: the user has asked for a
+    // panel wider than the chat column can survive, so the only bound left is the pane.
+    if (allowFullWidthPanels) {
+      return acceptsFullWidthPanelDrag({
+        nextWidth,
+        shellWidth: wrapper.parentElement?.clientWidth ?? 0,
+      });
+    }
     return canComposerHandlePanelWidth({
       nextWidth,
       paneScopeId: props.paneScopeId,
@@ -162,7 +174,12 @@ function SplitPaneEmbeddedPanel(props: {
     event.stopPropagation();
     const startX = event.clientX;
     const startWidth = wrapper.getBoundingClientRect().width;
-    const maxWidth = Math.max(minPanelWidth, parent.clientWidth - SPLIT_PANE_CHAT_MIN_WIDTH);
+    const maxWidth = resolveSplitPanelMaxWidth({
+      paneWidth: parent.clientWidth,
+      minPanelWidth,
+      chatMinWidth: SPLIT_PANE_CHAT_MIN_WIDTH,
+      fullWidth: allowFullWidthPanels,
+    });
     const resizeOverlay = createPanelResizeOverlay();
     let detachPointerSession = () => {};
 
@@ -204,7 +221,7 @@ function SplitPaneEmbeddedPanel(props: {
       style={
         {
           width: `${panelWidth}px`,
-          maxWidth: `calc(100% - ${SPLIT_PANE_CHAT_MIN_WIDTH}px)`,
+          maxWidth: allowFullWidthPanels ? "100%" : `calc(100% - ${SPLIT_PANE_CHAT_MIN_WIDTH}px)`,
           minWidth: minPanelWidth,
         } as CSSProperties
       }

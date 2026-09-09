@@ -308,6 +308,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "Set the default wrap state when the diff panel opens. word wrap",
   },
   {
+    id: "behavior:full-width-panels",
+    section: "behavior",
+    title: "Full-width panels",
+    keywords:
+      "Let the browser, diff, terminal, file, git, and side chat panels open at the full window width. fullscreen full screen maximize expand wide resize dock split",
+  },
+  {
     id: "behavior:delete-confirmation",
     section: "behavior",
     title: "Delete confirmation",

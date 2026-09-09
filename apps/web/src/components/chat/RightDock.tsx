@@ -19,6 +19,7 @@ import {
   reconcileKeepMountedPaneIds,
 } from "~/lib/dockPaneActivation";
 import { PanelRightCloseIcon, PlusIcon } from "~/lib/icons";
+import { resolveDockOpenWidth } from "~/lib/panelWidthPolicy";
 import type {
   RightDockPane,
   RightDockPaneKind,
@@ -70,6 +71,9 @@ interface RightDockProps {
   minWidth: number;
   defaultWidth: string;
   shouldAcceptWidth: (context: { nextWidth: number; wrapper: HTMLElement }) => boolean;
+  // When true the dock opens at the full width of the chat shell instead of an even
+  // split. Driven by the `allowFullWidthPanels` app setting.
+  openFullWidth?: boolean;
   paneLabelOverrides?: Record<string, string | undefined>;
   // Per-pane tab glyph overrides (same shape as label overrides) — e.g. a pull request pane
   // swapping the generic kind icon for its live state glyph.
@@ -198,6 +202,7 @@ export function RightDock(props: RightDockProps) {
   // freely; the next open re-centers the split.
   const contentRef = useRef<HTMLDivElement | null>(null);
   const minWidth = props.minWidth;
+  const openFullWidth = props.openFullWidth ?? false;
   const activePaneKind = activePane?.kind ?? null;
   useEffect(() => {
     if (!props.state.open) {
@@ -211,12 +216,16 @@ export function RightDock(props: RightDockProps) {
     // A phone-shaped pane has a natural width: half the shell leaves the device
     // stranded in empty space, so kinds that render a fixed-aspect object open
     // at their own comfortable size instead of the even split.
-    const preferredWidth = activePaneKind ? RIGHT_DOCK_PREFERRED_WIDTH[activePaneKind] : undefined;
-    const openWidth = preferredWidth ?? Math.round(shell.getBoundingClientRect().width / 2);
-    if (openWidth > 0) {
-      wrapper.style.setProperty("--sidebar-width", `${Math.max(minWidth, openWidth)}px`);
+    const openWidth = resolveDockOpenWidth({
+      shellWidth: shell.getBoundingClientRect().width,
+      minWidth,
+      preferredWidth: activePaneKind ? RIGHT_DOCK_PREFERRED_WIDTH[activePaneKind] : undefined,
+      fullWidth: openFullWidth,
+    });
+    if (openWidth !== null) {
+      wrapper.style.setProperty("--sidebar-width", `${openWidth}px`);
     }
-  }, [props.state.open, minWidth, activePaneKind]);
+  }, [props.state.open, minWidth, activePaneKind, openFullWidth]);
   const renderedPanes = props.state.panes.filter(
     (pane) => pane.id === activePane?.id || keepMountedPaneIds.has(pane.id),
   );
