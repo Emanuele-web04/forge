@@ -37,6 +37,10 @@ import {
 } from "../lib/terminalContext";
 import { filterPastedTextsWithText, type PastedTextDraft } from "../lib/composerPastedText";
 import {
+  normalizePullRequestContexts,
+  type PullRequestContextDraft,
+} from "../lib/pullRequestContext";
+import {
   humanizeSubagentStatus,
   normalizeSubagentStatusKind,
   resolveSubagentPresentationForThread,
@@ -813,6 +817,26 @@ export function filterSidechatTranscriptMessages(
     : [...messages];
 }
 
+// Imported fork history should not lock a Side chat's provider before its first native turn.
+export function threadHasProviderLockingMessages(
+  thread: Pick<Thread, "messages" | "sidechatSourceThreadId">,
+): boolean {
+  if (!thread.sidechatSourceThreadId) {
+    return thread.messages.length > 0;
+  }
+  return thread.messages.some((message) => (message.source ?? "native") !== "fork-import");
+}
+
+export function threadHasProviderLockingActivity(
+  thread: Pick<Thread, "messages" | "sidechatSourceThreadId" | "latestTurn" | "session">,
+): boolean {
+  return (
+    thread.latestTurn !== null ||
+    thread.session !== null ||
+    threadHasProviderLockingMessages(thread)
+  );
+}
+
 export function revokeBlobPreviewUrl(previewUrl: string | undefined): void {
   if (!previewUrl || typeof URL === "undefined" || !previewUrl.startsWith("blob:")) {
     return;
@@ -1582,11 +1606,13 @@ export function deriveComposerSendState(options: {
   fileCommentCount: number;
   terminalContexts: ReadonlyArray<TerminalContextDraft>;
   pastedTexts: ReadonlyArray<PastedTextDraft>;
+  pullRequestContexts: ReadonlyArray<PullRequestContextDraft>;
 }): {
   trimmedPrompt: string;
   sendableTerminalContexts: TerminalContextDraft[];
   expiredTerminalContextCount: number;
   sendablePastedTexts: PastedTextDraft[];
+  sendablePullRequestContexts: PullRequestContextDraft[];
   hasSendableContent: boolean;
 } {
   const trimmedPrompt = stripInlineTerminalContextPlaceholders(options.prompt).trim();
@@ -1594,11 +1620,13 @@ export function deriveComposerSendState(options: {
   const expiredTerminalContextCount =
     options.terminalContexts.length - sendableTerminalContexts.length;
   const sendablePastedTexts = filterPastedTextsWithText(options.pastedTexts);
+  const sendablePullRequestContexts = normalizePullRequestContexts(options.pullRequestContexts);
   return {
     trimmedPrompt,
     sendableTerminalContexts,
     expiredTerminalContextCount,
     sendablePastedTexts,
+    sendablePullRequestContexts,
     hasSendableContent:
       trimmedPrompt.length > 0 ||
       options.imageCount > 0 ||
@@ -1607,7 +1635,8 @@ export function deriveComposerSendState(options: {
       options.browserAnnotationCount > 0 ||
       options.fileCommentCount > 0 ||
       sendableTerminalContexts.length > 0 ||
-      sendablePastedTexts.length > 0,
+      sendablePastedTexts.length > 0 ||
+      sendablePullRequestContexts.length > 0,
   };
 }
 

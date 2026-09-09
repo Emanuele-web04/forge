@@ -66,6 +66,7 @@ import {
   WorktreeIcon,
 } from "~/lib/icons";
 import { pinActionLabel } from "~/lib/pin";
+import { syncAnimationsToTimelineOrigin } from "~/lib/animationTimelineSync";
 import { Button } from "../ui/button";
 import { composerOverlayScrollMaskImage } from "./composerOverlay";
 import { CrossTaskOriginLabel, type CrossTaskOrigin } from "./CrossTaskOriginLabel";
@@ -88,6 +89,7 @@ import { FileAttachmentChip } from "./FileAttachmentChip";
 import { FileCommentsSummaryChip } from "./FileCommentsSummaryChip";
 import { BrowserAnnotationStrip } from "./BrowserAnnotationStrip";
 import { UserMessagePastedTextCard } from "./PastedTextChip";
+import { UserMessagePullRequestContextCard } from "./PullRequestContextCard";
 import {
   EditedFileRowContent,
   prefersCompactWorkEntryRow,
@@ -357,7 +359,10 @@ function WorktreeSetupCard({
     <div className="w-fit max-w-full rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-primary)] px-3.5 py-3 font-system-ui shadow-xs">
       <div className="flex items-center gap-2">
         <WorktreeIcon className="size-3.5 shrink-0 text-[var(--color-text-foreground-tertiary)]" />
-        <span className="shimmer text-[13px] font-medium text-[var(--color-text-foreground-secondary)]">
+        <span
+          ref={syncAnimationsToTimelineOrigin}
+          className="shimmer text-[13px] font-medium text-[var(--color-text-foreground-secondary)]"
+        >
           Preparing worktree...
         </span>
       </div>
@@ -1643,6 +1648,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const terminalContexts = displayedUserMessage.contexts;
           const renderedFileComments = displayedUserMessage.fileComments;
           const renderedPastedTexts = displayedUserMessage.pastedTexts;
+          const renderedPullRequestContexts = displayedUserMessage.pullRequestContexts;
           const renderedBrowserAnnotations = displayedUserMessage.browserAnnotations;
           const userMessageText = displayedUserMessage.visibleText;
           const userMessageExpanded = expandedUserMessagesById[row.message.id] ?? false;
@@ -1666,6 +1672,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             browserAnnotationCount: renderedBrowserAnnotations.length,
             fileCommentCount: renderedFileComments.length,
             pastedTextCount: renderedPastedTexts.length,
+            pullRequestContextCount: renderedPullRequestContexts.length,
           });
           const isTailContentRow = row.id === tailContentRowId;
           const showCrossTaskOrigin =
@@ -1720,6 +1727,19 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           key={pasted.index}
                           text={pasted.text}
                           metrics={{ lineCount: pasted.lineCount, charCount: pasted.charCount }}
+                        />
+                      ))}
+                    </div>
+                  )}
+                  {renderedPullRequestContexts.length > 0 && (
+                    <div className="mb-1 flex max-w-full flex-col items-end gap-1.5 self-end">
+                      {renderedPullRequestContexts.map((context) => (
+                        <UserMessagePullRequestContextCard
+                          key={context.index}
+                          scope={context.scope}
+                          title={context.title}
+                          subtitle={context.subtitle}
+                          text={context.text}
                         />
                       ))}
                     </div>
@@ -2593,6 +2613,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
       {row.kind === "working" && (
         <div
+          ref={syncAnimationsToTimelineOrigin}
           className={cn("shimmer pt-0.5 font-system-ui", MUTED_LABEL_TEXT_CLASS_NAME)}
           style={{ fontSize: `${appTypographyScale.chatPx}px` }}
         >

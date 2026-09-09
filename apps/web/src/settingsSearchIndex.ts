@@ -54,6 +54,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Release idle provider CLIs after N minutes to free memory. 0 never auto-stop resume cursor process ram",
   },
   {
+    id: "general:welcome-tour",
+    section: "general",
+    title: "Welcome tour",
+    keywords:
+      "Replay the first-run setup: feature tour, provider selection, appearance, and first project. onboarding welcome wizard getting started setup",
+  },
+  {
     id: "general:project-order",
     section: "general",
     title: "Project order",

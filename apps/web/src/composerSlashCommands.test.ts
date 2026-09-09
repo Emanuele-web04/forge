@@ -4,6 +4,7 @@ import { THREAD_GOAL_MAX_CHARS } from "@synara/contracts";
 import {
   buildReviewPrompt,
   buildSubagentsPrompt,
+  canExecuteSideSlashCommand,
   canOfferForkSlashCommand,
   canOfferReviewSlashCommand,
   canOfferSideSlashCommand,
@@ -237,6 +238,42 @@ describe("composerSlashCommands", () => {
         selectedMentionCount: 0,
         interactionMode: "default",
         isSidechat: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("still executes /side when the composer holds provider args", () => {
+    expect(
+      canExecuteSideSlashCommand({
+        imageCount: 0,
+        terminalContextCount: 0,
+        selectedSkillCount: 0,
+        selectedMentionCount: 0,
+        interactionMode: "default",
+        isSidechat: false,
+      }),
+    ).toBe(true);
+
+    expect(
+      canOfferSideSlashCommand({
+        prompt: "Codex",
+        imageCount: 0,
+        terminalContextCount: 0,
+        selectedSkillCount: 0,
+        selectedMentionCount: 0,
+        interactionMode: "default",
+        isSidechat: false,
+      }),
+    ).toBe(false);
+
+    expect(
+      canExecuteSideSlashCommand({
+        imageCount: 1,
+        terminalContextCount: 0,
+        selectedSkillCount: 0,
+        selectedMentionCount: 0,
+        interactionMode: "default",
+        isSidechat: false,
       }),
     ).toBe(false);
   });

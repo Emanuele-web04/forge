@@ -26,6 +26,7 @@ import { ComposerPickerMenuPopup } from "~/components/chat/ComposerPickerMenuPop
 import {
   buildFixFindingsPrompt,
   buildResolveConflictsPrompt,
+  createPullRequestContextDraft,
 } from "~/components/chat/environment/environmentPullRequest.logic";
 import {
   AlertDialog,
@@ -50,7 +51,7 @@ import {
 import { Skeleton } from "~/components/ui/skeleton";
 import { toastManager } from "~/components/ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
-import { appendComposerPromptText } from "~/lib/chatReferences";
+import { addChatPullRequestContext } from "~/lib/chatReferences";
 import {
   EllipsisIcon,
   ExternalLinkIcon,
@@ -70,6 +71,7 @@ import {
   pullRequestDetailQueryOptions,
   pullRequestQueryErrorState,
 } from "~/lib/pullRequestReactQuery";
+import { type PullRequestContextDraft } from "~/lib/pullRequestContext";
 import { cn } from "~/lib/utils";
 import { ensureNativeApi } from "~/nativeApi";
 import { useHandleNewThread } from "~/hooks/useHandleNewThread";
@@ -225,11 +227,11 @@ export function PullRequestDetailPanel({
   };
 
   // "Fix findings" and "Resolve conflicts" hand the PR to a fresh thread the same way:
-  // prepare a worktree on the PR branch, create the thread, and pre-fill the composer with
-  // the task-specific prompt for the user to review and send.
+  // prepare a worktree on the PR branch, create the thread, and attach the task as a
+  // context card in its composer for the user to review and send.
   const startPullRequestThread = (
     kind: "findings" | "conflicts",
-    prompt: string,
+    card: PullRequestContextDraft,
     errorTitle: string,
   ) => {
     if (!detail || preparingThread !== null) return;
@@ -250,7 +252,7 @@ export function PullRequestDetailPanel({
           }),
         ).then((threadId) => {
           if (!threadId) throw new Error("Could not create a draft thread for this pull request.");
-          appendComposerPromptText(threadId, prompt);
+          addChatPullRequestContext(threadId, card);
         }),
       )
       .catch((error: unknown) => {
@@ -270,16 +272,22 @@ export function PullRequestDetailPanel({
     if (!detail) return;
     void startPullRequestThread(
       "findings",
-      buildFixFindingsPrompt({
-        prNumber: detail.number,
-        prTitle: detail.title,
-        prUrl: detail.url,
-        headBranch: detail.headBranch,
-        baseBranch: detail.baseBranch,
-        comments: detail.comments,
-        checks: detail.checks,
-        commentsTruncated: detail.commentsTruncated,
-        commentsIncomplete: detail.commentsIncomplete,
+      createPullRequestContextDraft({
+        scope: "everything",
+        pr: detail,
+        title: "Fix findings",
+        subtitle: `#${detail.number} ${detail.title}`,
+        text: buildFixFindingsPrompt({
+          prNumber: detail.number,
+          prTitle: detail.title,
+          prUrl: detail.url,
+          headBranch: detail.headBranch,
+          baseBranch: detail.baseBranch,
+          comments: detail.comments,
+          checks: detail.checks,
+          commentsTruncated: detail.commentsTruncated,
+          commentsIncomplete: detail.commentsIncomplete,
+        }),
       }),
       "Could not prepare findings",
     );
@@ -289,11 +297,17 @@ export function PullRequestDetailPanel({
     if (!detail) return;
     void startPullRequestThread(
       "conflicts",
-      buildResolveConflictsPrompt({
-        prNumber: detail.number,
-        prUrl: detail.url,
-        baseBranch: detail.baseBranch,
-        headBranch: detail.headBranch,
+      createPullRequestContextDraft({
+        scope: "conflicts",
+        pr: detail,
+        title: "Merge conflicts",
+        subtitle: `Conflicts with ${detail.baseBranch}`,
+        text: buildResolveConflictsPrompt({
+          prNumber: detail.number,
+          prUrl: detail.url,
+          baseBranch: detail.baseBranch,
+          headBranch: detail.headBranch,
+        }),
       }),
       "Could not prepare conflict resolution",
     );

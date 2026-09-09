@@ -116,6 +116,20 @@ const asMessageId = (value: string): MessageId => MessageId.makeUnsafe(value);
 const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
 
 describe("legacy provider blocker recovery", () => {
+  it("rejects a startup failure only when process cleanup was confirmed", () => {
+    const outcome = classifyProviderAttemptOutcome(
+      Exit.fail(
+        new ProviderAdapterProcessError({
+          provider: "codex",
+          threadId: ThreadId.makeUnsafe("thread-start-failed"),
+          reason: "startup-failed",
+          detail: "Codex stdout closed during initialization.",
+        }),
+      ),
+    );
+    expect(outcome._tag).toBe("rejected");
+  });
+
   it("keeps process lifecycle failures uncertain", () => {
     const outcome = classifyProviderAttemptOutcome(
       Exit.fail(
@@ -129,6 +143,36 @@ describe("legacy provider blocker recovery", () => {
 
     expect(outcome._tag).toBe("uncertain");
   });
+
+  it.each(["failure", "defect"] as const)(
+    "keeps startup rejection uncertain when provider restoration adds a %s",
+    async (kind) => {
+      const startupError = new ProviderAdapterProcessError({
+        provider: "codex",
+        threadId: ThreadId.makeUnsafe("thread-switch-start-failed"),
+        reason: "startup-failed",
+        detail: "Codex startup failed after confirmed cleanup.",
+      });
+      const restorationError = new ProviderAdapterProcessError({
+        provider: "claudeAgent",
+        threadId: startupError.threadId,
+        detail: "Previous provider restoration did not prove process-tree exit.",
+      });
+      const exit = await Effect.runPromise(
+        Effect.fail(startupError).pipe(
+          Effect.onExit(() =>
+            kind === "failure" ? Effect.fail(restorationError) : Effect.die(restorationError),
+          ),
+          Effect.exit,
+        ),
+      );
+
+      expect(classifyProviderAttemptOutcome(exit)).toMatchObject({
+        _tag: "uncertain",
+        detail: expect.stringContaining(restorationError.detail),
+      });
+    },
+  );
 
   it("accepts only failures that prove the command frame was not written", () => {
     expect(
@@ -150,6 +194,7 @@ describe("legacy provider blocker recovery", () => {
       ),
     ).toBe(false);
     expect(isSafeLegacyProviderBlocker("Provider process tree did not prove exit.")).toBe(false);
+    expect(isSafeLegacyProviderBlocker("Session stopped before request completed.")).toBe(false);
     expect(isSafeLegacyProviderBlocker("The provider rejected the prompt.")).toBe(false);
   });
 });
@@ -1856,6 +1901,55 @@ describe("ProviderCommandReactor", () => {
     expect(consumerState.pipe(Option.getOrThrow).lastAckedSequence).toBe(events.at(-1)!.sequence);
   });
 
+  it("accepts a new message after a failed Codex startup without reconciliation", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    harness.startSession.mockImplementationOnce(() =>
+      Effect.fail(
+        new ProviderAdapterProcessError({
+          provider: "codex",
+          threadId,
+          reason: "startup-failed",
+          detail: "Codex stdout closed during initialization.",
+        }),
+      ),
+    );
+
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "startup-failed-message",
+      text: "First attempt",
+      createdAt: now,
+    });
+    await harness.drain();
+    expect((await readHarnessThread(harness))?.session).toMatchObject({
+      status: "error",
+      lastError: expect.stringContaining("Codex stdout closed during initialization."),
+    });
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    const blockers = await Effect.runPromise(
+      harness.deliveryRepository.listBlockingDeliveries({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        threadId,
+        limit: 10,
+      }),
+    );
+    expect(blockers).toEqual([]);
+
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "startup-retry-message",
+      text: "Retry after startup failure",
+      createdAt: now,
+    });
+    await harness.drain();
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId,
+      input: "Retry after startup failure",
+    });
+    expect(harness.startSession).toHaveBeenCalledTimes(2);
+  });
+
   // The ambiguous command here is a conversation rollback whose provider
   // interrupt cannot prove it landed. A bare `thread.turn.interrupt` never
   // quarantines a thread on purpose: it escalates to a full session stop, so
@@ -2630,6 +2724,71 @@ describe("ProviderCommandReactor", () => {
       return promotion.pipe(Option.getOrThrow).state === "cancelled";
     });
     expect(harness.sendTurn.mock.calls.length).toBe(0);
+  });
+
+  it.each([
+    [false, true],
+    [true, true],
+    [true, false],
+  ])("restores an idle session with fork=%s and nativeResume=%s", async (fork, nativeResume) => {
+    const resumes: unknown[] = [];
+    const harness = await createHarness({
+      confirmNativeResume: (cursor) => {
+        resumes.push(cursor);
+        return nativeResume;
+      },
+    });
+    const threadId = ThreadId.makeUnsafe(fork ? "audit-fork" : "thread-1");
+    const now = new Date().toISOString();
+    if (fork)
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.fork.create",
+          commandId: CommandId.makeUnsafe("audit-create"),
+          threadId,
+          sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+          projectId: asProjectId("project-1"),
+          title: "Audit",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          envMode: "local",
+          branch: null,
+          worktreePath: null,
+          importedMessages: [],
+          createdAt: now,
+        }),
+      );
+    const send = async (n: number) => {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe(`audit-command-${n}`),
+          threadId,
+          message: {
+            messageId: asMessageId(`audit-message-${n}`),
+            role: "user",
+            text: `audit prompt ${n}`,
+            attachments: [],
+          },
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: now,
+        }),
+      );
+      await waitFor(() => harness.sendTurn.mock.calls.length === n);
+    };
+    await send(1);
+    await Effect.runPromise(harness.stopRuntimeSession({ threadId }));
+    await send(2);
+    expect(resumes).toHaveLength(1);
+    const prompt = (harness.sendTurn.mock.calls[1]![0] as { input: string }).input;
+    if (nativeResume) {
+      expect(prompt).not.toContain("<thread_context>");
+    } else {
+      expect(prompt).toContain("<thread_context>");
+      expect(prompt).toContain("audit prompt 1");
+    }
   });
 
   it("bootstraps sidechat context when the provider cannot fork natively", async () => {

@@ -57,6 +57,7 @@ import {
   PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
   type ProviderThreadSnapshot,
 } from "../Services/ProviderAdapter.ts";
+import { createAntigravityPrintResultParser } from "../antigravityPrintResult.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { makeBoundedCallbackIngress } from "../boundedCallbackIngress.ts";
 import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
@@ -174,6 +175,7 @@ type AntigravitySessionContext = ToolSurfaceCounters & {
   stopped: boolean;
   /** Guards against double turn.completed (process close + interrupt/stop). */
   turnTerminalEmitted: boolean;
+  stopTeardownRequested?: boolean;
 };
 
 function messageFromCause(cause: unknown, fallback: string): string {
@@ -1217,6 +1219,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         return;
       }
       const child = context.activeProcess;
+      context.stopTeardownRequested = true;
       void teardownProcessTree(child).catch(() => {
         try {
           child.kill("SIGKILL");
@@ -1289,7 +1292,10 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                   stopReason: "error",
                   errorMessage: input.errorMessage ?? "Antigravity turn failed.",
                 }
-              : { state: "completed", stopReason: "model_stop" },
+              : {
+                  state: "completed",
+                  stopReason: "model_stop",
+                },
         ...(input.raw ? { raw: input.raw } : {}),
       } satisfies ProviderRuntimeEvent);
       return true;
@@ -1359,13 +1365,13 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       for (const call of calls) {
         const name = typeof call?.name === "string" ? trim(call.name) : undefined;
         if (!name) continue;
-        const surfaceKey = `${stepIndex}:${name}`;
-        const occurrence = nextToolOccurrence(transcriptCounts, surfaceKey);
-        if (!claimToolOccurrence(context.surfacedToolCallCounts, surfaceKey, occurrence)) continue;
         const args =
           call.args && typeof call.args === "object"
             ? (call.args as Record<string, unknown>)
             : undefined;
+        const surfaceKey = `${stepIndex}:${name}`;
+        const occurrence = nextToolOccurrence(transcriptCounts, surfaceKey);
+        if (!claimToolOccurrence(context.surfacedToolCallCounts, surfaceKey, occurrence)) continue;
         const itemId = RuntimeItemId.makeUnsafe(
           `antigravity-${context.activeTurnId ?? "turn"}-tool-${context.nextToolSequence++}`,
         );
@@ -2132,6 +2138,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         context.sawAssistant = false;
         context.interrupted = false;
         context.turnTerminalEmitted = false;
+        delete context.stopTeardownRequested;
         context.turns.push({ id: turnId, items: [] });
         context.session = {
           ...context.session,
@@ -2152,6 +2159,8 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           "--dangerously-skip-permissions",
           "--model",
           cliModel,
+          "--output-format",
+          "stream-json",
           "--log-file",
           logFile,
           "--print-timeout",
@@ -2198,9 +2207,13 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           context.activeTurnId === turnId;
         let stdout = "";
         let stderr = "";
+        const outputParser = createAntigravityPrintResultParser();
         child.stdout.setEncoding("utf8");
         child.stderr.setEncoding("utf8");
-        child.stdout.on("data", (chunk) => (stdout += chunk));
+        child.stdout.on("data", (chunk) => {
+          outputParser.write(String(chunk));
+          stdout += chunk;
+        });
         child.stderr.on("data", (chunk) => (stderr += chunk));
         const timer = setInterval(() => {
           if (ownsTurn()) void pollHookFile(context);
@@ -2253,13 +2266,15 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
               return;
             }
-            if (!context.sawAssistant && stdout.trim()) {
+            const printResult = outputParser.finish();
+            const responseText = printResult?.response ?? stdout.trim();
+            if (!context.sawAssistant && responseText) {
               emitTextItem(
                 context,
                 {
                   step_index: Number.MAX_SAFE_INTEGER,
                   type: "PRINT_OUTPUT",
-                  content: stdout.trim(),
+                  content: responseText,
                 },
                 "assistant_message",
                 "assistant_text",
@@ -2270,8 +2285,25 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
               return;
             }
-            const interrupted = context.interrupted || signal !== null;
-            const failed = !interrupted && (code ?? 1) !== 0;
+            // Only our stop-hook teardown may replace a missing clean process exit.
+            // A provider ERROR is authoritative even when earlier response steps are DONE.
+            const completedAfterStopTeardown =
+              context.stopTeardownRequested === true &&
+              printResult?.completedResponse === true &&
+              context.sawAssistant &&
+              !stderr.trim() &&
+              context.pendingTools.length === 0 &&
+              context.pendingBackgroundTasks.size === 0 &&
+              context.pendingAnonymousBackgroundTasks === 0;
+            const interrupted =
+              context.interrupted ||
+              printResult?.state === "interrupted" ||
+              (signal !== null && printResult?.state !== "failed" && !completedAfterStopTeardown);
+            const failed =
+              !interrupted &&
+              !completedAfterStopTeardown &&
+              ((code ?? 1) !== 0 ||
+                (printResult !== undefined && printResult.state !== "completed"));
             if (failed && stderr.trim()) {
               offer({
                 ...base(context, { includeTurn: false }),
@@ -2285,7 +2317,13 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               stopReason: interrupted ? "interrupted" : failed ? "error" : "model_stop",
               ...(failed
                 ? {
-                    errorMessage: stderr.trim() || `Antigravity CLI exited with code ${code ?? 1}.`,
+                    errorMessage:
+                      printResult?.error ||
+                      stderr.trim() ||
+                      (printResult?.state === undefined && printResult !== undefined
+                        ? "Antigravity CLI exited without a complete result."
+                        : undefined) ||
+                      `Antigravity CLI exited with code ${code ?? 1}.`,
                   }
                 : {}),
               raw: raw("process-exit", { code, signal, stdout, stderr }),

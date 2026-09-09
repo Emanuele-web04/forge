@@ -198,7 +198,7 @@ describe("Claude context warning decisions", () => {
       keys: [],
     },
     {
-      name: "warns for a large mostly-uncached request",
+      name: "does not warn for normal first-request cache creation",
       rawUsage: {
         input_tokens: 5_000,
         cache_creation_input_tokens: 55_000,
@@ -206,7 +206,7 @@ describe("Claude context warning decisions", () => {
       },
       contextBudget: 200_000,
       emitted: [],
-      keys: ["uncached-ingestion"],
+      keys: [],
     },
     {
       name: "warns near the 200k auto-compact threshold",

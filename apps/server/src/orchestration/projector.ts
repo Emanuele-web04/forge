@@ -57,7 +57,11 @@ import {
 } from "./Schemas.ts";
 import { resolveStableMessageTurnId } from "./messageTurnId.ts";
 import { maxIso, settleTurnStateFromSession } from "./turnLifecycle.ts";
-import { deriveTurnStartModelSelection, deriveTurnStartSession } from "./turnStartSession.ts";
+import {
+  canAdoptFirstTurnProvider,
+  deriveTurnStartModelSelection,
+  deriveTurnStartSession,
+} from "./turnStartSession.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
 const MAX_THREAD_MESSAGES = 2_000;
@@ -968,12 +972,14 @@ export function projectEvent(
           if (!thread) {
             return nextBase;
           }
-          const canAdoptFirstTurnProvider =
-            thread.latestTurn === null && thread.session === null && thread.messages.length <= 1;
           const projectedModelSelection = deriveTurnStartModelSelection({
             currentModelSelection: thread.modelSelection,
             requestedModelSelection: payload.modelSelection,
-            canAdoptRequestedProvider: canAdoptFirstTurnProvider,
+            canAdoptRequestedProvider: canAdoptFirstTurnProvider({
+              hasLatestTurn: thread.latestTurn !== null,
+              hasSession: thread.session !== null,
+              messages: thread.messages,
+            }),
           });
           const modelSelectionPatch =
             projectedModelSelection !== thread.modelSelection

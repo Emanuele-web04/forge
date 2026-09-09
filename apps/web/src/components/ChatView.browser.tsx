@@ -62,7 +62,11 @@ import {
   sendEffectRpcExit,
 } from "../test/effectRpcWebSocketMock";
 import { makeDomainEvent } from "../storeTestFixtures";
-import { createBrowserTestServerConfig, createFullscreenTestHost } from "../test/browserHarness";
+import {
+  createBrowserTestServerConfig,
+  createBrowserTestServerSettings,
+  createFullscreenTestHost,
+} from "../test/browserHarness";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { resetRetainedThreadDetailSubscriptionsForTests } from "../threadDetailSubscriptionRetention";
@@ -1194,6 +1198,9 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
   }
   if (tag === WS_METHODS.automationCreate) {
     return createAutomationDefinitionFromCreateRequest(body);
+  }
+  if (tag === WS_METHODS.serverGetSettings) {
+    return createBrowserTestServerSettings(NOW_ISO);
   }
   if (tag === WS_METHODS.serverGetConfig) {
     return fixture.serverConfig;
@@ -5563,6 +5570,7 @@ describe("ChatView transcript geometry (full app)", () => {
         terminalContexts: [],
         fileComments: [],
         pastedTexts: [],
+        pullRequestContexts: [],
         skills: [],
         mentions: [],
         selectedProvider: "codex",
@@ -5589,6 +5597,7 @@ describe("ChatView transcript geometry (full app)", () => {
         terminalContexts: [],
         fileComments: [],
         pastedTexts: [],
+        pullRequestContexts: [],
         skills: [],
         mentions: [],
         selectedProvider: "codex",
@@ -5682,6 +5691,7 @@ describe("ChatView transcript geometry (full app)", () => {
         terminalContexts: [],
         fileComments: [],
         pastedTexts: [],
+        pullRequestContexts: [],
         skills: [],
         mentions: [],
         selectedProvider: "codex",
@@ -5766,6 +5776,7 @@ describe("ChatView transcript geometry (full app)", () => {
         terminalContexts: [],
         fileComments: [],
         pastedTexts: [],
+        pullRequestContexts: [],
         skills: [],
         mentions: [],
         selectedProvider: "codex",
@@ -5847,6 +5858,7 @@ describe("ChatView transcript geometry (full app)", () => {
         terminalContexts: [],
         fileComments: [],
         pastedTexts: [],
+        pullRequestContexts: [],
         skills: [],
         mentions: [],
         selectedProvider: "codex",
@@ -8376,6 +8388,7 @@ describe("ChatView transcript geometry (full app)", () => {
           terminalContexts: [],
           fileComments: [],
           pastedTexts: [],
+          pullRequestContexts: [],
           skills: [],
           mentions: [],
           queuedTurns: [],

@@ -59,7 +59,11 @@ import {
   sendEffectRpcExit,
   type EffectRpcWebSocketClient,
 } from "../test/effectRpcWebSocketMock";
-import { createBrowserTestServerConfig, createFullscreenTestHost } from "../test/browserHarness";
+import {
+  createBrowserTestServerConfig,
+  createBrowserTestServerSettings,
+  createFullscreenTestHost,
+} from "../test/browserHarness";
 import { getThreadFromState } from "../threadDerivation";
 import { resetThreadDetailResumeCursorsForTests } from "../threadDetailResumeCursors";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
@@ -276,6 +280,9 @@ function resolveWsRpc(tag: string, body?: unknown): unknown {
       typeof request?.fromSequenceExclusive === "number" ? request.fromSequenceExclusive : 0;
     replayRequestCursors.push(fromSequenceExclusive);
     return replayEvents.filter((event) => event.sequence > fromSequenceExclusive);
+  }
+  if (tag === WS_METHODS.serverGetSettings) {
+    return createBrowserTestServerSettings(NOW_ISO);
   }
   if (tag === WS_METHODS.serverGetConfig) {
     return fixture.serverConfig;

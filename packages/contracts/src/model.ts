@@ -820,17 +820,17 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
     },
     {
       slug: "glm-5.2",
-      name: "GLM-5.2",
+      name: "GLM 5.2",
       capabilities: DROID_CORE_HIGH_CAPABILITIES,
     },
     {
       slug: "glm-5.2-fast",
-      name: "GLM-5.2 Fast",
+      name: "GLM 5.2 Fast",
       capabilities: DROID_CORE_HIGH_CAPABILITIES,
     },
     {
       slug: "glm-5.1",
-      name: "GLM-5.1",
+      name: "GLM 5.1",
       capabilities: DROID_CORE_HIGH_CAPABILITIES,
     },
     {
@@ -1072,7 +1072,7 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
     },
     {
       slug: "glm-5.2",
-      name: "GLM-5.2",
+      name: "GLM 5.2",
       capabilities: cursorCapabilities({ efforts: ["high", "max"] }),
     },
   ],

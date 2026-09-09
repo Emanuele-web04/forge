@@ -4,15 +4,11 @@
 
 @theme inline {
   --animate-skeleton: skeleton 2s -1s infinite linear;
-  /* Always-on status spinners (sidebar running-thread glyph) rotate in discrete
-     steps (~18 fps) instead of a continuous 60 fps spin. The desktop shell is a
-     transparent window over macOS vibrancy and the sidebar surface carries a
-     backdrop-filter, so EVERY presented frame re-blurs the whole sidebar in the
-     GPU process and re-composites the vibrancy in WindowServer — a 12px spinner
-     at 60 fps kept the GPU process at ~18% CPU / +100MB and the renderer at ~9%.
-     Fewer frames is the only lever that cuts all of that; at this size the 15°
-     steps are visually indistinguishable from a smooth spin. */
-  --animate-spin-stepped: spin-stepped 1.3s steps(24, end) infinite;
+  /* Status spinners and shimmer labels share 50ms steps (20 fps), aligned by
+     animationTimelineSync. Matching both cadence and phase lets their redraws
+     share frames instead of repeatedly recompositing the translucent sidebar
+     and composer. Keep 1300ms / 26 steps equal to shimmer's 2000ms / 40 steps. */
+  --animate-spin-stepped: spin-stepped 1.3s steps(26, end) infinite;
   --font-sans: var(--font-ui-family);
   --font-display: var(--font-display-family);
   --font-mono: var(--font-mono-family);
@@ -2283,15 +2279,11 @@ label:has(> select#reasoning-effort) select {
   background-clip: text;
   -webkit-background-clip: text;
   -webkit-text-fill-color: var(--shimmer-text-fill, transparent);
-  /* Local deviation from the vendored utility: the sweep is duty-cycled with a stepped
-     timing function instead of `linear`. A `background-position` animation on a
-     `background-clip: text` element cannot run on the compositor, so every animation
-     frame re-rasterizes the label and — because the "Working…" line sits under the
-     composer's backdrop blur — re-blurs the glass. At 120 Hz that is ~240 repaints per
-     2 s cycle; 60 steps keep 30 hops/s (video-smooth on a label this small) and measured
-     ~-6 CPU points (renderer + GPU process) on the transcript perf harness while
-     streaming. `--shimmer-timing` lets a caller restore `linear` where the hop would show. */
-  animation: tw-shimmer var(--shimmer-duration, 2s) var(--shimmer-timing, steps(60)) infinite;
+  /* Animating a clipped text background repaints the label and its overlapping
+     composer blur. The default 2000ms / 40 steps shares the spinner's 50ms cadence;
+     status labels also use animationTimelineSync so those steps land together.
+     Custom durations/timings can opt out of that shared cadence. */
+  animation: tw-shimmer var(--shimmer-duration, 2s) var(--shimmer-timing, steps(40, end)) infinite;
 
   @variant dark {
     --_highlight: var(

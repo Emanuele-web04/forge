@@ -77,7 +77,8 @@ export class ProviderAdapterProcessError extends Schema.TaggedErrorClass<Provide
     provider: Schema.String,
     threadId: Schema.String,
     detail: Schema.String,
-    reason: Schema.optional(Schema.Literal("resume-state-unavailable")),
+    // startup-failed is only valid after cleanup proves the process stopped.
+    reason: Schema.optional(Schema.Literals(["resume-state-unavailable", "startup-failed"])),
     cause: Schema.optional(Schema.Defect),
   },
 ) {

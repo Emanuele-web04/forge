@@ -309,6 +309,32 @@ export async function captureProcessTree(
   };
 }
 
+/** A fresh OS observation, independent of Node's potentially delayed exit notification. */
+export async function isProcessRunning(
+  rootPid: number,
+  options: PlatformProcessTreeOptions = {},
+): Promise<boolean> {
+  if (!Number.isInteger(rootPid) || rootPid <= 0) return false;
+  try {
+    if ((options.platform ?? process.platform) === "win32") {
+      const snapshot = await (options.captureWindowsChildren ?? captureWindowsProcessChildrenMap)();
+      if (snapshot === null) return false;
+      return processesByPid(snapshot).has(rootPid);
+    }
+    const result = spawnProcessSync("ps", ["-p", String(rootPid), "-o", "stat="], {
+      encoding: "utf8",
+      maxBuffer: 1024,
+      timeout: PROCESS_TREE_SCAN_TIMEOUT_MS,
+    });
+    if (result.error || result.status !== 0) return false;
+    // kill(pid, 0) also succeeds for zombies. Accept only live POSIX process states;
+    // Z (zombie), X (dead), missing output, and unknown states cannot prove liveness.
+    return /^[RSDITUWt]/.test(result.stdout.trim());
+  } catch {
+    return false;
+  }
+}
+
 /** Inspect the exact captured identities; snapshot failure is never interpreted as exit. */
 export async function inspectProcessTree(
   tree: CapturedProcessTree,

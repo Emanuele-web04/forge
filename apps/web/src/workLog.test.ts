@@ -101,11 +101,13 @@ describe("deriveWorkLogEntries", () => {
     const taskListActivity = (
       id: string,
       createdAt: string,
+      sequence: number,
       tasks: Array<{ task: string; status: string }>,
     ) =>
       makeActivity({
         id,
         createdAt,
+        sequence,
         kind: "turn.tasks.updated",
         summary: "Tasks updated",
         tone: "info",
@@ -113,22 +115,23 @@ describe("deriveWorkLogEntries", () => {
         payload: { tasks },
       });
     const activities: OrchestrationThreadActivity[] = [
-      taskListActivity("tasks-1", "2026-02-23T00:00:01.000Z", [
+      taskListActivity("tasks-1", "2026-02-23T00:00:01.000Z", 1, [
         { task: "Implement inline editing", status: "inProgress" },
         { task: "Run verification", status: "pending" },
       ]),
       makeActivity({
         id: "tool-between",
         createdAt: "2026-02-23T00:00:02.000Z",
+        sequence: 2,
         kind: "tool.started",
         summary: "Tool call",
         turnId: "turn-1",
       }),
-      taskListActivity("tasks-2", "2026-02-23T00:00:03.000Z", [
+      taskListActivity("tasks-2", "2026-02-23T00:00:03.000Z", 3, [
         { task: "Implement inline editing", status: "completed" },
         { task: "Run verification", status: "inProgress" },
       ]),
-      taskListActivity("tasks-3", "2026-02-23T00:00:04.000Z", [
+      taskListActivity("tasks-3", "2026-02-23T00:00:04.000Z", 4, [
         { task: "Implement inline editing", status: "completed" },
         { task: "Run verification", status: "completed" },
       ]),
@@ -140,6 +143,7 @@ describe("deriveWorkLogEntries", () => {
     // Anchored at the first snapshot (stable id/createdAt), showing the latest state.
     expect(taskListEntries[0]?.id).toBe("tasks-1");
     expect(taskListEntries[0]?.createdAt).toBe("2026-02-23T00:00:01.000Z");
+    expect(taskListEntries[0]?.sequence).toBe(1);
     expect(taskListEntries[0]?.label).toBe("2 out of 2 tasks completed");
     expect(taskListEntries[0]?.detail).toBeUndefined();
     expect(entries.map((entry) => entry.id)).toEqual(["tasks-1", "tool-between"]);
@@ -633,6 +637,7 @@ describe("deriveWorkLogEntries", () => {
       makeActivity({
         id: "opencode-retry-1",
         createdAt: "2026-02-23T00:00:01.000Z",
+        sequence: 1,
         kind: "runtime.warning",
         summary: "OpenCode retrying",
         tone: "info",
@@ -643,6 +648,7 @@ describe("deriveWorkLogEntries", () => {
       makeActivity({
         id: "opencode-retry-2",
         createdAt: "2026-02-23T00:00:02.000Z",
+        sequence: 2,
         kind: "runtime.warning",
         summary: "OpenCode retrying",
         tone: "info",
@@ -653,6 +659,7 @@ describe("deriveWorkLogEntries", () => {
       makeActivity({
         id: "opencode-retry-3",
         createdAt: "2026-02-23T00:00:03.000Z",
+        sequence: 3,
         kind: "runtime.warning",
         summary: "OpenCode retrying",
         tone: "info",
@@ -665,7 +672,9 @@ describe("deriveWorkLogEntries", () => {
     const entries = deriveWorkLogEntries(activities, undefined);
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({
-      id: "opencode-retry-3",
+      id: "opencode-retry-1",
+      createdAt: "2026-02-23T00:00:01.000Z",
+      sequence: 1,
       label: "OpenCode retrying",
       detail: "3 notices - Provider request failed; retrying.",
       preview: "3 notices - Provider request failed; retrying.",
@@ -936,6 +945,7 @@ describe("deriveWorkLogEntries", () => {
       makeActivity({
         id: "a-started",
         createdAt: "2026-02-23T00:00:00.000Z",
+        sequence: 10,
         kind: "tool.started",
         summary: "Tool call",
         payload: {
@@ -947,6 +957,7 @@ describe("deriveWorkLogEntries", () => {
       makeActivity({
         id: "b-started",
         createdAt: "2026-02-23T00:00:01.000Z",
+        sequence: 20,
         kind: "tool.started",
         summary: "Tool call",
         payload: {
@@ -958,6 +969,7 @@ describe("deriveWorkLogEntries", () => {
       makeActivity({
         id: "a-completed",
         createdAt: "2026-02-23T00:00:02.000Z",
+        sequence: 30,
         kind: "tool.completed",
         summary: "Tool call",
         payload: {
@@ -969,6 +981,7 @@ describe("deriveWorkLogEntries", () => {
       makeActivity({
         id: "b-completed",
         createdAt: "2026-02-23T00:00:03.000Z",
+        sequence: 40,
         kind: "tool.completed",
         summary: "Tool call",
         payload: {
@@ -982,9 +995,144 @@ describe("deriveWorkLogEntries", () => {
     // Without id-based collapse this is 4 rows (a started, b started, a completed,
     // b completed); each tool call must merge to one row, kept at its start position.
     const entries = deriveWorkLogEntries(activities, undefined);
-    expect(entries.map((entry) => entry.id)).toEqual(["a-completed", "b-completed"]);
+    expect(entries.map((entry) => entry.id)).toEqual(["a-started", "b-started"]);
+    expect(entries.map((entry) => entry.createdAt)).toEqual([
+      "2026-02-23T00:00:00.000Z",
+      "2026-02-23T00:00:01.000Z",
+    ]);
+    expect(entries.map((entry) => entry.sequence)).toEqual([10, 20]);
     expect(entries.map((entry) => entry.toolName)).toEqual(["Workflow", "WebFetch"]);
   });
+
+  it("keeps a tool at its original timeline anchor when a later turn updates it", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "codex-command-start",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        sequence: 10,
+        turnId: "turn-1",
+        kind: "tool.started",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          title: "Ran command",
+          data: {
+            toolCallId: "background-command",
+            command: "sleep 10",
+          },
+        },
+      }),
+      makeActivity({
+        id: "intervening-warning",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        sequence: 15,
+        turnId: "turn-1",
+        kind: "runtime.warning",
+        summary: "Runtime warning",
+        tone: "info",
+        payload: { message: "The command is still running." },
+      }),
+      makeActivity({
+        id: "codex-command-update",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        sequence: 20,
+        turnId: "turn-2",
+        kind: "tool.updated",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          title: "Ran command",
+          detail: "Process exited with code 0",
+          data: {
+            toolCallId: "background-command",
+            summary: "Process exited with code 0",
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined, {
+      visibleTurnIds: new Set([TurnId.makeUnsafe("turn-1"), TurnId.makeUnsafe("turn-2")]),
+    });
+
+    expect(entries[0]).toMatchObject({
+      id: "codex-command-start",
+      createdAt: "2026-02-23T00:00:01.000Z",
+      sequence: 10,
+      turnId: TurnId.makeUnsafe("turn-2"),
+      activityKind: "tool.updated",
+      detail: "Process exited with code 0",
+    });
+    expect(deriveTimelineEntries([], [], entries).map((entry) => entry.id)).toEqual([
+      "codex-command-start",
+      "intervening-warning",
+    ]);
+  });
+
+  it.each([
+    ["completed", "turn.completed", "info"],
+    ["cancelled", "turn.aborted", "info"],
+    ["failed", "turn.completed", "error"],
+  ] as const)(
+    "keeps a cross-turn tool running after its original turn %s",
+    (_state, terminalKind, terminalTone) => {
+      const oldTurn = TurnId.makeUnsafe("turn-1");
+      const activeTurn = TurnId.makeUnsafe("turn-2");
+      const at = (second: number) => new Date(Date.UTC(2026, 8, 8, 0, 0, second)).toISOString();
+      const tool = (
+        id: string,
+        second: number,
+        kind: OrchestrationThreadActivity["kind"],
+        turnId: TurnId | null,
+      ) =>
+        makeActivity({
+          id,
+          createdAt: at(second),
+          sequence: second,
+          kind,
+          ...(turnId !== null ? { turnId } : {}),
+          summary: "Read file",
+          payload: { itemType: "dynamic_tool_call", data: { toolCallId: "background-tool" } },
+        });
+      const activities = [
+        tool("tool-start", 1, "tool.started", oldTurn),
+        makeActivity({
+          id: "turn-terminal",
+          createdAt: at(2),
+          sequence: 2,
+          turnId: oldTurn,
+          kind: terminalKind,
+          tone: terminalTone,
+        }),
+        tool("tool-next-turn", 3, "tool.updated", activeTurn),
+        tool("tool-progress", 4, "tool.updated", activeTurn),
+        // Some provider updates omit ownership; retain the latest known turn.
+        tool("tool-turnless-progress", 5, "tool.updated", null),
+      ];
+      const options = { activeTurnId: activeTurn, activeTurnStartedAt: at(3) };
+      const findTool = (input: OrchestrationThreadActivity[]) =>
+        deriveWorkLogEntries(input, undefined, options).find((entry) => entry.id === "tool-start");
+      const running = findTool(activities);
+      expect(running).toMatchObject({
+        id: "tool-start",
+        createdAt: at(1),
+        sequence: 1,
+        turnId: activeTurn,
+        toolStatus: "running",
+        liveActivity: { state: "running_tool", lastActivityAt: at(5) },
+      });
+
+      const completed = findTool([...activities, tool("tool-complete", 6, "tool.completed", null)]);
+      expect(completed).toMatchObject({
+        id: "tool-start",
+        createdAt: at(1),
+        sequence: 1,
+        turnId: activeTurn,
+        toolStatus: "completed",
+        liveActivity: { state: "completed", lastActivityAt: at(6) },
+      });
+    },
+  );
 
   it("keeps distinct calls of the same tool separate by tool-call id", () => {
     const activities: OrchestrationThreadActivity[] = [
@@ -1035,7 +1183,7 @@ describe("deriveWorkLogEntries", () => {
     ];
 
     const entries = deriveWorkLogEntries(activities, undefined);
-    expect(entries.map((entry) => entry.id)).toEqual(["first-completed", "second-completed"]);
+    expect(entries.map((entry) => entry.id)).toEqual(["first-started", "second-started"]);
   });
 
   it("orders work log by activity sequence when present", () => {
@@ -1184,7 +1332,7 @@ describe("deriveWorkLogEntries", () => {
     ];
 
     const [entry] = deriveWorkLogEntries(activities, undefined);
-    expect(entry?.id).toBe("command-complete");
+    expect(entry?.id).toBe("command-start");
     expect(entry?.toolDetails).toMatchObject({
       kind: "command",
       command: "bun run --cwd apps/web test session-logic.test.ts",
@@ -1376,7 +1524,7 @@ describe("deriveWorkLogEntries", () => {
 
     expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
       {
-        id: "cursor-searched",
+        id: "cursor-searching",
         toolTitle: "Searched",
         detail: "52 files found",
         itemType: "dynamic_tool_call",
@@ -1423,7 +1571,7 @@ describe("deriveWorkLogEntries", () => {
 
     expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
       {
-        id: "cursor-command-complete",
+        id: "cursor-command-start",
         command: "git diff --stat",
         detail: "done",
         itemType: "command_execution",
@@ -1686,7 +1834,7 @@ describe("deriveWorkLogEntries", () => {
 
     expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
       {
-        id: "codex-completed-rich",
+        id: "codex-start-generic",
         command: "git status --short",
         rawCommand: "/bin/zsh -lc 'git status --short'",
         toolTitle: "Checked",
@@ -2303,8 +2451,8 @@ describe("deriveWorkLogEntries", () => {
 
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({
-      id: "tool-complete",
-      createdAt: "2026-02-23T00:00:03.000Z",
+      id: "tool-update-1",
+      createdAt: "2026-02-23T00:00:01.000Z",
       label: "Tool call completed",
       detail: 'Read: {"file_path":"/tmp/app.ts"}',
       command: "sed -n 1,40p /tmp/app.ts",
@@ -2993,7 +3141,7 @@ describe("deriveWorkLogEntries", () => {
 
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({
-      id: "claude-complete",
+      id: "claude-update-1",
       label: "Read file",
       detail: 'Read: {"file_path":"/tmp/app.ts"}',
       itemType: "dynamic_tool_call",
@@ -3054,7 +3202,7 @@ describe("deriveWorkLogEntries", () => {
 
     const entries = deriveWorkLogEntries(activities, undefined);
 
-    expect(entries.map((entry) => entry.id)).toEqual(["tool-1-complete", "tool-2-complete"]);
+    expect(entries.map((entry) => entry.id)).toEqual(["tool-1-update", "tool-2-update"]);
   });
 
   it("collapses same-timestamp lifecycle rows even when completed sorts before updated by id", () => {
@@ -3097,7 +3245,7 @@ describe("deriveWorkLogEntries", () => {
     const entries = deriveWorkLogEntries(activities, undefined);
 
     expect(entries).toHaveLength(1);
-    expect(entries[0]?.id).toBe("a-complete-same-timestamp");
+    expect(entries[0]?.id).toBe("z-update-earlier");
   });
 
   it("omits routed collab subagent tool lifecycle rows from the transcript", () => {
@@ -3383,7 +3531,7 @@ describe("deriveWorkLogEntries", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]).toEqual(
       expect.objectContaining({
-        id: "opencode-task-complete",
+        id: "opencode-task-started",
         itemType: "collab_agent_tool_call",
         toolTitle: "Find changelog implementation",
         detail: "Full changelog report\nwith file references.",
@@ -3456,7 +3604,7 @@ describe("deriveWorkLogEntries", () => {
     expect(entries).toHaveLength(2);
     expect(entries.find((entry) => entry.itemType === "collab_agent_tool_call")).toEqual(
       expect.objectContaining({
-        id: "opencode-task-complete",
+        id: "opencode-task-update",
         itemType: "collab_agent_tool_call",
         toolTitle: "Find changelog implementation",
         detail: "Tool execution aborted",
