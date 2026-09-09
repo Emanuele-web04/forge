@@ -644,12 +644,16 @@ const LEGACY_KEYBINDING_COMMAND_ALIASES = {
   "reasoningPicker.toggle": "traitsPicker.toggle",
   "thread.previous": "chat.visible.previous",
   "thread.next": "chat.visible.next",
+  // Pre-rename dock/panel commands still present in older userdata configs.
+  "rightPanel.toggle": "browser.toggle",
+  "terminal.splitVertical": "terminal.split",
 } as const satisfies Record<string, KeybindingRule["command"]>;
 
 // Commands removed without a direct replacement are dropped during startup so
-// persisted configs from older releases do not produce validation warnings.
+// persisted configs from older releases do not produce validation warnings / toasts (#330).
 const RETIRED_LEGACY_KEYBINDING_COMMANDS = new Set(["chat.newGemini"]);
-const RETIRED_LEGACY_KEYBINDING_COMMAND_PATTERN = /^(?:composer\.)?modelPicker\.jump\.[1-9]$/;
+const RETIRED_LEGACY_KEYBINDING_COMMAND_PATTERN =
+  /^(?:composer\.)?modelPicker\.jump\.[1-9]$|^preview\.(?:toggle|refresh|focusUrl|zoomIn|zoomOut|resetZoom)$/;
 const OUTDATED_RECENT_VIEW_TERMINAL_GUARD = "!terminalFocus";
 const OUTDATED_SIDEBAR_SEARCH_SHORTCUT = "mod+k";
 const RECENT_VIEW_SHORTCUT_BY_COMMAND: Partial<Record<KeybindingRule["command"], string>> = {
@@ -1154,9 +1158,14 @@ const makeKeybindings = Effect.gen(function* () {
       }
 
       const runtimeConfig = yield* loadRuntimeCustomKeybindingsConfig();
-      if (runtimeConfig.issues.length > 0) {
+      // Malformed whole-file configs must not be rewritten: the cleaned path yields an empty
+      // rule set, and persisting that would erase the user's file. Only drop invalid *entries*.
+      const hasMalformedConfig = runtimeConfig.issues.some(
+        (issue) => issue.kind === "keybindings.malformed-config",
+      );
+      if (hasMalformedConfig) {
         yield* Effect.logWarning(
-          "skipping startup keybindings default sync because config has issues",
+          "skipping startup keybindings default sync because config is malformed",
           {
             path: keybindingsConfigPath,
             issues: runtimeConfig.issues,
@@ -1165,7 +1174,20 @@ const makeKeybindings = Effect.gen(function* () {
         yield* Cache.invalidate(resolvedConfigCache, resolvedConfigCacheKey);
         return;
       }
+
+      // Always continue from the cleaned/migrated rule set for invalid entries / aliases (#330).
       const customConfig = runtimeConfig.keybindings;
+      const droppedInvalidCount = runtimeConfig.issues.filter(
+        (issue) => issue.kind === "keybindings.invalid-entry",
+      ).length;
+      if (droppedInvalidCount > 0) {
+        yield* Effect.logWarning("dropping invalid keybinding entries from user config", {
+          path: keybindingsConfigPath,
+          issueCount: droppedInvalidCount,
+          issues: runtimeConfig.issues,
+          retainedRuleCount: customConfig.length,
+        });
+      }
       const existingCommands = new Set(customConfig.map((entry) => entry.command));
       const missingDefaults: KeybindingRule[] = [];
       const shortcutConflictWarnings: Array<{
@@ -1202,26 +1224,30 @@ const makeKeybindings = Effect.gen(function* () {
           reason: "shortcut context already used by existing rule",
         });
       }
-      if (missingDefaults.length === 0) {
-        if (
-          runtimeConfig.migratedLegacyCommandCount > 0 ||
-          runtimeConfig.migratedDefaultRuleCount > 0 ||
-          runtimeConfig.migratedConfigShape
-        ) {
-          yield* writeConfigAtomically(customConfig);
-        }
+
+      const migratedKeybindingCount =
+        runtimeConfig.migratedLegacyCommandCount + runtimeConfig.migratedDefaultRuleCount;
+      const shouldRewrite =
+        droppedInvalidCount > 0 ||
+        migratedKeybindingCount > 0 ||
+        runtimeConfig.migratedConfigShape ||
+        missingDefaults.length > 0;
+
+      if (!shouldRewrite) {
         yield* Cache.invalidate(resolvedConfigCache, resolvedConfigCacheKey);
         return;
       }
 
-      const matchingDefaults = DEFAULT_KEYBINDINGS.filter((defaultRule) =>
-        customConfig.some((entry) => isSameKeybindingRule(entry, defaultRule)),
-      ).map((rule) => rule.command);
-      if (matchingDefaults.length > 0) {
-        yield* Effect.logWarning("default keybinding rule already defined in user config", {
-          path: keybindingsConfigPath,
-          commands: matchingDefaults,
-        });
+      if (missingDefaults.length > 0) {
+        const matchingDefaults = DEFAULT_KEYBINDINGS.filter((defaultRule) =>
+          customConfig.some((entry) => isSameKeybindingRule(entry, defaultRule)),
+        ).map((rule) => rule.command);
+        if (matchingDefaults.length > 0) {
+          yield* Effect.logWarning("default keybinding rule already defined in user config", {
+            path: keybindingsConfigPath,
+            commands: matchingDefaults,
+          });
+        }
       }
 
       const nextConfig = [...customConfig, ...missingDefaults];
@@ -1236,12 +1262,17 @@ const makeKeybindings = Effect.gen(function* () {
         });
       }
 
-      const migratedKeybindingCount =
-        runtimeConfig.migratedLegacyCommandCount + runtimeConfig.migratedDefaultRuleCount;
       if (migratedKeybindingCount > 0) {
         yield* Effect.logInfo("migrated keybinding config entries", {
           path: keybindingsConfigPath,
           count: migratedKeybindingCount,
+        });
+      }
+      if (droppedInvalidCount > 0) {
+        yield* Effect.logInfo("rewrote keybindings config without invalid entries", {
+          path: keybindingsConfigPath,
+          droppedIssueCount: droppedInvalidCount,
+          retainedRuleCount: customConfig.length,
         });
       }
       yield* writeConfigAtomically(cappedConfig);

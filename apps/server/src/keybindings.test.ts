@@ -426,6 +426,95 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }).pipe(Effect.provide(makeKeybindingsLayer())),
   );
 
+  // Malformed whole-file JSON must not be rewritten on startup (#339 review): the cleaned
+  // path is an empty rule set, and writing it would erase the user's file.
+  it.effect("does not rewrite malformed keybindings config on startup sync", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      const malformed = "{ not-json";
+      yield* fs.writeFileString(keybindingsConfigPath, malformed);
+
+      yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+      });
+
+      assert.equal(yield* fs.readFileString(keybindingsConfigPath), malformed);
+
+      const configState = yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        return yield* keybindings.loadConfigState;
+      });
+      assert.equal(configState.issues[0]?.kind, "keybindings.malformed-config");
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
+  // Regression for #330: invalid/retired entries used to skip startup rewrite forever,
+  // so the Invalid keybindings toast reappeared on every launch.
+  it.effect("rewrites invalid and retired keybindings on startup so issues do not persist", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      yield* fs.writeFileString(
+        keybindingsConfigPath,
+        JSON.stringify([
+          { key: "mod+j", command: "terminal.toggle" },
+          { key: "mod+b", command: "rightPanel.toggle" },
+          { key: "mod+shift+\\", command: "terminal.splitVertical" },
+          { key: "mod+p", command: "preview.toggle" },
+          { key: "mod+x", command: "invalid.command" },
+        ]),
+      );
+
+      yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+      });
+
+      const afterSync = yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        return yield* keybindings.loadConfigState;
+      });
+      assert.deepEqual(afterSync.issues, []);
+      assert.isTrue(afterSync.keybindings.some((entry) => entry.command === "terminal.toggle"));
+      assert.isTrue(
+        afterSync.keybindings.some(
+          (entry) => entry.command === "browser.toggle" && entry.shortcut.key === "b",
+        ),
+      );
+      assert.isTrue(afterSync.keybindings.some((entry) => entry.command === "terminal.split"));
+      assert.isFalse(
+        afterSync.keybindings.some((entry) => String(entry.command) === "preview.toggle"),
+      );
+      assert.isFalse(
+        afterSync.keybindings.some((entry) => String(entry.command) === "invalid.command"),
+      );
+
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      assert.isTrue(persisted.some((entry) => entry.command === "terminal.toggle"));
+      assert.isTrue(
+        persisted.some((entry) => entry.key === "mod+b" && entry.command === "browser.toggle"),
+      );
+      assert.isTrue(
+        persisted.some(
+          (entry) => entry.key === "mod+shift+\\" && entry.command === "terminal.split",
+        ),
+      );
+      assert.isFalse(persisted.some((entry) => String(entry.command) === "preview.toggle"));
+      assert.isFalse(persisted.some((entry) => String(entry.command) === "invalid.command"));
+      assert.isFalse(persisted.some((entry) => String(entry.command) === "rightPanel.toggle"));
+      assert.isFalse(persisted.some((entry) => String(entry.command) === "terminal.splitVertical"));
+
+      // Second load after rewrite stays clean (no recurring toast source).
+      const secondLoad = yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        return yield* keybindings.loadConfigState;
+      });
+      assert.deepEqual(secondLoad.issues, []);
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
   it.effect("migrates legacy command palette keybindings without startup issues", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
