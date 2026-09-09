@@ -32,6 +32,16 @@ export function settingsSearchEntryTarget(entry: SettingsSearchEntry): string | 
 // null while inactive, so the sidebar cannot read every row at runtime; keep this list in sync
 // when rows are added, renamed, hidden conditionally, or represented as panel-level results.
 export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
+  // ── Developer ──────────────────────────────────────────────────────────────
+  {
+    id: "api-tokens:overview",
+    section: "api-tokens",
+    title: "API tokens",
+    keywords:
+      "CORTEX Cloud developer API token scopes expiration revoke secret one-time display private preview AI requests",
+    target: null,
+  },
+
   // ── General ────────────────────────────────────────────────────────────────
   {
     id: "general:default-provider",

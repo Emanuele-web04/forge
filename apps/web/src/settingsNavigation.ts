@@ -18,11 +18,18 @@ export const SETTINGS_SECTION_IDS = [
   "skills",
   "usage",
   "integrations",
+  "api-tokens",
   "advanced",
 ] as const;
 
 export type SettingsSectionId = (typeof SETTINGS_SECTION_IDS)[number];
-export type SettingsNavGroupId = "personal" | "integrations" | "coding" | "system" | "archived";
+export type SettingsNavGroupId =
+  | "personal"
+  | "integrations"
+  | "coding"
+  | "developer"
+  | "system"
+  | "archived";
 
 /**
  * Deep-link scroll targets inside settings panels. Each id is shared by its DOM owner and callers
@@ -51,11 +58,20 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
   { id: "personal", label: "Personal" },
   { id: "integrations", label: "Integrations" },
   { id: "coding", label: "Coding" },
+  { id: "developer", label: "Developer" },
   { id: "system", label: "System" },
   { id: "archived", label: "Archived" },
 ] as const;
 
 export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
+  {
+    id: "api-tokens",
+    group: "developer",
+    label: "API tokens",
+    description: "Manage CORTEX Cloud API credentials when your organization has preview access.",
+    icon: "key",
+    eyebrow: "CORTEX AI & API",
+  },
   {
     id: "general",
     group: "personal",
