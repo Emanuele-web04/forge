@@ -328,6 +328,7 @@ import {
   resolveSettingsBackTarget,
   type SettingsBackTarget,
   resolveSidebarNewThreadEnvMode,
+  resolveSidebarProjectRowLabel,
   resolveThreadHoverCardMetadata,
   resolveThreadProjectLabel,
   resolveThreadRowClassName,
@@ -4899,6 +4900,8 @@ export default function Sidebar() {
     // name container itself is not focusable — the row's button is.
     const projectToolbarReserveClassName =
       "group-hover/project-header:pr-[4.75rem] group-has-[:focus-visible]/project-header:pr-[4.75rem]";
+    // Configured display name only — folder identity lives in the hover card (#1000).
+    const projectRowLabel = resolveSidebarProjectRowLabel(project);
 
     return (
       <div className="group/collapsible">
@@ -4963,17 +4966,12 @@ export default function Sidebar() {
               >
                 <span
                   className={cn(
-                    "truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal",
+                    "min-w-0 flex-1 truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal",
                     SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
                   )}
                 >
-                  {project.name}
+                  {projectRowLabel}
                 </span>
-                {project.localName ? (
-                  <span className="shrink-0 truncate text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/40">
-                    {project.folderName}
-                  </span>
-                ) : null}
               </div>
               {/* Closed folders surface child-chat status on the project row; open
                   folders leave that signal to their visible child thread rows. */}
