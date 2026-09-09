@@ -190,4 +190,22 @@ describe("createDesktopPlatformBuildConfig", () => {
       "assets/prod/black-macos-legacy-1024.png",
     );
   });
+
+  it("stages closed-state ICNS from the legacy mark, not the modern full-bleed solid", async () => {
+    // Contract for #156 / pre-Tahoe closed dock: icon.icns must not be generated
+    // from the modern full-bleed source. Packaging reads both paths from
+    // BRAND_ASSET_PATHS; this locks the split so a future edit cannot silently
+    // point ICNS back at the modern asset without failing a focused test.
+    const source = await import("node:fs/promises").then((fs) =>
+      fs.readFile(new URL("./build-desktop-artifact.ts", import.meta.url), "utf8"),
+    );
+    // Dock runtime override + ICNS both use the legacy source; modern is only
+    // used for the staged icon.png (and must not feed generateMacIconSet).
+    assert.match(source, /generateMacIconSet\(\s*legacyIcnsSourcePng/);
+    assert.match(source, /sips -z 1024 1024 \$\{legacyIconSource\} --out \$\{dockIconPngPath\}/);
+    assert.isNull(
+      source.match(/generateMacIconSet\(\s*modernIconSource/),
+      "closed-state ICNS must not be built from the modern full-bleed solid (regresses Darwin < 25 closed dock)",
+    );
+  });
 });
