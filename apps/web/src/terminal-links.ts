@@ -1,3 +1,5 @@
+import { inferHomeFromCwd } from "@synara/shared/path";
+
 import { getNavigatorPlatform, isMacPlatform } from "./lib/utils";
 
 export type TerminalLinkKind = "url" | "path";
@@ -116,25 +118,6 @@ function joinPath(base: string, next: string, separator: "/" | "\\"): string {
     return `${cleanBase}\\${next.replaceAll("/", "\\")}`;
   }
   return `${cleanBase}/${next.replace(/^\/+/, "")}`;
-}
-
-function inferHomeFromCwd(cwd: string): string | undefined {
-  const posixUser = cwd.match(/^\/Users\/([^/]+)/);
-  if (posixUser?.[1]) {
-    return `/Users/${posixUser[1]}`;
-  }
-
-  const posixHome = cwd.match(/^\/home\/([^/]+)/);
-  if (posixHome?.[1]) {
-    return `/home/${posixHome[1]}`;
-  }
-
-  const windowsUser = cwd.match(/^([A-Za-z]:\\Users\\[^\\]+)/);
-  if (windowsUser?.[1]) {
-    return windowsUser[1];
-  }
-
-  return undefined;
 }
 
 function splitPathAndPosition(value: string): {

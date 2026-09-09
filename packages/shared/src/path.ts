@@ -35,6 +35,27 @@ export function isExplicitRelativePath(value: string): boolean {
   );
 }
 
+// Infers the user home directory from a workspace cwd when `~/…` needs expanding
+// and no explicit home is available (browser surfaces only know the project root).
+export function inferHomeFromCwd(cwd: string): string | undefined {
+  const posixUser = cwd.match(/^\/Users\/([^/]+)/);
+  if (posixUser?.[1]) {
+    return `/Users/${posixUser[1]}`;
+  }
+
+  const posixHome = cwd.match(/^\/home\/([^/]+)/);
+  if (posixHome?.[1]) {
+    return `/home/${posixHome[1]}`;
+  }
+
+  const windowsUser = cwd.match(/^([A-Za-z]:\\Users\\[^\\]+)/);
+  if (windowsUser?.[1]) {
+    return windowsUser[1];
+  }
+
+  return undefined;
+}
+
 function normalizePathSeparators(value: string): string {
   return value.replace(/\\/g, "/");
 }

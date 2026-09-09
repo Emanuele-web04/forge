@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  inferHomeFromCwd,
   isLocalAbsolutePath,
   isWorkspaceRelativePathSafe,
   joinWorkspaceRelativePath,
@@ -101,5 +102,18 @@ describe("joinWorkspaceRelativePath", () => {
   it("round-trips through workspaceRelativePathOf", () => {
     const joined = joinWorkspaceRelativePath("/repo/app", "src/page.tsx");
     expect(workspaceRelativePathOf(joined, "/repo/app")).toBe("src/page.tsx");
+  });
+});
+
+describe("inferHomeFromCwd", () => {
+  it("infers macOS, Linux, and Windows user homes", () => {
+    expect(inferHomeFromCwd("/Users/tester/project")).toBe("/Users/tester");
+    expect(inferHomeFromCwd("/home/tester/project")).toBe("/home/tester");
+    expect(inferHomeFromCwd("C:\\Users\\tester\\project")).toBe("C:\\Users\\tester");
+  });
+
+  it("returns undefined when the cwd does not encode a user home", () => {
+    expect(inferHomeFromCwd("/tmp/scratch")).toBeUndefined();
+    expect(inferHomeFromCwd("D:\\work\\repo")).toBeUndefined();
   });
 });

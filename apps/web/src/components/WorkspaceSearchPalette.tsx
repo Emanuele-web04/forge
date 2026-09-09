@@ -38,6 +38,10 @@ import {
   CommandStatus,
 } from "./ui/command";
 import { FileEntryIcon } from "./chat/FileEntryIcon";
+import {
+  isWorkspaceSearchFilesystemPathQuery,
+  resolveWorkspaceSearchFilesystemPath,
+} from "./WorkspaceSearchPalette.logic";
 
 export type WorkspaceSearchPaletteMode = "files" | "snippets";
 
@@ -83,6 +87,7 @@ const MODE_COPY: Record<
   WorkspaceSearchPaletteMode,
   {
     groupLabel: string;
+    openPathGroupLabel?: string;
     placeholder: string;
     prompt: string;
     noResults: string;
@@ -91,6 +96,7 @@ const MODE_COPY: Record<
 > = {
   files: {
     groupLabel: "Files",
+    openPathGroupLabel: "Open path",
     placeholder: "Search files",
     prompt: "Type to search for files",
     noResults: "No matching files",
@@ -259,6 +265,36 @@ const SnippetResultRow = memo(function SnippetResultRow(props: {
   );
 });
 
+// Exact absolute / ~/ open intent: same row chrome as file hits, but the path is
+// already resolved (workspace-relative when inside cwd, otherwise absolute).
+const OpenPathResultRow = memo(function OpenPathResultRow(props: {
+  path: string;
+  index: number;
+  onOpenFile: (relativePath: string) => void;
+}) {
+  const displayPath = props.path.replace(/\\/g, "/");
+  const { base, dir } = splitPath(displayPath);
+  return (
+    <CommandItem
+      index={props.index}
+      value={`open-path:${props.path}`}
+      className={`items-center ${ITEM_CLASS}`}
+      onClick={() => props.onOpenFile(props.path)}
+    >
+      <FileEntryIcon
+        pathValue={props.path}
+        kind="file"
+        colorMode="inherit"
+        className={ICON_CLASS}
+      />
+      <span className="min-w-0 flex-1 truncate text-[13px] text-zinc-700 dark:text-zinc-300">
+        {base || displayPath}
+      </span>
+      {dir ? <DirectoryText className="max-w-[55%] shrink-0" dir={dir} /> : null}
+    </CommandItem>
+  );
+});
+
 // Thin shell: dialog + popup only. All state lives in the content component
 // below, which Base UI keeps mounted through the exit transition and then
 // unmounts — resetting the palette without ever blanking it mid-animation.
@@ -292,6 +328,18 @@ function WorkspaceSearchPaletteContent(props: WorkspaceSearchPaletteProps) {
     prewarmProjectSearchIndex(props.cwd);
   }, [props.cwd]);
 
+  // Absolute / ~/ queries are an exact-open intent, not fuzzy index search.
+  const openPathTarget = useMemo(() => {
+    if (props.mode !== "files" || trimmedQuery.length === 0) {
+      return null;
+    }
+    return resolveWorkspaceSearchFilesystemPath(trimmedQuery, props.cwd);
+  }, [props.mode, trimmedQuery, props.cwd]);
+  const isFilesystemPathQuery =
+    props.mode === "files" && isWorkspaceSearchFilesystemPathQuery(trimmedQuery);
+  const isDebouncedFilesystemPathQuery =
+    props.mode === "files" && isWorkspaceSearchFilesystemPathQuery(debouncedQuery);
+
   const hasUsableQuery =
     props.mode === "files"
       ? trimmedQuery.length > 0
@@ -302,7 +350,11 @@ function WorkspaceSearchPaletteContent(props: WorkspaceSearchPaletteProps) {
       cwd: props.cwd,
       query: debouncedQuery,
       limit: SEARCH_LIMIT,
-      enabled: props.open && props.mode === "files" && debouncedQuery.length > 0,
+      enabled:
+        props.open &&
+        props.mode === "files" &&
+        debouncedQuery.length > 0 &&
+        !isDebouncedFilesystemPathQuery,
       staleTime: SEARCH_STALE_TIME_MS,
     }),
   );
@@ -321,13 +373,14 @@ function WorkspaceSearchPaletteContent(props: WorkspaceSearchPaletteProps) {
   );
 
   const fileEntries =
-    props.mode === "files" && hasUsableQuery
+    props.mode === "files" && hasUsableQuery && !isFilesystemPathQuery
       ? (fileSearchQuery.data?.entries ?? EMPTY_FILE_ENTRIES)
       : EMPTY_FILE_ENTRIES;
   const snippetMatches =
     props.mode === "snippets" && hasUsableQuery
       ? (snippetSearchQuery.data?.matches ?? EMPTY_SNIPPET_MATCHES)
       : EMPTY_SNIPPET_MATCHES;
+  const openPathIndexOffset = openPathTarget ? 1 : 0;
 
   // Exact item registry for Base UI, mirroring the rendered CommandItem
   // values in content and order. With it, the composite list clamps its
@@ -336,9 +389,12 @@ function WorkspaceSearchPaletteContent(props: WorkspaceSearchPaletteProps) {
   const itemValues = useMemo(
     () =>
       props.mode === "files"
-        ? fileEntries.map((entry) => `${entry.kind}:${entry.path}`)
+        ? [
+            ...(openPathTarget ? [`open-path:${openPathTarget}`] : []),
+            ...fileEntries.map((entry) => `${entry.kind}:${entry.path}`),
+          ]
         : snippetMatches.map((match) => `snippet:${match.path}:${match.lineNumber}`),
-    [props.mode, fileEntries, snippetMatches],
+    [props.mode, openPathTarget, fileEntries, snippetMatches],
   );
 
   const activeQuery = props.mode === "files" ? fileSearchQuery : snippetSearchQuery;
@@ -347,7 +403,7 @@ function WorkspaceSearchPaletteContent(props: WorkspaceSearchPaletteProps) {
   // changes). Only a settled response may claim "no results" — otherwise every
   // keystroke would flash the no-results state before data lands.
   const isSettled = trimmedQuery === debouncedQuery && !activeQuery.isFetching;
-  const hasRows = fileEntries.length > 0 || snippetMatches.length > 0;
+  const hasRows = openPathTarget !== null || fileEntries.length > 0 || snippetMatches.length > 0;
 
   // The server matches file entries against a normalized query (leading @ ./
   // stripped); highlighting must normalize the same way or rows that matched
@@ -414,6 +470,14 @@ function WorkspaceSearchPaletteContent(props: WorkspaceSearchPaletteProps) {
       </CommandStatus>
 
       <CommandList className={LIST_CLASS}>
+        {props.mode === "files" && openPathTarget ? (
+          <CommandGroup>
+            <CommandGroupLabel className={GROUP_LABEL_CLASS}>
+              {copy.openPathGroupLabel ?? "Open path"}
+            </CommandGroupLabel>
+            <OpenPathResultRow path={openPathTarget} index={0} onOpenFile={handleOpenFile} />
+          </CommandGroup>
+        ) : null}
         {props.mode === "files" && fileEntries.length > 0 ? (
           <CommandGroup>
             <CommandGroupLabel className={GROUP_LABEL_CLASS}>{copy.groupLabel}</CommandGroupLabel>
@@ -421,7 +485,7 @@ function WorkspaceSearchPaletteContent(props: WorkspaceSearchPaletteProps) {
               <FileResultRow
                 key={entry.path}
                 entry={entry}
-                index={index}
+                index={openPathIndexOffset + index}
                 highlightQuery={highlightQuery}
                 onOpenFile={handleOpenFile}
                 onOpenDirectory={handleOpenDirectory}
