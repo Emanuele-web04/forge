@@ -3654,7 +3654,9 @@ export default function ChatView({
   });
   // Turn/session updates can arrive before the first transcript row. An empty
   // synced snapshot during startup must not restore the unstarted landing.
-  const hasPendingThreadWork = isWorking || (activeLatestTurn !== null && !latestTurnSettled);
+  // Terminal turns can lack start timestamps after restore/import; their state wins.
+  const hasPendingThreadWork =
+    isWorking || (activeLatestTurnState === "running" && !latestTurnSettled);
   const handleRetryThreadDetailSync = useCallback(() => {
     useStore.getState().clearThreadDetailSyncFailure(threadId);
     const api = readNativeApi();
