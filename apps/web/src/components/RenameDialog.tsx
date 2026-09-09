@@ -3,7 +3,7 @@
 // Layer: Shared UI component
 // Exports: RenameDialog
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -25,6 +25,8 @@ export interface RenameDialogProps {
   allowEmpty?: boolean | undefined;
   placeholder?: string | undefined;
   saveLabel?: string | undefined;
+  /** Extra controls rendered between the input and the footer actions. */
+  belowField?: ReactNode | undefined;
   onOpenChange: (open: boolean) => void;
   onSave: (next: string) => Promise<void> | void;
 }
@@ -42,6 +44,7 @@ export function RenameDialog({
   allowEmpty: allowEmptyProp,
   placeholder,
   saveLabel: saveLabelProp,
+  belowField,
   onOpenChange,
   onSave,
 }: RenameDialogProps) {
@@ -62,6 +65,7 @@ export function RenameDialog({
           allowEmpty={allowEmpty}
           placeholder={placeholder}
           saveLabel={saveLabel}
+          belowField={belowField}
           onOpenChange={onOpenChange}
           onSave={onSave}
         />
@@ -75,6 +79,7 @@ function RenameDialogForm({
   allowEmpty,
   placeholder,
   saveLabel,
+  belowField,
   onOpenChange,
   onSave,
 }: {
@@ -82,6 +87,7 @@ function RenameDialogForm({
   allowEmpty: boolean;
   placeholder: string | undefined;
   saveLabel: string;
+  belowField: ReactNode | undefined;
   onOpenChange: (open: boolean) => void;
   onSave: (value: string) => Promise<void> | void;
 }) {
@@ -138,6 +144,7 @@ function RenameDialogForm({
           />
         </form>
       </DialogPanel>
+      {belowField ? <div className="px-6 pb-1">{belowField}</div> : null}
       <DialogFooter>
         <Button variant="outline" size="sm" onClick={() => onOpenChange(false)} disabled={isSaving}>
           Cancel

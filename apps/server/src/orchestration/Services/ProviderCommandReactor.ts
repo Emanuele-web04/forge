@@ -60,6 +60,7 @@ export interface ProviderCommandReactorShape {
 
   readonly regenerateThreadTitle: (input: {
     readonly threadId: ThreadId;
+    readonly triggeredBy?: "explicit" | "automatic";
   }) => Effect.Effect<OrchestrationRegenerateThreadTitleResult, unknown>;
 }
 

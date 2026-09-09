@@ -15,6 +15,7 @@ import {
   GIT_TEXT_GENERATION_PROVIDERS,
   TrimmedNonEmptyString,
   ProviderKind,
+  ThreadTitleRefreshMode,
   type GitTextGenerationProvider,
   type ProviderStartOptions,
   type ServerSettingsView,
@@ -364,6 +365,9 @@ export const AppSettingsSchema = Schema.Struct({
   customPiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   textGenerationProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
+  // Server-backed global default for opt-in automatic title refresh (#1041).
+  // Off unless onboarding explicitly asks; per-project/per-thread overrides win.
+  titleRefreshMode: ThreadTitleRefreshMode.pipe(withDefaults(() => "off" as const)),
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
   defaultProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),
   // Local-only UI preference: providers explicitly hidden from the composer picker.
@@ -702,6 +706,7 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     disabledProviders: getServerDisabledProviders(settings),
     textGenerationProvider: settings.textGenerationModelSelection.provider,
     textGenerationModel: settings.textGenerationModelSelection.model,
+    titleRefreshMode: settings.titleRefresh.mode,
     onboardingCompletedAt: settings.onboardingCompletedAt ?? null,
   };
 }
@@ -783,6 +788,9 @@ export function appSettingsPatchToServerSettingsPatch(
   }
   if (hasOwn(patch, "onboardingCompletedAt")) {
     serverPatch.onboardingCompletedAt = patch.onboardingCompletedAt ?? null;
+  }
+  if (hasOwn(patch, "titleRefreshMode") && patch.titleRefreshMode !== undefined) {
+    serverPatch.titleRefresh = { mode: patch.titleRefreshMode };
   }
   if (hasOwn(patch, "textGenerationModel") || hasOwn(patch, "textGenerationProvider")) {
     const model = patch.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;

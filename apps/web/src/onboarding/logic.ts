@@ -12,6 +12,7 @@ export const ONBOARDING_STEPS = [
   "tour",
   "providers",
   "theme",
+  "titles",
   "project",
   "done",
 ] as const;

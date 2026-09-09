@@ -567,6 +567,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               ? false
               : (event.payload.createBranchFlowCompleted ?? false),
             isPinned: event.payload.isPinned ?? false,
+            manualTitlePinned: false,
+            titleRefreshMode: null,
+            pendingSuggestedTitle: null,
             parentThreadId: event.payload.parentThreadId ?? null,
             creationSource: event.payload.creationSource ?? null,
             sourceThreadId: event.payload.sourceThreadId ?? null,
@@ -671,6 +674,15 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                   }
                 : {}),
               ...(event.payload.isPinned !== undefined ? { isPinned: event.payload.isPinned } : {}),
+              ...(event.payload.manualTitlePinned !== undefined
+                ? { manualTitlePinned: event.payload.manualTitlePinned }
+                : {}),
+              ...(event.payload.titleRefreshMode !== undefined
+                ? { titleRefreshMode: event.payload.titleRefreshMode }
+                : {}),
+              ...(event.payload.pendingSuggestedTitle !== undefined
+                ? { pendingSuggestedTitle: event.payload.pendingSuggestedTitle }
+                : {}),
               ...(event.payload.settledAt !== undefined
                 ? { settledAt: event.payload.settledAt }
                 : {}),

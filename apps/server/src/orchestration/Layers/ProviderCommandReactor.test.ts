@@ -1108,7 +1108,7 @@ describe("ProviderCommandReactor", () => {
         cwd: "/tmp/provider-project",
         context: "conversation",
         modelSelection: { provider: "codex", model: "gpt-5-codex" },
-        message: expect.stringContaining("User: Fix the backend authentication callback race"),
+        message: expect.stringContaining("User intent: Fix the backend authentication callback race"),
       }),
     );
     expect((await readHarnessThread(harness))?.title).toBe("Backend auth callback");
@@ -1228,6 +1228,78 @@ describe("ProviderCommandReactor", () => {
 
     expect(result).toEqual({ status: "stale", title: null });
     expect((await readHarnessThread(harness))?.title).toBe("Backend auth");
+  });
+
+  it("returns pinned for automatic refresh when the title is manually pinned", async () => {
+    const harness = await createHarness();
+    await seedRenameConversation(harness);
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-pin-title"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        manualTitlePinned: true,
+      }),
+    );
+    harness.generateThreadTitle.mockReturnValue(Effect.succeed({ title: "Should not apply" }));
+
+    const result = await Effect.runPromise(
+      harness.reactor.regenerateThreadTitle({
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        triggeredBy: "automatic",
+      }),
+    );
+
+    expect(result).toEqual({ status: "pinned", title: null });
+    expect(harness.generateThreadTitle).not.toHaveBeenCalled();
+    expect((await readHarnessThread(harness))?.title).toBe("Thread");
+  });
+
+  it("lets an explicit refresh proceed on a pinned title and unpins it", async () => {
+    const harness = await createHarness();
+    await seedRenameConversation(harness);
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-pin-title-explicit"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        manualTitlePinned: true,
+      }),
+    );
+    harness.generateThreadTitle.mockReturnValue(
+      Effect.succeed({ title: "Fresh explicit title" }),
+    );
+
+    const result = await Effect.runPromise(
+      harness.reactor.regenerateThreadTitle({ threadId: ThreadId.makeUnsafe("thread-1") }),
+    );
+
+    expect(result).toEqual({ status: "renamed", title: "Fresh explicit title" });
+    const thread = await readHarnessThread(harness);
+    expect(thread?.title).toBe("Fresh explicit title");
+    expect(thread?.manualTitlePinned).toBe(false);
+  });
+
+  it("stores a pending suggestion instead of renaming in suggested mode", async () => {
+    const harness = await createHarness({
+      serverSettings: { titleRefresh: { mode: "suggested" } },
+    });
+    await seedRenameConversation(harness);
+    harness.generateThreadTitle.mockReturnValue(
+      Effect.succeed({ title: "Suggested backend title" }),
+    );
+
+    const result = await Effect.runPromise(
+      harness.reactor.regenerateThreadTitle({
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        triggeredBy: "automatic",
+      }),
+    );
+
+    expect(result).toEqual({ status: "suggested", title: "Suggested backend title" });
+    const thread = await readHarnessThread(harness);
+    expect(thread?.title).toBe("Thread");
+    expect(thread?.pendingSuggestedTitle).toBe("Suggested backend title");
   });
 
   it("discards a generated title after an explicit A-to-B-to-A rename", async () => {

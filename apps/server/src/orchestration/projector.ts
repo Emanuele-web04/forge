@@ -472,6 +472,7 @@ export function projectEvent(
             defaultModelSelection: payload.defaultModelSelection,
             scripts: payload.scripts,
             isPinned: payload.isPinned ?? false,
+            titleRefreshMode: null,
             spaceId: payload.spaceId ?? null,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
@@ -507,6 +508,9 @@ export function projectEvent(
                     : {}),
                   ...(payload.scripts !== undefined ? { scripts: payload.scripts } : {}),
                   ...(payload.isPinned !== undefined ? { isPinned: payload.isPinned } : {}),
+                  ...(payload.titleRefreshMode !== undefined
+                    ? { titleRefreshMode: payload.titleRefreshMode }
+                    : {}),
                   ...(payload.spaceId !== undefined ? { spaceId: payload.spaceId } : {}),
                   updatedAt: payload.updatedAt,
                 }
@@ -738,6 +742,15 @@ export function projectEvent(
                   }
                 : {}),
               ...(payload.isPinned !== undefined ? { isPinned: payload.isPinned } : {}),
+              ...(payload.manualTitlePinned !== undefined
+                ? { manualTitlePinned: payload.manualTitlePinned }
+                : {}),
+              ...(payload.titleRefreshMode !== undefined
+                ? { titleRefreshMode: payload.titleRefreshMode }
+                : {}),
+              ...(payload.pendingSuggestedTitle !== undefined
+                ? { pendingSuggestedTitle: payload.pendingSuggestedTitle }
+                : {}),
               ...(payload.settledAt !== undefined ? { settledAt: payload.settledAt } : {}),
               ...(payload.parentThreadId !== undefined
                 ? { parentThreadId: payload.parentThreadId }

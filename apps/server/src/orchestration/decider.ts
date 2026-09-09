@@ -837,7 +837,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command.workspaceRoot !== undefined ||
         command.defaultModelSelection !== undefined ||
         command.scripts !== undefined ||
-        command.isPinned !== undefined;
+        command.isPinned !== undefined ||
+        command.titleRefreshMode !== undefined;
       const isLegacyHomeChatContainer = isLegacyHomeChatContainerRow({
         projectTitle: existingProject.title,
         projectWorkspaceRoot: existingProject.workspaceRoot,
@@ -944,6 +945,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             : {}),
           ...(command.scripts !== undefined ? { scripts: command.scripts } : {}),
           ...(command.isPinned !== undefined ? { isPinned: command.isPinned } : {}),
+          ...(command.titleRefreshMode !== undefined
+            ? { titleRefreshMode: command.titleRefreshMode }
+            : {}),
           ...(changedSpaceId !== undefined ? { spaceId: changedSpaceId } : {}),
           updatedAt: occurredAt,
         },
@@ -1438,6 +1442,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             : {}),
           ...resolveThreadWorkspaceMetadataPatch(project?.kind, command, thread),
           ...(command.isPinned !== undefined ? { isPinned: command.isPinned } : {}),
+          ...(command.manualTitlePinned !== undefined
+            ? { manualTitlePinned: command.manualTitlePinned }
+            : {}),
+          ...(command.titleRefreshMode !== undefined
+            ? { titleRefreshMode: command.titleRefreshMode }
+            : {}),
+          ...(command.pendingSuggestedTitle !== undefined
+            ? { pendingSuggestedTitle: command.pendingSuggestedTitle }
+            : {}),
           ...(command.isSettled !== undefined
             ? { settledAt: command.isSettled ? occurredAt : null }
             : {}),

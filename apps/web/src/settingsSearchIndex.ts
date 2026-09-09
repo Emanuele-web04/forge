@@ -282,6 +282,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
 
   // ── Behavior ──────────────────────────────────────────────────────────────────
   {
+    id: "behavior:thread-titles",
+    section: "behavior",
+    title: "Thread titles",
+    keywords:
+      "Automatic suggested title refresh rename stale conversation opt-in manual pin",
+  },
+  {
     id: "behavior:follow-up-behavior",
     section: "behavior",
     title: "Follow-up behavior",

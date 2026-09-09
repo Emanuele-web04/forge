@@ -177,6 +177,12 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { useLatestProjectStore } from "../latestProjectStore";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
 import { dispatchThreadRename } from "../lib/threadRename";
+import {
+  setProjectTitleRefreshMode,
+  setThreadManualTitlePin,
+  setThreadTitleRefreshMode,
+} from "../lib/threadTitleRefresh";
+import { TitleRefreshModePicker } from "./TitleRefreshModePicker";
 import { quotePosixShellArgument } from "../lib/shellQuote";
 import { DEFAULT_THREAD_TERMINAL_ID, type SidebarThreadSummary, type Thread } from "../types";
 import {
@@ -6848,6 +6854,16 @@ export default function Sidebar() {
         currentTitle={
           renameDialogThreadId ? (sidebarThreadSummaryById[renameDialogThreadId]?.title ?? "") : ""
         }
+        refreshMode={
+          renameDialogThreadId
+            ? (sidebarThreadSummaryById[renameDialogThreadId]?.titleRefreshMode ?? null)
+            : null
+        }
+        manualTitlePinned={
+          renameDialogThreadId
+            ? (sidebarThreadSummaryById[renameDialogThreadId]?.manualTitlePinned ?? false)
+            : false
+        }
         onOpenChange={(nextOpen) => {
           if (!nextOpen) setRenameDialogThreadId(null);
         }}
@@ -6856,6 +6872,26 @@ export default function Sidebar() {
           const target = sidebarThreadSummaryById[renameDialogThreadId];
           if (!target) return;
           void commitRename(target.id, newTitle, target.title);
+        }}
+        onRefreshModeChange={(mode) => {
+          if (renameDialogThreadId === null) return;
+          void setThreadTitleRefreshMode(renameDialogThreadId, mode).catch((error) => {
+            toastManager.add({
+              type: "error",
+              title: "Could not update title setting",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            });
+          });
+        }}
+        onPinChange={(pinned) => {
+          if (renameDialogThreadId === null) return;
+          void setThreadManualTitlePin(renameDialogThreadId, pinned).catch((error) => {
+            toastManager.add({
+              type: "error",
+              title: "Could not update title pin",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            });
+          });
         }}
       />
 
@@ -6871,6 +6907,25 @@ export default function Sidebar() {
         onOpenChange={(nextOpen) => {
           if (!nextOpen) setRenameProjectDialogId(null);
         }}
+        belowField={
+          <div className="border-t border-border/60 pt-3">
+            <TitleRefreshModePicker
+              value={renameProjectDialogProject?.titleRefreshMode ?? null}
+              onChange={(mode) => {
+                if (!renameProjectDialogProject) return;
+                void setProjectTitleRefreshMode(renameProjectDialogProject.id, mode).catch(
+                  (error) => {
+                    toastManager.add({
+                      type: "error",
+                      title: "Could not update title setting",
+                      description: error instanceof Error ? error.message : "An error occurred.",
+                    });
+                  },
+                );
+              }}
+            />
+          </div>
+        }
         onSave={(nextName) => {
           if (!renameProjectDialogProject) return;
           handleRenameProjectSave(

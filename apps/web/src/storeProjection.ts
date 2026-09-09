@@ -89,6 +89,8 @@ function toThreadShell(thread: Thread): ThreadShell {
     settledAt: thread.settledAt ?? null,
     updatedAt: thread.updatedAt,
     isPinned: thread.isPinned ?? false,
+    manualTitlePinned: thread.manualTitlePinned ?? false,
+    titleRefreshMode: thread.titleRefreshMode ?? null,
     envMode: thread.envMode,
     branch: thread.branch,
     worktreePath: thread.worktreePath,
@@ -342,6 +344,8 @@ function sidebarThreadSummariesEqual(
     (left.settledAt ?? null) === (right.settledAt ?? null) &&
     left.updatedAt === right.updatedAt &&
     (left.isPinned ?? false) === (right.isPinned ?? false) &&
+    (left.manualTitlePinned ?? false) === (right.manualTitlePinned ?? false) &&
+    (left.titleRefreshMode ?? null) === (right.titleRefreshMode ?? null) &&
     left.latestTurn === right.latestTurn &&
     left.lastVisitedAt === right.lastVisitedAt &&
     (left.parentThreadId ?? null) === (right.parentThreadId ?? null) &&
@@ -387,6 +391,8 @@ function buildSidebarThreadSummary(
     settledAt: thread.settledAt ?? null,
     updatedAt: thread.updatedAt,
     isPinned: thread.isPinned ?? false,
+    manualTitlePinned: thread.manualTitlePinned ?? false,
+    titleRefreshMode: thread.titleRefreshMode ?? null,
     latestTurn: thread.latestTurn,
     lastVisitedAt: thread.lastVisitedAt,
     parentThreadId: thread.parentThreadId ?? null,

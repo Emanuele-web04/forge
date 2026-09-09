@@ -59,6 +59,7 @@ describe("dispatchThreadRename", () => {
       type: "thread.meta.update",
       threadId: "thread-server",
       title: "Renamed server thread",
+      manualTitlePinned: true,
     });
     expect(regenerateThreadTitle).not.toHaveBeenCalled();
   });
@@ -87,13 +88,18 @@ describe("dispatchThreadRename", () => {
     });
 
     expect(outcome).toBe("renamed");
-    expect(dispatchCommand).toHaveBeenCalledTimes(1);
+    expect(dispatchCommand).toHaveBeenCalledTimes(2);
     expect(dispatchCommand.mock.calls[0]?.[0]).toMatchObject({
       type: "thread.create",
       threadId: "thread-draft",
       projectId: "project-chat",
       title: "Inbox cleanup",
       createdAt: "2026-04-18T00:00:00.000Z",
+    });
+    expect(dispatchCommand.mock.calls[1]?.[0]).toMatchObject({
+      type: "thread.meta.update",
+      threadId: "thread-draft",
+      manualTitlePinned: true,
     });
   });
 
