@@ -381,7 +381,7 @@ describe("shouldCaptureChatFindShortcut", () => {
     ).toBe(true);
   });
 
-  it("does not steal Ctrl+F from a focused terminal tab or in-app browser", () => {
+  it("does not steal Ctrl+F from a focused terminal tab, in-app browser, or file preview", () => {
     expect(
       shouldCaptureChatFindShortcut({
         shouldRenderChatPaneContent: true,
@@ -394,6 +394,14 @@ describe("shouldCaptureChatFindShortcut", () => {
         shouldRenderChatPaneContent: true,
         terminalWorkspaceTerminalTabActive: false,
         inAppBrowserFocused: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldCaptureChatFindShortcut({
+        shouldRenderChatPaneContent: true,
+        terminalWorkspaceTerminalTabActive: false,
+        inAppBrowserFocused: false,
+        filePreviewFocused: true,
       }),
     ).toBe(false);
     expect(

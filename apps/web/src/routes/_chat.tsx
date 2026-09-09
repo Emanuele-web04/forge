@@ -27,6 +27,7 @@ import {
 } from "../lib/projectShortcutTargets";
 import { resolveInheritedThreadContext } from "../lib/threadBootstrap";
 import { isTerminalFocused } from "../lib/terminalFocus";
+import { isFilePreviewFocused } from "../components/filePreviewFind.logic";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { startFreshChatForActiveSurface } from "../lib/startContainerChat";
 import { isOrdinarySpaceProject } from "../lib/spaces";
@@ -332,6 +333,7 @@ function ChatRouteGlobalShortcuts() {
         terminalFocus: isTerminalFocused(),
         terminalOpen,
         terminalWorkspaceOpen,
+        filePreviewFocus: isFilePreviewFocused(),
       };
 
       if (recentSwitcherState && event.key === "Escape") {
@@ -538,6 +540,7 @@ function ChatRouteGlobalShortcuts() {
           terminalFocus: isTerminalFocused(),
           terminalOpen,
           terminalWorkspaceOpen,
+          filePreviewFocus: isFilePreviewFocused(),
         }}
       />
       {recentSwitcherState ? (

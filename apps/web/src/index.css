@@ -844,6 +844,25 @@ label:has(> select#reasoning-effort) select {
   border-bottom-right-radius: 0;
 }
 
+/* File preview find: CSS Custom Highlight API (preferred) + line-level fallback. */
+::highlight(file-find-match) {
+  background-color: color-mix(in srgb, var(--color-amber-400) 55%, transparent);
+  color: var(--color-stone-900);
+}
+
+::highlight(file-find-match-active) {
+  background-color: color-mix(in srgb, var(--color-orange-500) 68%, transparent);
+  color: var(--color-stone-950);
+}
+
+.editor-file-viewer .file-find-line-match {
+  background-color: color-mix(in srgb, var(--color-amber-400) 22%, transparent);
+}
+
+.editor-file-viewer .file-find-line-match-active {
+  background-color: color-mix(in srgb, var(--color-orange-500) 28%, transparent);
+}
+
 /* Markdown can split one marker across inline nodes; only outer edges keep padding/radius. */
 .chat-markdown .thread-marker-highlight.thread-marker-continues-before {
   padding-left: 0;

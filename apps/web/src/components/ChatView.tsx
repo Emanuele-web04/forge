@@ -377,6 +377,7 @@ import {
 } from "../appSettings";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { isEditableEventTarget } from "../lib/editableEventTarget";
+import { isFilePreviewFocused, openFocusedFilePreviewFind } from "./filePreviewFind.logic";
 import {
   type ComposerFileAttachment,
   type ComposerImageAttachment,
@@ -6736,6 +6737,7 @@ export default function ChatView({
         !isVoiceTranscribing &&
         !isComposerApprovalState &&
         canHandleComposerPickerShortcut(event, composerFormRef.current);
+      const filePreviewFocus = isFilePreviewFocused();
       const shortcutContext = {
         terminalFocus: isTerminalFocused(),
         terminalOpen: Boolean(terminalState.terminalOpen),
@@ -6743,6 +6745,7 @@ export default function ChatView({
         terminalWorkspaceTerminalOnly: terminalState.workspaceLayout === "terminal-only",
         terminalWorkspaceTerminalTabActive,
         terminalWorkspaceChatTabActive,
+        filePreviewFocus,
       };
 
       const command = resolveShortcutCommand(event, keybindings, {
@@ -6758,12 +6761,22 @@ export default function ChatView({
         return;
       }
 
+      if (command === "file.find") {
+        if (!openFocusedFilePreviewFind()) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+
       if (command === "chat.find") {
         if (
           !shouldCaptureChatFindShortcut({
             shouldRenderChatPaneContent,
             terminalWorkspaceTerminalTabActive,
             inAppBrowserFocused: eventTargetsInAppBrowser(event.target),
+            filePreviewFocused: filePreviewFocus,
           })
         ) {
           return;

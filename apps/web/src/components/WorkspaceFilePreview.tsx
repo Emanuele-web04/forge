@@ -76,6 +76,14 @@ import { useFileLineCommenting } from "./chat/useFileLineCommenting";
 import { WorkspaceFilePreviewHeader } from "./chat/WorkspaceFilePreviewHeader";
 import { TranscriptSelectionAction } from "./chat/TranscriptSelectionAction";
 import { useCodeSelectionAction } from "./chat/useCodeSelectionAction";
+import { FilePreviewFindHost } from "./FilePreviewFindBar";
+import {
+  applyFilePreviewFindHighlights,
+  clearFilePreviewFindHighlights,
+  registerFilePreviewFindController,
+  scrollFilePreviewMatchIntoView,
+  type FilePreviewFindMatch,
+} from "./filePreviewFind.logic";
 import { LocalImagePreview } from "./LocalImagePreview";
 import { PdfFilePreview } from "./PdfFilePreview";
 import { Skeleton } from "./ui/skeleton";
@@ -366,15 +374,32 @@ function readFileSaveError(error: unknown): string {
     : "Could not save this file.";
 }
 
+function hasFileContentsReadyForFind(input: {
+  hasFileContents: boolean;
+  fileIsImage: boolean;
+  fileIsPdf: boolean;
+  editableSourceOpen: boolean;
+}): boolean {
+  return (
+    input.hasFileContents && !input.fileIsImage && !input.fileIsPdf && !input.editableSourceOpen
+  );
+}
+
 export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   const liveRevalidationEnabled = props.liveRevalidationEnabled ?? true;
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
+  const previewRootRef = useRef<HTMLDivElement>(null);
   const contentsRef = useRef<HTMLDivElement>(null);
   const taskWriteQueueRef = useRef<Promise<void>>(Promise.resolve());
   const latestTaskWriteVersionRef = useRef({ next: 0, byFile: new Map<string, number>() });
   const taskFileDiskVersionRef = useRef(new Map<string, string>());
   const [editBuffer, setEditBuffer] = useState<FileEditBuffer | null>(null);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findFocusNonce, setFindFocusNonce] = useState(0);
+  const findMatchesRef = useRef<readonly FilePreviewFindMatch[]>([]);
+  const findQueryRef = useRef("");
+  const findActiveIndexRef = useRef(-1);
   const {
     filePath: requestedFilePath,
     onAskWhyInChat,
@@ -861,6 +886,119 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     fileQuery.data.lineEnding !== "mixed" &&
     !editBufferDirty;
 
+  // Find covers the read-only code and rendered-markdown paths only — not the
+  // editable textarea, images, or PDFs.
+  const findAvailable = hasFileContentsReadyForFind({
+    hasFileContents: fileQuery.data !== undefined,
+    fileIsImage,
+    fileIsPdf,
+    editableSourceOpen: Boolean(activeEditBuffer && editableDocument && !showMarkdownPreview),
+  });
+
+  const openFileFind = useCallback(() => {
+    if (!findAvailable) return;
+    setFindOpen(true);
+    setFindFocusNonce((current) => current + 1);
+  }, [findAvailable]);
+
+  useEffect(() => {
+    if (!findAvailable && findOpen) {
+      setFindOpen(false);
+    }
+  }, [findAvailable, findOpen]);
+
+  useEffect(() => {
+    const root = previewRootRef.current;
+    if (!root || !findAvailable) {
+      return;
+    }
+    return registerFilePreviewFindController({
+      root,
+      open: openFileFind,
+    });
+  }, [findAvailable, openFileFind, filePath]);
+
+  useEffect(() => {
+    if (findOpen) {
+      return;
+    }
+    clearFilePreviewFindHighlights(contentsRef.current);
+    findMatchesRef.current = [];
+    findQueryRef.current = "";
+    findActiveIndexRef.current = -1;
+  }, [findOpen]);
+
+  useEffect(() => {
+    return () => {
+      clearFilePreviewFindHighlights(contentsRef.current);
+    };
+  }, []);
+
+  const handleFindMatchesChange = useCallback(
+    (matches: readonly FilePreviewFindMatch[], query: string, activeIndex: number) => {
+      findMatchesRef.current = matches;
+      findQueryRef.current = query;
+      findActiveIndexRef.current = activeIndex;
+      const root = contentsRef.current;
+      if (!root) return;
+      applyFilePreviewFindHighlights({
+        root,
+        contents: displayedFileContents,
+        query,
+        activeIndex,
+        matches,
+      });
+    },
+    [displayedFileContents],
+  );
+
+  const handleFindActiveMatchChange = useCallback(
+    (match: FilePreviewFindMatch | null, query: string, activeIndex: number) => {
+      findActiveIndexRef.current = activeIndex;
+      findQueryRef.current = query;
+      const root = contentsRef.current;
+      if (!root) return;
+      applyFilePreviewFindHighlights({
+        root,
+        contents: displayedFileContents,
+        query,
+        activeIndex,
+        matches: findMatchesRef.current,
+      });
+      if (match) {
+        scrollFilePreviewMatchIntoView({
+          root,
+          contents: displayedFileContents,
+          query,
+          activeIndex,
+          matches: findMatchesRef.current,
+        });
+      }
+    },
+    [displayedFileContents],
+  );
+
+  // Re-apply highlights after Shiki/markdown paint catches up to a live reload.
+  useEffect(() => {
+    if (!findOpen) {
+      return;
+    }
+    const root = contentsRef.current;
+    if (!root || findMatchesRef.current.length === 0) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      applyFilePreviewFindHighlights({
+        root,
+        contents: displayedFileContents,
+        query: findQueryRef.current,
+        activeIndex: findActiveIndexRef.current,
+        matches: findMatchesRef.current,
+      });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [displayedFileContents, findOpen, showMarkdownPreview, filePath]);
+
   if (!props.workspaceRoot && !fileIsLocalAbsolute && !fileIsScratchBinaryPreview) {
     return (
       <PanelStateMessage density="compact" fill="flex">
@@ -928,7 +1066,32 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     hasFileContents && fileReadError !== null && !activeEditBuffer?.error;
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-background-surface)]">
+    <div
+      ref={previewRootRef}
+      data-file-preview="true"
+      tabIndex={findAvailable ? 0 : undefined}
+      className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-background-surface)] outline-none"
+      onMouseDown={(event) => {
+        if (!findAvailable) return;
+        if (!(event.target instanceof HTMLElement)) return;
+        // Keep native focus for find-field / header controls; otherwise claim
+        // focus so Cmd+F resolves to file.find for this preview.
+        if (event.target.closest("input, textarea, button, a, [contenteditable='true']")) {
+          return;
+        }
+        previewRootRef.current?.focus({ preventScroll: true });
+      }}
+    >
+      {findAvailable ? (
+        <FilePreviewFindHost
+          open={findOpen}
+          focusNonce={findFocusNonce}
+          contents={displayedFileContents}
+          onClose={() => setFindOpen(false)}
+          onMatchesChange={handleFindMatchesChange}
+          onActiveMatchChange={handleFindActiveMatchChange}
+        />
+      ) : null}
       <WorkspaceFilePreviewHeader
         workspaceRoot={props.workspaceRoot}
         filePath={filePath}

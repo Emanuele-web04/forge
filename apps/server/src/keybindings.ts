@@ -112,7 +112,8 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+d", command: "diff.toggle", when: "!terminalFocus" },
   // Cmd-only instead of mod so Ctrl+L remains available to shells on non-macOS.
   { key: "cmd+l", command: "composer.focus.toggle", when: "!terminalFocus" },
-  { key: "mod+f", command: "chat.find", when: "!terminalFocus" },
+  { key: "mod+f", command: "chat.find", when: "!terminalFocus && !filePreviewFocus" },
+  { key: "mod+f", command: "file.find", when: "filePreviewFocus" },
   { key: "mod+shift+m", command: "modelPicker.toggle", when: "!terminalFocus" },
   // Cycle models within the active provider (favorites first, then remaining list).
   { key: "alt+]", command: "model.next", when: "!terminalFocus" },

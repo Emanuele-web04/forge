@@ -46,6 +46,7 @@ const SETTINGS_SHORTCUT_CONTEXT: ShortcutSheetContext = {
   terminalFocus: false,
   terminalOpen: false,
   terminalWorkspaceOpen: false,
+  filePreviewFocus: false,
 };
 
 const EDITABLE_SHORTCUT_DEFINITIONS = listEditableShortcutDefinitions();

@@ -311,7 +311,15 @@ const DEFAULT_BINDINGS = compile([
   {
     shortcut: modShortcut("f"),
     command: "chat.find",
-    whenAst: whenNot(whenIdentifier("terminalFocus")),
+    whenAst: whenAnd(
+      whenNot(whenIdentifier("terminalFocus")),
+      whenNot(whenIdentifier("filePreviewFocus")),
+    ),
+  },
+  {
+    shortcut: modShortcut("f"),
+    command: "file.find",
+    whenAst: whenIdentifier("filePreviewFocus"),
   },
   {
     shortcut: modShortcut("u", { shiftKey: true }),
@@ -626,38 +634,64 @@ describe("Activity shortcut", () => {
 });
 
 describe("in-thread find shortcuts", () => {
-  it("opens chat.find with Cmd/Ctrl+F outside terminal focus", () => {
+  it("opens chat.find with Cmd/Ctrl+F outside terminal and file-preview focus", () => {
     assert.equal(
       resolveShortcutCommand(event({ key: "f", metaKey: true }), DEFAULT_BINDINGS, {
         platform: "MacIntel",
-        context: { terminalFocus: false },
+        context: { terminalFocus: false, filePreviewFocus: false },
       }),
       "chat.find",
     );
     assert.equal(
       resolveShortcutCommand(event({ key: "f", ctrlKey: true }), DEFAULT_BINDINGS, {
         platform: "Win32",
-        context: { terminalFocus: false },
+        context: { terminalFocus: false, filePreviewFocus: false },
       }),
       "chat.find",
     );
     assert.isNull(
       resolveShortcutCommand(event({ key: "f", metaKey: true }), DEFAULT_BINDINGS, {
         platform: "MacIntel",
-        context: { terminalFocus: true },
+        context: { terminalFocus: true, filePreviewFocus: false },
       }),
     );
   });
 
+  it("opens file.find with Cmd/Ctrl+F when the file preview is focused", () => {
+    assert.equal(
+      resolveShortcutCommand(event({ key: "f", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false, filePreviewFocus: true },
+      }),
+      "file.find",
+    );
+    assert.equal(
+      resolveShortcutCommand(event({ key: "f", ctrlKey: true }), DEFAULT_BINDINGS, {
+        platform: "Win32",
+        context: { terminalFocus: false, filePreviewFocus: true },
+      }),
+      "file.find",
+    );
+  });
+
   it("falls back to chat.find when runtime config is missing it", () => {
-    const legacyBindings = DEFAULT_BINDINGS.filter((binding) => binding.command !== "chat.find");
+    const legacyBindings = DEFAULT_BINDINGS.filter(
+      (binding) => binding.command !== "chat.find" && binding.command !== "file.find",
+    );
 
     assert.strictEqual(
       resolveShortcutCommand(event({ key: "f", metaKey: true }), legacyBindings, {
         platform: "MacIntel",
-        context: { terminalFocus: false },
+        context: { terminalFocus: false, filePreviewFocus: false },
       }),
       "chat.find",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "f", metaKey: true }), legacyBindings, {
+        platform: "MacIntel",
+        context: { terminalFocus: false, filePreviewFocus: true },
+      }),
+      "file.find",
     );
   });
 });

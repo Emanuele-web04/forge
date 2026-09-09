@@ -131,6 +131,12 @@ it.effect("parses keybinding rules", () =>
     });
     assert.strictEqual(parsedChatFind.command, "chat.find");
 
+    const parsedFileFind = yield* decode(KeybindingRule, {
+      key: "mod+f",
+      command: "file.find",
+    });
+    assert.strictEqual(parsedFileFind.command, "file.find");
+
     const parsedNewChat = yield* decode(KeybindingRule, {
       key: "mod+alt+n",
       command: "chat.newChat",
