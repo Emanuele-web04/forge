@@ -7284,6 +7284,138 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it("keeps the first sent message visible throughout draft promotion", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, THREAD_ID);
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createDraftOnlySnapshot(),
+    });
+
+    try {
+      const prompt = "Keep the first message on screen";
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, prompt);
+      const sendButton = await waitForSendButton();
+      expect(sendButton.disabled).toBe(false);
+      sendButton.click();
+      const startCommand = await vi.waitFor(() => {
+        const command = wsRequests
+          .map(readDispatchedCommand)
+          .find((candidate) => candidate?.type === "thread.turn.start");
+        expect(command).toBeDefined();
+        return command!;
+      });
+      const message = startCommand.message as { messageId: MessageId; text: string };
+      const messageSelector = `[data-message-id="${message.messageId}"][data-message-role="user"]`;
+      const expectTranscript = async () => {
+        await waitForLayout();
+        expect(document.querySelectorAll(messageSelector)).toHaveLength(1);
+        expect(document.querySelector(messageSelector)?.textContent).toContain(prompt);
+        expect(document.querySelector('[data-empty-landing-composer-block="true"]')).toBeNull();
+        expect(mounted.router.state.location.pathname).toBe(`/${THREAD_ID}`);
+      };
+      await expectTranscript();
+
+      const createdSnapshot = addThreadToSnapshot(fixture.snapshot, THREAD_ID);
+      const createdThread = { ...createdSnapshot.threads[0]!, session: null };
+      fixture.snapshot = { ...createdSnapshot, threads: [createdThread] };
+      useStore
+        .getState()
+        .syncServerShellSnapshot(createShellSnapshotFromReadModel(fixture.snapshot));
+      await expectTranscript();
+      useStore.getState().syncServerThreadDetailHotPath(createdThread);
+      await expectTranscript();
+
+      const startedThread = {
+        ...createdThread,
+        messages: [
+          {
+            ...createUserMessage({ id: message.messageId, text: message.text, offsetSeconds: 1 }),
+            createdAt: startCommand.createdAt as string,
+            updatedAt: startCommand.createdAt as string,
+          },
+        ],
+      };
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: [startedThread],
+      };
+      useStore.getState().syncServerThreadDetailHotPath(startedThread);
+      useComposerDraftStore.getState().finalizePromotedDraftThread(THREAD_ID);
+      await expectTranscript();
+
+      // A creation snapshot can finish after the first message echo.
+      useStore.getState().syncServerThreadDetailHotPath(createdThread);
+      await expectTranscript();
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("keeps the transcript open while the first turn starts before its message arrives", async () => {
+    const snapshot = addThreadToSnapshot(createDraftOnlySnapshot(), THREAD_ID);
+    const emptyThread = { ...snapshot.threads[0]!, session: null };
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: { ...snapshot, threads: [emptyThread] },
+    });
+
+    try {
+      await expect.element(page.getByTestId("empty-landing-heading")).toBeInTheDocument();
+      const pendingTurn = {
+        turnId: TurnId.makeUnsafe("first-turn-starting"),
+        state: "running" as const,
+        requestedAt: new Date().toISOString(),
+        startedAt: null,
+        completedAt: null,
+        assistantMessageId: null,
+      };
+      const pendingThread = { ...emptyThread, latestTurn: pendingTurn };
+      fixture.snapshot = { ...fixture.snapshot, threads: [pendingThread] };
+      useStore.getState().syncServerThreadDetailHotPath(pendingThread);
+      await waitForLayout();
+      expect(document.querySelector('[data-testid="empty-landing-heading"]')).toBeNull();
+      const transcriptPane = document.querySelector('[data-chat-transcript-pane="true"]');
+      expect(transcriptPane).not.toBeNull();
+      expect(transcriptPane?.textContent).not.toContain("What should");
+      expect(transcriptPane?.textContent).not.toContain("Send a message to start the conversation.");
+
+      for (const status of ["starting", "running"] as const) {
+        const thread = {
+          ...pendingThread,
+          session: { ...snapshot.threads[0]!.session!, status },
+        };
+        fixture.snapshot = { ...fixture.snapshot, threads: [thread] };
+        useStore.getState().syncServerThreadDetailHotPath(thread);
+        await waitForLayout();
+        expect(document.querySelector('[data-testid="empty-landing-heading"]')).toBeNull();
+        expect(document.querySelector('[data-chat-transcript-pane="true"]')).toBe(transcriptPane);
+      }
+
+      const startedThread = {
+        ...pendingThread,
+        messages: [
+          createUserMessage({
+            id: MessageId.makeUnsafe("first-turn-message"),
+            text: "Start the first turn",
+            offsetSeconds: 1,
+          }),
+        ],
+      };
+      fixture.snapshot = { ...fixture.snapshot, threads: [startedThread] };
+      useStore.getState().syncServerThreadDetailHotPath(startedThread);
+      await expect
+        .element(page.getByText("Start the first turn", { exact: true }))
+        .toBeInTheDocument();
+      expect(document.querySelector('[data-testid="empty-landing-heading"]')).toBeNull();
+      expect(document.querySelector('[data-chat-transcript-pane="true"]')).toBe(transcriptPane);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("creates a detached worktree on first send in New worktree mode", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
     const mounted = await mountChatView({
