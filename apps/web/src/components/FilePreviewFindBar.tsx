@@ -3,14 +3,7 @@
 //   + match count below. Mirrors ThreadFindBar layout for a consistent find UX.
 // Layer: File preview presentation
 
-import {
-  useDeferredValue,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent,
-} from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 import { IconButton } from "~/components/ui/icon-button";
 import { ArrowDownIcon, ArrowUpIcon, SearchIcon, XIcon } from "~/lib/icons";
@@ -32,8 +25,16 @@ interface FilePreviewFindBarProps {
   focusNonce: number;
   contents: string;
   onClose: () => void;
-  onMatchesChange: (matches: readonly FilePreviewFindMatch[], query: string, activeIndex: number) => void;
-  onActiveMatchChange: (match: FilePreviewFindMatch | null, query: string, activeIndex: number) => void;
+  onMatchesChange: (
+    matches: readonly FilePreviewFindMatch[],
+    query: string,
+    activeIndex: number,
+  ) => void;
+  onActiveMatchChange: (
+    match: FilePreviewFindMatch | null,
+    query: string,
+    activeIndex: number,
+  ) => void;
 }
 
 const FIND_STEP_BUTTON_CLASS_NAME =
@@ -65,7 +66,11 @@ export function FilePreviewFindBar({
     if (!open) {
       return { matches: [] as FilePreviewFindMatch[], capped: false };
     }
-    const all = collectFilePreviewMatches(contents, deferredQuery, FILE_PREVIEW_FIND_MAX_MATCHES + 1);
+    const all = collectFilePreviewMatches(
+      contents,
+      deferredQuery,
+      FILE_PREVIEW_FIND_MAX_MATCHES + 1,
+    );
     const capped = all.length > FILE_PREVIEW_FIND_MAX_MATCHES;
     return {
       matches: capped ? all.slice(0, FILE_PREVIEW_FIND_MAX_MATCHES) : all,

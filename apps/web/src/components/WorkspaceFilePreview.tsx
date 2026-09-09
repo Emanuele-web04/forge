@@ -381,10 +381,7 @@ function hasFileContentsReadyForFind(input: {
   editableSourceOpen: boolean;
 }): boolean {
   return (
-    input.hasFileContents &&
-    !input.fileIsImage &&
-    !input.fileIsPdf &&
-    !input.editableSourceOpen
+    input.hasFileContents && !input.fileIsImage && !input.fileIsPdf && !input.editableSourceOpen
   );
 }
 
@@ -891,13 +888,12 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
 
   // Find covers the read-only code and rendered-markdown paths only — not the
   // editable textarea, images, or PDFs.
-  const findAvailable =
-    hasFileContentsReadyForFind({
-      hasFileContents: fileQuery.data !== undefined,
-      fileIsImage,
-      fileIsPdf,
-      editableSourceOpen: Boolean(activeEditBuffer && editableDocument && !showMarkdownPreview),
-    });
+  const findAvailable = hasFileContentsReadyForFind({
+    hasFileContents: fileQuery.data !== undefined,
+    fileIsImage,
+    fileIsPdf,
+    editableSourceOpen: Boolean(activeEditBuffer && editableDocument && !showMarkdownPreview),
+  });
 
   const openFileFind = useCallback(() => {
     if (!findAvailable) return;

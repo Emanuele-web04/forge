@@ -376,10 +376,7 @@ import {
 } from "../appSettings";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { isEditableEventTarget } from "../lib/editableEventTarget";
-import {
-  isFilePreviewFocused,
-  openFocusedFilePreviewFind,
-} from "./filePreviewFind.logic";
+import { isFilePreviewFocused, openFocusedFilePreviewFind } from "./filePreviewFind.logic";
 import {
   type ComposerFileAttachment,
   type ComposerImageAttachment,

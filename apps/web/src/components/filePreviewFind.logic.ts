@@ -52,11 +52,8 @@ export function filePreviewMatchCountLabel(input: {
   if (input.matchCount === 0) {
     return "No results";
   }
-  const total = input.capped
-    ? `${FILE_PREVIEW_FIND_MAX_MATCHES}+`
-    : String(input.matchCount);
-  const current =
-    input.activeIndex < 0 ? 0 : Math.min(input.activeIndex + 1, input.matchCount);
+  const total = input.capped ? `${FILE_PREVIEW_FIND_MAX_MATCHES}+` : String(input.matchCount);
+  const current = input.activeIndex < 0 ? 0 : Math.min(input.activeIndex + 1, input.matchCount);
   return `${current} / ${total}`;
 }
 
@@ -83,8 +80,7 @@ export function anchorFilePreviewMatchIndex(
     return 0;
   }
   const exact = matches.findIndex(
-    (match) =>
-      match.startOffset === previous.startOffset && match.endOffset === previous.endOffset,
+    (match) => match.startOffset === previous.startOffset && match.endOffset === previous.endOffset,
   );
   if (exact >= 0) {
     return exact;
@@ -119,11 +115,7 @@ export function lineIndexForOffset(text: string, offset: number): number {
 }
 
 export function supportsCssCustomHighlight(): boolean {
-  return (
-    typeof CSS !== "undefined" &&
-    "highlights" in CSS &&
-    typeof Highlight !== "undefined"
-  );
+  return typeof CSS !== "undefined" && "highlights" in CSS && typeof Highlight !== "undefined";
 }
 
 interface DomTextNodeSpan {
@@ -245,15 +237,12 @@ export function applyFilePreviewFindHighlights(input: {
   }
 
   const safeIndex =
-    input.activeIndex < 0
-      ? -1
-      : Math.min(input.activeIndex, input.matches.length - 1);
+    input.activeIndex < 0 ? -1 : Math.min(input.activeIndex, input.matches.length - 1);
 
   if (supportsCssCustomHighlight()) {
     const domRanges = collectDomHighlightRanges(input.root, needle);
     if (domRanges.length > 0) {
-      const activeDomIndex =
-        safeIndex < 0 ? -1 : Math.min(safeIndex, domRanges.length - 1);
+      const activeDomIndex = safeIndex < 0 ? -1 : Math.min(safeIndex, domRanges.length - 1);
       const inactive = new Highlight();
       const active = new Highlight();
       for (let index = 0; index < domRanges.length; index += 1) {
@@ -319,9 +308,10 @@ export function scrollFilePreviewMatchIntoView(input: {
     const domRanges = collectDomHighlightRanges(input.root, needle);
     const range = domRanges[Math.min(safeIndex, Math.max(domRanges.length - 1, 0))];
     if (range) {
-      const anchor = range.startContainer instanceof Element
-        ? range.startContainer
-        : range.startContainer.parentElement;
+      const anchor =
+        range.startContainer instanceof Element
+          ? range.startContainer
+          : range.startContainer.parentElement;
       anchor?.scrollIntoView({ block: "center", inline: "nearest" });
       return;
     }
@@ -378,7 +368,9 @@ interface FilePreviewFindController {
 
 const filePreviewFindControllers = new Set<FilePreviewFindController>();
 
-export function registerFilePreviewFindController(controller: FilePreviewFindController): () => void {
+export function registerFilePreviewFindController(
+  controller: FilePreviewFindController,
+): () => void {
   filePreviewFindControllers.add(controller);
   return () => {
     filePreviewFindControllers.delete(controller);

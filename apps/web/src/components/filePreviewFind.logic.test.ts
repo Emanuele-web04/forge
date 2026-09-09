@@ -37,15 +37,11 @@ describe("anchorFilePreviewMatchIndex", () => {
   const matches = collectFilePreviewMatches("one two one", "one");
 
   it("keeps the exact prior offset when still present", () => {
-    expect(
-      anchorFilePreviewMatchIndex(matches, { startOffset: 8, endOffset: 11 }),
-    ).toBe(1);
+    expect(anchorFilePreviewMatchIndex(matches, { startOffset: 8, endOffset: 11 })).toBe(1);
   });
 
   it("falls back to the nearest offset after a live edit", () => {
-    expect(
-      anchorFilePreviewMatchIndex(matches, { startOffset: 7, endOffset: 10 }),
-    ).toBe(1);
+    expect(anchorFilePreviewMatchIndex(matches, { startOffset: 7, endOffset: 10 })).toBe(1);
   });
 
   it("returns -1 when there are no matches", () => {
