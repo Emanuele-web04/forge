@@ -3,8 +3,34 @@ import { describe, expect, it } from "vitest";
 import {
   resolveDockFileOpenTarget,
   resolveScratchPreviewFileOpenTarget,
+  resolveWorkspaceDirectoryOpenTarget,
   resolveWorkspaceFileOpenTarget,
 } from "./workspaceFileOpener";
+
+describe("resolveWorkspaceDirectoryOpenTarget", () => {
+  it("recognizes the workspace root across Windows separator and casing differences", () => {
+    expect(
+      resolveWorkspaceDirectoryOpenTarget("C:\\Users\\Dev\\Projects", "c:/users/dev/projects/"),
+    ).toBe("");
+  });
+
+  it("recognizes the POSIX workspace root", () => {
+    expect(resolveWorkspaceDirectoryOpenTarget("/Users/dev/project/", "/Users/dev/project")).toBe(
+      "",
+    );
+  });
+
+  it("maps explicit in-workspace directory references to Explorer paths", () => {
+    expect(resolveWorkspaceDirectoryOpenTarget("docs/", "/repo/app")).toBe("docs");
+    expect(resolveWorkspaceDirectoryOpenTarget("C:\\Repo\\App\\Src\\", "c:/repo/app")).toBe("Src");
+  });
+
+  it("leaves file-shaped and out-of-workspace references to file opening", () => {
+    expect(resolveWorkspaceDirectoryOpenTarget("README.md", "/repo/app")).toBeNull();
+    expect(resolveWorkspaceDirectoryOpenTarget("/repo/app/src/page.tsx", "/repo/app")).toBeNull();
+    expect(resolveWorkspaceDirectoryOpenTarget("/repo/other/", "/repo/app")).toBeNull();
+  });
+});
 
 describe("resolveWorkspaceFileOpenTarget", () => {
   it("passes workspace-relative paths through unchanged", () => {
