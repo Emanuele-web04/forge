@@ -251,3 +251,55 @@ it("renders snippet rows and gates short queries behind the prompt", async () =>
     restoreNativeApi();
   }
 });
+
+it("offers an Open path row for in-workspace absolute paths without fuzzy search", async () => {
+  const searchEntries = vi.fn().mockResolvedValue({ entries: [], truncated: false });
+  const restoreNativeApi = installNativeApi({
+    projects: {
+      prewarmSearchIndex: vi.fn().mockResolvedValue({ started: true }),
+      searchEntries,
+    },
+  } as unknown as NativeApi);
+
+  try {
+    const handlers = await renderPalette("files");
+    await page.getByPlaceholder("Search files").fill(`${WORKSPACE_ROOT}/src/notes/todo.md`);
+
+    await expect.element(page.getByText("Open path")).toBeVisible();
+    await expect.element(page.getByText("todo.md")).toBeVisible();
+    expect(searchEntries).not.toHaveBeenCalled();
+
+    await page.getByText("todo.md").click();
+    expect(handlers.onOpenFile).toHaveBeenCalledWith("src/notes/todo.md");
+    expect(handlers.onOpenChange).toHaveBeenCalledWith(false);
+  } finally {
+    restoreNativeApi();
+  }
+});
+
+it("expands ~/ paths and opens them via Enter", async () => {
+  const searchEntries = vi.fn().mockResolvedValue({ entries: [], truncated: false });
+  const restoreNativeApi = installNativeApi({
+    projects: {
+      prewarmSearchIndex: vi.fn().mockResolvedValue({ started: true }),
+      searchEntries,
+    },
+  } as unknown as NativeApi);
+
+  try {
+    const handlers = await renderPalette("files");
+    await page.getByPlaceholder("Search files").fill("~/notes/todo.md");
+
+    await expect.element(page.getByText("Open path")).toBeVisible();
+    await expect.element(page.getByText("todo.md")).toBeVisible();
+    expect(searchEntries).not.toHaveBeenCalled();
+
+    await userEvent.keyboard("{Enter}");
+    await vi.waitFor(() =>
+      expect(handlers.onOpenFile).toHaveBeenCalledWith("/Users/tester/notes/todo.md"),
+    );
+    expect(handlers.onOpenChange).toHaveBeenCalledWith(false);
+  } finally {
+    restoreNativeApi();
+  }
+});
