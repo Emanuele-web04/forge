@@ -6235,9 +6235,19 @@ describe("ChatView transcript geometry (full app)", () => {
     });
 
     try {
+      // Neutralize the WS fixture so an in-flight getShellSnapshot cannot restore
+      // projects and defeat the pre-hydration guard under CI load.
+      fixture = buildFixture({
+        ...fixture.snapshot,
+        projects: [],
+        updatedAt: NOW_ISO,
+      });
       useStore.setState({ projects: [], threadsHydrated: false });
       await waitForLayout();
+      // Wait until Sidebar has committed the loading empty-state from the cleared store.
+      await expect.element(page.getByLabelText("Loading projects")).toBeInTheDocument();
       const initialPath = mounted.router.state.location.pathname;
+      expect(initialPath).toBe(`/${THREAD_ID}`);
       const newThreadButton = page.getByRole("button", { name: "New thread", exact: true });
       await expect.element(newThreadButton).toBeInTheDocument();
       await newThreadButton.click();

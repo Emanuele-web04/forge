@@ -8085,6 +8085,9 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
+      // Spawn (1m) + live clear back to Claude Code's native default. Switching
+      // to a custom/discovered Claude slug (#367) keeps that same default, so it
+      // does not emit a third auto-compact reconfiguration.
       const configuredEventsFiber = yield* Stream.filter(
         adapter.streamEvents,
         (event) => event.type === "session.configured",
@@ -8109,7 +8112,20 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         },
         attachments: [],
       });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "switch to a discovered model",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude/custom-opus",
+        },
+        attachments: [],
+      });
+
+      // Native default cleared once when leaving the explicit 1m selection.
+      // Custom slugs inherit the same default, so no second applyFlagSettings.
       assert.deepEqual(harness.query.applyFlagSettingsCalls, [{ autoCompactWindow: null }]);
+      assert.ok(harness.query.setModelCalls.includes("claude/custom-opus"));
       const configuredEvents = Array.from(yield* Fiber.join(configuredEventsFiber));
       assert.deepEqual(
         configuredEvents.map((event) =>

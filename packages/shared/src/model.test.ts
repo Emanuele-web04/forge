@@ -429,6 +429,25 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
     expect(values("claudeAgent", "claude-haiku-4-5")).toEqual([]);
   });
 
+  // #367: custom Claude Code slugs (proxy endpoints) must still expose effort controls.
+  it("returns flagship Claude effort options for unknown custom Claude model slugs", () => {
+    const customLevels = values("claudeAgent", "my-proxy/custom-opus");
+    expect(customLevels).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultrathink",
+      "ultracode",
+    ]);
+    expect(getDefaultEffort(getModelCapabilities("claudeAgent", "vendor/special-model"))).toBe(
+      "high",
+    );
+    // Known models keep their own ladders (Haiku still has no effort).
+    expect(values("claudeAgent", "claude-haiku-4-5")).toEqual([]);
+  });
+
   it("returns Grok Build effort options for grok-build models", () => {
     expect(values("grok", "grok-build-0.1")).toEqual(["none", "low", "medium", "high"]);
     expect(values("grok", "grok-build")).toEqual(["none", "low", "medium", "high"]);

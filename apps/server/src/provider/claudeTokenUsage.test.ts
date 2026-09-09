@@ -162,6 +162,11 @@ describe("Claude context selection", () => {
     ["claude-fable-5-1[1m]", "200k", 200_000],
     ["claude-opus-4-5", "1m", undefined],
     ["claude-opus-4-6", "2m", undefined],
+    // #367: custom/proxy Claude slugs inherit the flagship auto-compact ladder.
+    // Unset stays native (undefined); explicit overrides still resolve.
+    ["claude/custom-opus", undefined, undefined],
+    ["claude/custom-opus", "200k", 200_000],
+    ["my-proxy/custom-opus", "1m", 1_000_000],
   ] as const)("resolves model=%s selection=%s to %s", (model, selected, expected) => {
     expect(resolveSelectedClaudeAutoCompactWindow(model, selected)).toBe(expected);
   });
