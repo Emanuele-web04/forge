@@ -1971,6 +1971,19 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [WS_METHODS.providerCompactThread]: (input) =>
           rpcEffect(providerService.compactThread(input), "Failed to compact thread"),
+        [WS_METHODS.providerStopIdleRuntimeSession]: (input) => {
+          if (!providerService.stopIdleRuntimeSession) {
+            return Effect.fail(
+              new WsRpcError({
+                message: "Stopping idle agent processes is unavailable in this server build.",
+              }),
+            );
+          }
+          return rpcEffect(
+            providerService.stopIdleRuntimeSession(input),
+            "Failed to stop idle agent process",
+          );
+        },
         [WS_METHODS.providerListCommands]: (input) =>
           rpcEffect(providerDiscoveryService.listCommands(input), "Failed to list commands"),
         [WS_METHODS.providerListSkills]: (input) =>

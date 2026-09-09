@@ -1,7 +1,7 @@
 import http from "node:http";
 
-import type { ServerSettingsError } from "@synara/contracts";
-import { Effect, Exit, FileSystem, Layer, Path, Schema, Scope, ServiceMap } from "effect";
+import { providerRuntimeIdleStopMsFromMinutes, type ServerSettingsError } from "@synara/contracts";
+import { Effect, Exit, FileSystem, Layer, Path, Schema, Scope, ServiceMap, Stream } from "effect";
 import { HttpRouter } from "effect/unstable/http";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -149,6 +149,24 @@ export const createEffectServer = Effect.fn(function* (
     ),
   );
   yield* serverSettings.start;
+  // Apply the durable idle-stop window before any client can start a runtime,
+  // then keep it in sync when Settings → General changes it.
+  const applyProviderRuntimeIdleStopMs = (settings: {
+    readonly providerRuntimeIdleStopMinutes: number;
+  }) =>
+    Effect.sync(() => {
+      providerService.configureRuntimeIdleStopMs?.(
+        providerRuntimeIdleStopMsFromMinutes(settings.providerRuntimeIdleStopMinutes),
+      );
+    });
+  yield* applyProviderRuntimeIdleStopMs(yield* serverSettings.getSettings);
+  const providerRuntimeIdleStopSettingsChanges = yield* serverSettings.streamChanges.pipe(
+    Stream.toQueue({ capacity: "unbounded" }),
+  );
+  yield* Stream.fromQueue(providerRuntimeIdleStopSettingsChanges).pipe(
+    Stream.runForEach(applyProviderRuntimeIdleStopMs),
+    Effect.forkChild,
+  );
   yield* readiness.markPushBusReady;
   yield* readiness.markKeybindingsReady;
 

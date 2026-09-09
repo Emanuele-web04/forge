@@ -47,6 +47,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Pick the default workspace mode for newly created draft threads. local worktree environment",
   },
   {
+    id: "general:idle-agent-stop",
+    section: "general",
+    title: "Stop idle agent processes after",
+    keywords:
+      "Release idle provider CLIs after N minutes to free memory. 0 never auto-stop resume cursor process ram",
+  },
+  {
     id: "general:welcome-tour",
     section: "general",
     title: "Welcome tour",

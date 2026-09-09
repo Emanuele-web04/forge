@@ -360,6 +360,11 @@ import {
   resolveAvailableHandoffTargetProviders,
   resolveThreadHandoffBadgeLabel,
 } from "../lib/threadHandoff";
+import {
+  canOfferStopAgentProcess,
+  isStopAgentProcessBlockedByActiveTurn,
+  stopIdleRuntimeSessionFromClient,
+} from "../lib/threadRuntimeStop";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import { normalizeSettingsSection } from "../settingsNavigation";
@@ -3011,6 +3016,8 @@ export default function Sidebar() {
         envMode: thread.envMode,
         worktreePath: thread.worktreePath,
       });
+      const canStopAgentProcess = canOfferStopAgentProcess(thread.session);
+      const stopAgentProcessBlocked = isStopAgentProcessBlockedByActiveTurn(thread.session);
       const clicked = await api.contextMenu.show(
         [
           { id: "rename", label: "Rename thread" },
@@ -3020,7 +3027,22 @@ export default function Sidebar() {
             : []),
           { id: "mark-unread", label: "Mark unread" },
           ...handoffItems,
-          { id: "copy-path", label: "Copy Path", separatorBefore: true },
+          ...(canStopAgentProcess
+            ? [
+                {
+                  id: "stop-agent-process",
+                  label: stopAgentProcessBlocked
+                    ? "Stop agent process (turn in progress)"
+                    : "Stop agent process",
+                  separatorBefore: true,
+                },
+              ]
+            : []),
+          {
+            id: "copy-path",
+            label: "Copy Path",
+            ...(canStopAgentProcess ? {} : { separatorBefore: true }),
+          },
           ...(threadWorkspacePath
             ? [{ id: "open-path-in-terminal", label: "Open Path in Terminal" }]
             : []),
@@ -3064,6 +3086,34 @@ export default function Sidebar() {
         const targetProvider = clicked.slice("handoff:".length);
         if (handoffTargets.includes(targetProvider as ProviderKind)) {
           await handoffThread(thread, targetProvider as ProviderKind);
+        }
+        return;
+      }
+      if (clicked === "stop-agent-process") {
+        if (isStopAgentProcessBlockedByActiveTurn(thread.session)) {
+          toastManager.add({
+            type: "error",
+            title: "Unable to stop agent process",
+            description: "Interrupt the current turn before stopping the agent process.",
+          });
+          return;
+        }
+        try {
+          await stopIdleRuntimeSessionFromClient(api.provider, threadId);
+          toastManager.add({
+            type: "success",
+            title: "Agent process stopped",
+            description: "The next message will resume this thread.",
+          });
+        } catch (error) {
+          toastManager.add({
+            type: "error",
+            title: "Unable to stop agent process",
+            description:
+              error instanceof Error
+                ? error.message
+                : "An error occurred while stopping the agent process.",
+          });
         }
         return;
       }

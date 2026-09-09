@@ -5511,6 +5511,70 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
     }),
   );
 
+  it.effect("stops an idle-ready runtime immediately when requested from the UI path", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const runtimeRepository = yield* ProviderSessionRuntimeRepository;
+      const threadId = asThreadId("thread-idle-stop-now");
+
+      const session = yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      idleCleanup.codex.stopSession.mockClear();
+      assert.equal(typeof provider.stopIdleRuntimeSession, "function");
+      if (!provider.stopIdleRuntimeSession) {
+        assert.fail("stopIdleRuntimeSession unavailable");
+      }
+
+      yield* provider.stopIdleRuntimeSession({ threadId });
+
+      assert.deepEqual(idleCleanup.codex.stopSession.mock.calls[0]?.[0], threadId);
+      const persisted = yield* runtimeRepository.getByThreadId({ threadId });
+      assert.equal(Option.isSome(persisted), true);
+      if (Option.isSome(persisted)) {
+        assert.equal(persisted.value.status, "stopped");
+        assert.deepEqual(persisted.value.resumeCursor, session.resumeCursor);
+      }
+    }),
+  );
+
+  it.effect("refuses the UI idle-stop path while a turn is mid-flight", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-idle-stop-now-busy");
+      const turnId = asTurnId("turn-idle-stop-now-busy");
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      idleCleanup.codex.sendTurn.mockImplementationOnce((input) =>
+        Effect.succeed({ threadId: input.threadId, turnId }),
+      );
+      yield* provider.sendTurn({ threadId, input: "busy", attachments: [] });
+      idleCleanup.codex.stopSession.mockClear();
+      assert.equal(typeof provider.stopIdleRuntimeSession, "function");
+      if (!provider.stopIdleRuntimeSession) {
+        assert.fail("stopIdleRuntimeSession unavailable");
+      }
+
+      const failure = yield* Effect.result(provider.stopIdleRuntimeSession({ threadId }));
+      assert.equal(failure._tag, "Failure");
+      if (failure._tag !== "Failure") {
+        return;
+      }
+      assert.equal(failure.failure._tag, "ProviderValidationError");
+      if (failure.failure._tag !== "ProviderValidationError") {
+        return;
+      }
+      assert.match(failure.failure.issue, /turn is still in progress/i);
+      assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 0);
+    }),
+  );
+
   it.effect("restores idle cleanup when new turn dispatch fails before runtime events", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;

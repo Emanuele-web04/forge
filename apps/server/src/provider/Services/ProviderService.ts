@@ -184,6 +184,21 @@ export interface ProviderServiceShape {
   }) => Effect.Effect<void, ProviderServiceError>;
 
   /**
+   * Immediately stop an idle-ready provider runtime for a thread, preserving the
+   * resume cursor so the next message can restart it. Refuses mid-flight turns
+   * and live provider-native tasks — same admission as the automatic idle stop.
+   */
+  readonly stopIdleRuntimeSession?: (input: {
+    readonly threadId: ThreadId;
+  }) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
+   * Update the automatic idle-stop timer duration (milliseconds). 0 disables.
+   * Used when durable server settings change without restarting the process.
+   */
+  readonly configureRuntimeIdleStopMs?: (runtimeIdleStopMs: number) => void;
+
+  /**
    * Whether provider-native background tasks are currently keeping the
    * thread's runtime alive. Restart-oriented recovery paths must check this
    * before stopRuntimeSession: killing the shared subprocess silently

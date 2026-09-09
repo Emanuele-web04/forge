@@ -742,6 +742,8 @@ export function createWsNativeApi(): NativeApi {
       // to the 10-minute turn-idle ceiling), so the server owns this bound.
       compactThread: (input) =>
         transport.request(WS_METHODS.providerCompactThread, input, { timeoutMs: null }),
+      stopIdleRuntimeSession: (input) =>
+        transport.request(WS_METHODS.providerStopIdleRuntimeSession, input),
       listCommands: (input) => transport.request(WS_METHODS.providerListCommands, input),
       listSkills: (input) => transport.request(WS_METHODS.providerListSkills, input),
       listSkillsCatalog: (input) => transport.request(WS_METHODS.providerListSkillsCatalog, input),

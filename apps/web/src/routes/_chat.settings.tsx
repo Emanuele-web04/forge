@@ -16,10 +16,12 @@ import {
   DEFAULT_CHAT_WIDTH,
   type UiDensity,
   MAX_CHAT_FONT_SIZE_PX,
+  MAX_PROVIDER_RUNTIME_IDLE_STOP_MINUTES,
   MAX_TERMINAL_FONT_SIZE_PX,
   MIN_CHAT_FONT_SIZE_PX,
   MIN_TERMINAL_FONT_SIZE_PX,
   normalizeChatFontSizePx,
+  normalizeProviderRuntimeIdleStopMinutes,
   normalizeTerminalFontFamily,
   normalizeTerminalFontSizePx,
   isGitTextGenerationSettingsDirty,
@@ -342,6 +344,9 @@ function SettingsRouteView() {
     ...(settings.enableAssistantStreaming !== defaults.enableAssistantStreaming
       ? ["Assistant output"]
       : []),
+    ...(settings.providerRuntimeIdleStopMinutes !== defaults.providerRuntimeIdleStopMinutes
+      ? ["Stop idle agent processes"]
+      : []),
     ...(settings.followUpBehavior !== defaults.followUpBehavior ? ["Follow-up behavior"] : []),
     ...(settings.autoOpenDevicePane !== defaults.autoOpenDevicePane
       ? ["Automatically open simulator"]
@@ -522,6 +527,49 @@ function SettingsRouteView() {
                 New worktree
               </SelectItem>
             </SettingsSelectControl>
+          }
+        />
+
+        <SettingsRow
+          title="Stop idle agent processes after"
+          description="Release idle provider CLIs after this many minutes to free memory. Set 0 to never auto-stop. The next message resumes from the same cursor."
+          resetAction={
+            settings.providerRuntimeIdleStopMinutes !== defaults.providerRuntimeIdleStopMinutes ? (
+              <SettingResetButton
+                label="idle agent stop"
+                onClick={() =>
+                  updateSettings({
+                    providerRuntimeIdleStopMinutes: defaults.providerRuntimeIdleStopMinutes,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
+              <Input
+                type="number"
+                size="sm"
+                min={0}
+                max={MAX_PROVIDER_RUNTIME_IDLE_STOP_MINUTES}
+                step={1}
+                inputMode="numeric"
+                variant="soft"
+                className="w-full text-right sm:w-20"
+                value={String(settings.providerRuntimeIdleStopMinutes)}
+                onChange={(event) => {
+                  const nextValue = event.target.value.trim();
+                  if (nextValue.length === 0) return;
+                  updateSettings({
+                    providerRuntimeIdleStopMinutes: normalizeProviderRuntimeIdleStopMinutes(
+                      Number(nextValue),
+                    ),
+                  });
+                }}
+                aria-label="Stop idle agent processes after minutes"
+              />
+              <span className="text-xs text-muted-foreground">min</span>
+            </div>
           }
         />
 

@@ -302,6 +302,7 @@ describe("wsNativeApi", () => {
         enableProviderUpdateChecks: true,
         defaultThreadEnvMode: "local",
         addProjectBaseDirectory: "",
+        providerRuntimeIdleStopMinutes: 10,
         textGenerationModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
         providers: {
           codex: { enabled: true, binaryPath: "codex", homePath: "", customModels: [] },
