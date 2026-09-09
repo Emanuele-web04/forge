@@ -2,13 +2,13 @@ import { ThreadId } from "@synara/contracts";
 import { Deferred, Effect, Fiber } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { makeDroidSessionTeardownGate } from "./DroidSessionTeardownGate.ts";
+import { makeSessionTeardownGate } from "./SessionTeardownGate.ts";
 
-describe("DroidSessionTeardownGate", () => {
+describe("SessionTeardownGate", () => {
   it("blocks replacement work until the tracked teardown completes", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
-        const gate = makeDroidSessionTeardownGate();
+        const gate = makeSessionTeardownGate();
         const threadId = ThreadId.makeUnsafe("thread-1");
         const completion = yield* Deferred.make<void>();
         let replacementStarted = false;
@@ -37,7 +37,7 @@ describe("DroidSessionTeardownGate", () => {
   it("does not let stale cleanup clear a newer teardown gate", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
-        const gate = makeDroidSessionTeardownGate();
+        const gate = makeSessionTeardownGate();
         const threadId = ThreadId.makeUnsafe("thread-1");
         const oldCompletion = yield* Deferred.make<void>();
         const newCompletion = yield* Deferred.make<void>();
