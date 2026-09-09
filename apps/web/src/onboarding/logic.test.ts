@@ -35,8 +35,16 @@ const RECONCILE_BASE = {
 } as const;
 
 describe("onboarding steps", () => {
-  it("runs intro → tour → providers → theme → project → done", () => {
-    expect(ONBOARDING_STEPS).toEqual(["welcome", "tour", "providers", "theme", "project", "done"]);
+  it("runs intro → tour → providers → theme → titles → project → done", () => {
+    expect(ONBOARDING_STEPS).toEqual([
+      "welcome",
+      "tour",
+      "providers",
+      "theme",
+      "titles",
+      "project",
+      "done",
+    ]);
   });
 
   it("clamps navigation at both ends", () => {

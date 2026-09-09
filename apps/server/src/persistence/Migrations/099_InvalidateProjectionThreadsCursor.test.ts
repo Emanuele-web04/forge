@@ -61,6 +61,12 @@ it.layer(Layer.fresh(testLayer))("099_InvalidateProjectionThreadsCursor", (it) =
         // already has migration 98 applied and a projection.threads cursor at
         // the journal head.
         yield* runMigrations({ toMigrationInclusive: 98 });
+        // Later columns (migration 100) are pre-added so current repository
+        // code can upsert during setup; migration 99 semantics are unaffected.
+        yield* sql`ALTER TABLE projection_threads ADD COLUMN manual_title_pinned INTEGER NOT NULL DEFAULT 0`;
+        yield* sql`ALTER TABLE projection_threads ADD COLUMN title_refresh_mode TEXT`;
+        yield* sql`ALTER TABLE projection_threads ADD COLUMN pending_suggested_title TEXT`;
+        yield* sql`ALTER TABLE projection_projects ADD COLUMN title_refresh_mode TEXT`;
 
         const threadId = ThreadId.makeUnsafe("thread-099");
         const projectId = ProjectId.makeUnsafe("project-099");

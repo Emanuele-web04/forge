@@ -42,6 +42,7 @@ import { FeatureTourStep } from "./steps/FeatureTourStep";
 import { ProjectStep, type OnboardingProjectResult } from "./steps/ProjectStep";
 import { ProvidersStep } from "./steps/ProvidersStep";
 import { ThemeStep } from "./steps/ThemeStep";
+import { TitlesStep } from "./steps/TitlesStep";
 import { WelcomeStep } from "./steps/WelcomeStep";
 
 const STEP_TITLES: Record<OnboardingStep, string> = {
@@ -49,6 +50,7 @@ const STEP_TITLES: Record<OnboardingStep, string> = {
   tour: `What ${APP_BASE_NAME} can do`,
   providers: "Choose your agents",
   theme: "Pick an appearance",
+  titles: "Keep thread titles fresh",
   project: "Add your first project",
   done: "You're all set",
 };
@@ -58,6 +60,7 @@ const STEP_DESCRIPTIONS: Record<Exclude<OnboardingStep, "done">, string> = {
   tour: "",
   providers: `Detected on this machine. Uncheck any you don't want ${APP_BASE_NAME} to use.`,
   theme: "Applies live behind this window. Change it anytime in Settings → Appearance.",
+  titles: "Stale titles get refreshed as chats evolve. Manual renames always win.",
   project: `A project is a folder ${APP_BASE_NAME} works in. Git repositories unlock branches, worktrees, diffs and pull requests.`,
 };
 
@@ -122,6 +125,7 @@ function OnboardingFlow(props: {
         return { label: "Set up", onPrimary: goNext };
       case "providers":
       case "theme":
+      case "titles":
         return { label: "Continue", onPrimary: goNext };
       case "project":
         return projectResults.length > 0
@@ -173,6 +177,7 @@ function OnboardingFlow(props: {
         {step === "tour" ? <FeatureTourStep /> : null}
         {step === "providers" ? <ProvidersStep /> : null}
         {step === "theme" ? <ThemeStep /> : null}
+        {step === "titles" ? <TitlesStep /> : null}
         {step === "project" ? (
           <ProjectStep
             results={projectResults}

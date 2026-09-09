@@ -23,6 +23,7 @@ import {
   ThreadCreationSource,
   ThreadEnvironmentMode,
   ThreadId,
+  ThreadTitleRefreshMode,
   TurnId,
 } from "@synara/contracts";
 import { Option, Schema, ServiceMap } from "effect";
@@ -48,6 +49,13 @@ export const ProjectionThread = Schema.Struct({
   associatedWorktreeRef: Schema.NullOr(Schema.String),
   createBranchFlowCompleted: Schema.Boolean,
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  manualTitlePinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  titleRefreshMode: Schema.optional(Schema.NullOr(ThreadTitleRefreshMode)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  pendingSuggestedTitle: Schema.optional(Schema.NullOr(Schema.String)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   creationSource: Schema.optional(Schema.NullOr(ThreadCreationSource)).pipe(
     Schema.withDecodingDefault(() => null),

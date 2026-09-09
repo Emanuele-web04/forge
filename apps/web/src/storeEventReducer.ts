@@ -853,6 +853,10 @@ function applyOrchestrationEvent(
               : existingProject.defaultModelSelection,
           scripts: event.payload.scripts ?? existingProject.scripts,
           isPinned: event.payload.isPinned ?? existingProject.isPinned ?? false,
+          titleRefreshMode:
+            event.payload.titleRefreshMode !== undefined
+              ? event.payload.titleRefreshMode
+              : (existingProject.titleRefreshMode ?? null),
           spaceId:
             event.payload.spaceId !== undefined
               ? event.payload.spaceId
@@ -943,6 +947,13 @@ function applyOrchestrationEvent(
             nextCreateBranchFlowCompleted === (thread.createBranchFlowCompleted ?? false) &&
             (event.payload.isPinned === undefined ||
               event.payload.isPinned === (thread.isPinned ?? false)) &&
+            (event.payload.manualTitlePinned === undefined ||
+              event.payload.manualTitlePinned === (thread.manualTitlePinned ?? false)) &&
+            (event.payload.titleRefreshMode === undefined ||
+              (event.payload.titleRefreshMode ?? null) === (thread.titleRefreshMode ?? null)) &&
+            (event.payload.pendingSuggestedTitle === undefined ||
+              (event.payload.pendingSuggestedTitle ?? null) ===
+                (thread.pendingSuggestedTitle ?? null)) &&
             (event.payload.settledAt === undefined ||
               (event.payload.settledAt ?? null) === (thread.settledAt ?? null)) &&
             (event.payload.parentThreadId === undefined ||
@@ -987,6 +998,15 @@ function applyOrchestrationEvent(
             associatedWorktreeRef: nextAssociatedWorktreeRef,
             createBranchFlowCompleted: nextCreateBranchFlowCompleted,
             ...(event.payload.isPinned !== undefined ? { isPinned: event.payload.isPinned } : {}),
+            ...(event.payload.manualTitlePinned !== undefined
+              ? { manualTitlePinned: event.payload.manualTitlePinned }
+              : {}),
+            ...(event.payload.titleRefreshMode !== undefined
+              ? { titleRefreshMode: event.payload.titleRefreshMode }
+              : {}),
+            ...(event.payload.pendingSuggestedTitle !== undefined
+              ? { pendingSuggestedTitle: event.payload.pendingSuggestedTitle }
+              : {}),
             ...(event.payload.settledAt !== undefined
               ? { settledAt: event.payload.settledAt }
               : {}),

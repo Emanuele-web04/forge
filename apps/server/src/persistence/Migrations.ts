@@ -115,6 +115,7 @@ import Migration0096 from "./Migrations/096_ProjectionThreadsGoalAchievements.ts
 import Migration0097 from "./Migrations/097_ProjectionThreadsSidechatLifecycle.ts";
 import Migration0098 from "./Migrations/098_MigrateKiloToOpenCode.ts";
 import Migration0099 from "./Migrations/099_InvalidateProjectionThreadsCursor.ts";
+import Migration0100 from "./Migrations/100_ThreadTitleRefresh.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -229,6 +230,7 @@ export const migrationEntries = [
   [97, "ProjectionThreadsSidechatLifecycle", Migration0097],
   [98, "MigrateKiloToOpenCode", Migration0098],
   [99, "InvalidateProjectionThreadsCursor", Migration0099],
+  [100, "ThreadTitleRefresh", Migration0100],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

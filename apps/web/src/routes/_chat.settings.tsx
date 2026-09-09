@@ -3,7 +3,7 @@
 // Layer: Route screen
 // Exports: Settings route component for `/settings`
 
-import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@synara/contracts";
+import { PROVIDER_DISPLAY_NAMES, type ProviderKind, type ThreadTitleRefreshMode } from "@synara/contracts";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import { sameAppSnapShortcut } from "@synara/shared/appSnapShortcut";
 import { createFileRoute, useSearch } from "@tanstack/react-router";
@@ -179,6 +179,12 @@ const FOLLOW_UP_BEHAVIOR_OPTIONS = [
   { value: "steer", label: "Steer" },
 ] as const satisfies ReadonlyArray<{ value: FollowUpBehavior; label: string }>;
 
+const TITLE_REFRESH_MODE_OPTIONS = [
+  { value: "off", label: "Off" },
+  { value: "suggested", label: "Suggested" },
+  { value: "automatic", label: "Automatic" },
+] as const satisfies ReadonlyArray<{ value: ThreadTitleRefreshMode; label: string }>;
+
 // ── Settings UI primitives ────────────────────────────────────────────────
 
 // Shared settings controls live in ~/components/settings/SettingControls.
@@ -332,6 +338,7 @@ function SettingsRouteView() {
       ? ["Font smoothing"]
       : []),
     ...(settings.timestampFormat !== defaults.timestampFormat ? ["Time format"] : []),
+    ...(settings.titleRefreshMode !== defaults.titleRefreshMode ? ["Thread titles"] : []),
     ...(settings.enableTaskCompletionToasts !== defaults.enableTaskCompletionToasts
       ? ["Activity toasts"]
       : []),
@@ -1176,6 +1183,30 @@ function SettingsRouteView() {
       </SettingsSection>
 
       <SettingsSection title="Review">
+        <SettingsRow
+          title="Thread titles"
+          description="Refresh stale thread titles as conversations evolve. Suggested previews a candidate first; automatic applies it. Manual renames always win. Off by default."
+          resetAction={
+            settings.titleRefreshMode !== defaults.titleRefreshMode ? (
+              <SettingResetButton
+                label="thread title refresh"
+                onClick={() =>
+                  updateSettings({
+                    titleRefreshMode: defaults.titleRefreshMode,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={settings.titleRefreshMode}
+              onValueChange={(value) => updateSettings({ titleRefreshMode: value })}
+              ariaLabel="Thread title refresh"
+              options={TITLE_REFRESH_MODE_OPTIONS}
+            />
+          }
+        />
         {renderBooleanSettingRow({
           settingKey: "showPullRequestDiffColors",
           title: "Pull request diff colors",

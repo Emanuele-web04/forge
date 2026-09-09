@@ -438,6 +438,18 @@ export function useComposerSlashCommands(input: {
           title: "Newer thread title kept",
           description: "The generated title was discarded because the title changed.",
         });
+      } else if (outcome.status === "suggested") {
+        toastManager.add({
+          type: "success",
+          title: "Title suggestion ready",
+          description: outcome.title,
+        });
+      } else if (outcome.status === "pinned") {
+        toastManager.add({
+          type: "info",
+          title: "Manual title kept",
+          description: "Unpin the title or request a refresh to change it.",
+        });
       } else if (outcome.status === "unavailable") {
         toastManager.add({ type: "warning", title: "Rename is unavailable" });
       } else {
