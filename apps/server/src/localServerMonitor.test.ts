@@ -219,24 +219,28 @@ describe("localServerMonitor", () => {
   });
 
   it("uses parent command lines when a dev-tool child owns the listening port", () => {
+    // Synthetic PIDs must not equal process.pid — toServerProcess hides Synara itself.
+    const listenerPid = process.pid + 10_001;
+    const parentPid = process.pid + 10_002;
+    const grandparentPid = process.pid + 10_003;
     const processInfo = new Map<number, LocalServerProcessInfo>([
       [
-        12095,
+        listenerPid,
         {
-          ppid: 12094,
+          ppid: parentPid,
           commandLine: "next-server (v16.2.3)",
         },
       ],
       [
-        12094,
+        parentPid,
         {
-          ppid: 12064,
+          ppid: grandparentPid,
           commandLine:
             "node /Users/emanueledipietro/Developer/synara-website/node_modules/.bin/next dev",
         },
       ],
       [
-        12064,
+        grandparentPid,
         {
           ppid: 10212,
           commandLine: "npm run dev",
@@ -245,14 +249,14 @@ describe("localServerMonitor", () => {
     ]);
 
     const servers = buildLocalServerProcesses(
-      parseLsofTcpListenOutput(["p12095", "cnode", "PTCP", "n*:3000"].join("\n")),
+      parseLsofTcpListenOutput([`p${listenerPid}`, "cnode", "PTCP", "n*:3000"].join("\n")),
       processInfo,
     );
 
     expect(servers).toHaveLength(1);
     expect(servers[0]).toMatchObject({
-      pid: 12095,
-      ppid: 12094,
+      pid: listenerPid,
+      ppid: parentPid,
       displayName: "Next.js",
       args: "next-server (v16.2.3)",
       ports: [3000],
